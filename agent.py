@@ -8,7 +8,10 @@ from typing import List, Dict, Any, Generator
 import ollama
 
 from tools import TOOL_SCHEMAS, AVAILABLE_TOOLS, get_tool_schemas, get_available_tools
-from config import get_current_model, get_obsidian_vault
+from config import (
+    get_current_model, get_obsidian_vault, 
+    get_hooks_dir, get_autonomous_plugins_enabled
+)
 from hook_manager import hook_manager
 
 #If you suspect a typo or a non-existent entity, search the web to verify before correcting the user. Это если ИИ будет сопративляться и не искать информацию в интернете
@@ -62,6 +65,29 @@ class ArgentAgent:
                 f"\nWARNING: If the user asks to rewrite, expand, or add examples to an Obsidian note's TEXT, ALWAYS use `replace_in_file` or rewrite it completely with `write_file`. DO NOT use `update_obsidian_properties` for text modifications!"
             )
             
+        # Plugin & Autonomous Awareness
+        hooks_dir = get_hooks_dir()
+        auto_plugins = get_autonomous_plugins_enabled()
+        
+        system_prompt += (
+            f"\n\nGLOBAL PLUGINS (HOOKS): You can extend your own functionality by creating new slash commands. "
+            f"The global hooks directory is: '{hooks_dir}'. "
+            "To create a new command, use `write_file` to create a .py file in that directory. "
+            "The function name must start with 'command_'. After creating it, the command will be available after a restart or reload."
+        )
+        
+        if auto_plugins:
+            system_prompt += (
+                "\nAUTONOMOUS EXTENSION ENABLED: You ARE allowed to autonomously create new plugins/tools "
+                "if you decide it is a more efficient way to solve the user's task. For example, if no current tool "
+                "can handle a specific file format or logic, write a specialized plugin for it."
+            )
+        else:
+            system_prompt += (
+                "\nAUTONOMOUS EXTENSION DISABLED: You ARE NOT allowed to autonomously create new plugins "
+                "unless the user explicitly asks you to create a new command or plugin."
+            )
+
         self.messages: List[Dict[str, Any]] = [
             {"role": "system", "content": system_prompt}
         ]
@@ -476,6 +502,10 @@ class ArgentAgent:
                     yield {"type": "tool_start", "name": func_name, "args": arguments}
                     
                     current_tools = get_available_tools()
+                    # Enforce allowed_tools filter during execution as well
+                    if allowed_tools is not None:
+                        current_tools = {name: func for name, func in current_tools.items() if name in allowed_tools}
+                        
                     if func_name in current_tools:
                         try:
                             func = current_tools[func_name]

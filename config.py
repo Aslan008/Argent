@@ -54,3 +54,27 @@ def set_disabled_tools(tools_list: list[str]):
     config = load_config()
     config["disabled_tools"] = tools_list
     save_config(config)
+
+def get_hooks_dir() -> str:
+    """Get the configured hooks directory path."""
+    config = load_config()
+    # Default to ~/.argent/hooks
+    default = str(Path.home() / ".argent" / "hooks")
+    return config.get("hooks_dir", default)
+
+def set_hooks_dir(path: str):
+    """Save the custom hooks directory path to config."""
+    config = load_config()
+    config["hooks_dir"] = path
+    save_config(config)
+
+def get_autonomous_plugins_enabled() -> bool:
+    """Check if AI is allowed to autonomously create plugins."""
+    config = load_config()
+    return config.get("autonomous_plugins", False)
+
+def set_autonomous_plugins_enabled(enabled: bool):
+    """Save preference for autonomous plugin creation."""
+    config = load_config()
+    config["autonomous_plugins"] = enabled
+    save_config(config)

@@ -3,11 +3,13 @@ import sys
 import importlib.util
 from pathlib import Path
 from ui import print_system, print_error
+from config import get_hooks_dir
 
 def get_global_hooks_dir() -> Path:
-    """Returns the path to the global ~/.argent/hooks directory."""
-    # We use ~/.argent/hooks/ for global plugins
-    hook_dir = Path.home() / ".argent" / "hooks"
+    """Returns the path to the global plugins directory (configurable)."""
+    # Use config-specified dir or default to ~/.argent/hooks/
+    hook_dir_str = get_hooks_dir()
+    hook_dir = Path(hook_dir_str).expanduser().resolve()
     hook_dir.mkdir(parents=True, exist_ok=True)
     return hook_dir
 
@@ -24,13 +26,20 @@ class HookManager:
         if not self.hooks_dir.exists():
             return
             
+        # Add to sys.path so plugins can import each other
         sys.path.insert(0, str(self.hooks_dir))
         
         loaded_count = 0
+        self._plugins = [] # Clear existing plugins
+        
         for item in self.hooks_dir.iterdir():
             if item.is_file() and item.suffix == ".py" and not item.name.startswith("_"):
                 plugin_name = item.stem
                 try:
+                    # Invalidate cache to allow reloading same-named modules from different paths
+                    if plugin_name in sys.modules:
+                        del sys.modules[plugin_name]
+                        
                     spec = importlib.util.spec_from_file_location(plugin_name, str(item))
                     if spec and spec.loader:
                         module = importlib.util.module_from_spec(spec)
@@ -46,6 +55,17 @@ class HookManager:
             
         if loaded_count > 0:
             print_system(f"Loaded {loaded_count} global plugin(s) from {self.hooks_dir}")
+
+    def reload_plugins(self, new_dir=None):
+        """Reloads all plugins from the current or a new directory."""
+        if new_dir:
+            self.hooks_dir = Path(new_dir).expanduser().resolve()
+            self.hooks_dir.mkdir(parents=True, exist_ok=True)
+        else:
+            self.hooks_dir = get_global_hooks_dir()
+            
+        # Clear existing module cache for loaded plugins to force fresh imports
+        self._load_plugins()
 
     def call_hook(self, event_name: str, *args, **kwargs):
         """

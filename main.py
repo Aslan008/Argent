@@ -205,6 +205,8 @@ def handle_slash_command(command: str, agent: ArgentAgent) -> bool:
             "- `/obsidian [path]` - Set the path to your Obsidian vault\n"
             "- `/research [topic]` - Enter Auto-Research mode to search the web and generate notes\n"
             "- `/enable_rag` - Index the current project codebase for Semantic AI Search\n"
+            "- `/disable_rag` - Turn off Semantic AI Search\n"
+            "- `/hooks [path]` - View or change the global plugins (hooks) directory\n"
             "- `/sandbox` - Enter an isolated Code Playground to execute and test code safely\n"
             "- `/tools` - Open interactive menu to enable/disable tools\n"
             "- `/save [name]` - Export the current conversation to a Markdown file\n"
@@ -250,8 +252,8 @@ def main():
     agent = ArgentAgent()
     
     builtin_cmds = [
-        '/help', '/model', '/obsidian', '/clear', '/research', '/enable_rag', 
-        '/sandbox', '/tools', '/save', '/setup_terminal', '/project', '/work', '/commit', '/exit', '/quit'
+        '/help', '/model', '/obsidian', '/clear', '/research', '/enable_rag', '/disable_rag',
+        '/hooks', '/sandbox', '/tools', '/save', '/setup_terminal', '/project', '/work', '/commit', '/exit', '/quit'
     ]
     # Add custom commands from hooks to autocomplete
     custom_names = [f"/{c}" for c in hook_manager.get_custom_commands().keys()]
@@ -332,6 +334,47 @@ def main():
                         result = enable_rag_for_project(cwd)
                 
                 print_system(result)
+                continue
+            elif user_input.strip() == "/disable_rag":
+                from rag_engine import disable_rag
+                disable_rag()
+                print_system("Semantic Search (RAG) has been disabled.")
+                continue
+            elif user_input.startswith("/hooks"):
+                from hook_manager import hook_manager
+                from config import set_hooks_dir, get_hooks_dir, set_autonomous_plugins_enabled, get_autonomous_plugins_enabled
+                
+                parts = user_input.split(" ")
+                if len(parts) == 1:
+                    status = "ENABLED" if get_autonomous_plugins_enabled() else "DISABLED"
+                    print_system(f"Current Hooks Directory: [bold cyan]{get_hooks_dir()}[/bold cyan]")
+                    print_system(f"Autonomous Plugin Creation: [bold yellow]{status}[/bold yellow]")
+                elif parts[1].lower() == "auto":
+                    if len(parts) > 2:
+                        val = parts[2].lower()
+                        if val in ("on", "true", "yes", "1"):
+                            set_autonomous_plugins_enabled(True)
+                            print_system("Autonomous Plugin Creation [bold green]ENABLED[/bold green]. AI can now create tools on its own.")
+                        else:
+                            set_autonomous_plugins_enabled(False)
+                            print_system("Autonomous Plugin Creation [bold red]DISABLED[/bold red]. AI will only create plugins when asked.")
+                    else:
+                        status = "ENABLED" if get_autonomous_plugins_enabled() else "DISABLED"
+                        print_system(f"Autonomous Plugin Creation is currently: [bold yellow]{status}[/bold yellow]")
+                else:
+                    new_path = user_input.split(" ", 1)[1].strip()
+                    set_hooks_dir(new_path)
+                    hook_manager.reload_plugins(new_path)
+                    print_system(f"Hooks Directory changed to: [bold green]{new_path}[/bold green]")
+                    # Refresh autocomplete
+                    builtin_cmds = [
+                        '/help', '/model', '/obsidian', '/clear', '/research', '/enable_rag', '/disable_rag',
+                        '/hooks', '/sandbox', '/tools', '/save', '/setup_terminal', '/project', '/work', '/commit', '/exit', '/quit'
+                    ]
+                    custom_cmds = hook_manager.get_custom_commands()
+                    all_available_cmds = builtin_cmds + [f"/{c}" for c in custom_cmds.keys()]
+                    # Note: session (prompt_toolkit) doesn't easily allow updating completer at runtime 
+                    # without full restart, but local plugin lookup still works.
                 continue
             elif user_input.strip() == "/setup_terminal":
                 font_guide = """

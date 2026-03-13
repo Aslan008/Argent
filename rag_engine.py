@@ -12,6 +12,12 @@ def is_rag_enabled() -> bool:
     global _RAG_ENABLED
     return _RAG_ENABLED
 
+def disable_rag():
+    """Disables RAG and clears the collection reference."""
+    global _RAG_ENABLED, _COLLECTION
+    _RAG_ENABLED = False
+    _COLLECTION = None
+
 def enable_rag_for_project(project_dir: str) -> str:
     """Initializes ChromaDB, creates embeddings for the project, and enables semantic search."""
     global _RAG_ENABLED, _COLLECTION
