@@ -7,3 +7,4 @@ theme.yaml
 .DS_Store
 *.log
 chroma_db/
+.argent/chats/
