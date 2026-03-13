@@ -10,12 +10,17 @@ from rich.console import Console
 import questionary
 
 from agent import ArgentAgent
-from config import get_current_model, set_current_model, get_obsidian_vault, set_obsidian_vault
+from config import (
+    get_current_model, set_current_model, get_obsidian_vault, set_obsidian_vault,
+    get_hooks_dir, set_hooks_dir, get_autonomous_plugins_enabled, set_autonomous_plugins_enabled,
+    get_disabled_tools, set_disabled_tools
+)
 from ui import (
     console, print_markdown, print_system, print_error,
     print_tool_start, print_tool_end, select_model, s
 )
 from hook_manager import hook_manager
+from rag_engine import enable_rag_for_project, disable_rag
 import subprocess
 import json
 from pathlib import Path
@@ -321,7 +326,6 @@ def main():
                 )
                 print_system(f"Starting auto-research on: {topic}...")
             elif user_input.strip() == "/enable_rag":
-                from rag_engine import enable_rag_for_project
                 cwd = os.getcwd()
                 print_system(f"Enabling RAG for project at {cwd}...")
                 result = enable_rag_for_project(cwd)
@@ -336,13 +340,10 @@ def main():
                 print_system(result)
                 continue
             elif user_input.strip() == "/disable_rag":
-                from rag_engine import disable_rag
                 disable_rag()
                 print_system("Semantic Search (RAG) has been disabled.")
                 continue
             elif user_input.startswith("/hooks"):
-                from hook_manager import hook_manager
-                from config import set_hooks_dir, get_hooks_dir, set_autonomous_plugins_enabled, get_autonomous_plugins_enabled
                 
                 parts = user_input.split(" ")
                 if len(parts) == 1:
@@ -397,7 +398,6 @@ def main():
                 print_markdown(font_guide)
                 continue
             elif user_input.strip() == "/tools":
-                from config import get_disabled_tools, set_disabled_tools
                 from tools import AVAILABLE_TOOLS
                 all_tools = list(AVAILABLE_TOOLS.keys())
                 
