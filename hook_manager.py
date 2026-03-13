@@ -3,7 +3,7 @@ import sys
 import importlib.util
 from pathlib import Path
 from ui import print_system, print_error
-from config import get_hooks_dir
+from config import get_hooks_dir, get_disabled_plugins
 
 def get_global_hooks_dir() -> Path:
     """Returns the path to the global plugins directory (configurable)."""
@@ -32,9 +32,15 @@ class HookManager:
         loaded_count = 0
         self._plugins = [] # Clear existing plugins
         
+        disabled_plugins = get_disabled_plugins()
+        
         for item in self.hooks_dir.iterdir():
             if item.is_file() and item.suffix == ".py" and not item.name.startswith("_"):
                 plugin_name = item.stem
+                
+                if plugin_name in disabled_plugins:
+                    continue
+                    
                 try:
                     # Invalidate cache to allow reloading same-named modules from different paths
                     if plugin_name in sys.modules:

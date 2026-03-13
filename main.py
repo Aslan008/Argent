@@ -356,12 +356,42 @@ def main():
                 print_system("Semantic Search (RAG) has been disabled.")
                 continue
             elif user_input.startswith("/hooks"):
-                
                 parts = user_input.split(" ")
                 if len(parts) == 1:
                     status = "ENABLED" if get_autonomous_plugins_enabled() else "DISABLED"
                     print_system(f"Current Hooks Directory: [bold cyan]{get_hooks_dir()}[/bold cyan]")
                     print_system(f"Autonomous Plugin Creation: [bold yellow]{status}[/bold yellow]")
+                    
+                    # Add interactive plugin toggle
+                    from config import get_disabled_plugins, set_disabled_plugins
+                    from pathlib import Path
+                    
+                    hooks_dir = Path(get_hooks_dir()).expanduser().resolve()
+                    if hooks_dir.exists():
+                        all_plugins = [item.stem for item in hooks_dir.iterdir() 
+                                     if item.is_file() and item.suffix == ".py" and not item.name.startswith("_")]
+                        
+                        if all_plugins:
+                            disabled = set(get_disabled_plugins())
+                            choices = [
+                                questionary.Choice(p, checked=(p not in disabled))
+                                for p in all_plugins
+                            ]
+                            
+                            selected_plugins = questionary.checkbox(
+                                "Select the plugins you want to ENABLE:",
+                                choices=choices
+                            ).ask()
+                            
+                            if selected_plugins is not None:
+                                new_disabled = [p for p in all_plugins if p not in selected_plugins]
+                                set_disabled_plugins(new_disabled)
+                                hook_manager.reload_plugins()
+                                print_system(f"Plugins updated. Disabled: {', '.join(new_disabled) if new_disabled else 'None'}")
+                        else:
+                            print_system("No plugins found in the directory.")
+                    else:
+                        print_error(f"Hooks directory not found: {hooks_dir}")
                 elif parts[1].lower() == "auto":
                     if len(parts) > 2:
                         val = parts[2].lower()
