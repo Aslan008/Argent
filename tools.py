@@ -40,6 +40,22 @@ def __resolve_path(file_path: str) -> Path:
             
     return path
 
+def _is_plugin_path_restricted(file_path: str) -> str | None:
+    """Checks if the path is inside the plugins directory and returns an error if restricted."""
+    try:
+        from config import get_hooks_dir
+        abs_path = os.path.abspath(file_path)
+        hooks_dir = os.path.abspath(get_hooks_dir())
+        if abs_path.startswith(hooks_dir):
+            return (
+                f"ERROR: Direct modification of files in the plugins directory is restricted. "
+                f"You MUST use the `create_plugin` or `delete_plugin` tools for all plugin-related tasks. "
+                f"These tools ensure mandatory syntax validation and automatic system reloading."
+            )
+    except:
+        pass
+    return None
+
 def _validate_code_syntax(file_path: str) -> str | None:
     """Quietly checks if the written Python or C# file has syntax errors.
     Returns the error string if failed, or None if passed."""
@@ -208,6 +224,10 @@ def read_file(file_path: str) -> str:
 
 def delete_file(file_path: str) -> str:
     """Delete a file from the file system."""
+    restriction_error = _is_plugin_path_restricted(file_path)
+    if restriction_error:
+        return restriction_error
+        
     try:
         path = __resolve_path(file_path)
         if not path.exists():
@@ -257,6 +277,10 @@ def get_file_outline(file_path: str) -> str:
 
 def write_file(file_path: str, content: str) -> str:
     """Write or overwrite content to a file. Creates directories if needed."""
+    restriction_error = _is_plugin_path_restricted(file_path)
+    if restriction_error:
+        return restriction_error
+        
     try:
         path = Path(file_path).expanduser().resolve()
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -639,6 +663,10 @@ def replace_python_function(file_path: str, function_name: str, new_code: str) -
 
 def replace_in_file(file_path: str, target_text: str, replacement_text: str) -> str:
     """Replace exactly matching text in a file with new text."""
+    restriction_error = _is_plugin_path_restricted(file_path)
+    if restriction_error:
+        return restriction_error
+        
     try:
         path = __resolve_path(file_path)
         if not path.exists():
@@ -731,6 +759,12 @@ def multi_replace_in_file(changes_json: str) -> str:
         report = []
         for change in changes:
             fp = change.get("file_path")
+            
+            restriction_error = _is_plugin_path_restricted(fp)
+            if restriction_error:
+                report.append(f"Skipping '{fp}': {restriction_error}")
+                continue
+                
             target = change.get("target_text", "")
             repl = change.get("replacement_text", "")
             if not fp:
