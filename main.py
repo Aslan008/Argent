@@ -459,8 +459,24 @@ def main():
                              f"  /clean      - Wipe the sandbox clean\n"
                              f"  /exit       - Leave Sandbox and return to main chat")
                 
+                # Sandbox tool restrictions
+                SANDBOX_ALLOWED_TOOLS = [
+                    "read_file", "write_file", "delete_file", "replace_in_file", "replace_python_function",
+                    "list_directory", "grep_search", "run_command", "run_admin_command",
+                    "start_background_command", "read_background_command", "send_background_command",
+                    "stop_background_command", "search_web", "read_webpage", "get_file_outline", "multi_replace_in_file"
+                ]
+
                 # Switch AI context forcefully
-                agent.messages.append({"role": "system", "content": f"You are now in SANDBOX MODE. You MUST write all code ONLY to {sm.sandbox_dir}. DO NOT modify the main project. Wait for the user to ask you to write code before doing anything."})
+                agent.messages.append({
+                    "role": "system", 
+                    "content": (
+                        f"You are now in SANDBOX MODE. You MUST write all code ONLY to {sm.sandbox_dir}.\n"
+                        "DO NOT modify the main project. DO NOT use Project Brain tools like `add_project_task` or `complete_project_task`.\n"
+                        "Your goal is to experiment and build small prototypes or test isolated logic.\n"
+                        "Wait for the user to ask you to write code before doing anything."
+                    )
+                })
                 
                 # Nested sandbox loop
                 while True:
@@ -520,7 +536,7 @@ def main():
                             continue
                             
                         # If normal chat input inside Sandbox, send to AI directly via inner spinner
-                        response_chunks = agent.process_user_input(sb_input, allowed_tools=None) # all tools allowed
+                        response_chunks = agent.process_user_input(sb_input, allowed_tools=SANDBOX_ALLOWED_TOOLS)
                         
                         chunk_iterator = iter(response_chunks)
                         streamed_text = ""
