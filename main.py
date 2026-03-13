@@ -27,6 +27,16 @@ from pathlib import Path
 from project_manager import ProjectManager
 import ollama
 
+# Default tools allowed in regular chat (excludes Project Brain tools)
+CHAT_ALLOWED_TOOLS = [
+    "read_file", "write_file", "delete_file", "replace_in_file", "replace_python_function",
+    "list_directory", "grep_search", "run_command", "run_admin_command",
+    "start_background_command", "read_background_command", "send_background_command",
+    "stop_background_command", "search_web", "read_webpage", "get_file_outline", 
+    "multi_replace_in_file", "write_obsidian_note", "search_obsidian_notes", 
+    "get_obsidian_vault", "semantic_search"
+]
+
 
 def _build_spec_prompt(objective: str, architecture: str, filename: str) -> str:
     """Build the Phase 1b prompt for detailing one file's specification."""
@@ -260,10 +270,12 @@ def main():
         '/help', '/model', '/obsidian', '/clear', '/research', '/enable_rag', '/disable_rag',
         '/hooks', '/sandbox', '/tools', '/save', '/setup_terminal', '/project', '/work', '/commit', '/exit', '/quit'
     ]
-    # Add custom commands from hooks to autocomplete
-    custom_names = [f"/{c}" for c in hook_manager.get_custom_commands().keys()]
     
-    command_completer = WordCompleter(builtin_cmds + custom_names, ignore_case=True, match_middle=False, sentence=True)
+    def get_all_commands():
+        custom_names = [f"/{c}" for c in hook_manager.get_custom_commands().keys()]
+        return builtin_cmds + custom_names
+    
+    command_completer = WordCompleter(get_all_commands, ignore_case=True, match_middle=False, sentence=True)
     session_history = InMemoryHistory()
     
     print_system(f"Active Model: {get_current_model()}")
@@ -809,6 +821,12 @@ def main():
                             "stop_background_command", "search_web", "read_webpage",
                             "complete_project_task", "write_obsidian_note", "get_obsidian_vault"
                         ]
+                else:
+                    # In normal chat, use CHAT_ALLOWED_TOOLS
+                    active_tools = CHAT_ALLOWED_TOOLS
+            else:
+                # Regular chat mode
+                active_tools = CHAT_ALLOWED_TOOLS
 
             response_chunks = agent.process_user_input(user_input, allowed_tools=active_tools)
             chunk_iterator = iter(response_chunks)

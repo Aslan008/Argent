@@ -1,4 +1,5 @@
 import sys
+import os
 import json
 import re
 import codecs
@@ -42,7 +43,7 @@ CRITICAL ENVIRONMENT INFO: The user is running on the """ + platform.system() + 
 - PROACTIVE INVESTIGATION: If a user asks a question about files or directories (e.g., "what do these scripts do?"), YOU MUST autonomously use `list_directory` and then `read_file` on relevant files to get the answer. DO NOT ask the user to provide the content of files you can access yourself.
 - ANTI-PASSIVITY: NEVER say "Please provide the content of X" if X is in the current directory or accessible via tools. Use the tool immediately.
 - If you suspect a typo or a non-existent entity, search the web to verify before correcting the user.
-- PROJECT MODE: When working on a /project, use `add_project_task` to plan steps and `complete_project_task(task_id, summary)` when done with each step. The summary is MANDATORY — describe what you did.
+- PROJECT MODE: Tools like `add_project_task`, `complete_project_task`, `write_project_spec`, and `write_project_architecture` are ONLY for use when you are explicitly helping a user build a massive multi-step project (Project Brain mode). If these tools are not listed in your `allowed_tools` for the current call, DO NOT try to use them. For regular chat tasks (like creating a single plugin), use regular file tools like `write_file` or `replace_in_file` directly.
 Do not explain what you are going to do and then stop. Output the correct tool call JSON directly!
 
 CRITICAL LANGUAGE INSTRUCTION: You MUST respond to the user in the EXACT SAME LANGUAGE they used to address you. If the user speaks Russian, you MUST reply in Russian. If you reply in English to a Russian prompt, the system will fail.
@@ -530,6 +531,18 @@ class ArgentAgent:
                                     result = f"Error: Execution of tool '{func_name}' was blocked by a user plugin."
                                 else:
                                     result = func(**filtered_args)
+                                    
+                                    # --- AUTO PLUGIN RELOAD ---
+                                    if func_name in ["write_file", "replace_in_file", "replace_python_function", "delete_file"]:
+                                        target_file = filtered_args.get("file_path")
+                                        if target_file and "Error" not in result:
+                                            # Normalize to absolute path
+                                            abs_target = os.path.abspath(target_file)
+                                            hooks_dir = os.path.abspath(get_hooks_dir())
+                                            if abs_target.startswith(hooks_dir):
+                                                hook_manager.reload_plugins(hooks_dir)
+                                                # Append a small notification to the tool result so the AI knows its new tool is ready
+                                                result += f"\n\n[Argent]: Plugin system reloaded. Any new or modified commands in '{os.path.basename(abs_target)}' are now active."
                         except Exception as e:
                             result = f"Error executing tool {func_name}: {e}"
                     else:

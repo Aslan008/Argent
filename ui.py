@@ -6,6 +6,7 @@ from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.text import Text
 from rich.theme import Theme
+from rich.markup import escape
 import ollama
 
 # --- LOAD THEME ---
@@ -85,7 +86,7 @@ def print_markdown(text: str):
     safe_print(panel)
 
 def print_system(text: str):
-    safe_print(f"[sys]{text}[/sys]")
+    safe_print(f"[sys]{escape(text)}[/sys]")
 
 def print_error(text: str):
     safe_print(f"[{c['error_msg']}]Error: {text}[/{c['error_msg']}]")
@@ -109,7 +110,7 @@ def print_tool_end(name: str, result: str):
         
     try:
         panel = Panel(
-            f"[dim]{res_preview}[/dim]", 
+            f"[dim]{escape(res_preview)}[/dim]", 
             title=f"[dim]✓ Tool {name} finished[/dim]", 
             title_align="left",
             border_style=c["tool_end_border"],
@@ -119,7 +120,7 @@ def print_tool_end(name: str, result: str):
         safe_print(panel)
     except UnicodeEncodeError:
         panel = Panel(
-            f"[dim]{res_preview}[/dim]", 
+            f"[dim]{escape(res_preview)}[/dim]", 
             title=f"[dim]> Tool {name} finished[/dim]", 
             title_align="left",
             border_style=c["tool_end_border"],
