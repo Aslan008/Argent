@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+.argent/sandbox/
+.argent_project.json
+theme.yaml
+.env
+.DS_Store
+*.log
