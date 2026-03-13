@@ -11,11 +11,12 @@ import ctypes
 import time
 from bs4 import BeautifulSoup
 from ui import console
-from config import get_obsidian_vault
+from config import get_obsidian_vault, get_hooks_dir
 import yaml
 import py_compile
 from deep_research import run_deep_research
 from project_manager import ProjectManager
+from hook_manager import hook_manager
 
 # ---------------------------------------------------------------------------
 # Helper Functions
@@ -1122,6 +1123,71 @@ def read_webpage(url: str) -> str:
     except Exception as e:
         return f"Error reading webpage '{url}': {e}"
 
+
+def create_plugin(name: str, code: str) -> str:
+    """
+    Creates a new Python plugin in the configured plugins directory.
+    Automatically handles directory path, .py extension, and syntax validation.
+    """
+    try:
+        hooks_dir = Path(get_hooks_dir()).expanduser().resolve()
+        hooks_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Ensure correct extension
+        if not name.endswith(".py"):
+            name += ".py"
+            
+        file_path = hooks_dir / name
+        
+        # Validation: Check if it uses console from ui
+        if "from ui import console" not in code and "import ui" not in code:
+            code = "from ui import console\n" + code
+            
+        # Write temporary file for syntax check
+        temp_path = hooks_dir / f"_temp_{name}"
+        with open(temp_path, "w", encoding="utf-8") as f:
+            f.write(code)
+            
+        error = _validate_code_syntax(str(temp_path))
+        if error:
+            temp_path.unlink()
+            return f"Failed to create plugin due to syntax error:\n{error}"
+            
+        # Move temp to final destination
+        if file_path.exists():
+            file_path.unlink()
+        temp_path.rename(file_path)
+        
+        # Reload plugins immediately
+        hook_manager.reload_plugins()
+        
+        return f"Successfully created plugin '{name}' in {hooks_dir}. It is now active."
+    except Exception as e:
+        return f"Error creating plugin: {e}"
+
+
+def delete_plugin(name: str) -> str:
+    """
+    Deletes a plugin from the plugins directory and reloads the hook manager.
+    """
+    try:
+        hooks_dir = Path(get_hooks_dir()).expanduser().resolve()
+        
+        # Ensure correct extension
+        if not name.endswith(".py"):
+            name += ".py"
+            
+        file_path = hooks_dir / name
+        
+        if file_path.exists():
+            file_path.unlink()
+            hook_manager.reload_plugins()
+            return f"Plugin '{name}' deleted successfully."
+        else:
+            return f"Plugin '{name}' not found in {hooks_dir}."
+    except Exception as e:
+        return f"Error deleting plugin: {e}"
+
 # ---------------------------------------------------------------------------
 # Tool Mapping & Schemas
 # ---------------------------------------------------------------------------
@@ -1155,7 +1221,9 @@ AVAILABLE_TOOLS = {
     "read_webpage": read_webpage,
     "get_file_outline": get_file_outline,
     "multi_replace_in_file": multi_replace_in_file,
-    "read_git_diff": read_git_diff
+    "read_git_diff": read_git_diff,
+    "create_plugin": create_plugin,
+    "delete_plugin": delete_plugin
 }
 
 TOOL_SCHEMAS = [
@@ -1400,6 +1468,44 @@ TOOL_SCHEMAS = [
                         "description": "Optional tag to search for, either in the YAML frontmatter or inline as #tag (e.g., 'idea', 'boss')."
                     }
                 }
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "create_plugin",
+            "description": "Creates a new Python plugin (hook/command) in the './plugins/' directory. Automatically handles imports, syntax validation, and reloads Argent to active the new command immediately.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "The filename of the plugin (e.g., 'weather_plugin' or 'weather_plugin.py')."
+                    },
+                    "code": {
+                        "type": "string",
+                        "description": "The full Python code for the plugin. Remember to use 'command_NAME' for slash-commands and 'from ui import console' for output."
+                    }
+                },
+                "required": ["name", "code"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "delete_plugin",
+            "description": "Deletes an existing plugin from the './plugins/' directory and reloads Argent.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "The filename of the plugin to delete (e.g., 'weather_plugin.py')."
+                    }
+                },
+                "required": ["name"]
             }
         }
     },

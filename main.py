@@ -34,7 +34,7 @@ CHAT_ALLOWED_TOOLS = [
     "start_background_command", "read_background_command", "send_background_command",
     "stop_background_command", "search_web", "read_webpage", "get_file_outline", 
     "multi_replace_in_file", "write_obsidian_note", "search_obsidian_notes", 
-    "get_obsidian_vault", "semantic_search"
+    "get_obsidian_vault", "semantic_search", "create_plugin", "delete_plugin"
 ]
 
 
