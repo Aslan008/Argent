@@ -1,5 +1,8 @@
 import os
 from pathlib import Path
+from logger import get_logger
+
+log = get_logger("rag")
 
 # IMPORTANT: We DO NOT import chromadb here at the top level!
 # It will be imported inside functions (lazy loading) to prevent slow startup times.
@@ -101,6 +104,37 @@ def _chunk_text(text: str, file_rel_path: str) -> list:
         
     return docs, metadatas
 
+def _load_argentignore(project_path: Path) -> set:
+    """Load .argentignore patterns from the project root."""
+    ignore_file = project_path / ".argentignore"
+    patterns = set()
+    if ignore_file.exists():
+        try:
+            for line in ignore_file.read_text(encoding="utf-8").splitlines():
+                line = line.strip()
+                if line and not line.startswith("#"):
+                    patterns.add(line.rstrip("/"))
+        except Exception:
+            pass
+    return patterns
+
+
+def _is_ignored(rel_path: str, patterns: set) -> bool:
+    """Check if a relative path matches any .argentignore pattern."""
+    if not patterns:
+        return False
+    parts = Path(rel_path).parts
+    for pattern in patterns:
+        if pattern in parts:
+            return True
+        if pattern.startswith("*."):
+            if rel_path.endswith(pattern[1:]):
+                return True
+        if rel_path.startswith(pattern):
+            return True
+    return False
+
+
 def _index_codebase(project_path: Path, collection):
     """Walks the codebase and chunks files into the vector database."""
     print("[INFO] Indexing codebase. This might take a minute...")
@@ -110,20 +144,26 @@ def _index_codebase(project_path: Path, collection):
     metadatas = []
     
     supported_extensions = {".py", ".cs", ".js", ".ts", ".html", ".css", ".cpp", ".h", ".c"}
-    ignore_dirs = {".git", ".argent", "node_modules", "venv", "env", "Library", "Temp", "Logs"}
+    default_ignore = {".git", ".argent", "node_modules", "venv", "env", "Library", "Temp", "Logs"}
+    
+    ignore_patterns = _load_argentignore(project_path)
     
     doc_id_counter = 0
     
     for root, dirs, files in os.walk(project_path):
-        dirs[:] = [d for d in dirs if d not in ignore_dirs]
+        rel_root = str(Path(root).relative_to(project_path))
+        dirs[:] = [d for d in dirs
+                   if d not in default_ignore
+                   and not _is_ignored(str(Path(rel_root) / d) if rel_root != "." else d, ignore_patterns)]
         for file in files:
             file_path = Path(root) / file
-            if file_path.suffix in supported_extensions:
+            rel = str(file_path.relative_to(project_path))
+            if file_path.suffix in supported_extensions and not _is_ignored(rel, ignore_patterns):
                 try:
-                    with open(file_path, 'r', encoding='utf-8') as f:
+                    with open(file_path, 'r', encoding="utf-8") as f:
                         source = f.read()
                     
-                    file_docs, file_metas = _chunk_text(source, str(file_path.relative_to(project_path)))
+                    file_docs, file_metas = _chunk_text(source, rel)
                     for d, m in zip(file_docs, file_metas):
                         docs.append(d)
                         metadatas.append(m)
@@ -134,6 +174,7 @@ def _index_codebase(project_path: Path, collection):
                     
     if docs:
         print(f"[INFO] Uploading {len(docs)} chunks to ChromaDB...")
+        log.info("Indexing %d chunks into ChromaDB", len(docs))
         batch_size = 5000
         for i in range(0, len(docs), batch_size):
             collection.upsert(
@@ -142,6 +183,7 @@ def _index_codebase(project_path: Path, collection):
                 ids=ids[i:i+batch_size]
             )
     print("[INFO] Indexing complete.")
+    log.info("Indexing complete: %d docs, %d ids", len(docs), len(ids))
 
 def update_file_index(file_path: str):
     """Updates the vector index for a single file. Useful for synchronous RAG updates."""

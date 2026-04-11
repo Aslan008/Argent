@@ -2,58 +2,73 @@ import sys
 import json
 import requests
 import time
-from typing import List, Dict
+import re
+from typing import List, Dict, Any
 from bs4 import BeautifulSoup
 from ddgs import DDGS
 from config import get_current_model
+from providers import create_provider, ProviderError
 from ui import console
+from logger import get_logger
+
+log = get_logger("research")
+
+# New imports for advanced pipeline
+try:
+    from crawl4ai import AsyncWebCrawler
+except ImportError:
+    pass
+
+try:
+    from sentence_transformers import SentenceTransformer
+except ImportError:
+    pass
+
+try:
+    import numpy as np
+except ImportError:
+    pass
 
 OLLAMA_API_URL = "http://localhost:11434/api/generate"
 
-def _call_ollama_sync(prompt: str, json_format: bool = False, temperature: float = 0.3) -> str:
-    """Synchronous internal call to the local Ollama model."""
+def _call_llm_sync(prompt: str, json_format: bool = False, temperature: float = 0.3) -> str:
+    """Synchronous internal call to the configured LLM provider."""
     model = get_current_model()
     if not model:
-        model = "llama3.2" 
-        
-    payload = {
-        "model": model,
-        "prompt": prompt,
-        "stream": False,
-        "options": {
-            "temperature": temperature
-        }
-    }
+        model = "llama3.2"
     
-    if json_format:
-        payload["format"] = "json"
-        
     try:
-        # Увеличил таймаут до 600 секунд (10 минут) для медленных/тяжелых моделей
-        response = requests.post(OLLAMA_API_URL, json=payload, timeout=600)
-        response.raise_for_status()
-        data = response.json()
-        return data.get("response", "")
+        provider = create_provider()
+        return provider.sync_chat(
+            model=model,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=temperature,
+            json_format=json_format,
+        )
+    except ProviderError as e:
+        console.print(f"[bold red]Deep Research Error:[/bold red] {e}")
+        return ""
     except Exception as e:
-        console.print(f"[bold red]Deep Research Ollama Error:[/bold red] {e}")
+        console.print(f"[bold red]Deep Research Error:[/bold red] {e}")
         return ""
 
 def _generate_queries(objective: str) -> List[str]:
-    """Ask Ollama to brainstorm 3 distinct search queries for DuckDuckGo."""
+    """Ask Ollama to brainstorm 3-5 distinct search queries for DuckDuckGo."""
     prompt = f"""You are an elite autonomous research agent. 
 The user wants you to research the following topic deeply: '{objective}'.
-Generate exactly 3 distinct, highly effective search queries that you would type into Google to find the best technical articles, forums, or documentation on this topic.
+Generate exactly 5 distinct, highly effective search queries that you would type into Google to find the best technical articles, forums, or documentation on this topic.
+Focus on different aspects: technical docs, GitHub issues, stackoverflow, and deep-dive blogs.
 Return ONLY a valid JSON array of strings. No markup, no explanations.
-Example: ["query 1", "query 2", "query 3"]
+Example: ["query 1", "query 2", "query 3", "query 4", "query 5"]
 """
-    result = _call_ollama_sync(prompt, json_format=True, temperature=0.7)
+    result = _call_llm_sync(prompt, json_format=True, temperature=0.7)
     if not result:
         return [objective]
         
     try:
         queries = json.loads(result)
         if isinstance(queries, list) and len(queries) > 0:
-            return [str(q) for q in queries][:3]
+            return [str(q) for q in queries][:5]
     except Exception:
         pass
         
@@ -61,25 +76,93 @@ Example: ["query 1", "query 2", "query 3"]
     try:
         queries = json.loads(cleaned)
         if isinstance(queries, list) and len(queries) > 0:
-            return [str(q) for q in queries][:3]
+            return [str(q) for q in queries][:5]
     except Exception:
         pass
         
     return [objective]
 
-def _extract_info(objective: str, chunk: str) -> str:
-    """Ask Ollama to read a chunk of HTML text and extract relevant info."""
+def _scrape_url(url: str) -> str:
+    """Read a webpage and extract clean Markdown/Text content."""
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    }
+    try:
+        resp = requests.get(url, headers=headers, timeout=15)
+        if resp.status_code != 200:
+            return ""
+            
+        soup = BeautifulSoup(resp.text, 'html.parser')
+        
+        # Remove garbage
+        for element in soup(["script", "style", "nav", "footer", "header", "aside", "form"]):
+            element.extract()
+            
+        # Try to find main content
+        main_content = soup.find('main') or soup.find('article') or soup.find('div', class_=re.compile(r'content|article|post|main', re.I))
+        if main_content:
+            text = main_content.get_text(separator='\n', strip=True)
+        else:
+            text = soup.get_text(separator='\n', strip=True)
+            
+        return text
+    except Exception as e:
+        console.print(f"  [dim red]Scraping failed for {url}: {e}[/dim red]")
+        return ""
+
+def _chunk_text(text: str, chunk_size: int = 800, overlap: int = 150) -> List[str]:
+    """Split text into overlapping chunks."""
+    if not text:
+        return []
+    
+    # Simple character-based chunking for performance
+    chunks = []
+    start = 0
+    while start < len(text):
+        end = start + chunk_size
+        chunks.append(text[start:end])
+        start += (chunk_size - overlap)
+        
+    return chunks
+
+def _rerank_chunks(objective: str, all_chunks: List[str], top_n: int = 10) -> List[str]:
+    """Use sentence-transformers to find the most relevant chunks."""
+    if not all_chunks:
+        return []
+        
+    try:
+        console.print(f"  [dim cyan]Reranking {len(all_chunks)} chunks using SentenceTransformer...[/dim cyan]")
+        model = SentenceTransformer('all-MiniLM-L6-v2') # Light and fast
+        
+        obj_embedding = model.encode([objective])
+        chunk_embeddings = model.encode(all_chunks)
+        
+        # Compute cosine similarity
+        similarities = np.dot(chunk_embeddings, obj_embedding.T).flatten()
+        
+        # Get top-N indices
+        top_indices = np.argsort(similarities)[-top_n:][::-1]
+        
+        return [all_chunks[i] for i in top_indices]
+    except Exception as e:
+        console.print(f"  [dim yellow]Reranking failed: {e}. Using first chunks instead.[/dim yellow]")
+        return all_chunks[:top_n]
+
+def _extract_info(objective: str, chunks: List[str]) -> str:
+    """Ask Ollama to synthesize information from multiple chunks."""
+    combined_text = "\n---\n".join(chunks)
     prompt = f"""You are a research data extractor. 
 Your overarching objective is: '{objective}'
 
-Please read the following text extracted from a webpage. 
+Below are some fragments of text found on the internet. 
 Extract and summarize any useful facts, code snippets, optimizations, or relevant details that help achieve the objective.
-If the text does NOT contain anything genuinely useful for the objective, or if it is just SEO filler, reply with exactly the word "NOTHING".
+Synthesize the information into a cohesive set of notes. Omit irrelevant parts.
+If NOTHING useful is found, reply with "NOTHING".
 
-TEXT:
-{chunk[:6000]}
+TEXT FRAGMENTS:
+{combined_text[:12000]}
 """
-    result = _call_ollama_sync(prompt, temperature=0.2).strip()
+    result = _call_llm_sync(prompt, temperature=0.2).strip()
     if result.upper() == "NOTHING" or result.upper() == '"NOTHING"':
         return ""
     return result
@@ -87,16 +170,17 @@ TEXT:
 def run_deep_research(objective: str) -> str:
     """
     Executes an autonomous Deep Research loop:
-    1. Generates 3 search queries.
-    2. Searches DDG and gets top 3 links per query.
-    3. Scrapes HTML, filters garbage.
-    4. Evaluates and extracts relevance using local LLM.
+    1. Generates 5 search queries.
+    2. Searches DDG and gets top links.
+    3. Scrapes content from top sites.
+    4. Chunks text and Reranks most relevant fragments.
     5. Summarizes everything into a unified report.
     """
-    console.print(f"\n[bold cyan]🧠 Starting Deep Research Sub-Agent...[/bold cyan]")
+    console.print(f"\n[bold cyan]Starting Advanced Deep Research...[/bold cyan]")
+    log.info("Deep research started: %s", objective[:100])
     console.print(f"Objective: {objective}")
     
-    console.print("🤔 Brainstorming search queries...")
+    console.print("Thinking: Brainstorming search queries...")
     queries = _generate_queries(objective)
     for i, q in enumerate(queries, 1):
         console.print(f"  {i}. {q}")
@@ -105,7 +189,7 @@ def run_deep_research(objective: str) -> str:
     all_links = []
     
     # 1. Search
-    console.print("🔎 Searching DuckDuckGo...")
+    console.print("Searching DuckDuckGo...")
     with DDGS() as ddgs:
         for q in queries:
             try:
@@ -113,76 +197,66 @@ def run_deep_research(objective: str) -> str:
                 for r in results:
                     url = r.get("href")
                     if url and url not in visited_urls:
-                        # Exclude YouTube videos as they are hard to scrape text from here
                         if "youtube.com" not in url and "youtu.be" not in url:
                             visited_urls.add(url)
                             all_links.append(url)
             except Exception as e:
                 console.print(f"[dim yellow]Search warning for '{q}': {e}[/dim yellow]")
                 
-    console.print(f"📚 Found {len(all_links)} unique text sources to analyze.")
+    console.print(f"Found {len(all_links)} unique sources to analyze.")
     
-    # 2. Scrape and Extract
-    extracted_knowledge = []
+    # 2. Scrape and Chunk
+    all_chunks = []
+    source_map = {} # Map chunks back to sources
     
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/91.0.4472.124 Safari/537.36"
-    }
-    
-    for url in all_links[:6]: # Cap at 6 to prevent script from taking 10+ minutes locally
-        console.print(f"📖 Reading: {url}")
-        try:
-            resp = requests.get(url, headers=headers, timeout=10)
-            if resp.status_code != 200:
-                console.print(f"  [dim]Skipped ({resp.status_code})[/dim]")
-                continue
-                
-            soup = BeautifulSoup(resp.text, 'html.parser')
-            for element in soup(["script", "style", "nav", "footer", "header", "aside"]):
-                element.extract()
-                
-            text = soup.get_text(separator=' ', strip=True)
-            if len(text) < 200:
-                console.print(f"  [dim]Skipped (Too little text)[/dim]")
-                continue
-                
-            # Take the first ~6500 chars to evaluate (avoids hitting context window limit too hard for 8b models)
-            chunk = text[:6500]
-            console.print("  [dim]Evaluating relevance via LLM...[/dim]")
-            info = _extract_info(objective, chunk)
+    for url in all_links[:10]: # Analyze up to 10 sources
+        console.print(f"Reading: {url}")
+        content = _scrape_url(url)
+        if len(content) < 200:
+            continue
             
-            if info:
-                console.print(f"  [green]✓ Relevant info extracted![/green]")
-                extracted_knowledge.append(f"--- SOURCE: {url} ---\n{info}\n")
-            else:
-                console.print(f"  [dim]✗ No relevant technical info found.[/dim]")
-                
-        except Exception as e:
-            console.print(f"  [dim]Failed to read: {e}[/dim]")
-            
-    if not extracted_knowledge:
-        return f"Deep Research failed to find heavily relevant information for: '{objective}'. The agent tried {len(all_links)} sources but found nothing concrete."
+        chunks = _chunk_text(content)
+        for c in chunks:
+            all_chunks.append(c)
+            source_map[c] = url
+
+    if not all_chunks:
+        return f"Deep Research failed to find any text content for: '{objective}'."
         
-    # 3. Final Synthesis
-    console.print("[bold cyan]🔄 Synthesizing Final Report...[/bold cyan]")
-    combined_notes = "\n".join(extracted_knowledge)
+    # 3. Rerank
+    relevant_chunks = _rerank_chunks(objective, all_chunks, top_n=15)
     
-    # We send the final synthesis request. This might be quite large.
+    # 4. Extract & Synthesize Finding per Chunk Group (batching to Ollama)
+    console.print("  [dim]Synthesizing extracted knowledge via LLM...[/dim]")
+    extracted_notes = _extract_info(objective, relevant_chunks)
+    
+    if not extracted_notes:
+        return f"Research completed, but no relevant technical info was found in the {len(all_links)} sources."
+        
+    # 5. Final Synthesis
+    console.print("[bold cyan]Building Final Report...[/bold cyan]")
+    
+    # Collect sources used in final chunks
+    used_sources = sorted(list(set(source_map[c] for c in relevant_chunks if c in source_map)))
+    sources_text = "\n".join([f"- {s}" for s in used_sources])
+    
     synthesis_prompt = f"""You are an elite expert researcher.
 Your overarching research objective was: '{objective}'
 
-Here are the raw notes extracted from various internet sources by your sub-agents:
-{combined_notes}
+Here are the extracted findings from the most relevant web fragments:
+{extracted_notes}
 
 Synthesize this information into a MASSIVE, highly structured, cohesive, and deeply technical Markdown report.
 Group similar concepts together. Include code blocks where applicable. Ensure no valuable technical details are lost. Use clear headers and bullet points.
-Include a list of sources used at the bottom.
+Include a section 'SOURCES' at the bottom listing these URLs:
+{sources_text}
+
 Do not add conversational fluff. Output ONLY the markdown report.
 """
-    final_report = _call_ollama_sync(synthesis_prompt, temperature=0.3)
+    final_report = _call_llm_sync(synthesis_prompt, temperature=0.3)
     
     if not final_report:
-        return f"Research completed, but failed to synthesize final report.\nRaw findings:\n{combined_notes}"
+        return f"Research completed, but failed to synthesize final report.\nRaw findings:\n{extracted_notes}"
     
-    console.print("[bold green]✅ Deep Research Complete![/bold green]")
+    console.print("[bold green]Deep Research Complete![/bold green]")
     return final_report

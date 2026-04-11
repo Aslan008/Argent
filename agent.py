@@ -5,22 +5,37 @@ import re
 import codecs
 import inspect
 import platform
+from pathlib import Path
 from typing import List, Dict, Any, Generator
 import ollama
 
 from tools import TOOL_SCHEMAS, AVAILABLE_TOOLS, get_tool_schemas, get_available_tools
 from config import (
     get_current_model, get_obsidian_vault, 
-    get_hooks_dir, get_autonomous_plugins_enabled
+    get_hooks_dir, get_autonomous_plugins_enabled,
+    get_context_window, get_provider
 )
+from providers import create_provider, ProviderError
+from logger import get_logger
 from hook_manager import hook_manager
+from prompt_compressor import compress_system_prompt, compress_tool_result
+from tool_recovery import recover_tool_call
+from memory_manager import memory
+from config import get_model_size_category
+
+log = get_logger("agent")
 
 SYSTEM_PROMPT = f"""
+# CRITICAL: LANGUAGE RULE
+- You MUST respond and perform ALL internal reasoning (thinking process) in the EXACT SAME LANGUAGE the user used in their request. This is your highest priority rule.
+- If the user writes in Russian, you THINK in Russian and REPLY in Russian.
+
 # ROLE: Argent Coder
 You are an autonomous AI software engineer. You design, build, and debug software with precision and speed on {platform.system()}.
 
 ## 1. OPERATIONAL PROTOCOL
 - **Tool-First**: YOU are the only one with tool access. Invoke tools immediately via JSON.
+- **Ask Before Guessing**: If a user's request is ambiguous or lacks details, you MUST use the `ask_user_questions` tool to prompt them with structured options before writing code. Do NOT just ask questions in plain text chat.
 - **Anti-Lazy**: Never ask the user to run code or copy-paste. Use `run_command` and `write_file` yourself.
 - **Proactive Search**: Always use `search_web` for technical info, documentation, or current events.
 - **Self-Correction**: If a tool fails, analyze the error and fix it proactively. Do not apologize.
@@ -39,6 +54,12 @@ When asked to create/manage a "plugin" or "new command":
     - `on_chat_saved(file_path)`: Runs after chat log is saved.
 4. **Implementation**: Always use `from ui import console` for output.
 
+### Skills System
+You have access to "Skills" — instruction-based extensions stored in markdown files.
+1. **Discovery**: Use `list_skills` to see what specialized instructions are available.
+2. **Usage**: If a user's request matches a skill's description, use `read_skill` to get the full instructions and FOLLOW THEM strictly.
+3. **Persistence**: Use `create_skill` to save complex workflows, expert personas, or specific logic patterns for future use.
+
 ### Project Brain Mode
 - Tools like `add_project_task`, `write_project_spec`, etc., are EXCLUSIVELY for massive multi-step projects.
 - If these tools are not in your `allowed_tools` list, DO NOT attempt to call them. Use regular file tools instead.
@@ -48,14 +69,35 @@ When asked to create/manage a "plugin" or "new command":
 - **"Table"**: Always refers to `rich.table.Table`.
 - **Output**: Use `console.print()` or `print_system()` for beautiful terminal results.
 
-## 4. COMMUNICATION
-- **Language**: You MUST respond in the EXACT SAME LANGUAGE the user used (e.g., Russian prompt = Russian reply).
+## 4. THINK & VERIFY PROTOCOL
+- **Outcome Analysis**: After EACH tool call, analyze if the result truly moves you closer to the goal.
+- **False Success**: "Requirement already satisfied" or "Exit code: 0" does NOT always mean success. If a tool reports success but the problem persists (e.g., a package still can't be imported), you MUST try a different approach (e.g., check paths, use `--force-reinstall`, or investigate environment).
+- **Proactive Verification**: After installing things or writing complex files, use `run_command` or `read_file` to VERIFY they work as intended.
+- **Self-Correction**: If you are stuck in a loop, STOP. Rethink your strategy. Explain your new reasoning to the user.
+
+## 5. COMMUNICATION
+- **Language**: Follow the CRITICAL LANGUAGE RULE at the top of this prompt.
+- **Transparency**: Briefly state your reasoning before executing tools, especially if you are changing your plan.
+- **Visuals**: If a complex concept, UI mockup, or architecture diagram would help the user, USE the `create_svg_image` tool. This will automatically open a browser window for the user to see your work.
 """
 
 class ArgentAgent:
-    def __init__(self, max_history_messages: int = 20):
-        self.max_history_messages = max_history_messages
+    def __init__(self, max_history_messages: int = None):
         self.model_name = get_current_model()
+        self.provider = get_provider()
+        self.max_context_tokens = get_context_window()
+        
+        if max_history_messages is not None:
+            self.max_history_messages = max_history_messages
+        else:
+            category = get_model_size_category(self.model_name)
+            self.max_history_messages = {
+                "tiny": 6,
+                "small": 10,
+                "medium": 20,
+                "large": 30,
+                "cloud": 40,
+            }.get(category, 20)
         system_prompt = SYSTEM_PROMPT
         
         vault = get_obsidian_vault()
@@ -83,8 +125,24 @@ class ArgentAgent:
         else:
             system_prompt += "- **Note**: You ARE NOT allowed to create plugins unless explicitly requested by the user.\n"
 
+        # Load AGENTS.md project instructions if present
+        agents_md_paths = [
+            Path(".argent/AGENTS.md"),
+            Path("AGENTS.md"),
+        ]
+        for p in agents_md_paths:
+            if p.exists():
+                try:
+                    agents_content = p.read_text(encoding="utf-8").strip()
+                    if agents_content:
+                        system_prompt += f"\n## 7. PROJECT INSTRUCTIONS (from {p})\n{agents_content}\n"
+                    break
+                except Exception:
+                    pass
+
+        compressed_prompt = compress_system_prompt(system_prompt, self.model_name)
         self.messages: List[Dict[str, Any]] = [
-            {"role": "system", "content": system_prompt}
+            {"role": "system", "content": compressed_prompt}
         ]
 
     def set_model(self, model_name: str):
@@ -111,51 +169,131 @@ class ArgentAgent:
         )
         
         try:
-            from ui import console
-            # console.print("[dim]...Compressing context memory...[/dim]") # Removed to avoid spam
-            response = ollama.chat(
+            provider = create_provider()
+            validation_error = provider.validate_config()
+            if validation_error:
+                return summary_prompt
+            result = provider.sync_chat(
                 model=self.model_name,
                 messages=[{"role": "user", "content": summary_prompt}]
             )
-            return response.get("message", {}).get("content", "[Compression Failed]")
+            return result or "[Compression Failed]"
         except Exception:
             return "Previous context omitted to save memory."
 
     def _trim_history(self):
-        """Keeps history size manageable using token heuristics and LLM summarization."""
-        MAX_CONTEXT_TOKENS = 16000 # Safe budget
+        """Keeps history size manageable. Uses two strategies:
+        - tiny/small models: hard reset with memory preservation (no LLM call needed)
+        - medium/large/cloud: LLM summarization of old messages
+        """
+        self.max_context_tokens = get_context_window()
         
-        # Calculate tokens of history (excluding system prompt at index 0)
         history_tokens = sum(self._estimate_tokens(str(m)) for m in self.messages[1:])
         msg_count = len(self.messages) - 1
         
-        if msg_count <= self.max_history_messages and history_tokens <= MAX_CONTEXT_TOKENS:
+        if msg_count <= self.max_history_messages and history_tokens <= self.max_context_tokens:
             return
-            
-        # We need to trim. Calculate how many to drop.
-        # We drop either because we hit max_messages, or because we hit token limit.
-        excess_count = msg_count - self.max_history_messages
-        excess_count = max(excess_count, 0)
+
+        category = get_model_size_category(self.model_name)
+
+        if category in ("tiny", "small"):
+            self._hard_reset_with_memory()
+        else:
+            self._soft_trim_with_summarization()
+
+    def _hard_reset_with_memory(self):
+        """Full context reset for small models.
+        Preserves system prompt and injects structured memory note.
+        No LLM call needed — memory is accumulated incrementally during conversation.
+        """
+        self._update_memory_from_messages()
+
+        context_note = memory.build_context_note()
+
+        system_content = self.messages[0]["content"]
+        if context_note:
+            sep = "\n\n=== PERSISTENT MEMORY (context was reset) ===\n"
+            end = "\n=== END MEMORY ==="
+            existing = system_content.find("=== PERSISTENT MEMORY")
+            if existing != -1:
+                end_marker = system_content.find("=== END MEMORY ===", existing)
+                if end_marker != -1:
+                    system_content = system_content[:existing] + sep + context_note + end + system_content[end_marker + len("=== END MEMORY ==="):]
+                else:
+                    system_content += sep + context_note + end
+            else:
+                system_content += sep + context_note + end
+
+        self.messages = [{"role": "system", "content": system_content}]
+        log.info("Hard context reset performed (model=%s, category=%s)", self.model_name, get_model_size_category(self.model_name))
+
+    def _update_memory_from_messages(self):
+        """Extract key information from recent messages before clearing them."""
+        last_user_msg = ""
+        last_assistant_action = ""
+
+        for m in reversed(self.messages):
+            if m.get("role") == "user" and not last_user_msg:
+                content = m.get("content", "")
+                if content and not content.startswith("/"):
+                    last_user_msg = content
+            elif m.get("role") == "assistant" and not last_assistant_action:
+                content = m.get("content", "")
+                if content:
+                    first_line = content.strip().split("\n")[0][:200]
+                    last_assistant_action = first_line
+
+        if last_user_msg and not memory.data.get("objective"):
+            memory.set_objective(last_user_msg)
+
+        if last_assistant_action:
+            memory.set_current_task(last_assistant_action)
+
+    def _soft_trim_with_summarization(self):
+        """LLM-based summarization for medium/large/cloud models."""
+        pinned_indices = {0}
+        for i, m in enumerate(self.messages):
+            if m.get("role") == "system":
+                content = m.get("content", "")
+                if any(x in content for x in ["PROJECT SPECIFICATION", "ARCHITECTURE MAP", "PREVIOUS CONTEXT MEMORY", "PERSISTENT MEMORY"]):
+                    pinned_indices.add(i)
+
+        msgs_to_summarize = []
+        indices_to_drop = []
+
+        current_tokens = sum(self._estimate_tokens(str(m)) for m in self.messages[1:])
+        for i in range(1, len(self.messages)):
+            if i in pinned_indices:
+                continue
+            if len(self.messages) - len(indices_to_drop) <= self.max_history_messages and current_tokens <= (self.max_context_tokens * 0.7):
+                break
+            msgs_to_summarize.append(self.messages[i])
+            indices_to_drop.append(i)
+            current_tokens -= self._estimate_tokens(str(self.messages[i]))
+
+        if not msgs_to_summarize:
+            return
+
+        from ui import console
+        with console.status("[dim magenta]Оптимизация контекста...[/dim magenta]", spinner="dots"):
+            summary = self._summarize_messages(msgs_to_summarize)
         
-        # If still over tokens after excess_count, drop more until we're under 50% of max tokens to give headroom
-        drop_idx = 1 + excess_count
-        while drop_idx < len(self.messages) and sum(self._estimate_tokens(str(m)) for m in self.messages[drop_idx:]) > (MAX_CONTEXT_TOKENS // 2):
-            drop_idx += 1
-            
-        # We must keep pairs intact (tool_call <-> tool_result). For simplicity, we just chunk it.
-        # The messages to summarize are from index 1 to drop_idx
-        if drop_idx > 1:
-            msgs_to_drop = self.messages[1:drop_idx]
-            summary = self._summarize_messages(msgs_to_drop)
-            
-            # Create a memory injection message
-            memory_msg = {
-                "role": "system", 
-                "content": f"=== PREVIOUS CONTEXT MEMORY ===\n{summary}\n=== END MEMORY ==="
-            }
-            
-            # Replace the dropped messages with the memory message
-            self.messages = [self.messages[0]] + [memory_msg] + self.messages[drop_idx:]
+        memory_msg = {
+            "role": "system",
+            "content": f"=== PREVIOUS CONTEXT MEMORY ===\n{summary}\n=== END MEMORY ==="
+        }
+
+        new_messages = []
+        memory_injected = False
+        for i, m in enumerate(self.messages):
+            if i in indices_to_drop:
+                if not memory_injected:
+                    new_messages.append(memory_msg)
+                    memory_injected = True
+                continue
+            new_messages.append(m)
+
+        self.messages = new_messages
 
     # Parameter name aliases for known tools
     _PARAM_ALIASES = {
@@ -316,14 +454,11 @@ class ArgentAgent:
         if not isinstance(parsed, dict):
             return None
         
-        # Format: [{"name": ..., "arguments": {...}}] (array)
-        if isinstance(parsed, list) and len(parsed) > 0:
-            parsed = parsed[0]
-            if not isinstance(parsed, dict):
-                return None
-        
-        # Format: {"name": ..., "arguments": {...}} (standard)
-        if "name" in parsed and "arguments" in parsed:
+        # Format: {"name": ..., "arguments": {...}} or {"function": ..., "arguments": {...}}
+        # Support both 'name' and 'function' as a top-level key for the tool name
+        tool_id = parsed.get("name") or parsed.get("function")
+        if tool_id and isinstance(tool_id, str) and "arguments" in parsed:
+            parsed["name"] = tool_id # Canonicalize for the rest of the logic
             parsed = self._normalize_tool_params(parsed)
             return {"parsed": parsed}
         
@@ -342,13 +477,15 @@ class ArgentAgent:
     
     def _try_recover_malformed_tool(self, content: str, tool_name: str) -> dict | None:
         """Last-resort recovery for malformed JSON (e.g., unescaped newlines in strings).
-        Uses regex to extract file_path and content parameters directly."""
-        if tool_name != "write_file":
+        Uses regex to extract path and content parameters directly."""
+        # Supported tools for content recovery
+        CONTENT_TOOLS = ["write_file", "write_obsidian_note", "replace_python_function", "replace_in_file"]
+        if tool_name not in CONTENT_TOOLS:
             return None
         
-        # Try to find file path under any common parameter name
+        # Try to find file/note path under any common parameter name
         fp_match = re.search(
-            r'"(?:file_path|filename|filepath|path|file)"\s*:\s*"([^"]+)"', content
+            r'"(?:file_path|filename|filepath|path|file|note_path)"\s*:\s*"([^"]+)"', content
         )
         # Find content: grab everything after "content": " until we can determine the end
         ct_match = re.search(r'"content"\s*:\s*"([\s\S]*)', content)
@@ -370,10 +507,15 @@ class ArgentAgent:
         recovered = recovered.replace('\\"', '"')
         recovered = recovered.replace('\\\\', '\\')
         
+        # Identify the correct parameter name for the path
+        path_param = "file_path"
+        if tool_name == "write_obsidian_note":
+            path_param = "note_path"
+            
         parsed = {
-            "name": "write_file",
+            "name": tool_name,
             "arguments": {
-                "file_path": fp_match.group(1),
+                path_param: fp_match.group(1),
                 "content": recovered
             }
         }
@@ -386,62 +528,123 @@ class ArgentAgent:
         Supports streaming generation.
         """
         self.messages.append({"role": "user", "content": user_text})
+        
+        if not user_text.startswith("/"):
+            if not memory.data.get("objective"):
+                memory.set_objective(user_text)
+            else:
+                memory.set_current_task(user_text[:200])
+        
         self._trim_history()
         
         while True:
             # Variables to accumulate the streamed response
             full_content = ""
+            full_reasoning = ""
             tool_calls_accumulator = []
             is_building_raw_tool = False
             raw_tool_buffer = ""
+            raw_tool_char_count = 0
+            reasoning_tag_active = False
+            START_TAGS = ["<thought>", "<think>", "<reasoning>"]
+            END_TAGS = ["</thought>", "</think>", "</reasoning>"]
             
             try:
-                # Filter tools if requested
                 active_tools = get_tool_schemas()
                 if allowed_tools is not None:
                     active_tools = [t for t in active_tools if t["function"]["name"] in allowed_tools]
 
-                # Make the streaming call
-                response_stream = ollama.chat(
+                provider = create_provider()
+                validation_error = provider.validate_config()
+                if validation_error:
+                    yield {"type": "error", "content": validation_error}
+                    return
+
+                response_stream = provider.stream_chat(
                     model=self.model_name,
                     messages=self.messages,
                     tools=active_tools,
-                    stream=True
+                    context_window=self.max_context_tokens if self.provider != "zai" else None,
                 )
-                
-                # Iterate through the stream. We wrap this in a try/except because
-                # the 400 error often happens on the first iteration.
+
                 for chunk in response_stream:
-                    msg_chunk = chunk.get("message", {})
-                    
-                    # 1. Handle native tool calls if the model supports them
-                    if "tool_calls" in msg_chunk:
-                        for tc in msg_chunk["tool_calls"]:
-                            if tc not in tool_calls_accumulator:
-                                tool_calls_accumulator.append(tc)
-                    
-                    # 2. Check for content stream
-                    content_chunk = msg_chunk.get("content", "")
+                    thinking_chunk = chunk.get("thinking", "")
+                    if thinking_chunk:
+                        full_reasoning += thinking_chunk
+                        yield {"type": "thinking_stream", "content": thinking_chunk}
+
+                    for tc_delta in chunk.get("tool_call_deltas", []):
+                        index = tc_delta["index"]
+                        while len(tool_calls_accumulator) <= index:
+                            tool_calls_accumulator.append({"id": "", "function": {"name": "", "arguments": ""}})
+                        if tc_delta.get("id"):
+                            tool_calls_accumulator[index]["id"] = tc_delta["id"]
+                        if tc_delta.get("function_name_delta"):
+                            tool_calls_accumulator[index]["function"]["name"] += tc_delta["function_name_delta"]
+                        if tc_delta.get("function_arguments_delta"):
+                            tool_calls_accumulator[index]["function"]["arguments"] += tc_delta["function_arguments_delta"]
+                            # Yield a progress signal so the UI can show a spinner
+                            yield {"type": "tool_generating", "name": tool_calls_accumulator[index]["function"]["name"], "bytes": len(tool_calls_accumulator[index]["function"]["arguments"])}
+
+                    content_chunk = chunk.get("content", "")
                     if content_chunk:
-                        full_content += content_chunk
-                        raw_tool_buffer += content_chunk
+                        # Logic to handle tags that might be split across chunks
+                        # and redirect content to reasoning if a tag is active.
+                        temp_content = content_chunk
                         
-                        # Detect if we are building a raw JSON tool call
-                        stripped_buffer = raw_tool_buffer.lstrip()
-                        if stripped_buffer.startswith('```json') or stripped_buffer.startswith('{'):
-                            is_building_raw_tool = True
+                        # Check for START TAGS
+                        for tag in START_TAGS:
+                            if tag in temp_content:
+                                # Split: everything before tag is content, anything after is reasoning
+                                parts = temp_content.split(tag, 1)
+                                if parts[0] and not reasoning_tag_active and not is_building_raw_tool:
+                                    yield {"type": "content_stream", "content": parts[0]}
+                                    full_content += parts[0]
+                                
+                                reasoning_tag_active = True
+                                temp_content = parts[1]
+                                break
                         
-                        if not is_building_raw_tool:
-                            yield {"type": "content_stream", "content": content_chunk}
+                        # Check for END TAGS
+                        for tag in END_TAGS:
+                            if tag in temp_content:
+                                # Split: everything before tag is reasoning, after is content
+                                parts = temp_content.split(tag, 1)
+                                if parts[0] and reasoning_tag_active:
+                                    full_reasoning += parts[0]
+                                    yield {"type": "thinking_stream", "content": parts[0]}
+                                
+                                reasoning_tag_active = False
+                                temp_content = parts[1]
+                                break
+                        
+                        if reasoning_tag_active:
+                            full_reasoning += temp_content
+                            yield {"type": "thinking_stream", "content": temp_content}
+                        else:
+                            if temp_content:
+                                full_content += temp_content
+                                raw_tool_buffer += temp_content
+                                
+                                # Detect if we are building a raw JSON tool call
+                                stripped_buffer = raw_tool_buffer.lstrip()
+                                if stripped_buffer.startswith('```json') or stripped_buffer.startswith('{'):
+                                    is_building_raw_tool = True
+                                
+                                if not is_building_raw_tool:
+                                    yield {"type": "content_stream", "content": temp_content}
+                                else:
+                                    # Signal progress so the UI can show a spinner
+                                    yield {"type": "tool_generating", "name": "?", "bytes": len(raw_tool_buffer)}
                             
             except ollama.ResponseError as e:
                 error_str = str(e).lower()
-                # If the model doesn't support tools natively, retry without tools.
                 if "does not support tools" in error_str:
                     try:
                         response_stream = ollama.chat(
                             model=self.model_name,
                             messages=self.messages,
+                            options={"num_ctx": self.max_context_tokens},
                             stream=True
                         )
                         for chunk in response_stream:
@@ -453,18 +656,29 @@ class ArgentAgent:
                         yield {"type": "error", "content": f"Fallback Error: {retry_e}"}
                         break
                 elif "thought_signature" in error_str or "functioncall" in error_str:
-                    # Gemini cloud models require thought_signature in tool call history.
-                    # Fix: convert structured tool_calls to plain text and retry.
                     self._flatten_tool_messages()
-                    continue  # Retry the loop with flattened messages
+                    continue
                 else:
                     yield {"type": "error", "content": f"Ollama Error: {e.error}"}
                     break
+            except ProviderError as e:
+                yield {"type": "error", "content": str(e)}
+                break
             except Exception as e:
-                yield {"type": "error", "content": f"Connection Error: {e}. Is Ollama running?"}
+                log.error("Unexpected error in stream: %s", e, exc_info=True)
+                yield {"type": "error", "content": f"Connection Error: {e}"}
                 break
 
-            # End of stream.
+            # End of stream — parse tool call arguments from strings to dicts.
+            if tool_calls_accumulator:
+                for tc in tool_calls_accumulator:
+                    if isinstance(tc["function"]["arguments"], str):
+                        try:
+                            tc["function"]["arguments"] = json.loads(tc["function"]["arguments"])
+                        except json.JSONDecodeError as e:
+                            log.warning("Failed to parse tool args for %s: %s", tc["function"]["name"], e)
+                            tc["function"]["arguments"] = {}
+
             # --- FALLBACK: Parse tool calls from raw JSON in content ---
             # Models like Qwen2.5-Coder, nanbeige, etc. often write tool calls
             # as raw JSON strings instead of using the native tool_calls mechanism.
@@ -482,24 +696,33 @@ class ArgentAgent:
                     yield {"type": "content_replace", "content": full_content}
             # --- END FALLBACK ---
             
-            if full_content or tool_calls_accumulator:
+            if full_content or tool_calls_accumulator or full_reasoning:
                 msg_to_append = {"role": "assistant", "content": full_content}
+                if full_reasoning:
+                    msg_to_append["thinking"] = full_reasoning
                 if tool_calls_accumulator:
                     msg_to_append["tool_calls"] = tool_calls_accumulator
                 self.messages.append(msg_to_append)
             
             # Now handle the fully assembled tool calls
             if tool_calls_accumulator:
+                current_tools = get_available_tools()
+                if allowed_tools is not None:
+                    current_tools = {name: func for name, func in current_tools.items() if name in allowed_tools}
+                
                 for tool_call in tool_calls_accumulator:
                     func_name = tool_call["function"]["name"]
                     arguments = tool_call["function"].get("arguments", {})
                     
-                    yield {"type": "tool_start", "name": func_name, "args": arguments}
+                    if func_name not in current_tools:
+                        recovered = recover_tool_call(tool_call, current_tools)
+                        if recovered:
+                            func_name = recovered["function"]["name"]
+                            arguments = recovered["function"]["arguments"]
+                            tool_call["function"]["name"] = func_name
+                            tool_call["function"]["arguments"] = arguments
                     
-                    current_tools = get_available_tools()
-                    # Enforce allowed_tools filter during execution as well
-                    if allowed_tools is not None:
-                        current_tools = {name: func for name, func in current_tools.items() if name in allowed_tools}
+                    yield {"type": "tool_start", "name": func_name, "args": arguments}
                         
                     if func_name in current_tools:
                         try:
@@ -543,15 +766,28 @@ class ArgentAgent:
                         result = f"Error: Tool {func_name} is not available."
                         
                     # Inject a forceful reminder on errors to prevent the model from reverting to raw python code output
-                    if func_name in ["run_command", "write_file", "replace_in_file"] and ("Error" in result or "failed" in result.lower() or "Traceback" in result):
-                        result += "\n\nCRITICAL REMINDER: You must resolve this error. Do NOT output raw code or text explanations without tool calls. If this is a missing package, use `run_command` to pip install it. If it is a code bug, use `replace_in_file` or `write_file` to fix the file."
+                    if func_name in ["run_command", "write_file", "replace_in_file"] and ("Error" in result or "failed" in result.lower() or "Traceback" in result or "Requirement already satisfied" in result):
+                        result += (
+                            "\n\n[SYSTEM ADVICE]: If you see an error or a 'False Success' (like 'Requirement already satisfied' while the issue persists):"
+                            "\n1. Do NOT just repeat the same command."
+                            "\n2. VERIFY the state using other tools (e.g., check python versions, site-packages, or file contents)."
+                            "\n3. Try alternative methods (e.g., --force-reinstall, checking environment variables)."
+                            "\n4. If building code, ensure you didn't leave syntax errors from previous edits."
+                        )
                         
+                    result = compress_tool_result(result, self.model_name)
+                    
                     yield {"type": "tool_end", "name": func_name, "result": result}
                     
-                    self.messages.append({
-                        "role": "tool",
-                        "content": str(result)
-                    })
+                    try:
+                        provider = create_provider()
+                    except Exception:
+                        provider = None
+                    if provider:
+                        tool_result_msg = provider.format_tool_result(str(result), tool_call.get("id"))
+                    else:
+                        tool_result_msg = {"role": "tool", "content": str(result)}
+                    self.messages.append(tool_result_msg)
                 # Loop continues to let the model react to tool results
             else:
                 break
@@ -571,6 +807,8 @@ class ArgentAgent:
             if msg.get("role") == "assistant" and "tool_calls" in msg:
                 # Build a text representation of the tool calls and their results
                 text_parts = []
+                if msg.get("thinking"):
+                    text_parts.append(f"[Reasoning process]:\n{msg['thinking']}")
                 if msg.get("content"):
                     text_parts.append(msg["content"])
                 
@@ -601,10 +839,20 @@ class ArgentAgent:
         
         self.messages = new_messages
     def clear_history(self):
-        """Clears the conversation history but keeps the system prompt."""
-        self.messages = [
-            {"role": "system", "content": SYSTEM_PROMPT}
-        ]
+        memory.clear()
+        self.messages = [self.messages[0]]
+
+    def get_context_usage(self) -> Dict[str, Any]:
+        """Calculates current context usage statistics."""
+        history_tokens = sum(self._estimate_tokens(str(m)) for m in self.messages)
+        max_tokens = get_context_window()
+        percent = (history_tokens / max_tokens) * 100 if max_tokens > 0 else 0
+        return {
+            "tokens": history_tokens,
+            "max": max_tokens,
+            "percent": min(percent, 100),
+            "messages": len(self.messages)
+        }
 
     def inject_context(self):
         """Clear conversation history but preserve the full system prompt
@@ -613,3 +861,44 @@ class ArgentAgent:
         self.messages = [
             {"role": "system", "content": self.messages[0]["content"]}
         ]
+
+class ArgentSubAgent(ArgentAgent):
+    """
+    A specialized, stateless sub-agent designed for isolated, precise tasks.
+    Unlike the main agent, it doesn't maintain long-term chat history and 
+    operates under strict tool restrictions.
+    """
+    def __init__(self, role: str, task: str, tools_override: List[str] = None):
+        super().__init__()
+        self.role = role
+        self.task = task
+        self.tools_override = tools_override
+        
+        # Override system prompt for specific role
+        role_prompts = {
+            "Coder": "You are a specialized Coder sub-agent. Your goal is to IMPLEMENT specific code as described. Be concise and follow the style guide.",
+            "Researcher": "You are a specialized Research sub-agent. Your goal is to gather technical information and documentation. Synthesize your findings into a clear report.",
+            "Reviewer": "You are a specialized Code Reviewer. Your goal is to find bugs, security vulnerabilities, and architectural flaws in the provided code.",
+            "DocWriter": "You are a specialized Documentation sub-agent. Your goal is to write clear, accurate markdown documentation for the project."
+        }
+        
+        custom_system = role_prompts.get(role, f"You are a specialized {role} sub-agent.")
+        custom_system += f"\n\n## YOUR SPECIFIC TASK:\n{task}\n"
+        custom_system += "\n## PROTOCOL:\n- Focus ONLY on your task.\n- Return a final summary to the Supervisor when finished.\n"
+        
+        # Replace main system prompt
+        self.messages[0] = {"role": "system", "content": custom_system}
+
+    def execute(self) -> str:
+        """Run the sub-agent loop until completion and return the final report."""
+        from ui import console
+        console.print(f"[bold cyan]Sub-Agent ({self.role}) starting task...[/bold cyan]")
+        
+        final_answer = ""
+        for chunk in self.process_user_input(f"Start task: {self.task}", allowed_tools=self.tools_override):
+            if chunk["type"] == "content_stream":
+                final_answer += chunk["content"]
+            elif chunk["type"] == "error":
+                return f"Sub-Agent Error: {chunk['content']}"
+                
+        return final_answer

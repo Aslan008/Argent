@@ -5,11 +5,16 @@ from pathlib import Path
 import questionary
 from ddgs import DDGS
 import requests
+import difflib
+from rich.syntax import Syntax
+from rich.panel import Panel
 import queue
 import threading
 import ctypes
 import time
 from bs4 import BeautifulSoup
+import webbrowser
+from datetime import datetime
 from ui import console
 from config import get_obsidian_vault, get_hooks_dir
 import yaml
@@ -17,6 +22,14 @@ import py_compile
 from deep_research import run_deep_research
 from project_manager import ProjectManager
 from hook_manager import hook_manager
+from skill_manager import skill_manager
+from intelligence import intel
+from mcp_client import mcp_client
+from file_tracker import snapshot
+from logger import get_logger
+from memory_manager import memory
+
+log = get_logger("tools")
 
 # ---------------------------------------------------------------------------
 # Helper Functions
@@ -35,7 +48,7 @@ def __resolve_path(file_path: str) -> Path:
             possible_vault_file = (vault_path / file_path).resolve()
             if possible_vault_file.exists() and str(possible_vault_file).startswith(str(vault_path)):
                 return possible_vault_file
-        except:
+        except Exception:
             pass
             
     return path
@@ -52,7 +65,7 @@ def _is_plugin_path_restricted(file_path: str) -> str | None:
                 f"You MUST use the `create_plugin` or `delete_plugin` tools for all plugin-related tasks. "
                 f"These tools ensure mandatory syntax validation and automatic system reloading."
             )
-    except:
+    except Exception:
         pass
     return None
 
@@ -209,8 +222,8 @@ def write_file_spec(filename: str, spec: str) -> str:
     else:
         return f"Spec for '{filename}' saved. All files now have detailed specs!"
 
-def read_file(file_path: str) -> str:
-    """Read the complete contents of a file."""
+def read_file(file_path: str, start_line: int = None, end_line: int = None) -> str:
+    """Read the contents of a file. Optionally read a specific range of lines (1-indexed)."""
     try:
         path = __resolve_path(file_path)
         if not path.exists():
@@ -218,7 +231,20 @@ def read_file(file_path: str) -> str:
         if not path.is_file():
             return f"Error: '{file_path}' is not a file."
         with open(path, "r", encoding="utf-8") as f:
-            return f.read()
+            if start_line is not None or end_line is not None:
+                lines = f.readlines()
+                total = len(lines)
+                s = max(1, start_line or 1) - 1
+                e = min(total, end_line or total)
+                selected = lines[s:e]
+                header = f"[Lines {s+1}-{e} of {total}]\n"
+                return header + "".join(selected)
+            else:
+                content = f.read()
+                line_count = content.count('\n') + 1
+                if line_count > 500:
+                    return f"[File has {line_count} lines. Showing first 500. Use start_line/end_line to read specific sections.]\n" + "\n".join(content.splitlines()[:500])
+                return content
     except Exception as e:
         return f"Error reading file '{file_path}': {e}"
 
@@ -246,35 +272,6 @@ def delete_file(file_path: str) -> str:
     except Exception as e:
         return f"Error deleting file '{file_path}': {e}"
 
-def get_file_outline(file_path: str) -> str:
-    """Returns a structural outline of a Python file (classes and methods) without full body."""
-    try:
-        path = __resolve_path(file_path)
-        if not path.exists():
-            return f"Error: File '{file_path}' does not exist."
-        if not str(path).endswith(".py"):
-            return f"Error: get_file_outline currently only supports Python files (.py)."
-            
-        with open(path, "r", encoding="utf-8") as f:
-            source = f.read()
-            
-        import ast
-        tree = ast.parse(source)
-        outline = f"Outline for {path.name}:\n"
-        
-        for node in tree.body:
-            if isinstance(node, ast.ClassDef):
-                outline += f"class {node.name}:\n"
-                for sub in node.body:
-                    if isinstance(sub, ast.FunctionDef):
-                        outline += f"    def {sub.name}(...)\n"
-            elif isinstance(node, ast.FunctionDef):
-                outline += f"def {node.name}(...)\n"
-        
-        return outline if outline.strip() != f"Outline for {path.name}:" else "File is empty or contains no classes/functions."
-    except Exception as e:
-        return f"Error parsing outline for '{file_path}': {e}"
-
 def write_file(file_path: str, content: str) -> str:
     """Write or overwrite content to a file. Creates directories if needed."""
     restriction_error = _is_plugin_path_restricted(file_path)
@@ -284,12 +281,10 @@ def write_file(file_path: str, content: str) -> str:
     try:
         path = Path(file_path).expanduser().resolve()
         path.parent.mkdir(parents=True, exist_ok=True)
-        # Decode literal escape sequences (\n, \t, \\) that AI models produce
-        # when encoding multiline code as a single JSON string value.
-        # Only applies if the content looks like it still has literal escapes
-        # (i.e., json.loads didn't fully process them).
+        if path.exists():
+            snapshot(str(path))
         if '\\n' in content or '\\t' in content:
-            content = content.replace('\\n', '\n').replace('\\t', '\t').replace('\\\\', '\\')
+            content = content.replace('\\\\', '\\').replace('\\n', '\n').replace('\\t', '\t')
         with open(path, "w", encoding="utf-8") as f:
             f.write(content)
             
@@ -304,8 +299,12 @@ def write_file(file_path: str, content: str) -> str:
         except ImportError:
             pass
 
+        log.info("write_file: %s (%d chars)", file_path, len(content))
+        memory.add_file_modified(file_path)
+        memory.add_completed(f"Wrote {file_path} ({len(content)} chars)")
         return f"Successfully wrote to '{file_path}'."
     except Exception as e:
+        log.error("write_file error %s: %s", file_path, e)
         return f"Error writing file '{file_path}': {e}"
 
 def write_obsidian_note(note_path: str, content: str, tags: list = None, aliases: list = None, overwrite: bool = False) -> str:
@@ -557,7 +556,9 @@ def replace_python_function(file_path: str, function_name: str, new_code: str) -
             return f"Error: File '{file_path}' does not exist."
         if not path.is_file():
             return f"Error: '{file_path}' is not a file."
-            
+        
+        snapshot(str(path))
+        
         with open(path, "r", encoding="utf-8") as f:
             source = f.read()
 
@@ -741,8 +742,12 @@ def replace_in_file(file_path: str, target_text: str, replacement_text: str) -> 
         except ImportError:
             pass
 
+        log.info("replace_in_file: %s (replaced %d chars)", file_path, len(target_text_processed))
+        memory.add_file_modified(file_path)
+        memory.add_completed(f"Edited {file_path}")
         return f"Successfully replaced text in '{file_path}'."
     except Exception as e:
+        log.error("replace_in_file error %s: %s", file_path, e)
         return f"Error replacing text in '{file_path}': {e}"
 
 def multi_replace_in_file(changes_json: str) -> str:
@@ -788,7 +793,9 @@ def get_file_outline(file_path: str) -> str:
             return f"Error: File '{file_path}' does not exist."
         if not path.is_file():
             return f"Error: '{file_path}' is not a file."
-
+        
+        snapshot(str(path))
+        
         with open(path, "r", encoding="utf-8") as f:
             source = f.read()
 
@@ -857,6 +864,87 @@ def list_directory(dir_path: str) -> str:
     except Exception as e:
         return f"Error listing directory '{dir_path}': {e}"
 
+def search_files(directory: str = ".", pattern: str = "*", name_contains: str = None, content_contains: str = None, max_results: int = 50) -> str:
+    """Recursively search for files matching criteria. Can filter by file pattern, name, and content."""
+    try:
+        start_path = __resolve_path(directory)
+        if not start_path.exists():
+            return f"Error: Directory '{directory}' does not exist."
+        if not start_path.is_dir():
+            return f"Error: '{directory}' is not a directory."
+        
+        results = []
+        name_filter = name_contains.lower() if name_contains else None
+        content_filter = content_contains.lower() if content_contains else None
+        
+        for file_path in start_path.rglob(pattern):
+            if not file_path.is_file():
+                continue
+            
+            if any(part.startswith('.') for part in file_path.parts):
+                continue
+            if any(part in ['node_modules', '__pycache__', 'Library', 'Temp', 'obj', 'bin'] for part in file_path.parts):
+                continue
+            
+            if name_filter and name_filter not in file_path.name.lower():
+                continue
+            
+            snippet = None
+            if content_filter:
+                try:
+                    if file_path.suffix.lower() in ['.exe', '.dll', '.png', '.jpg', '.jpeg', '.gif', '.pdf', '.zip', '.mp3', '.mp4', '.wav', '.asset', '.meta', '.prefab', '.unity']:
+                        continue
+                    with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                        content = f.read()
+                    if content_filter not in content.lower():
+                        continue
+                    idx = content.lower().find(content_filter)
+                    if idx != -1:
+                        start = max(0, idx - 40)
+                        end = min(len(content), idx + len(content_filter) + 60)
+                        snippet = content[start:end].replace('\
+', ' ').strip()
+                        if start > 0:
+                            snippet = "..." + snippet
+                        if end < len(content):
+                            snippet = snippet + "..."
+                except Exception:
+                    continue
+            
+            results.append({'path': str(file_path), 'name': file_path.name, 'snippet': snippet})
+            
+            if len(results) >= max_results:
+                break
+        
+        if not results:
+            conditions = []
+            if pattern != '*':
+                conditions.append(f"pattern='{pattern}'")
+            if name_contains:
+                conditions.append(f"name contains '{name_contains}'")
+            if content_contains:
+                conditions.append(f"content contains '{content_contains}'")
+            condition_str = " and ".join(conditions) if conditions else "any file"
+            return f"No files found matching: {condition_str}"
+        
+        output = [f"Found {len(results)} file(s):"]
+        output.append("-" * 60)
+        
+        for r in results:
+            output.append(f"{r['path']}")
+            if r['snippet']:
+                output.append(f"  >> {r['snippet']}")
+        
+        if len(results) >= max_results:
+            output.append(f"\
+(Results limited to {max_results}. Use max_results parameter to see more.)")
+        
+        return "\
+".join(output)
+        
+    except Exception as e:
+        return f"Error searching files: {e}"
+
 def run_command(command: str) -> str:
     """Execute a console command and return its output. Requires user confirmation. Streams output to console."""
     console.print(f"\n[bold yellow]Agent requesting to run command:[/bold yellow] {command}")
@@ -902,8 +990,19 @@ def run_command(command: str) -> str:
         if final_output:
             output += f"OUTPUT:\n{final_output}\n"
             
+        log.info("run_command: %s (exit=%d)", command, process.returncode)
+        
+        # Special cases: some Windows programs always return non-zero exit codes on success
+        cmd_lower = command.strip().lower()
+        is_fire_and_forget = any(cmd_lower.startswith(p) for p in ["explorer", "start ", "start.", 'start"'])
+        
+        if process.returncode != 0 and not is_fire_and_forget:
+            memory.add_error(f"Command '{command}' failed (exit={process.returncode})")
+        else:
+            memory.add_completed(f"Ran: {command}")
         return output.strip()
     except Exception as e:
+        log.error("run_command error: %s: %s", command, e)
         return f"Error running command '{command}': {e}"
 
 def run_admin_command(command: str) -> str:
@@ -979,6 +1078,76 @@ def read_git_diff() -> str:
         return res if res else "No changes detected in Git."
     except Exception as e:
         return f"Error reading git diff: {e}"
+
+def ask_user_questions(questions: list) -> str:
+    """Ask the user a series of structured questions.
+    Expects a list of dimension objects:
+    [{"type": "text"|"single_choice"|"multi_choice", "question": "...", "options": ["opt1", "opt2"]}]
+    Returns a structured string with all answers.
+    """
+    from prompt_toolkit import prompt as ptk_prompt
+    
+    if not isinstance(questions, list):
+        return "Error: 'questions' must be a JSON array of objects."
+        
+    responses = {}
+    console.print("\n[bold cyan]🔍 Уточнение требований:[/bold cyan]")
+    
+    for q in questions:
+        q_type = q.get("type", "text")
+        q_text = q.get("question", "Question?")
+        options = q.get("options", [])
+        
+        console.print(f"\n[bold yellow]{q_text}[/bold yellow]")
+        
+        if q_type == "text":
+            console.print("[dim](Введите текст и нажмите Enter)[/dim]")
+            try:
+                answer = ptk_prompt("Ваш ответ ❯ ")
+                responses[q_text] = answer.strip() if answer.strip() else "No answer"
+            except (KeyboardInterrupt, EOFError):
+                responses[q_text] = "Skipped"
+                
+        elif q_type in ("single_choice", "multi_choice"):
+            display_options = options.copy()
+            if "✏ Свой вариант..." not in display_options:
+                display_options.append("✏ Свой вариант...")
+                
+            if q_type == "single_choice":
+                console.print("[dim](Выберите один вариант стрелками ↑↓ и нажмите Enter)[/dim]")
+                try:
+                    selected = questionary.select("Выберите:", choices=display_options).ask()
+                    if selected == "✏ Свой вариант...":
+                        custom = ptk_prompt("Введите свой вариант ❯ ")
+                        responses[q_text] = custom.strip() if custom.strip() else "No answer"
+                    elif selected:
+                        responses[q_text] = selected
+                    else:
+                        responses[q_text] = "Skipped"
+                except (KeyboardInterrupt, EOFError):
+                    responses[q_text] = "Skipped"
+            else: # multi_choice
+                console.print("[dim](Выделите пробелом нужные варианты и нажмите Enter)[/dim]")
+                try:
+                    selected = questionary.checkbox("Выберите варианты:", choices=display_options).ask()
+                    if selected and "✏ Свой вариант..." in selected:
+                        selected.remove("✏ Свой вариант...")
+                        custom = ptk_prompt("Введите свой(и) вариант(ы) через запятую ❯ ")
+                        if custom.strip():
+                            selected.append(custom.strip())
+                    
+                    responses[q_text] = ", ".join(selected) if selected else "No answer"
+                except (KeyboardInterrupt, EOFError):
+                    responses[q_text] = "Skipped"
+    
+    # Save everything to memory facts
+    import io
+    summary = io.StringIO()
+    for k, v in responses.items():
+        summary.write(f"- {k}: {v}\n")
+        memory.add_fact(f"User preference on '{k}': {v}")
+        
+    return f"User responses:\n{summary.getvalue()}"
 
 ACTIVE_PROCESSES = {}
 _pid_counter = 1
@@ -1090,8 +1259,8 @@ def send_background_command(pid: str, input_string: str) -> str:
         
     try:
         print(f"\n[bold yellow]Agent sending input to PID {pid}:[/bold yellow] {input_string.strip()}")
-        if not input_string.endswith('\\n'):
-            input_string += '\\n'
+        if not input_string.endswith('\n'):
+            input_string += '\n'
         process.stdin.write(input_string.encode('utf-8'))
         process.stdin.flush()
         return f"Sent input to PID {pid}."
@@ -1156,6 +1325,40 @@ def read_webpage(url: str) -> str:
         return f"Content of {url}:\n\n{text}"
     except Exception as e:
         return f"Error reading webpage '{url}': {e}"
+
+def create_svg_image(svg_code: str, filename: str = None) -> str:
+    """
+    Creates an SVG image file from the provided SVG code and opens it in the default web browser.
+    Excellent for diagrams, UI mockups, and visual explanations.
+    """
+    try:
+        from config import get_visuals_dir
+        visuals_dir = Path(get_visuals_dir()).expanduser().resolve()
+        visuals_dir.mkdir(parents=True, exist_ok=True)
+        
+        if not filename:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = f"svg_{timestamp}.svg"
+        
+        if not filename.endswith(".svg"):
+            filename += ".svg"
+            
+        file_path = visuals_dir / filename
+        
+        # Ensure it has the correct XML declaration if missing
+        if "<?xml" not in svg_code:
+            svg_code = '<?xml version="1.0" encoding="UTF-8" standalone="no"?>\n' + svg_code
+            
+        with open(file_path, "w", encoding="utf-8") as f:
+            f.write(svg_code)
+            
+        # Open in browser
+        webbrowser.open(f"file:///{file_path}")
+        
+        return f"Successfully created SVG image at '{file_path}'. It should now be open in your browser."
+    except Exception as e:
+        return f"Error creating SVG image: {e}"
+
 
 
 def create_plugin(name: str, code: str) -> str:
@@ -1222,6 +1425,130 @@ def delete_plugin(name: str) -> str:
     except Exception as e:
         return f"Error deleting plugin: {e}"
 
+
+def list_skills() -> str:
+    """Lists all available markdown-based skills."""
+    skills = skill_manager.list_skills()
+    if not skills:
+        return "No skills found. You can create one via `create_skill`."
+    
+    output = "Available Skills:\n"
+    for s in skills:
+        output += f"  - {s['name']}: {s['description']}\n"
+    return output
+
+
+def read_skill(name: str) -> str:
+    """Reads the full instructions of a specific skill."""
+    content = skill_manager.read_skill(name)
+    if content:
+        return f"Instructions for skill '{name}':\n\n{content}"
+    return f"Skill '{name}' not found."
+
+
+def create_skill(name: str, instructions: str, description: str = "") -> str:
+    """Creates or updates a markdown-based skill."""
+    result = skill_manager.create_skill(name, instructions, description)
+    return result
+
+
+def delete_skill(name: str) -> str:
+    """Deletes a skill."""
+    result = skill_manager.delete_skill(name)
+    return result
+
+def find_definition(file_path: str, line: int, column: int) -> str:
+    """Find the definition of a symbol at the given line and column."""
+    results = intel.find_definitions(file_path, line, column)
+    if not results:
+        return "No definitions found."
+    if "error" in results[0]:
+        return f"Error finding definitions: {results[0]['error']}"
+    
+    out = "Found definitions:\n"
+    for d in results:
+        out += f"- {d['name']} ({d['type']}) in {d['file_path']}:{d['line']}:{d['column']}\n"
+        out += f"  {d['description']}\n"
+    return out
+
+def find_references(file_path: str, line: int, column: int) -> str:
+    """Find all references to a symbol at the given line and column."""
+    results = intel.find_references(file_path, line, column)
+    if not results:
+        return "No references found."
+    if "error" in results[0]:
+        return f"Error finding references: {results[0]['error']}"
+    
+    out = "Found references:\n"
+    for r in results:
+        out += f"- {r['name']} in {r['file_path']}:{r['line']}:{r['column']}\n"
+    return out
+
+def git_checkpoint(message: str) -> str:
+    """Create a temporary git commit (checkpoint) to save state before an experiment."""
+    try:
+        # Check if it's a git repo
+        res = subprocess.run(["git", "rev-parse", "--is-inside-work-tree"], capture_output=True, text=True)
+        if res.returncode != 0:
+            return "Error: Not a git repository. Checkpoints require git."
+        
+        subprocess.run(["git", "add", "."], check=True)
+        # Check if there are changes to commit
+        res = subprocess.run(["git", "diff", "--cached", "--quiet"])
+        if res.returncode == 0:
+            return "No changes to checkpoint."
+            
+        subprocess.run(["git", "commit", "-m", f"Argent Checkpoint: {message}"], check=True)
+        return f"Checkpoint created: '{message}'"
+    except Exception as e:
+        return f"Error creating checkpoint: {e}"
+
+def git_rollback() -> str:
+    """Roll back the last checkpoint (git reset --hard HEAD~1). Use this if an experiment failed."""
+    try:
+        # Check if it's a git repo
+        res = subprocess.run(["git", "rev-parse", "--is-inside-work-tree"], capture_output=True, text=True)
+        if res.returncode != 0:
+            return "Error: Not a git repository."
+        
+        # Get the last commit message
+        res = subprocess.run(["git", "log", "-1", "--pretty=%B"], capture_output=True, text=True)
+        last_msg = res.stdout.strip()
+        
+        if not last_msg.startswith("Argent Checkpoint:"):
+            return f"Error: The last commit ('{last_msg}') was not an Argent Checkpoint. Rollback aborted for safety."
+            
+        print(f"\n[bold red]Rolling back last checkpoint:[/bold red] {last_msg}")
+        approved = questionary.confirm("Are you sure you want to revert ALL changes to the last checkpoint?").ask()
+        if not approved:
+            return "Rollback aborted by user."
+            
+        subprocess.run(["git", "reset", "--hard", "HEAD~1"], check=True)
+        return f"Successfully rolled back: {last_msg}"
+    except Exception as e:
+        return f"Error rolling back: {e}"
+
+def call_mcp_tool(server_name: str, tool_name: str, arguments_json: str) -> str:
+    """Call a standardized tool from an MCP server. arguments_json must be a valid JSON string."""
+    try:
+        args = json.loads(arguments_json)
+        return mcp_client.call_tool(server_name, tool_name, args)
+    except json.JSONDecodeError:
+        return "Error: arguments_json must be a valid JSON string."
+    except Exception as e:
+        return f"Error calling MCP tool: {e}"
+
+def run_subagent(role: str, task: str, tools_json: str = None) -> str:
+    """Spawn a specialized sub-agent for an isolated task. role can be 'Coder', 'Researcher', 'Reviewer', 'DocWriter'. tools_json is an optional JSON list of tools to allow."""
+    from orchestrator import spawn_subagent
+    tools = None
+    if tools_json:
+        try:
+            tools = json.loads(tools_json)
+        except Exception:
+            pass
+    return spawn_subagent(role, task, tools)
+
 # ---------------------------------------------------------------------------
 # Tool Mapping & Schemas
 # ---------------------------------------------------------------------------
@@ -1245,6 +1572,7 @@ AVAILABLE_TOOLS = {
     "replace_python_function": replace_python_function,
     "delete_file": delete_file,
     "list_directory": list_directory,
+    "search_files": search_files,
     "run_command": run_command,
     "run_admin_command": run_admin_command,
     "start_background_command": start_background_command,
@@ -1257,7 +1585,19 @@ AVAILABLE_TOOLS = {
     "multi_replace_in_file": multi_replace_in_file,
     "read_git_diff": read_git_diff,
     "create_plugin": create_plugin,
-    "delete_plugin": delete_plugin
+    "delete_plugin": delete_plugin,
+    "list_skills": list_skills,
+    "read_skill": read_skill,
+    "create_skill": create_skill,
+    "delete_skill": delete_skill,
+    "find_definition": find_definition,
+    "find_references": find_references,
+    "git_checkpoint": git_checkpoint,
+    "git_rollback": git_rollback,
+    "call_mcp_tool": call_mcp_tool,
+    "run_subagent": run_subagent,
+    "create_svg_image": create_svg_image,
+    "ask_user_questions": ask_user_questions
 }
 
 TOOL_SCHEMAS = [
@@ -1356,6 +1696,38 @@ TOOL_SCHEMAS = [
     {
         "type": "function",
         "function": {
+            "name": "call_mcp_tool",
+            "description": "Call a standardized tool via the Model Context Protocol (MCP). Use this to interact with external services like GitHub, Slack, or Google Search via a standard interface.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "server_name": { "type": "string", "description": "The name of the MCP server (e.g., 'github')." },
+                    "tool_name": { "type": "string", "description": "The name of the tool to call." },
+                    "arguments_json": { "type": "string", "description": "JSON string of arguments for the tool." }
+                },
+                "required": ["server_name", "tool_name", "arguments_json"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "run_subagent",
+            "description": "Spawn a specialized sub-agent to handle a specific part of a complex task in isolation. This is great for research, code reviews, or implementing small isolated modules.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "role": { "type": "string", "description": "The role of the sub-agent: 'Coder', 'Researcher', 'Reviewer', 'DocWriter'." },
+                    "task": { "type": "string", "description": "The specific task instructions for the sub-agent." },
+                    "tools_json": { "type": "string", "description": "Optional JSON list of tool names allowed for this sub-agent (e.g., '[\"read_file\", \"write_file\"]')." }
+                },
+                "required": ["role", "task"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "write_project_spec",
             "description": "Write the detailed technical specification for the current project. Describe all files, classes, fields (with types), methods (with parameters), and relationships.",
             "parameters": {
@@ -1416,13 +1788,21 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "read_file",
-            "description": "Reads the entire content of a file from the file system.",
+            "description": "Reads file content. Files over 500 lines are auto-truncated; use start_line/end_line to read specific sections.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "file_path": {
                         "type": "string",
                         "description": "The absolute or relative path to the file to read."
+                    },
+                    "start_line": {
+                        "type": "integer",
+                        "description": "Optional. First line to read (1-indexed). Omit to start from the beginning."
+                    },
+                    "end_line": {
+                        "type": "integer",
+                        "description": "Optional. Last line to read (1-indexed, inclusive). Omit to read to the end."
                     }
                 },
                 "required": ["file_path"]
@@ -1508,6 +1888,27 @@ TOOL_SCHEMAS = [
     {
         "type": "function",
         "function": {
+            "name": "create_svg_image",
+            "description": "Create an SVG image from code and automatically open it in the web browser for the user to see. Use this to explain complex concepts, show UI designs, or create architecture diagrams.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "svg_code": {
+                        "type": "string",
+                        "description": "The complete SVG XML code."
+                    },
+                    "filename": {
+                        "type": "string",
+                        "description": "Optional custom filename (e.g., 'architecture_diagram.svg')."
+                    }
+                },
+                "required": ["svg_code"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "create_plugin",
             "description": "Creates a new Python plugin (hook/command) in the './plugins/' directory. Automatically handles imports, syntax validation, and reloads Argent to active the new command immediately.",
             "parameters": {
@@ -1537,6 +1938,76 @@ TOOL_SCHEMAS = [
                     "name": {
                         "type": "string",
                         "description": "The filename of the plugin to delete (e.g., 'weather_plugin.py')."
+                    }
+                },
+                "required": ["name"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_skills",
+            "description": "Lists all available markdown-based skills. Use this to discover specialized instructions you or the user have created.",
+            "parameters": {
+                "type": "object",
+                "properties": {}
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "read_skill",
+            "description": "Reads the full instructions of a specific skill. Use this to follow complex workflows or expert guidelines.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "The name of the skill to read (e.g., 'SQL_Expert')."
+                    }
+                },
+                "required": ["name"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "create_skill",
+            "description": "Creates a new markdown-based skill or updates an existing one. Use this to persist complex workflows or expert personas for future use.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "The name of the skill (e.g., 'Code_Reviewer')."
+                    },
+                    "instructions": {
+                        "type": "string",
+                        "description": "The detailed instructions that Argent must follow when this skill is active."
+                    },
+                    "description": {
+                        "type": "string",
+                        "description": "A short one-sentence summary of what this skill does."
+                    }
+                },
+                "required": ["name", "instructions"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "delete_skill",
+            "description": "Deletes an existing skill.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "The name of the skill to delete."
                     }
                 },
                 "required": ["name"]
@@ -1665,6 +2136,38 @@ TOOL_SCHEMAS = [
                     }
                 },
                 "required": ["dir_path"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_files",
+            "description": "Recursively search for files matching specific criteria. Use this to find files by pattern (e.g., *.cs), by name, or by content without requiring user confirmation.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "directory": {
+                        "type": "string",
+                        "description": "The root directory to start the search from. Default is '.'."
+                    },
+                    "pattern": {
+                        "type": "string",
+                        "description": "Glob pattern for file matching (e.g., '*.py', '**/*.cs'). Default is '*'."
+                    },
+                    "name_contains": {
+                        "type": "string",
+                        "description": "Case-insensitive substring that must be in the filename."
+                    },
+                    "content_contains": {
+                        "type": "string",
+                        "description": "Case-insensitive substring that must be inside the file's content."
+                    },
+                    "max_results": {
+                        "type": "integer",
+                        "description": "Maximum number of files to return. Default is 50."
+                    }
+                }
             }
         }
     },
@@ -1871,6 +2374,100 @@ TOOL_SCHEMAS = [
                     }
                 },
                 "required": ["objective"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "find_definition",
+            "description": "Find the definition of a class, function, or variable at a specific line and column. Use this instead of grep for precise navigation.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "file_path": { "type": "string", "description": "The path to the file." },
+                    "line": { "type": "integer", "description": "Line number (1-indexed)." },
+                    "column": { "type": "integer", "description": "Column number (0-indexed)." }
+                },
+                "required": ["file_path", "line", "column"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "find_references",
+            "description": "Find all usages (references) of a symbol at a specific line and column.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "file_path": { "type": "string", "description": "The path to the file." },
+                    "line": { "type": "integer", "description": "Line number (1-indexed)." },
+                    "column": { "type": "integer", "description": "Column number (0-indexed)." }
+                },
+                "required": ["file_path", "line", "column"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "git_checkpoint",
+            "description": "Create a temporary git commit to save current progress. Use this before making risky changes or running experiments.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "message": { "type": "string", "description": "Brief description of why you are checkpointing." }
+                },
+                "required": ["message"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "git_rollback",
+            "description": "Revert all changes to the last 'Argent Checkpoint'. Use this if an experiment failed or logic is broken beyond simple repair.",
+            "parameters": {
+                "type": "object",
+                "properties": {}
+            }
+        }
+    },
+        {
+        "type": "function",
+        "function": {
+            "name": "ask_user_questions",
+            "description": "Ask the user a series of structured questions. Use this when you need clarification, preferences, or decisions on multiple points before proceeding.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "questions": {
+                        "type": "array",
+                        "description": "A list of question objects.",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "type": {
+                                    "type": "string",
+                                    "enum": ["text", "single_choice", "multi_choice"],
+                                    "description": "The type of question."
+                                },
+                                "question": {
+                                    "type": "string",
+                                    "description": "The question text."
+                                },
+                                "options": {
+                                    "type": "array",
+                                    "items": {"type": "string"},
+                                    "description": "Required for single_choice/multi_choice. A list of string options."
+                                }
+                            },
+                            "required": ["type", "question"]
+                        }
+                    }
+                },
+                "required": ["questions"]
             }
         }
     }

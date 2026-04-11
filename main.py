@@ -1,5 +1,7 @@
 import sys
 import os
+import signal
+import atexit
 from prompt_toolkit import prompt
 from prompt_toolkit.completion import WordCompleter
 from prompt_toolkit.styles import Style
@@ -13,12 +15,17 @@ from agent import ArgentAgent
 from config import (
     get_current_model, set_current_model, get_obsidian_vault, set_obsidian_vault,
     get_hooks_dir, set_hooks_dir, get_autonomous_plugins_enabled, set_autonomous_plugins_enabled,
-    get_disabled_tools, set_disabled_tools
+    get_disabled_tools, set_disabled_tools,
+    get_provider, set_provider, get_zai_api_key, set_zai_api_key,
+    get_zai_endpoint, set_zai_endpoint, ZAI_ENDPOINT_GENERAL, ZAI_ENDPOINT_CODING,
+    get_verbose_status, set_verbose_status
 )
 from ui import (
     console, print_markdown, print_system, print_error,
-    print_tool_start, print_tool_end, select_model, s
+    print_tool_start, print_tool_end, select_model, 
+    print_context_usage, s, get_code_blocks, clear_code_blocks
 )
+from rich.markup import escape
 from hook_manager import hook_manager
 from rag_engine import enable_rag_for_project, disable_rag
 import subprocess
@@ -26,6 +33,9 @@ import json
 from pathlib import Path
 from project_manager import ProjectManager
 import ollama
+from session import save_session, load_session, list_sessions, delete_session, get_last_session
+from file_tracker import snapshot, get_diff, undo, get_pending_changes, undo_all
+from pipeline import Pipeline
 
 # Default tools allowed in regular chat (excludes Project Brain tools)
 CHAT_ALLOWED_TOOLS = [
@@ -34,7 +44,9 @@ CHAT_ALLOWED_TOOLS = [
     "start_background_command", "read_background_command", "send_background_command",
     "stop_background_command", "search_web", "read_webpage", "get_file_outline", 
     "multi_replace_in_file", "write_obsidian_note", "search_obsidian_notes", 
-    "get_obsidian_vault", "semantic_search", "create_plugin", "delete_plugin"
+    "get_obsidian_vault", "semantic_search", "create_plugin", "delete_plugin",
+    "create_skill", "read_skill", "list_skills", "delete_skill", "create_svg_image",
+    "ask_user_questions"
 ]
 
 
@@ -144,7 +156,7 @@ def export_chat_history(agent: ArgentAgent, filename: str = None, auto: bool = F
         return
         
     cwd = os.getcwd()
-    chats_dir = os.path.join(cwd, ".argent", "chats")
+    chats_dir = os.path.join(cwd, "exports")
     os.makedirs(chats_dir, exist_ok=True)
     
     if not filename:
@@ -199,6 +211,55 @@ def handle_slash_command(command: str, agent: ArgentAgent) -> bool:
             print_system(f"Model updated to: {new_model}")
         else:
             print_system("Model unchanged.")
+    elif cmd == "/provider":
+        current_prov = get_provider()
+        choices = ["ollama", "zai"]
+        new_prov = questionary.select(
+            "Select API Provider:",
+            choices=choices,
+            default=current_prov
+        ).ask()
+        
+        if new_prov:
+            set_provider(new_prov)
+            agent.provider = new_prov
+            options_text = ""
+            if new_prov == "zai":
+                current_key = get_zai_api_key()
+                if not current_key:
+                    new_key = questionary.password("Enter Z.AI API Key:").ask()
+                    if new_key:
+                        set_zai_api_key(new_key)
+                        options_text = " (API Key saved)"
+                else:
+                    change_key = questionary.confirm("Z.AI API Key is already set. Do you want to change it?").ask()
+                    if change_key:
+                        new_key = questionary.password("Enter New Z.AI API Key:").ask()
+                        if new_key:
+                            set_zai_api_key(new_key)
+                            options_text = " (API Key updated)"
+
+                endpoint_choice = questionary.select(
+                    "Select Z.AI Endpoint:",
+                    choices=[
+                        "Coding Plan (api.z.ai/api/coding/paas/v4) - for GLM Coding Plan subscribers",
+                        "General API (api.z.ai/api/paas/v4) - standard pay-per-token",
+                    ],
+                    default="Coding Plan (api.z.ai/api/coding/paas/v4) - for GLM Coding Plan subscribers"
+                ).ask()
+                if endpoint_choice and "Coding Plan" in endpoint_choice:
+                    set_zai_endpoint(ZAI_ENDPOINT_CODING)
+                else:
+                    set_zai_endpoint(ZAI_ENDPOINT_GENERAL)
+
+            print_system(f"API Provider updated to: {new_prov}{options_text}")
+            if new_prov == "zai":
+                print_system("Select a Z.AI model to use:")
+                new_model = select_model(get_current_model())
+                if new_model != get_current_model():
+                    set_current_model(new_model)
+                    agent.model_name = new_model
+                    print_system(f"Model updated to: {new_model}")
     elif cmd.startswith("/obsidian"):
         parts = command.split(" ", 1)
         if len(parts) > 1:
@@ -216,7 +277,8 @@ def handle_slash_command(command: str, agent: ArgentAgent) -> bool:
     elif cmd == "/help":
         help_text = (
             "**Argent Coder Commands:**\n"
-            "- `/model` - Select active Ollama model\n"
+            "- `/provider` - Select API Provider (Ollama / Z.ai) and endpoint\n"
+            "- `/model` - Select active LLM model\n"
             "- `/obsidian [path]` - Set the path to your Obsidian vault\n"
             "- `/research [topic]` - Enter Auto-Research mode to search the web and generate notes\n"
             "- `/enable_rag` - Index the current project codebase for Semantic AI Search\n"
@@ -225,10 +287,20 @@ def handle_slash_command(command: str, agent: ArgentAgent) -> bool:
             "- `/sandbox` - Enter an isolated Code Playground to execute and test code safely\n"
             "- `/tools` - Open interactive menu to enable/disable tools\n"
             "- `/save [name]` - Export the current conversation to a Markdown file\n"
+            "- `/sessions` - List saved sessions\n"
+            "- `/load <n>` - Restore a saved session by number\n"
+            "- `/diff [file]` - Show changes made to files\n"
+            "- `/undo [file]` - Restore a file to its previous version\n"
+            "- `/undo_all` - Restore all modified files\n"
+            "- `/copy <n>` - Copy code block #n to clipboard\n"
+            "- `/pipeline [task]` - Execute a multi-step task automatically\n"
+            "- `/logs [module] [n]` - View logs (e.g. /logs tools 20, /logs error)\n"
+            "- `/skills` - List available AI skills\n"
             "- `/setup_terminal` - Make the terminal look incredibly professional (Fonts & Colors)\n"
             "- `/project [prompt]` - Force the AI to build a massive multi-step project from scratch\n"
             "- `/work [--auto] [task]` - Modify or fix an EXISTING codebase safely\n"
             "- `/commit` - Generate AI commit message and commit changes\n"
+            "- `/verbose` - Toggle live status indicators (spinners)\n"
             "- `/clear` - Clear conversation history\n"
             "- `/help` - Show this help message\n"
             "- `/exit` - Exit the application\n"
@@ -242,6 +314,12 @@ def handle_slash_command(command: str, agent: ArgentAgent) -> bool:
                 help_text += f"- `/{c}`\n"
                 
         print_markdown(help_text)
+    elif cmd == "/verbose":
+        current = get_verbose_status()
+        new_val = not current
+        set_verbose_status(new_val)
+        state = "[bold green]ON[/bold green]" if new_val else "[bold red]OFF[/bold red]"
+        print_system(f"Live status indicators: {state}")
     else:
         # Check for custom commands in hooks
         custom_cmds = hook_manager.get_custom_commands()
@@ -259,16 +337,41 @@ def handle_slash_command(command: str, agent: ArgentAgent) -> bool:
     return False
 
 def main():
+    agent = None
+
+    def cleanup():
+        nonlocal agent
+        try:
+            from tools import ACTIVE_PROCESSES
+            for pid, proc_info in list(ACTIVE_PROCESSES.items()):
+                try:
+                    proc_info["process"].terminate()
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        if agent and agent.messages:
+            try:
+                save_session(agent.messages, {
+                    "model": agent.model_name,
+                    "provider": get_provider(),
+                })
+            except Exception:
+                pass
+
+    atexit.register(cleanup)
+
     os.system('cls' if os.name == 'nt' else 'clear')
     console.rule("[bold cyan]Argent Coder[/bold cyan]")
-    print_system("Welcome to Argent Coder. The elite AI pair programmer.")
-    print_system("Type /help for commands. Type your prompt below.")
+    print_system("Argent Coder. Autonomous Development Environment.")
+    print_system("Type /help for commands.")
     
     agent = ArgentAgent()
     
     builtin_cmds = [
-        '/help', '/model', '/obsidian', '/clear', '/research', '/enable_rag', '/disable_rag',
-        '/hooks', '/sandbox', '/tools', '/save', '/setup_terminal', '/project', '/work', '/commit', '/exit', '/quit'
+        '/help', '/provider', '/model', '/obsidian', '/clear', '/research', '/enable_rag', '/disable_rag',
+        '/hooks', '/sandbox', '/tools', '/save', '/setup_terminal', '/project', '/work', '/commit',
+        '/sessions', '/load', '/diff', '/undo', '/undo_all', '/copy', '/pipeline', '/logs', '/skills', '/verbose', '/exit', '/quit'
     ]
     
     def get_all_commands():
@@ -278,11 +381,24 @@ def main():
     command_completer = WordCompleter(get_all_commands, ignore_case=True, match_middle=False, sentence=True)
     session_history = InMemoryHistory()
     
+    print_system(f"Active Provider: {get_provider().upper()}")
     print_system(f"Active Model: {get_current_model()}")
     print_system(f"Working Directory: {os.getcwd()}")
     vault = get_obsidian_vault()
     if vault:
         print_system(f"Obsidian Vault: {vault}")
+
+    # Offer to restore last session
+    last = get_last_session()
+    if last and last.get("preview"):
+        restore = questionary.confirm(
+            f"Last session found ({last['saved_at'][:16]}): \"{last['preview']}\". Restore?"
+        ).ask()
+        if restore:
+            data = load_session(last["id"])
+            if data and data.get("messages"):
+                agent.messages = data["messages"]
+                print_system(f"Restored {len(data['messages'])} messages from last session.")
 
     # Trigger Startup Hook
     hook_manager.call_hook("on_startup")
@@ -291,7 +407,10 @@ def main():
     auto_continue_input = None
     last_task_id = None
     task_retries = 0
+    project_iterations = 0
     MAX_TASK_RETRIES = 3
+    turn_counter = 0
+    turn_counter = 0
     
     while True:
         try:
@@ -300,7 +419,7 @@ def main():
             if auto_continue_input:
                 user_input = auto_continue_input
                 auto_continue_input = None
-                print_system("🔄 Auto-continuing project workflow...")
+                print_system("Продолжение рабочего процесса...")
             else:
                 try:
                     user_input = prompt("❯ ", completer=command_completer, history=session_history)
@@ -354,6 +473,16 @@ def main():
             elif user_input.strip() == "/disable_rag":
                 disable_rag()
                 print_system("Semantic Search (RAG) has been disabled.")
+                continue
+            elif user_input.startswith("/skills"):
+                from skill_manager import skill_manager
+                skills = skill_manager.list_skills()
+                if not skills:
+                    print_system("No skills found. You can create one via `create_skill` tool.")
+                else:
+                    print_system("[bold cyan]Available Skills:[/bold cyan]")
+                    for skill in skills:
+                        print_system(f"- [bold yellow]{skill['name']}[/bold yellow]: {skill['description']}")
                 continue
             elif user_input.startswith("/hooks"):
                 parts = user_input.split(" ")
@@ -409,15 +538,6 @@ def main():
                     set_hooks_dir(new_path)
                     hook_manager.reload_plugins(new_path)
                     print_system(f"Hooks Directory changed to: [bold green]{new_path}[/bold green]")
-                    # Refresh autocomplete
-                    builtin_cmds = [
-                        '/help', '/model', '/obsidian', '/clear', '/research', '/enable_rag', '/disable_rag',
-                        '/hooks', '/sandbox', '/tools', '/save', '/setup_terminal', '/project', '/work', '/commit', '/exit', '/quit'
-                    ]
-                    custom_cmds = hook_manager.get_custom_commands()
-                    all_available_cmds = builtin_cmds + [f"/{c}" for c in custom_cmds.keys()]
-                    # Note: session (prompt_toolkit) doesn't easily allow updating completer at runtime 
-                    # without full restart, but local plugin lookup still works.
                 continue
             elif user_input.strip() == "/setup_terminal":
                 font_guide = """
@@ -472,6 +592,188 @@ def main():
                 parts = user_input.split(" ", 1)
                 filename = parts[1].strip() if len(parts) > 1 else None
                 export_chat_history(agent, filename=filename, auto=False)
+                # Also save as a restorable session
+                try:
+                    save_session(agent.messages, {
+                        "model": agent.model_name,
+                        "provider": get_provider(),
+                    })
+                except Exception:
+                    pass
+                continue
+            elif user_input.strip() == "/sessions":
+                sessions = list_sessions()
+                if not sessions:
+                    print_system("No saved sessions found.")
+                else:
+                    console.print("[bold cyan]Saved Sessions:[/bold cyan]")
+                    for i, s in enumerate(sessions[:20]):
+                        date = s.get("saved_at", "")[:16]
+                        model = s.get("model", "?")
+                        preview = s.get("preview", "")
+                        count = s.get("message_count", 0)
+                        console.print(f"  [dim][{i+1}][/dim] {date} [dim]|[/dim] [cyan]{model}[/cyan] [dim]|[/dim] {count} msgs [dim]|[/dim] [italic]\"{preview}\"[/italic]")
+                    print_system("Use /load <number> to restore a session.")
+                continue
+            elif user_input.startswith("/load"):
+                parts = user_input.strip().split()
+                if len(parts) < 2:
+                    print_error("Usage: /load <session-number>")
+                    continue
+                sessions = list_sessions()
+                try:
+                    idx = int(parts[1]) - 1
+                    if 0 <= idx < len(sessions):
+                        data = load_session(sessions[idx]["id"])
+                        if data and data.get("messages"):
+                            agent.messages = data["messages"]
+                            print_system(f"Restored {len(data['messages'])} messages from {sessions[idx].get('saved_at', '')[:16]}.")
+                        else:
+                            print_error("Failed to load session data.")
+                    else:
+                        print_error("Invalid session number.")
+                except ValueError:
+                    print_error("Please enter a valid number.")
+                continue
+            elif user_input.startswith("/diff"):
+                parts = user_input.strip().split(maxsplit=1)
+                if len(parts) < 2:
+                    pending = get_pending_changes()
+                    if not pending:
+                        print_system("No pending file changes.")
+                    else:
+                        print_system("[bold cyan]Modified files:[/bold cyan]")
+                        for ch in pending:
+                            print_system(f"  - {ch['key']} ({ch['snapshot_count']} snapshots)")
+                        print_system("Use /diff <filepath> to see changes.")
+                else:
+                    diff_output = get_diff(parts[1])
+                    print_markdown(f"```diff\n{diff_output}\n```")
+                continue
+            elif user_input.strip() == "/undo":
+                pending = get_pending_changes()
+                if not pending:
+                    print_system("No files to undo.")
+                elif len(pending) == 1:
+                    result = undo(pending[0]["key"])
+                    print_system(result)
+                else:
+                    print_system("Multiple modified files. Use /undo <filepath> or /undo_all.")
+                continue
+            elif user_input.startswith("/undo "):
+                filepath = user_input.strip()[6:]
+                result = undo(filepath)
+                print_system(result)
+                continue
+            elif user_input.strip() == "/undo_all":
+                result = undo_all()
+                print_system(result)
+                continue
+            elif user_input.startswith("/copy"):
+                import pyperclip
+                blocks = get_code_blocks()
+                parts = user_input.strip().split()
+                if not blocks:
+                    print_system("No code blocks in current response.")
+                elif len(parts) < 2:
+                    print_system("Usage: /copy <number>")
+                    print_system(f"Available blocks: {', '.join(f'[{b['index']}] {b['lang']}' for b in blocks)}")
+                else:
+                    try:
+                        idx = int(parts[1])
+                        block = next((b for b in blocks if b['index'] == idx), None)
+                        if block:
+                            pyperclip.copy(block['code'])
+                            print_system(f"Copied block [{idx}] ({block['lang']}, {len(block['code'].splitlines())} lines) to clipboard.")
+                        else:
+                            print_error(f"Block {idx} not found. Available: 1-{len(blocks)}")
+                    except ValueError:
+                        print_error("Usage: /copy <number>")
+                continue
+            elif user_input.startswith("/pipeline"):
+                parts = user_input.split(" ", 1)
+                if len(parts) < 2:
+                    print_error("Usage: /pipeline <task description>")
+                    print_system("Example: /pipeline Find all TODO comments in the codebase and create a report")
+                    continue
+                pipeline_task = parts[1].strip()
+                print_system(f"Planning pipeline for: {pipeline_task}")
+                try:
+                    pipe = Pipeline(agent)
+                    steps = pipe.plan(pipeline_task)
+                    if not steps:
+                        print_error("Failed to plan pipeline steps.")
+                        continue
+                    print_system(f"[bold cyan]Pipeline planned: {len(steps)} steps[/bold cyan]")
+                    for s in steps:
+                        print_system(f"  {s.get('step', '?')}. {s.get('action', s.get('task', ''))}")
+                    approved = questionary.confirm("Execute this pipeline?").ask()
+                    if approved:
+                        result = pipe.execute()
+                        print_system("[bold green]Pipeline complete.[/bold green]")
+                        print_markdown(result)
+                    else:
+                        print_system("Pipeline cancelled.")
+                except Exception as e:
+                    print_error(f"Pipeline error: {e}")
+                continue
+            elif user_input.startswith("/logs"):
+                log_dir = Path.home() / ".argent" / "logs"
+                parts = user_input.strip().split()
+                
+                if len(parts) > 1 and parts[1] == "clear":
+                    for f in log_dir.glob("*.log"):
+                        f.write_text("", encoding="utf-8")
+                    print_system("All logs cleared.")
+                    continue
+                
+                errors_only = "error" in parts
+                module_filter = None
+                count = 30
+                for p in parts[1:]:
+                    if p == "error":
+                        continue
+                    elif p.isdigit():
+                        count = int(p)
+                    else:
+                        module_filter = p
+                
+                log_files = sorted(log_dir.glob("*.log"))
+                if not log_files:
+                    print_system("No log files found at ~/.argent/logs/")
+                    continue
+                
+                if module_filter:
+                    log_files = [f for f in log_files if f.stem == module_filter]
+                    if not log_files:
+                        available = ", ".join(f.stem for f in sorted(log_dir.glob("*.log")))
+                        print_error(f"No log '{module_filter}'. Available: {available}")
+                        continue
+                
+                output_lines = []
+                for lf in log_files:
+                    try:
+                        lines = lf.read_text(encoding="utf-8").splitlines()
+                    except Exception:
+                        continue
+                    if errors_only:
+                        lines = [l for l in lines if "[ERROR]" in l or "[WARNING]" in l]
+                    recent = lines[-count:]
+                    if recent:
+                        output_lines.append(f"\n[bold cyan]--- {lf.stem}.log ---[/bold cyan]")
+                        for line in recent:
+                            if "[ERROR]" in line:
+                                output_lines.append(f"[red]{escape(line)}[/red]")
+                            elif "[WARNING]" in line:
+                                output_lines.append(f"[yellow]{escape(line)}[/yellow]")
+                            else:
+                                output_lines.append(f"[dim]{escape(line)}[/dim]")
+                
+                if output_lines:
+                    for line in output_lines:
+                        console.print(line)
+                else:
+                    print_system("No log entries found.")
                 continue
             elif user_input.startswith("/project"):
                 parts = user_input.split(" ", 1)
@@ -486,12 +788,17 @@ def main():
                 # TDD Mode
                 tdd_mode = questionary.confirm("Enable TDD Mode? (AI will write tests BEFORE code)").ask()
                 
+                # Obsidian Mode
+                use_obsidian = False
+                if get_obsidian_vault():
+                    use_obsidian = questionary.confirm("Enable Obsidian integration for this project? (Create notes instead of normal files)").ask()
+                
                 # Initialize Project Brain
                 pm = ProjectManager()
                 pm.destroy()
                 
                 if run_research:
-                    pm.create(proj_prompt, status="researching", tdd_mode=tdd_mode)
+                    pm.create(proj_prompt, status="researching", tdd_mode=tdd_mode, use_obsidian=use_obsidian)
                     user_input = (
                         f"You are the Phase 0 Research Agent for the new project: '{proj_prompt}'.\n\n"
                         f"Your task is to gather the MAXIMUM amount of up-to-date information, best practices, and API references required to build this project.\n"
@@ -499,9 +806,9 @@ def main():
                         f"When the research is complete, output a detailed markdown report of everything you found.\n"
                         f"DO NOT write code or architecture yet. Just gather information."
                     )
-                    print_system(f"[Project Brain] Phase 0: Starting Deep Research...")
+                    print_system(f"[Brain] Phase 0: Starting Deep Research...")
                 else:
-                    pm.create(proj_prompt, status="specifying_architecture", tdd_mode=tdd_mode)
+                    pm.create(proj_prompt, status="specifying_architecture", tdd_mode=tdd_mode, use_obsidian=use_obsidian)
                     user_input = (
                         f"You are the architect for this project: '{proj_prompt}'.\n\n"
                         f"Your task is to design the HIGH-LEVEL ARCHITECTURE.\n"
@@ -521,7 +828,7 @@ def main():
                         f"- Do NOT call any other tools\n"
                         f"- Call `write_project_architecture` NOW!"
                     )
-                    print_system(f"[Project Brain] Phase 1a: Designing architecture...")
+                    print_system(f"[Brain] Phase 1a: Designing architecture...")
                 
                 is_project_mode = True
                 last_task_id = None
@@ -714,12 +1021,17 @@ def main():
                 # TDD Mode
                 tdd_mode = questionary.confirm("Enable TDD Mode? (AI will write tests BEFORE code)").ask()
 
+                # Obsidian Mode
+                use_obsidian = False
+                if get_obsidian_vault():
+                    use_obsidian = questionary.confirm("Enable Obsidian integration for this work task?").ask()
+
                 # Initialize Project Brain in Work mode
                 pm = ProjectManager()
                 pm.destroy()
                 
                 if run_research:
-                    pm.create(work_prompt, status="work_researching", mode="work", auto_mode=auto_mode, tdd_mode=tdd_mode)
+                    pm.create(work_prompt, status="work_researching", mode="work", auto_mode=auto_mode, tdd_mode=tdd_mode, use_obsidian=use_obsidian)
                     user_input = (
                         f"You are the Phase 0 Research Agent for the codebase modification task: '{work_prompt}'.\n\n"
                         f"Your task is to gather the MAXIMUM amount of up-to-date information, best practices, and API references required for this task.\n"
@@ -727,16 +1039,20 @@ def main():
                         f"When the research is complete, output a detailed markdown report of everything you found.\n"
                         f"DO NOT write code or investigate files yet. Just gather information."
                     )
-                    print_system(f"[Work Brain] Phase 0: Starting Deep Research...")
+                    print_system(f"[Brain] Phase 0: Starting Deep Research...")
                 else:
-                    pm.create(work_prompt, status="work_investigating", mode="work", auto_mode=auto_mode, tdd_mode=tdd_mode)
+                    pm.create(work_prompt, status="work_investigating", mode="work", auto_mode=auto_mode, tdd_mode=tdd_mode, use_obsidian=use_obsidian)
                     user_input = _build_work_investigation_prompt(work_prompt, "")
-                    print_system(f"[Work Brain] Phase 1: Investigating codebase...")
+                    print_system(f"[Brain] Phase 1: Investigating codebase...")
 
             elif user_input.startswith("/commit"):
                 try:
-                    # 1. Get staged changes
-                    staged_diff = subprocess.run("git diff --cached", shell=True, capture_output=True, text=True).stdout
+                    git_check = subprocess.run("git rev-parse --git-dir", capture_output=True, text=True)
+                    if git_check.returncode != 0:
+                        print_error("Not a git repository. Navigate to a git project first.")
+                        continue
+                    
+                    staged_diff = subprocess.run(["git", "diff", "--cached"], capture_output=True, text=True).stdout
                     if not staged_diff.strip():
                         print_error("No staged changes found. Use 'git add' first.")
                         continue
@@ -749,12 +1065,17 @@ def main():
                         f"{staged_diff}"
                     )
                     
-                    # Call LLM synchronously for quick message generation
-                    response = ollama.chat(
-                        model=agent.model_name,
-                        messages=[{"role": "user", "content": commit_prompt}]
-                    )
-                    gen_message = response.get("message", {}).get("content", "").strip().strip('"').strip("'")
+                    gen_message = ""
+                    try:
+                        from providers import create_provider
+                        provider = create_provider()
+                        gen_message = provider.sync_chat(
+                            model=agent.model_name,
+                            messages=[{"role": "user", "content": commit_prompt}]
+                        ).strip().strip('"').strip("'")
+                    except Exception as e:
+                        print_error(f"Failed to generate commit message: {e}")
+                        continue
                     
                     if not gen_message:
                         print_error("Failed to generate commit message.")
@@ -777,10 +1098,6 @@ def main():
                 except Exception as e:
                     print_error(f"Error during commit: {e}")
                 continue
-                
-                is_project_mode = True
-                last_task_id = None
-                task_retries = 0
 
             elif user_input.startswith("/"): #
                 should_exit = handle_slash_command(user_input, agent)
@@ -849,8 +1166,10 @@ def main():
                             "list_directory", "grep_search", "run_command", "run_admin_command",
                             "start_background_command", "read_background_command", "send_background_command",
                             "stop_background_command", "search_web", "read_webpage",
-                            "complete_project_task", "write_obsidian_note", "get_obsidian_vault"
+                            "complete_project_task", "create_svg_image"
                         ]
+                        if pm_temp.data.get("use_obsidian", False):
+                            active_tools.extend(["write_obsidian_note", "search_obsidian_notes", "get_obsidian_vault"])
                 else:
                     # In normal chat, use CHAT_ALLOWED_TOOLS
                     active_tools = CHAT_ALLOWED_TOOLS
@@ -861,60 +1180,169 @@ def main():
             response_chunks = agent.process_user_input(user_input, allowed_tools=active_tools)
             chunk_iterator = iter(response_chunks)
             streamed_text = ""
+            streamed_thinking = ""
             is_tool_executing = False
+            current_tool_name = ""
             
-            # Using the rich status spinner instead of Live Markdown for a cleaner look
-            # We import it here or at the top of the file
-            from ui import s
+            # Using the rich Live display for real-time response rendering
+            from rich.live import Live
+            from rich.console import Group
+            from rich.text import Text
+            from rich.markdown import Markdown
+            from ui import s, c, create_response_panel, create_content_panel, print_reasoning, print_reasoning_header
+            
+            verbose = get_verbose_status()
             
             while True:
                 try:
                     done = False
                     if not is_tool_executing:
-                        spinner_text = "[dim]AI is thinking...[/dim]" if s.get("use_spinners", True) else ""
-                        with console.status(spinner_text, spinner="dots", speed=1.5):
-                            while True:
+                        # Phase 1: Thinking/Reasoning Stream (NATIVE STREAMING)
+                        # We don't use Live here because Live prevents natural terminal scrolling 
+                        # for content larger than the viewport.
+                        has_started_reasoning = False
+                        is_waiting_ttft = True
+                        while True:
+                            try:
+                                if is_waiting_ttft and verbose:
+                                    with console.status("[bold cyan]Обработка...[/bold cyan]", spinner="dots"):
+                                        chunk = next(chunk_iterator)
+                                    is_waiting_ttft = False
+                                else:
+                                    chunk = next(chunk_iterator)
+                                    is_waiting_ttft = False
+                            except StopIteration:
+                                done = True
+                                break
+                            
+                            type_ = chunk.get("type")
+                            if type_ == "thinking_stream":
+                                if not has_started_reasoning:
+                                    print_reasoning_header()
+                                    has_started_reasoning = True
+                                
+                                content = chunk["content"]
+                                streamed_thinking += content
+                                # Native print without Live keeps scrolling lock-free
+                                console.print(content, end="", style=c.get("reasoning_text", "dim white"))
+                            elif type_ == "tool_generating":
+                                if has_started_reasoning:
+                                    console.print("\n")
+                                    has_started_reasoning = False
+                                # Show a spinner while the LLM generates tool arguments
+                                tool_gen_name = chunk.get("name", "?")
+                                tool_gen_bytes = chunk.get("bytes", 0)
+                                if verbose:
+                                    with console.status(f"[dim cyan]Генерация {tool_gen_name}... ({tool_gen_bytes} B)[/dim cyan]", spinner="dots") as status:
+                                        while True:
+                                            try:
+                                                chunk = next(chunk_iterator)
+                                            except StopIteration:
+                                                done = True
+                                                break
+                                            type_ = chunk.get("type")
+                                            if type_ == "tool_generating":
+                                                tool_gen_name = chunk.get("name", tool_gen_name)
+                                                tool_gen_bytes = chunk.get("bytes", 0)
+                                                status.update(f"[dim cyan]Генерация {tool_gen_name}... ({tool_gen_bytes} B)[/dim cyan]")
+                                            else:
+                                                break
+                                else:
+                                    while True:
+                                        try:
+                                            chunk = next(chunk_iterator)
+                                        except StopIteration:
+                                            done = True
+                                            break
+                                        type_ = chunk.get("type")
+                                        if type_ != "tool_generating":
+                                            break
+                                # After exiting spinner, re-check what chunk type we got
+                                if done:
+                                    break
+                                if type_ == "tool_start":
+                                    print_tool_start(chunk["name"], chunk.get("args", {}))
+                                    is_tool_executing = True
+                                    current_tool_name = chunk["name"]
+                                    break
+                                elif type_ in ("content_stream", "content"):
+                                    # Shouldn't happen often — but handle gracefully
+                                    break
+                                else:
+                                    break
+                            else:
+                                if has_started_reasoning:
+                                    console.print("\n") # Newline after reasoning
+                                break
+                            
+                        # Phase 2: Main Content/Tool Stream (LIVE PANEL)
+                        if not done and not is_tool_executing:
+                            # Live with transient=True: panel disappears after streaming ends,
+                            # replaced by clean final render without borders.
+                            with Live(create_content_panel(""), console=console, refresh_per_second=10, transient=True) as live:
+                                while True:
+                                    # If type_ is already from the previous next() call, process it first
+                                    if type_ in ("content_stream", "content"):
+                                        streamed_text += chunk["content"]
+                                        live.update(create_content_panel(streamed_text))
+                                    elif type_ == "content_replace":
+                                        streamed_text = chunk["content"]
+                                        live.update(create_content_panel(streamed_text))
+                                    elif type_ == "tool_generating":
+                                        # Tool generation started mid-content — exit Live and let next iteration handle it
+                                        break
+                                    elif type_ not in ("thinking_stream"):
+                                        # Tool or error, exit live content phase
+                                        break
+                                    
+                                    try:
+                                        chunk = next(chunk_iterator)
+                                        type_ = chunk.get("type")
+                                    except StopIteration:
+                                        done = True
+                                        break
+                        
+                        # Re-process the last chunk that broke the Live content loop (tool or error)
+                        if not done and not is_tool_executing:
+                            if type_ == "tool_start":
+                                print_tool_start(chunk["name"], chunk.get("args", {}))
+                                is_tool_executing = True
+                                current_tool_name = chunk["name"]
+                            elif type_ == "tool_generating":
+                                # Will be caught by the next outer loop iteration
+                                pass
+                            elif type_ == "tool_end":
+                                print_tool_end(chunk["name"], chunk.get("result", ""))
+                            elif type_ == "error":
+                                print_error(chunk["content"])
+                    
+                    else:
+                        # Tool is executing — wait for tool_end
+                        # Skip spinner for interactive tools that need clean terminal (e.g. ask_user_questions)
+                        interactive_tools = {"ask_user_questions"}
+                        use_spinner = verbose and current_tool_name not in interactive_tools
+                        
+                        if use_spinner:
+                            with console.status("[dim cyan]Выполнение...[/dim cyan]", spinner="dots"):
                                 try:
                                     chunk = next(chunk_iterator)
                                 except StopIteration:
-                                    if streamed_text:
-                                        print_markdown(streamed_text)
                                     done = True
-                                    break
-                                    
-                                type_ = chunk.get("type")
-                                
-                                if type_ in ("content_stream", "content"):
-                                    streamed_text += chunk["content"]
-                                elif type_ == "content_replace":
-                                    streamed_text = chunk["content"]
-                                else:
-                                    if streamed_text:
-                                        print_markdown(streamed_text)
-                                        streamed_text = ""
-                                        
-                                    if type_ == "tool_start":
-                                        print_tool_start(chunk["name"], chunk.get("args", {}))
-                                        is_tool_executing = True
-                                    elif type_ == "tool_end":
-                                        print_tool_end(chunk["name"], chunk.get("result", ""))
-                                    elif type_ == "error":
-                                        print_error(chunk["content"])
-                                    
-                                    break
-                    else:
-                        try:
-                            chunk = next(chunk_iterator)
-                        except StopIteration:
-                            done = True
+                        else:
+                            try:
+                                chunk = next(chunk_iterator)
+                            except StopIteration:
+                                done = True
                              
                         if not done:
                             type_ = chunk.get("type")
                             if type_ == "tool_end":
                                 print_tool_end(chunk["name"], chunk.get("result", ""))
                                 is_tool_executing = False
+                                current_tool_name = ""
                             elif type_ == "tool_start":
                                 print_tool_start(chunk["name"], chunk.get("args", {}))
+                                current_tool_name = chunk["name"]
                             elif type_ == "error":
                                 print_error(chunk["content"])
                         
@@ -927,6 +1355,28 @@ def main():
                     print_error(f"Streaming error: {e}")
                     break
             
+            # Render final response without borders for easy copy-paste
+            if streamed_text:
+                from ui import create_final_panel, safe_print as _safe_print
+                for el in create_final_panel(streamed_text):
+                    _safe_print(el)
+                    _safe_print("")
+            
+            # Show context usage after response
+            usage = agent.get_context_usage()
+            print_context_usage(usage["tokens"], usage["max"], usage["percent"])
+            
+            # Auto-save session every 5 turns
+            turn_counter += 1
+            if turn_counter % 5 == 0:
+                try:
+                    save_session(agent.messages, {
+                        "model": agent.model_name,
+                        "provider": get_provider(),
+                    })
+                except Exception:
+                    pass
+            
             # Trigger Post Response Hook
             if agent.messages and agent.messages[-1].get("role") in ("assistant", "model"):
                 hook_manager.call_hook("post_response", agent.messages[-1].get("content", ""))
@@ -937,7 +1387,7 @@ def main():
                 
                 if not pm.active:
                     is_project_mode = False
-                    print_system("[Project Brain] No active project found.")
+                    print_system("[Brain] No active project found.")
                     continue
                 
                 status = pm.data.get("status", "")
@@ -952,7 +1402,7 @@ def main():
                         pm.set_status("work_investigating")
                         agent.inject_context()
                         auto_continue_input = _build_work_investigation_prompt(pm.data["objective"], pm.data.get("research_data", ""))
-                        print_system(f"[Work Brain] Phase 1: Investigating codebase based on research...")
+                        print_system(f"[Brain] Phase 1: Investigating codebase based on research...")
                     else:
                         pm.set_status("specifying_architecture")
                         agent.inject_context()
@@ -989,7 +1439,7 @@ def main():
                             f"- Call `write_project_architecture` NOW!"
                         )
                         
-                        print_system(f"[Project Brain] Phase 1a: Designing architecture based on research...")
+                        print_system(f"[Brain] Phase 1a: Designing architecture based on research...")
 
                 # --- WORK MODE ---
                 # Phase 1: Investigation in progress ( waiting for plan_work_changes )
@@ -997,13 +1447,13 @@ def main():
                     agent.inject_context()
                     # We just re-prompt briefly to remind it to call plan_work_changes if it got distracted
                     auto_continue_input = "Investigation phase. Continue reading files, searching, or when ready, call `plan_work_changes`."
-                    print_system("[Work Brain] Phase 1: Investigation in progress...")
+                    print_system("[Brain] Phase 1: Investigation in progress...")
 
                 # Phase 1 Investigation done (plan_work_changes called) -> Phase 2 Micro-Tasking
                 elif status == "work_planning" and not pm.has_pending():
                     # Tools.py changes status to work_planning when plan is accepted
                     agent.inject_context()
-                    print_system("[Work Brain] Phase 2: Generating micro-tasks from investigation plan...")
+                    print_system("[Brain] Phase 2: Generating micro-tasks from investigation plan...")
                     auto_continue_input = _build_work_planning_prompt(
                         pm.data["objective"],
                         pm.data.get("work_strategy", ""),
@@ -1020,7 +1470,7 @@ def main():
                     agent.inject_context()
                     auto_continue_input = pm.build_execution_context(next_task)
                     progress = pm.get_progress_display()
-                    print_system(f"[Work Brain] Phase 3: {progress} >> Work Task {next_task['id']}: {next_task['description']}")
+                    print_system(f"[Brain] Phase 3: {progress} >> Work Task {next_task['id']}: {next_task['description']}")
                 
                 # Phase 3: Continue executing
                 elif status == "work_executing" and pm.has_pending():
@@ -1028,11 +1478,27 @@ def main():
                     if next_task["id"] == last_task_id:
                         task_retries += 1
                         if task_retries >= MAX_TASK_RETRIES:
-                            print_system(f"[Work Brain] Task {next_task['id']} failed {MAX_TASK_RETRIES} times, skipping...")
-                            pm.complete_task(next_task["id"], "SKIPPED: failed to complete")
-                            last_task_id = None
-                            task_retries = 0
-                            continue
+                            print_system(f"[Brain] Task {next_task['id']} failed {MAX_TASK_RETRIES} times.")
+                            action = questionary.select(
+                                "What should we do with this stalled task?",
+                                choices=["1. Continue trying (reset counter)", "2. Provide a hint to AI", "3. Skip task"]
+                            ).ask()
+                            
+                            if action and action.startswith("1"):
+                                task_retries = 0
+                                print_system("Retrying task...")
+                            elif action and action.startswith("2"):
+                                hint = questionary.text("Enter your hint for the AI:").ask()
+                                if hint:
+                                    next_task['description'] += f"\n\n[USER HINT AFTER FAILURE]: {hint}"
+                                    pm._save()
+                                task_retries = 0
+                                print_system("Hint added. Retrying task...")
+                            else:
+                                pm.complete_task(next_task["id"], "SKIPPED: failed to complete after multiple attempts")
+                                last_task_id = None
+                                task_retries = 0
+                                continue
                     else:
                         last_task_id = next_task["id"]
                         task_retries = 0
@@ -1040,13 +1506,13 @@ def main():
                     agent.inject_context()
                     auto_continue_input = pm.build_execution_context(next_task)
                     progress = pm.get_progress_display()
-                    print_system(f"[Work Brain] {progress} >> Work Task {next_task['id']}: {next_task['description']}")
+                    print_system(f"[Brain] {progress} >> Work Task {next_task['id']}: {next_task['description']}")
                 
                 # Phase 3 done
                 elif status == "work_executing" and not pm.has_pending():
                     is_project_mode = False
                     pm.set_status("completed")
-                    print_system(f"[Work Brain] {pm.get_progress_display()} Work complete! Returning to chat.")
+                    print_system(f"[Brain] {pm.get_progress_display()} Work complete! Returning to chat.")
 
                 # --- PROJECT MODE ---
                 # Phase 1a → 1b: Architecture written, now detail each file
@@ -1059,7 +1525,7 @@ def main():
                         pm.set_status("specifying_details")
                         agent.inject_context()
                         
-                        print_system(f"[Project Brain] Phase 1b: Detailing spec for {next_file} ({len(pending_files)} files remaining)...")
+                        print_system(f"[Brain] Phase 1b: Detailing spec for {next_file} ({len(pending_files)} files remaining)...")
                         
                         auto_continue_input = _build_spec_prompt(
                             pm.data['objective'], pm.get_architecture(), next_file
@@ -1073,7 +1539,7 @@ def main():
                         specs_summary = "\
 ".join([f"  - {fname}" for fname in all_specs.keys()])
                         
-                        print_system(f"[Project Brain] Phase 2: Creating tasks from {len(all_specs)} file specs...")
+                        print_system(f"[Brain] Phase 2: Creating tasks from {len(all_specs)} file specs...")
                         
                         auto_continue_input = _build_planning_prompt(pm.data['objective'], specs_summary)
                 # Phase 1b: Continue detailing files
@@ -1084,7 +1550,7 @@ def main():
                         next_file = pending_files[0]
                         agent.inject_context()
                         
-                        print_system(f"[Project Brain] Phase 1b: Detailing spec for {next_file} ({len(pending_files)} files remaining)...")
+                        print_system(f"[Brain] Phase 1b: Detailing spec for {next_file} ({len(pending_files)} files remaining)...")
                         
                         auto_continue_input = _build_spec_prompt(
                             pm.data['objective'], pm.get_architecture(), next_file
@@ -1097,7 +1563,7 @@ def main():
                         all_specs = pm.get_all_file_specs()
                         specs_summary = "\n".join([f"  - {fname}" for fname in all_specs.keys()])
                         
-                        print_system(f"[Project Brain] Phase 2: Creating tasks from {len(all_specs)} file specs...")
+                        print_system(f"[Brain] Phase 2: Creating tasks from {len(all_specs)} file specs...")
                         
                         auto_continue_input = _build_planning_prompt(pm.data['objective'], specs_summary)
                 # Phase 2 → 3: Tasks created, start execution
@@ -1109,7 +1575,7 @@ def main():
                     agent.inject_context()
                     auto_continue_input = pm.build_execution_context(next_task)
                     progress = pm.get_progress_display()
-                    print_system(f"[Project Brain] Phase 3: {progress} >> Task {next_task['id']}: {next_task['description']}")
+                    print_system(f"[Brain] Phase 3: {progress} >> Task {next_task['id']}: {next_task['description']}")
                 # Phase 3: Continue executing next pending task
                 elif status == "executing" and pm.has_pending():
                     next_task = pm.get_next_pending()
@@ -1118,11 +1584,27 @@ def main():
                     if next_task["id"] == last_task_id:
                         task_retries += 1
                         if task_retries >= MAX_TASK_RETRIES:
-                            print_system(f"[Project Brain] Task {next_task['id']} failed {MAX_TASK_RETRIES} times, skipping...")
-                            pm.complete_task(next_task["id"], "SKIPPED: failed to complete after multiple attempts")
-                            last_task_id = None
-                            task_retries = 0
-                            continue # re-enter state machine to pick next task
+                            print_system(f"[Brain] Task {next_task['id']} failed {MAX_TASK_RETRIES} times.")
+                            action = questionary.select(
+                                "What should we do with this stalled task?",
+                                choices=["1. Continue trying (reset counter)", "2. Provide a hint to AI", "3. Skip task"]
+                            ).ask()
+                            
+                            if action and action.startswith("1"):
+                                task_retries = 0
+                                print_system("Retrying task...")
+                            elif action and action.startswith("2"):
+                                hint = questionary.text("Enter your hint for the AI:").ask()
+                                if hint:
+                                    next_task['description'] += f"\n\n[USER HINT AFTER FAILURE]: {hint}"
+                                    pm._save()
+                                task_retries = 0
+                                print_system("Hint added. Retrying task...")
+                            else:
+                                pm.complete_task(next_task["id"], "SKIPPED: failed to complete after multiple attempts")
+                                last_task_id = None
+                                task_retries = 0
+                                continue # re-enter state machine to pick next task
                     else:
                         last_task_id = next_task["id"]
                         task_retries = 0
@@ -1130,16 +1612,16 @@ def main():
                     agent.inject_context()
                     auto_continue_input = pm.build_execution_context(next_task)
                     progress = pm.get_progress_display()
-                    print_system(f"[Project Brain] {progress} >> Task {next_task['id']}: {next_task['description']}")
+                    print_system(f"[Brain] {progress} >> Task {next_task['id']}: {next_task['description']}")
                 # Execution done → Finish project
                 elif status == "executing" and not pm.has_pending():
                     is_project_mode = False
                     pm.set_status("completed")
-                    print_system(f"[Project Brain] {pm.get_progress_display()} Project complete! Returning to chat.")
+                    print_system(f"[Brain] {pm.get_progress_display()} Project complete! Returning to chat.")
                 # Fallback: no progress
                 else:
                     is_project_mode = False
-                    print_system("[Project Brain] Could not advance project. Check the model output.")
+                    print_system("[Brain] Could not advance project. Check the model output.")
             
         except KeyboardInterrupt:
             continue
@@ -1148,7 +1630,7 @@ def main():
             break
         except Exception as e:
             print_error(f"Main loop error: {e}")
-            break
+            continue
     
     print_system("Goodbye!")
 

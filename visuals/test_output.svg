@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+
+<svg width="200" height="200" xmlns="http://www.w3.org/2001/svg">
+  <rect width="100%" height="100%" fill="skyblue" />
+  <circle cx="100" cy="100" r="80" stroke="white" stroke-width="4" fill="gold" />
+  <text x="100" y="115" font-size="40" text-anchor="middle" fill="orange" font-family="Arial">O</text>
+</svg>
