@@ -1318,8 +1318,16 @@ def main():
                     
                     else:
                         # Tool is executing — wait for tool_end
-                        # Skip spinner for interactive tools that need clean terminal (e.g. ask_user_questions)
-                        interactive_tools = {"ask_user_questions"}
+                        # Skip spinner for interactive tools that need clean terminal
+                        # (any tool that calls questionary.confirm or similar prompts)
+                        interactive_tools = {
+                            "ask_user_questions",
+                            "run_command",
+                            "run_admin_command",
+                            "start_background_command",
+                            "delete_file",
+                            "plan_work_changes",
+                        }
                         use_spinner = verbose and current_tool_name not in interactive_tools
                         
                         if use_spinner:

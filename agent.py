@@ -5,6 +5,7 @@ import re
 import codecs
 import inspect
 import platform
+import threading
 from pathlib import Path
 from typing import List, Dict, Any, Generator
 import ollama
@@ -152,8 +153,11 @@ class ArgentAgent:
         """Heuristic calculation for tokens (roughly 1 token = 4 chars)."""
         return len(text) // 4
 
-    def _summarize_messages(self, msgs_to_summarize: List[Dict]) -> str:
-        """Runs a fast, synchronous LLM call to summarize old context."""
+    def _summarize_messages(self, msgs_to_summarize: List[Dict], timeout: float = 30.0) -> str:
+        """Runs a synchronous LLM call to summarize old context.
+        Protected by a timeout to prevent infinite blocking.
+        Only used for cloud providers — Ollama uses hard reset instead.
+        """
         text_to_summarize = ""
         for m in msgs_to_summarize:
             role = m.get("role", "unknown")
@@ -168,23 +172,44 @@ class ArgentAgent:
             "Omit politeness and conversational filler. Here is the log:\n\n" + text_to_summarize
         )
         
-        try:
-            provider = create_provider()
-            validation_error = provider.validate_config()
-            if validation_error:
-                return summary_prompt
-            result = provider.sync_chat(
-                model=self.model_name,
-                messages=[{"role": "user", "content": summary_prompt}]
-            )
-            return result or "[Compression Failed]"
-        except Exception:
-            return "Previous context omitted to save memory."
+        result_container = [None]
+        error_container = [None]
+        
+        def _do_summarize():
+            try:
+                provider = create_provider()
+                validation_error = provider.validate_config()
+                if validation_error:
+                    result_container[0] = None
+                    return
+                result_container[0] = provider.sync_chat(
+                    model=self.model_name,
+                    messages=[{"role": "user", "content": summary_prompt}]
+                )
+            except Exception as e:
+                error_container[0] = e
+        
+        worker = threading.Thread(target=_do_summarize, daemon=True)
+        worker.start()
+        worker.join(timeout=timeout)
+        
+        if worker.is_alive():
+            log.warning("Context summarization timed out after %.0fs, falling back to hard reset.", timeout)
+            return None  # Signal to caller: summarization failed
+        
+        if error_container[0]:
+            log.warning("Context summarization error: %s", error_container[0])
+            return None
+        
+        return result_container[0] or "[Compression Failed]"
 
     def _trim_history(self):
-        """Keeps history size manageable. Uses two strategies:
-        - tiny/small models: hard reset with memory preservation (no LLM call needed)
-        - medium/large/cloud: LLM summarization of old messages
+        """Keeps history size manageable. Strategy depends on provider:
+        - Ollama (any model size): hard reset with memory (no LLM call).
+          Ollama is single-threaded for inference, so a sync summarization
+          call before the main stream would block forever.
+        - Cloud providers (tiny/small): hard reset with memory.
+        - Cloud providers (medium/large/cloud): LLM summarization with timeout.
         """
         self.max_context_tokens = get_context_window()
         
@@ -194,8 +219,14 @@ class ArgentAgent:
         if msg_count <= self.max_history_messages and history_tokens <= self.max_context_tokens:
             return
 
-        category = get_model_size_category(self.model_name)
+        # Ollama is single-threaded: a sync LLM call here would queue behind
+        # the upcoming stream_chat and hang indefinitely. Always use instant reset.
+        if self.provider != "zai":
+            self._hard_reset_with_memory()
+            return
 
+        # Cloud provider — safe to make a parallel API call
+        category = get_model_size_category(self.model_name)
         if category in ("tiny", "small"):
             self._hard_reset_with_memory()
         else:
@@ -276,7 +307,13 @@ class ArgentAgent:
 
         from ui import console
         with console.status("[dim magenta]Оптимизация контекста...[/dim magenta]", spinner="dots"):
-            summary = self._summarize_messages(msgs_to_summarize)
+            summary = self._summarize_messages(msgs_to_summarize, timeout=30.0)
+        
+        # If summarization failed (timeout or error), fall back to hard reset
+        if summary is None:
+            log.info("Summarization failed, falling back to hard reset.")
+            self._hard_reset_with_memory()
+            return
         
         memory_msg = {
             "role": "system",
