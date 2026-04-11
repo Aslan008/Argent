@@ -1189,6 +1189,7 @@ def main():
             from rich.console import Group
             from rich.text import Text
             from rich.markdown import Markdown
+            from rich.spinner import Spinner as RichSpinner
             from ui import s, c, create_response_panel, create_content_panel, print_reasoning, print_reasoning_header
             
             verbose = get_verbose_status()
@@ -1295,9 +1296,23 @@ def main():
                                         # Tool or error, exit live content phase
                                         break
                                     
+                                    # Show animated thinking indicator while waiting for next chunk.
+                                    # Rich Live refreshes via a background thread, so the spinner
+                                    # keeps animating even while next() blocks the main thread.
+                                    if streamed_text:
+                                        live.update(Group(
+                                            create_content_panel(streamed_text),
+                                            RichSpinner("dots", text=Text(" Генерация...", style="dim cyan"))
+                                        ))
+                                    
                                     try:
                                         chunk = next(chunk_iterator)
                                         type_ = chunk.get("type")
+                                        # Restore clean content panel (remove spinner)
+                                        if type_ in ("content_stream", "content", "content_replace"):
+                                            pass  # Will be updated at the top of the loop
+                                        elif streamed_text:
+                                            live.update(create_content_panel(streamed_text))
                                     except StopIteration:
                                         done = True
                                         break
