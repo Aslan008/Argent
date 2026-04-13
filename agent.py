@@ -358,11 +358,42 @@ class ArgentAgent:
             "file": "file_path",
             "filepath": "file_path",
         },
+        "replace_python_function": {
+            "filename": "file_path",
+            "path": "file_path",
+            "file": "file_path",
+            "filepath": "file_path",
+        },
+        "create_directory": {
+            "path": "dir_path",
+            "directory": "dir_path",
+            "dir": "dir_path",
+            "directory_path": "dir_path",
+        },
         "list_directory": {
             "path": "dir_path",
             "directory": "dir_path",
             "dir": "dir_path",
             "directory_path": "dir_path",
+        },
+        "grep_search": {
+            "dir": "directory",
+            "path": "directory",
+            "directory_path": "directory",
+        },
+        "move_file": {
+            "src": "source",
+            "source_path": "source",
+            "dst": "destination",
+            "dest": "destination",
+            "destination_path": "destination",
+        },
+        "copy_file": {
+            "src": "source",
+            "source_path": "source",
+            "dst": "destination",
+            "dest": "destination",
+            "destination_path": "destination",
         },
     }
 

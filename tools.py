@@ -1,5 +1,8 @@
 import os
+import re
+import ast
 import json
+import shutil
 import subprocess
 from pathlib import Path
 import questionary
@@ -35,7 +38,7 @@ log = get_logger("tools")
 # Helper Functions
 # ---------------------------------------------------------------------------
 
-def __resolve_path(file_path: str) -> Path:
+def _resolve_path(file_path: str) -> Path:
     """Resolve file path locally first. If missing, check if it exists in the configured Obsidian Vault."""
     path = Path(file_path).expanduser().resolve()
     if path.exists():
@@ -56,12 +59,11 @@ def __resolve_path(file_path: str) -> Path:
 def _is_plugin_path_restricted(file_path: str) -> str | None:
     """Checks if the path is inside the plugins directory and returns an error if restricted."""
     try:
-        from config import get_hooks_dir
         abs_path = os.path.abspath(file_path)
         hooks_dir = os.path.abspath(get_hooks_dir())
         if abs_path.startswith(hooks_dir):
             return (
-                f"ERROR: Direct modification of files in the plugins directory is restricted. "
+                f"Error: Direct modification of files in the plugins directory is restricted. "
                 f"You MUST use the `create_plugin` or `delete_plugin` tools for all plugin-related tasks. "
                 f"These tools ensure mandatory syntax validation and automatic system reloading."
             )
@@ -98,7 +100,6 @@ def _validate_code_syntax(file_path: str) -> str | None:
                 
         if csproj_file:
             try:
-                import subprocess
                 result = subprocess.run(["dotnet", "build", str(csproj_file), "-v", "q", "/nologo"], capture_output=True, text=True, timeout=15)
                 if result.returncode != 0:
                     return f"C# Compiler Error:\n{result.stdout}\n\nPlease fix this compiler error using the `replace_in_file` tool."
@@ -121,6 +122,33 @@ def _print_diff(old_text, new_text, filename):
         diff_str = "".join(diff)
         syntax = Syntax(diff_str, "diff", theme="monokai", background_color="default")
         console.print(Panel(syntax, title=f"Changes in {filename}", border_style="green"))
+
+def _build_match_hint(target_text: str, content: str) -> str:
+    """Build a helpful hint when target text is not found, showing the closest match."""
+    lines = target_text.strip().split('\n')
+    if not lines:
+        return ""
+    first_line = lines[0].strip()
+    if not first_line or len(first_line) <= 3:
+        return ""
+    
+    # Try to find the first line in the file content
+    idx = content.find(first_line)
+    if idx != -1:
+        start_idx = max(0, idx - 50)
+        end_idx = min(len(content), idx + len(first_line) + 300)
+        actual_snippet = content[start_idx:end_idx]
+        return f"\n\nHint: We found a partial match for your target_text. Here is the EXACT text from the file (including whitespaces/newlines):\n```\n{actual_snippet}\n```\nCopy the exact text from this snippet for your target_text."
+    
+    # Try line-by-line search
+    content_lines = content.split('\n')
+    start_snippet = target_text[:30].strip()
+    for i, line in enumerate(content_lines):
+        if start_snippet in line:
+            context = '\n'.join(content_lines[max(0, i-2):min(len(content_lines), i+10)])
+            return f"\n\nHINT: Found something similar around line {i+1}:\n```\n{context}\n```\nMake sure your `target_text` has the EXACT spacing and indentation shown in this snippet."
+    
+    return ""
 
 # ---------------------------------------------------------------------------
 # Tool Implementations
@@ -225,7 +253,7 @@ def write_file_spec(filename: str, spec: str) -> str:
 def read_file(file_path: str, start_line: int = None, end_line: int = None) -> str:
     """Read the contents of a file. Optionally read a specific range of lines (1-indexed)."""
     try:
-        path = __resolve_path(file_path)
+        path = _resolve_path(file_path)
         if not path.exists():
             return f"Error: File '{file_path}' does not exist."
         if not path.is_file():
@@ -241,7 +269,7 @@ def read_file(file_path: str, start_line: int = None, end_line: int = None) -> s
                 return header + "".join(selected)
             else:
                 content = f.read()
-                line_count = content.count('\n') + 1
+                line_count = len(content.splitlines())
                 if line_count > 500:
                     return f"[File has {line_count} lines. Showing first 500. Use start_line/end_line to read specific sections.]\n" + "\n".join(content.splitlines()[:500])
                 return content
@@ -255,7 +283,7 @@ def delete_file(file_path: str) -> str:
         return restriction_error
         
     try:
-        path = __resolve_path(file_path)
+        path = _resolve_path(file_path)
         if not path.exists():
             return f"Error: File '{file_path}' does not exist."
         if not path.is_file():
@@ -268,8 +296,11 @@ def delete_file(file_path: str) -> str:
             return f"Deletion aborted by user. The file '{file_path}' was NOT deleted."
             
         path.unlink()
+        log.info("delete_file: %s", file_path)
+        memory.add_completed(f"Deleted {file_path}")
         return f"Successfully deleted '{file_path}'."
     except Exception as e:
+        log.error("delete_file error %s: %s", file_path, e)
         return f"Error deleting file '{file_path}': {e}"
 
 def write_file(file_path: str, content: str) -> str:
@@ -279,12 +310,12 @@ def write_file(file_path: str, content: str) -> str:
         return restriction_error
         
     try:
-        path = Path(file_path).expanduser().resolve()
+        path = _resolve_path(file_path)
         path.parent.mkdir(parents=True, exist_ok=True)
         if path.exists():
             snapshot(str(path))
         if '\\n' in content or '\\t' in content:
-            content = content.replace('\\\\', '\\').replace('\\n', '\n').replace('\\t', '\t')
+            content = content.replace('\\n', '\n').replace('\\t', '\t').replace('\\\\', '\\')
         with open(path, "w", encoding="utf-8") as f:
             f.write(content)
             
@@ -532,7 +563,10 @@ def update_obsidian_properties(note_path: str, add_tags: list = None, remove_tag
         # Write back
         if fm:
             new_fm_str = yaml.dump(fm, allow_unicode=True, default_flow_style=False, sort_keys=False)
-            final_content = f"---\n{new_fm_str}---\n" + body.lstrip('\n')
+            body_trimmed = body.lstrip('\n')
+            final_content = f"---\n{new_fm_str}---\n"
+            if body_trimmed:
+                final_content += "\n" + body_trimmed
         else:
             final_content = body.lstrip('\n')
             
@@ -544,14 +578,12 @@ def update_obsidian_properties(note_path: str, add_tags: list = None, remove_tag
     except Exception as e:
         return f"Error updating properties for '{note_path}': {e}"
 
-import ast
-
 def replace_python_function(file_path: str, function_name: str, new_code: str) -> str:
     """Surgically replace a top-level function or class method in a Python file. 
     function_name can be 'my_func' or 'MyClass.my_method'.
     """
     try:
-        path = __resolve_path(file_path)
+        path = _resolve_path(file_path)
         if not path.exists():
             return f"Error: File '{file_path}' does not exist."
         if not path.is_file():
@@ -656,6 +688,9 @@ def replace_python_function(file_path: str, function_name: str, new_code: str) -
         except ImportError:
             pass
 
+        log.info("replace_python_function: %s (%s)", file_path, function_name)
+        memory.add_file_modified(file_path)
+        memory.add_completed(f"Replaced {function_name} in {file_path}")
         return f"Successfully replaced '{function_name}' in '{file_path}'."
         
     except Exception as e:
@@ -669,7 +704,7 @@ def replace_in_file(file_path: str, target_text: str, replacement_text: str) -> 
         return restriction_error
         
     try:
-        path = __resolve_path(file_path)
+        path = _resolve_path(file_path)
         if not path.exists():
             return f"Error: File '{file_path}' does not exist."
         if not path.is_file():
@@ -677,23 +712,7 @@ def replace_in_file(file_path: str, target_text: str, replacement_text: str) -> 
             
         with open(path, "r", encoding="utf-8") as f:
             content = f.read()
-            
-        if target_text not in content:
-            hint = ""
-            lines = target_text.strip().split('\n')
-            if lines:
-                first_line = lines[0].strip()
-                if first_line and len(first_line) > 3:
-                    idx = content.find(first_line)
-                    if idx != -1:
-                        start_idx = max(0, idx - 50)
-                        end_idx = min(len(content), idx + len(first_line) + 300)
-                        actual_snippet = content[start_idx:end_idx]
-                        hint = f"\n\nHint: We found a partial match for your target_text. Here is the EXACT text from the file (including whitespaces/newlines):\n```\n{actual_snippet}\n```\nCopy the exact text from this snippet for your target_text."
-                        
-            return f"Error: The target text was not found in '{file_path}'. Make sure it matches exactly, including whitespace and indentation.{hint}"
 
-        # Same decoding of literal escapes locally so standard match works
         target_text_processed = target_text
         if '\\n' in target_text_processed or '\\t' in target_text_processed:
             target_text_processed = target_text_processed.replace('\\n', '\n').replace('\\t', '\t').replace('\\\\', '\\')
@@ -702,24 +721,15 @@ def replace_in_file(file_path: str, target_text: str, replacement_text: str) -> 
         if '\\n' in replacement_text_processed or '\\t' in replacement_text_processed:
             replacement_text_processed = replacement_text_processed.replace('\\n', '\n').replace('\\t', '\t').replace('\\\\', '\\')
 
+        # Check for match with processed text
+        if target_text_processed not in content:
+            hint = _build_match_hint(target_text_processed, content)
+            return f"Error: The target text was not found in '{file_path}'. Make sure it matches exactly, including whitespace and indentation.{hint}"
+
         # Count occurrences
         count = content.count(target_text_processed)
         if count > 1:
             return f"Error: The target text appears {count} times in '{file_path}'. Please provide a more specific, unique block of text to replace."
-
-        if target_text_processed not in content:
-            # Fallback hint mechanism
-            start_snippet = target_text_processed[:30].strip()
-            # Try to find something that looks like the start text
-            lines = content.split('\n')
-            hint = ""
-            for i, line in enumerate(lines):
-                if start_snippet in line:
-                    context = '\n'.join(lines[max(0, i-2):min(len(lines), i+10)])
-                    hint = f"\n\nHINT: I found something similar around line {i+1}. It looks exactly like this:\n```\n{context}\n```\n\nMake sure your `target_text` has the EXACT spacing and indentation shown in this snippet."
-                    break
-                    
-            return f"Error: The target text was not found in '{file_path}'. Make sure you matched spacing and indentation perfectly.{hint}"
 
         new_content = content.replace(target_text_processed, replacement_text_processed)
         with open(path, "w", encoding="utf-8") as f:
@@ -756,7 +766,6 @@ def multi_replace_in_file(changes_json: str) -> str:
     Example: '[{"file_path": "src/main.py", "target_text": "old_func()", "replacement_text": "new_func()"}, {"file_path": "src/utils.py", "target_text": "old_var", "replacement_text": "new_var"}]'
     """
     try:
-        import json
         changes = json.loads(changes_json)
         if not isinstance(changes, list):
             return "Error: changes_json must be a JSON array of objects."
@@ -788,13 +797,11 @@ def get_file_outline(file_path: str) -> str:
     including classes, functions, and their methods.
     """
     try:
-        path = __resolve_path(file_path)
+        path = _resolve_path(file_path)
         if not path.exists():
             return f"Error: File '{file_path}' does not exist."
         if not path.is_file():
             return f"Error: '{file_path}' is not a file."
-        
-        snapshot(str(path))
         
         with open(path, "r", encoding="utf-8") as f:
             source = f.read()
@@ -846,7 +853,7 @@ def get_file_outline(file_path: str) -> str:
 def list_directory(dir_path: str) -> str:
     """List the contents of a directory."""
     try:
-        path = __resolve_path(dir_path)
+        path = _resolve_path(dir_path)
         if not path.exists():
             return f"Error: Directory '{dir_path}' does not exist."
         if not path.is_dir():
@@ -856,10 +863,30 @@ def list_directory(dir_path: str) -> str:
         if not items:
             return f"Directory '{dir_path}' is empty."
         
-        output = [f"Contents of {dir_path}:"]
+        dirs = []
+        files = []
         for item in items:
+            if item.is_dir():
+                dirs.append(item)
+            else:
+                files.append(item)
+        
+        output = [f"Contents of {dir_path}:"]
+        for item in sorted(dirs) + sorted(files):
             type_str = "DIR" if item.is_dir() else "FILE"
-            output.append(f"[{type_str}] {item.name}")
+            line = f"[{type_str}] {item.name}"
+            if item.is_file():
+                try:
+                    size = item.stat().st_size
+                    if size < 1024:
+                        line += f"  ({size} B)"
+                    elif size < 1024 * 1024:
+                        line += f"  ({size / 1024:.1f} KB)"
+                    else:
+                        line += f"  ({size / (1024 * 1024):.1f} MB)"
+                except OSError:
+                    pass
+            output.append(line)
         return "\n".join(output)
     except Exception as e:
         return f"Error listing directory '{dir_path}': {e}"
@@ -867,7 +894,7 @@ def list_directory(dir_path: str) -> str:
 def search_files(directory: str = ".", pattern: str = "*", name_contains: str = None, content_contains: str = None, max_results: int = 50) -> str:
     """Recursively search for files matching criteria. Can filter by file pattern, name, and content."""
     try:
-        start_path = __resolve_path(directory)
+        start_path = _resolve_path(directory)
         if not start_path.exists():
             return f"Error: Directory '{directory}' does not exist."
         if not start_path.is_dir():
@@ -902,8 +929,7 @@ def search_files(directory: str = ".", pattern: str = "*", name_contains: str = 
                     if idx != -1:
                         start = max(0, idx - 40)
                         end = min(len(content), idx + len(content_filter) + 60)
-                        snippet = content[start:end].replace('\
-', ' ').strip()
+                        snippet = content[start:end].replace('\n', ' ').strip()
                         if start > 0:
                             snippet = "..." + snippet
                         if end < len(content):
@@ -936,14 +962,82 @@ def search_files(directory: str = ".", pattern: str = "*", name_contains: str = 
                 output.append(f"  >> {r['snippet']}")
         
         if len(results) >= max_results:
-            output.append(f"\
-(Results limited to {max_results}. Use max_results parameter to see more.)")
+            output.append(f"(Results limited to {max_results}. Use max_results parameter to see more.)")
         
-        return "\
-".join(output)
+        return "\n".join(output)
         
     except Exception as e:
         return f"Error searching files: {e}"
+
+def grep_search(directory: str, pattern: str, file_pattern: str = None, max_results: int = 30) -> str:
+    """Search file contents using regex pattern. Faster and more precise than search_files for finding specific code."""
+    try:
+        start_path = _resolve_path(directory)
+        if not start_path.exists():
+            return f"Error: Directory '{directory}' does not exist."
+        if not start_path.is_dir():
+            return f"Error: '{directory}' is not a directory."
+        
+        try:
+            regex = re.compile(pattern, re.IGNORECASE)
+        except re.error as e:
+            return f"Error: Invalid regex pattern '{pattern}': {e}"
+        
+        results = []
+        glob_pattern = file_pattern or "*"
+        skip_ext = {'.exe', '.dll', '.png', '.jpg', '.jpeg', '.gif', '.pdf', '.zip', '.mp3', '.mp4', '.wav', '.asset', '.meta', '.prefab', '.unity', '.pdb', '.obj', '.bin'}
+        skip_dirs = {'.git', '.argent', 'node_modules', '__pycache__', 'venv', 'env', 'Library', 'Temp', 'obj', 'bin', '.venv'}
+        
+        for file_path in start_path.rglob(glob_pattern):
+            if not file_path.is_file():
+                continue
+            if any(part.startswith('.') for part in file_path.parts):
+                continue
+            if any(part in skip_dirs for part in file_path.parts):
+                continue
+            if file_path.suffix.lower() in skip_ext:
+                continue
+            
+            try:
+                with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                    lines = f.readlines()
+            except Exception:
+                continue
+            
+            for line_num, line in enumerate(lines, 1):
+                match = regex.search(line)
+                if match:
+                    matched_text = match.group(0)
+                    line_stripped = line.rstrip()
+                    results.append({
+                        'file': str(file_path),
+                        'line': line_num,
+                        'text': line_stripped,
+                        'match': matched_text
+                    })
+                    if len(results) >= max_results:
+                        break
+            if len(results) >= max_results:
+                break
+        
+        if not results:
+            return f"No matches found for pattern '{pattern}' in '{directory}'."
+        
+        output = [f"Found {len(results)} match(es) for '{pattern}':"]
+        output.append("-" * 60)
+        current_file = None
+        for r in results:
+            if r['file'] != current_file:
+                current_file = r['file']
+                output.append(f"\n{current_file}:")
+            output.append(f"  {r['line']}: {r['text']}")
+        
+        if len(results) >= max_results:
+            output.append(f"\n(Results limited to {max_results}. Use max_results to see more.)")
+        
+        return "\n".join(output)
+    except Exception as e:
+        return f"Error in grep search: {e}"
 
 def run_command(command: str) -> str:
     """Execute a console command and return its output. Requires user confirmation. Streams output to console."""
@@ -1018,12 +1112,8 @@ def run_admin_command(command: str) -> str:
         if temp_out.exists():
             temp_out.unlink()
             
-        # Wrap command to output to temp file
         wrapped_command = f"{command} > '{temp_out}' 2>&1"
         
-        # Execute via ShellExecuteW with 'runas' verb
-        # UINT ShellExecuteW(HWND hwnd, LPCWSTR lpOperation, LPCWSTR lpFile, LPCWSTR lpParameters, LPCWSTR lpDirectory, INT nShowCmd);
-        # 0 = SW_HIDE (hide the window)
         result = ctypes.windll.shell32.ShellExecuteW(
             None, 
             "runas", 
@@ -1033,11 +1123,9 @@ def run_admin_command(command: str) -> str:
             0
         )
         
-        # result <= 32 means error in ShellExecute
         if result <= 32:
             return f"Error: UAC prompt was denied or execution failed. Error code: {result}"
             
-        # Wait for file to become available or timeout
         timeout = 20
         start_time = time.time()
         while time.time() - start_time < timeout:
@@ -1045,12 +1133,17 @@ def run_admin_command(command: str) -> str:
                 try:
                     with open(temp_out, "r", encoding="utf-8", errors="replace") as f:
                         out = f.read().strip()
-                    temp_out.unlink()  # Cleanup
+                    temp_out.unlink()
                     return f"Admin execution completed.\nOutput:\n{out}"
                 except PermissionError:
-                    pass # Still writing
+                    pass
             time.sleep(0.5)
             
+        try:
+            if temp_out.exists():
+                temp_out.unlink()
+        except Exception:
+            pass
         return "Admin execution started, but timed out waiting for output file. It may still be running in the background."
         
     except Exception as e:
@@ -1141,19 +1234,24 @@ def ask_user_questions(questions: list) -> str:
                     responses[q_text] = "Skipped"
     
     # Save everything to memory facts
-    import io
-    summary = io.StringIO()
+    summary_lines = []
     for k, v in responses.items():
-        summary.write(f"- {k}: {v}\n")
+        summary_lines.append(f"- {k}: {v}")
         memory.add_fact(f"User preference on '{k}': {v}")
         
-    return f"User responses:\n{summary.getvalue()}"
+    return f"User responses:\n" + "\n".join(summary_lines)
 
 ACTIVE_PROCESSES = {}
+ACTIVE_PROCESSES_LOCK = threading.Lock()
 _pid_counter = 1
+MAX_BACKGROUND_PROCESSES = 10
 
 def start_background_command(command: str) -> str:
     """Launch a command in the background and return its PID."""
+    with ACTIVE_PROCESSES_LOCK:
+        if len(ACTIVE_PROCESSES) >= MAX_BACKGROUND_PROCESSES:
+            return f"Error: Maximum number of background processes ({MAX_BACKGROUND_PROCESSES}) reached. Stop an existing process first."
+    
     console.print(f"\n[bold yellow]Agent requesting to start background command:[/bold yellow] {command}")
     approved = questionary.confirm("Do you want to allow this background process?").ask()
     
@@ -1161,8 +1259,9 @@ def start_background_command(command: str) -> str:
         return f"Execution aborted by user. The command '{command}' was NOT started."
         
     global _pid_counter
-    pid = str(_pid_counter)
-    _pid_counter += 1
+    with ACTIVE_PROCESSES_LOCK:
+        pid = str(_pid_counter)
+        _pid_counter += 1
     
     try:
         process = subprocess.Popen(
@@ -1190,11 +1289,12 @@ def start_background_command(command: str) -> str:
         threading.Thread(target=reader, args=(process.stdout, out_queue), daemon=True).start()
         threading.Thread(target=reader, args=(process.stderr, err_queue), daemon=True).start()
         
-        ACTIVE_PROCESSES[pid] = {
-            "process": process,
-            "out_queue": out_queue,
-            "err_queue": err_queue,
-            "command": command
+        with ACTIVE_PROCESSES_LOCK:
+            ACTIVE_PROCESSES[pid] = {
+                "process": process,
+                "out_queue": out_queue,
+                "err_queue": err_queue,
+                "command": command
         }
         
         return f"Started background process with PID: {pid}"
@@ -1269,16 +1369,16 @@ def send_background_command(pid: str, input_string: str) -> str:
 
 def stop_background_command(pid: str) -> str:
     """Terminate a background process."""
-    if pid not in ACTIVE_PROCESSES:
-        return f"Error: No active process with PID {pid}."
-        
-    process = ACTIVE_PROCESSES[pid]["process"]
-    try:
-        process.terminate()
-        del ACTIVE_PROCESSES[pid]
-        return f"Terminated background process PID {pid}."
-    except Exception as e:
-        return f"Error terminating PID {pid}: {e}"
+    with ACTIVE_PROCESSES_LOCK:
+        if pid not in ACTIVE_PROCESSES:
+            return f"Error: No active process with PID {pid}."
+        process = ACTIVE_PROCESSES[pid]["process"]
+        try:
+            process.terminate()
+            del ACTIVE_PROCESSES[pid]
+            return f"Terminated background process PID {pid}."
+        except Exception as e:
+            return f"Error terminating PID {pid}: {e}"
 
 def search_web(query: str, max_results: int = 5) -> str:
     """Search the web using DuckDuckGo."""
@@ -1299,13 +1399,13 @@ def search_web(query: str, max_results: int = 5) -> str:
     except Exception as e:
         return f"Error searching the web: {e}"
 
-def read_webpage(url: str) -> str:
+def read_webpage(url: str, timeout: int = 15) -> str:
     """Read and extract text content from a webpage URL."""
     try:
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
         }
-        response = requests.get(url, headers=headers, timeout=10)
+        response = requests.get(url, headers=headers, timeout=timeout)
         response.raise_for_status()
         
         soup = BeautifulSoup(response.text, 'html.parser')
@@ -1359,6 +1459,62 @@ def create_svg_image(svg_code: str, filename: str = None) -> str:
     except Exception as e:
         return f"Error creating SVG image: {e}"
 
+
+def create_directory(dir_path: str) -> str:
+    """Create a directory and all parent directories if needed."""
+    try:
+        path = Path(dir_path).expanduser().resolve()
+        if path.exists():
+            return f"Directory '{dir_path}' already exists."
+        path.mkdir(parents=True, exist_ok=True)
+        log.info("create_directory: %s", dir_path)
+        return f"Successfully created directory '{dir_path}'."
+    except Exception as e:
+        log.error("create_directory error %s: %s", dir_path, e)
+        return f"Error creating directory '{dir_path}': {e}"
+
+def move_file(source: str, destination: str) -> str:
+    """Move or rename a file from source to destination."""
+    restriction_error = _is_plugin_path_restricted(source)
+    if restriction_error:
+        return restriction_error
+    try:
+        src = _resolve_path(source)
+        dst = Path(destination).expanduser().resolve()
+        if not src.exists():
+            return f"Error: Source '{source}' does not exist."
+        if not src.is_file():
+            return f"Error: '{source}' is not a file."
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        if dst.exists():
+            return f"Error: Destination '{destination}' already exists."
+        shutil.move(str(src), str(dst))
+        log.info("move_file: %s -> %s", source, destination)
+        memory.add_completed(f"Moved {source} -> {destination}")
+        return f"Successfully moved '{source}' to '{destination}'."
+    except Exception as e:
+        log.error("move_file error %s: %s", source, e)
+        return f"Error moving file '{source}': {e}"
+
+def copy_file(source: str, destination: str) -> str:
+    """Copy a file from source to destination. Creates parent directories if needed."""
+    try:
+        src = _resolve_path(source)
+        dst = Path(destination).expanduser().resolve()
+        if not src.exists():
+            return f"Error: Source '{source}' does not exist."
+        if not src.is_file():
+            return f"Error: '{source}' is not a file."
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        if dst.exists():
+            return f"Error: Destination '{destination}' already exists."
+        shutil.copy2(str(src), str(dst))
+        log.info("copy_file: %s -> %s", source, destination)
+        memory.add_completed(f"Copied {source} -> {destination}")
+        return f"Successfully copied '{source}' to '{destination}'."
+    except Exception as e:
+        log.error("copy_file error %s: %s", source, e)
+        return f"Error copying file '{source}': {e}"
 
 
 def create_plugin(name: str, code: str) -> str:
@@ -1564,15 +1720,19 @@ AVAILABLE_TOOLS = {
     "add_work_task": add_work_task,
     "read_file": read_file,
     "write_file": write_file,
+    "delete_file": delete_file,
+    "create_directory": create_directory,
+    "move_file": move_file,
+    "copy_file": copy_file,
     "write_obsidian_note": write_obsidian_note,
     "search_obsidian_notes": search_obsidian_notes,
     "update_obsidian_properties": update_obsidian_properties,
     "run_deep_research": run_deep_research,
     "replace_in_file": replace_in_file,
     "replace_python_function": replace_python_function,
-    "delete_file": delete_file,
     "list_directory": list_directory,
     "search_files": search_files,
+    "grep_search": grep_search,
     "run_command": run_command,
     "run_admin_command": run_admin_command,
     "start_background_command": start_background_command,
@@ -2125,6 +2285,65 @@ TOOL_SCHEMAS = [
     {
         "type": "function",
         "function": {
+            "name": "create_directory",
+            "description": "Creates a new directory and all parent directories if needed.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "dir_path": {
+                        "type": "string",
+                        "description": "The path of the directory to create."
+                    }
+                },
+                "required": ["dir_path"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "move_file",
+            "description": "Moves or renames a file from one path to another.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "source": {
+                        "type": "string",
+                        "description": "The current path of the file."
+                    },
+                    "destination": {
+                        "type": "string",
+                        "description": "The new path for the file."
+                    }
+                },
+                "required": ["source", "destination"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "copy_file",
+            "description": "Copies a file from one path to another. Creates parent directories if needed.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "source": {
+                        "type": "string",
+                        "description": "The path of the file to copy."
+                    },
+                    "destination": {
+                        "type": "string",
+                        "description": "The destination path for the copy."
+                    }
+                },
+                "required": ["source", "destination"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "list_directory",
             "description": "Lists all files and subdirectories within a given directory.",
             "parameters": {
@@ -2168,6 +2387,35 @@ TOOL_SCHEMAS = [
                         "description": "Maximum number of files to return. Default is 50."
                     }
                 }
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "grep_search",
+            "description": "Search file contents using a regex pattern. Returns matching lines with file paths and line numbers. Faster and more precise than search_files for finding specific code, function calls, or text patterns.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "directory": {
+                        "type": "string",
+                        "description": "The root directory to search in."
+                    },
+                    "pattern": {
+                        "type": "string",
+                        "description": "Regular expression pattern to search for (e.g., 'def my_func', 'import os', 'class.*Model')."
+                    },
+                    "file_pattern": {
+                        "type": "string",
+                        "description": "Optional glob pattern to filter files (e.g., '*.py', '*.cs'). Default searches all files."
+                    },
+                    "max_results": {
+                        "type": "integer",
+                        "description": "Maximum number of matches to return. Default is 30."
+                    }
+                },
+                "required": ["directory", "pattern"]
             }
         }
     },
@@ -2237,6 +2485,10 @@ TOOL_SCHEMAS = [
                     "url": {
                         "type": "string",
                         "description": "The URL of the webpage to read."
+                    },
+                    "timeout": {
+                        "type": "integer",
+                        "description": "Request timeout in seconds. Default is 15."
                     }
                 },
                 "required": ["url"]
@@ -2434,7 +2686,7 @@ TOOL_SCHEMAS = [
             }
         }
     },
-        {
+    {
         "type": "function",
         "function": {
             "name": "ask_user_questions",

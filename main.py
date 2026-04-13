@@ -40,13 +40,13 @@ from pipeline import Pipeline
 # Default tools allowed in regular chat (excludes Project Brain tools)
 CHAT_ALLOWED_TOOLS = [
     "read_file", "write_file", "delete_file", "replace_in_file", "replace_python_function",
-    "list_directory", "grep_search", "run_command", "run_admin_command",
+    "list_directory", "grep_search", "search_files", "run_command", "run_admin_command",
     "start_background_command", "read_background_command", "send_background_command",
     "stop_background_command", "search_web", "read_webpage", "get_file_outline", 
     "multi_replace_in_file", "write_obsidian_note", "search_obsidian_notes", 
-    "get_obsidian_vault", "semantic_search", "create_plugin", "delete_plugin",
+    "update_obsidian_properties", "semantic_search", "create_plugin", "delete_plugin",
     "create_skill", "read_skill", "list_skills", "delete_skill", "create_svg_image",
-    "ask_user_questions"
+    "ask_user_questions", "create_directory", "move_file", "copy_file"
 ]
 
 
@@ -854,7 +854,7 @@ def main():
                 # Sandbox tool restrictions
                 SANDBOX_ALLOWED_TOOLS = [
                     "read_file", "write_file", "delete_file", "replace_in_file", "replace_python_function",
-                    "list_directory", "grep_search", "run_command", "run_admin_command",
+                    "list_directory", "grep_search", "search_files", "run_command", "run_admin_command",
                     "start_background_command", "read_background_command", "send_background_command",
                     "stop_background_command", "search_web", "read_webpage", "get_file_outline", "multi_replace_in_file"
                 ]
@@ -1169,7 +1169,7 @@ def main():
                             "complete_project_task", "create_svg_image"
                         ]
                         if pm_temp.data.get("use_obsidian", False):
-                            active_tools.extend(["write_obsidian_note", "search_obsidian_notes", "get_obsidian_vault"])
+                            active_tools.extend(["write_obsidian_note", "search_obsidian_notes", "update_obsidian_properties"])
                 else:
                     # In normal chat, use CHAT_ALLOWED_TOOLS
                     active_tools = CHAT_ALLOWED_TOOLS
