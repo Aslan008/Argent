@@ -254,8 +254,13 @@ class ArgentAgent:
                     system_content += sep + context_note + end
             else:
                 system_content += sep + context_note + end
+        # Извлекаем последний пользовательский запрос (он добавляется в массив ДО вызова этой функции)
+        last_user_msg = self.messages[-1] if self.messages and self.messages[-1].get("role") == "user" else None
 
         self.messages = [{"role": "system", "content": system_content}]
+        if last_user_msg:
+            self.messages.append(last_user_msg)
+            
         log.info("Hard context reset performed (model=%s, category=%s)", self.model_name, get_model_size_category(self.model_name))
 
     def _update_memory_from_messages(self):
