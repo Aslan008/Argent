@@ -12,30 +12,30 @@ def browser_open(url: str, session: str = "default", headed: bool = False) -> st
         log.error("browser_open error: %s", e)
         return f"Error opening browser: {e}"
 
-def browser_state(session: str = "default") -> str:
-    """Get the current page state: numbered list of interactive elements."""
+def browser_state(session: str = "default", query: str = None) -> str:
+    """Get the current page state: numbered list of interactive elements, optionally filtered by query."""
     try:
-        return browser_engine.run(browser_engine.get_state(session))
+        return browser_engine.run(browser_engine.get_state(session, query))
     except KeyError as e:
         return str(e)
     except Exception as e:
         log.error("browser_state error: %s", e)
         return f"Error getting browser state: {e}"
 
-def browser_click(index: int, session: str = "default") -> str:
-    """Click an element by its index from browser_state."""
+def browser_click(index: int = None, selector: str = None, text: str = None, session: str = "default") -> str:
+    """Click an element by its index, CSS selector, or visible text."""
     try:
-        return browser_engine.run(browser_engine.click(index, session))
+        return browser_engine.run(browser_engine.click(index, selector, text, session))
     except KeyError as e:
         return str(e)
     except Exception as e:
         log.error("browser_click error: %s", e)
         return f"Error clicking element: {e}"
 
-def browser_input(index: int, text: str, session: str = "default") -> str:
-    """Type text into an input element by its index from browser_state."""
+def browser_input(index: int = None, text: str = "", selector: str = None, session: str = "default") -> str:
+    """Type text into an input element by its index or CSS selector."""
     try:
-        return browser_engine.run(browser_engine.fill_input(index, text, session))
+        return browser_engine.run(browser_engine.fill_input(index, text, selector, session))
     except KeyError as e:
         return str(e)
     except Exception as e:
@@ -52,10 +52,10 @@ def browser_screenshot(path: str = None, full_page: bool = False, session: str =
         log.error("browser_screenshot error: %s", e)
         return f"Error taking screenshot: {e}"
 
-def browser_scroll(direction: str = "down", amount: int = 500, session: str = "default") -> str:
-    """Scroll the page up or down."""
+def browser_scroll(direction: str = "down", amount: int = 500, index: int = None, session: str = "default") -> str:
+    """Scroll the page or scroll a specific element into view."""
     try:
-        return browser_engine.run(browser_engine.scroll(direction, amount, session))
+        return browser_engine.run(browser_engine.scroll(direction, amount, index, session))
     except KeyError as e:
         return str(e)
     except Exception as e:

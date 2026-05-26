@@ -1207,13 +1207,17 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "browser_state",
-            "description": "Get the current state of the browser page: URL, title, and a numbered list of all interactive elements (buttons, links, inputs, etc). ALWAYS call this after browser_open or after any action to see the updated page. Use the element indices from this output for browser_click and browser_input.",
+            "description": "Get the current state of the browser page: URL, title, and a numbered list of all interactive elements. Can be filtered by a query keyword. ALWAYS call this after browser_open or after any action to see the updated page.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "session": {
                         "type": "string",
                         "description": "Browser session name. Default: 'default'."
+                    },
+                    "query": {
+                        "type": "string",
+                        "description": "Optional. Keyword to filter elements by (case-insensitive OR match against text, tags, values, and hrefs. Supports comma-separated list). WARNING: Use ONLY literal keywords expected to physically appear on the page (e.g. 'Videos', 'Sign In'). Do NOT use semantic descriptions of your goal (e.g. do NOT search for 'latest video' because video titles are actual names like 'Game Title Review', not the text 'latest video')."
                     }
                 }
             }
@@ -1223,20 +1227,28 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "browser_click",
-            "description": "Click on an interactive element by its index number. The index comes from browser_state output (e.g. [3] button \"Submit\"). IMPORTANT: After clicking, call browser_state again to see the updated page — old indices become invalid.",
+            "description": "Click on an element. You must specify either the index (from browser_state), a CSS selector, or the visible text of the element. IMPORTANT: After clicking, call browser_state again to see the updated page.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "index": {
                         "type": "integer",
-                        "description": "The element index from browser_state (e.g. 3 for [3] button \"Submit\")."
+                        "description": "Optional. The element index from browser_state (e.g. 3 for [3] button \"Submit\")."
+                    },
+                    "selector": {
+                        "type": "string",
+                        "description": "Optional. CSS selector of the element to click (e.g. '#submit-btn')."
+                    },
+                    "text": {
+                        "type": "string",
+                        "description": "Optional. Visible text of the element to click (e.g. 'Submit')."
                     },
                     "session": {
                         "type": "string",
                         "description": "Browser session name. Default: 'default'."
                     }
                 },
-                "required": ["index"]
+                "required": []
             }
         }
     },
@@ -1244,13 +1256,17 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "browser_input",
-            "description": "Type text into an input field or textarea by its index from browser_state. Clears the existing text before typing. Use for filling forms, search boxes, login fields.",
+            "description": "Type text into an input field or textarea. You must specify either the index (from browser_state) or a CSS selector to target the input.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "index": {
                         "type": "integer",
-                        "description": "The element index from browser_state."
+                        "description": "Optional. The element index from browser_state."
+                    },
+                    "selector": {
+                        "type": "string",
+                        "description": "Optional. CSS selector of the input field (e.g. 'input[type=email]')."
                     },
                     "text": {
                         "type": "string",
@@ -1261,7 +1277,7 @@ TOOL_SCHEMAS = [
                         "description": "Browser session name. Default: 'default'."
                     }
                 },
-                "required": ["index", "text"]
+                "required": ["text"]
             }
         }
     },
@@ -1293,18 +1309,22 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "browser_scroll",
-            "description": "Scroll the browser page up or down. Use this to reveal content below the fold or to navigate long pages.",
+            "description": "Scroll the browser page up or down, or scroll a specific element into view.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "direction": {
                         "type": "string",
                         "enum": ["up", "down"],
-                        "description": "Scroll direction. Default: 'down'."
+                        "description": "Scroll direction. Default: 'down'. Ignored if index is provided."
                     },
                     "amount": {
                         "type": "integer",
-                        "description": "Pixels to scroll. Default: 500."
+                        "description": "Pixels to scroll. Default: 500. Ignored if index is provided."
+                    },
+                    "index": {
+                        "type": "integer",
+                        "description": "Optional element index from browser_state to scroll into view."
                     },
                     "session": {
                         "type": "string",

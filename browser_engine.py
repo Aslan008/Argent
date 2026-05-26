@@ -112,7 +112,9 @@ def _html_to_markdown(html: str) -> str:
 # elements and assign them index numbers. It returns a JSON array that
 # get_state() formats into the numbered list the LLM consumes.
 _STATE_EXTRACTION_JS = """
-() => {
+(args) => {
+    const startIdx = args.startIdx || 1;
+    const query = args.query || null;
     // ---------------------------------------------------------------
     // Shadow DOM-aware interactive element extractor for Argent.
     // Modern sites (YouTube, GitHub, etc.) use Web Components with
@@ -144,8 +146,9 @@ _STATE_EXTRACTION_JS = """
     ]);
 
     const elements = [];
-    let idx = 1;
+    let idx = startIdx;
     const MAX_ELEMENTS = 600;
+    let totalFiltered = 0;
 
     function isVisible(node) {
         try {
@@ -219,6 +222,23 @@ _STATE_EXTRACTION_JS = """
                 checked = node.checked;
             }
 
+            // Optional keyword filter (supports comma-separated list for OR matching)
+            if (query) {
+                const keywords = query.split(',').map(s => s.trim().toLowerCase()).filter(s => s.length > 0);
+                if (keywords.length > 0) {
+                    const matches = keywords.some(q => {
+                        return (label || '').toLowerCase().includes(q) ||
+                               descriptor.toLowerCase().includes(q) ||
+                               (value || '').toLowerCase().includes(q) ||
+                               (tag === 'A' ? (node.href || '').toLowerCase().includes(q) : false);
+                    });
+                    if (!matches) {
+                        totalFiltered++;
+                        return; // Skip element if it doesn't match any of the keywords
+                    }
+                }
+            }
+
             // Mark element for later retrieval
             node.setAttribute('data-argent-idx', idx);
 
@@ -263,7 +283,9 @@ _STATE_EXTRACTION_JS = """
     return {
         url: window.location.href,
         title: document.title,
-        elements: elements
+        elements: elements,
+        nextIdx: idx,
+        totalFiltered: totalFiltered
     };
 }
 """
@@ -302,6 +324,7 @@ class BrowserEngine:
         self._stealth_applied = False
         self._cdp_mode = False        # True when connected via CDP to user's browser
         self._cdp_process = None      # subprocess.Popen if we launched the browser ourselves
+        self._element_frames = {}     # Maps element index -> Playwright Frame object
 
     # -----------------------------------------------------------------------
     # Lifecycle
@@ -548,6 +571,25 @@ class BrowserEngine:
                     return await self._create_session(session)
             return sc
 
+        # Auto-attach fallback for CDP mode
+        from config import get_browser_mode
+        if get_browser_mode() == "user":
+            try:
+                await self._ensure_browser()
+                if self._cdp_mode and self._browser:
+                    contexts = self._browser.contexts
+                    if contexts:
+                        context = contexts[0]
+                        pages = context.pages
+                        if pages:
+                            page = pages[-1]
+                            sc = _SessionContext(context=context, page=page)
+                            self._sessions[session] = sc
+                            log.info("Auto-attached to existing tab for session '%s'", session)
+                            return sc
+            except Exception as e:
+                log.warning("Failed to auto-attach to existing CDP page: %s", e)
+
         raise KeyError(f"Session '{session}' does not exist. Use browser_open first.")
 
     async def _create_session(self, session: str, headed: bool = False) -> _SessionContext:
@@ -680,7 +722,7 @@ class BrowserEngine:
     # Public API: State Extraction (the key BrowserAct-like feature)
     # -----------------------------------------------------------------------
 
-    async def get_state(self, session: str = "default") -> str:
+    async def get_state(self, session: str = "default", query: str = None) -> str:
         """
         Extract interactive elements from the page with numbered indices.
         
@@ -692,22 +734,45 @@ class BrowserEngine:
             [3] button "Sign In"
         """
         sc = await self._get_session(session)
+        self._element_frames.clear()
+
+        combined_elements = []
+        page_url = "?"
+        page_title = "?"
+        idx = 1
+
+        total_filtered = 0
 
         try:
-            result = await sc.page.evaluate(_STATE_EXTRACTION_JS)
+            # Get all frames in the page
+            frames = sc.page.frames
+            for frame in frames:
+                try:
+                    result = await frame.evaluate(_STATE_EXTRACTION_JS, {"startIdx": idx, "query": query})
+                    if result:
+                        frame_elements = result.get("elements", [])
+                        for el in frame_elements:
+                            self._element_frames[el["idx"]] = frame
+                            combined_elements.append(el)
+                        idx = result.get("nextIdx", idx)
+                        total_filtered += result.get("totalFiltered", 0)
+
+                        # Set page url and title based on the main frame
+                        if frame == sc.page.main_frame:
+                            page_url = result.get("url", "?")
+                            page_title = result.get("title", "?")
+                except Exception as e:
+                    # Ignore frames that can't be evaluated (e.g. detached, or security restrictions)
+                    log.debug("Frame evaluation skipped for frame: %s", e)
         except Exception as e:
             return f"Error extracting state: {e}"
 
-        url = result.get("url", "?")
-        title = result.get("title", "?")
-        elements = result.get("elements", [])
+        lines = [f"Page: {page_url} | Title: {page_title}", "---"]
 
-        lines = [f"Page: {url} | Title: {title}", "---"]
-
-        if not elements:
+        if not combined_elements:
             lines.append("(No interactive elements found on this page)")
         else:
-            for el in elements:
+            for el in combined_elements:
                 parts = [f"[{el['idx']}]", el["tag"]]
 
                 if el.get("label"):
@@ -730,64 +795,150 @@ class BrowserEngine:
 
                 lines.append(" ".join(parts))
 
+        if query and total_filtered > 0:
+            lines.append(f"\n(Note: {total_filtered} interactive elements were filtered out by query '{query}'. If you cannot find the element you need, call browser_state without a query or with a different keyword.)")
+
         return "\n".join(lines)
 
     # -----------------------------------------------------------------------
     # Public API: Interaction
     # -----------------------------------------------------------------------
 
-    async def click(self, index: int, session: str = "default") -> str:
-        """Click element by its state index."""
+    async def click(self, index: int = None, selector: str = None, text: str = None, session: str = "default") -> str:
+        """Click element by its state index, CSS selector, or visible text."""
         sc = await self._get_session(session)
-        try:
-            el = sc.page.locator(f'[data-argent-idx="{index}"]')
-            count = await el.count()
-            if count == 0:
-                return (
-                    f"Error: Element [{index}] not found. "
-                    "The page may have changed — call browser_state to get fresh indices."
-                )
-            await el.first.click(timeout=10000)
-            await sc.page.wait_for_timeout(800)
-            return f"Clicked element [{index}]. Call browser_state to see the updated page."
-        except Exception as e:
-            return f"Error clicking element [{index}]: {e}"
+        
+        # Priority: index > selector > text
+        if index is not None:
+            try:
+                frame = self._element_frames.get(index, sc.page)
+                el = frame.locator(f'[data-argent-idx="{index}"]')
+                count = await el.count()
+                if count == 0:
+                    return (
+                        f"Error: Element [{index}] not found. "
+                        "The page may have changed — call browser_state to get fresh indices."
+                    )
+                await el.first.click(timeout=10000)
+                await sc.page.wait_for_timeout(800)
+                return f"Clicked element [{index}]. Call browser_state to see the updated page."
+            except Exception as e:
+                return f"Error clicking element [{index}]: {e}"
+        elif selector is not None:
+            try:
+                target_locator = None
+                for frame in sc.page.frames:
+                    try:
+                        el = frame.locator(selector)
+                        if await el.count() > 0:
+                            target_locator = el.first
+                            break
+                    except Exception:
+                        pass
+                
+                if not target_locator:
+                    target_locator = sc.page.locator(selector).first
+                    
+                await target_locator.click(timeout=10000)
+                await sc.page.wait_for_timeout(800)
+                return f"Clicked element matching selector '{selector}'."
+            except Exception as e:
+                return f"Error clicking selector '{selector}': {e}"
+        elif text is not None:
+            try:
+                target_locator = None
+                for frame in sc.page.frames:
+                    try:
+                        el = frame.get_by_text(text, exact=False)
+                        if await el.count() > 0:
+                            target_locator = el.first
+                            break
+                    except Exception:
+                        pass
+                
+                if not target_locator:
+                    target_locator = sc.page.get_by_text(text, exact=False).first
+                    
+                await target_locator.click(timeout=10000)
+                await sc.page.wait_for_timeout(800)
+                return f"Clicked element matching text '{text}'."
+            except Exception as e:
+                return f"Error clicking text '{text}': {e}"
+        else:
+            return "Error: You must specify index, selector, or text to click."
 
-    async def fill_input(self, index: int, text: str,
+    async def fill_input(self, index: int = None, text: str = "", selector: str = None,
                          session: str = "default") -> str:
-        """Clear and fill text into an input element by its state index."""
+        """Clear and fill text into an input element by its state index or CSS selector."""
         sc = await self._get_session(session)
-        try:
-            el = sc.page.locator(f'[data-argent-idx="{index}"]')
-            count = await el.count()
-            if count == 0:
-                return (
-                    f"Error: Element [{index}] not found. "
-                    "Call browser_state to get fresh indices."
-                )
-            await el.first.click(timeout=5000)
-            await el.first.fill(text, timeout=5000)
-            return f"Filled element [{index}] with text."
-        except Exception as e:
-            return f"Error filling element [{index}]: {e}"
+        
+        if index is not None:
+            try:
+                frame = self._element_frames.get(index, sc.page)
+                el = frame.locator(f'[data-argent-idx="{index}"]')
+                count = await el.count()
+                if count == 0:
+                    return (
+                        f"Error: Element [{index}] not found. "
+                        "Call browser_state to get fresh indices."
+                    )
+                await el.first.click(timeout=5000)
+                await el.first.fill(text, timeout=5000)
+                return f"Filled element [{index}] with text."
+            except Exception as e:
+                return f"Error filling element [{index}]: {e}"
+        elif selector is not None:
+            try:
+                target_locator = None
+                for frame in sc.page.frames:
+                    try:
+                        el = frame.locator(selector)
+                        if await el.count() > 0:
+                            target_locator = el.first
+                            break
+                    except Exception:
+                        pass
+                
+                if not target_locator:
+                    target_locator = sc.page.locator(selector).first
+                    
+                await target_locator.click(timeout=5000)
+                await target_locator.fill(text, timeout=5000)
+                return f"Filled element matching selector '{selector}' with text."
+            except Exception as e:
+                return f"Error filling selector '{selector}': {e}"
+        else:
+            return "Error: You must specify either index or selector to fill input."
 
-    async def scroll(self, direction: str = "down", amount: int = 500,
+    async def scroll(self, direction: str = "down", amount: int = 500, index: int = None,
                      session: str = "default") -> str:
-        """Scroll the page up or down using JavaScript.
-        Uses window.scrollBy which reliably triggers lazy-loading on SPAs
-        like YouTube, unlike mouse.wheel which can miss scroll listeners."""
+        """Scroll the page or scroll a specific element into view."""
         sc = await self._get_session(session)
-        delta = amount if direction.lower() == "down" else -amount
-        # JS scroll triggers IntersectionObserver and scroll event listeners
-        await sc.page.evaluate(f"window.scrollBy(0, {delta})")
-        # Wait for lazy-loaded content (SPA sites need this)
-        await sc.page.wait_for_timeout(1500)
-        # Report actual scroll position for context
-        scroll_y = await sc.page.evaluate("window.scrollY")
-        page_height = await sc.page.evaluate(
-            "Math.max(document.body.scrollHeight, document.documentElement.scrollHeight)"
-        )
-        return f"Scrolled {direction} by {amount}px. Position: {scroll_y}/{page_height}px."
+        
+        if index is not None:
+            try:
+                frame = self._element_frames.get(index, sc.page)
+                el = frame.locator(f'[data-argent-idx="{index}"]')
+                count = await el.count()
+                if count == 0:
+                    return f"Error: Element [{index}] not found to scroll to."
+                await el.first.scroll_into_view_if_needed(timeout=5000)
+                await sc.page.wait_for_timeout(800)
+                return f"Scrolled element [{index}] into view."
+            except Exception as e:
+                return f"Error scrolling to element [{index}]: {e}"
+        else:
+            delta = amount if direction.lower() == "down" else -amount
+            # JS scroll triggers IntersectionObserver and scroll event listeners
+            await sc.page.evaluate(f"window.scrollBy(0, {delta})")
+            # Wait for lazy-loaded content (SPA sites need this)
+            await sc.page.wait_for_timeout(1500)
+            # Report actual scroll position for context
+            scroll_y = await sc.page.evaluate("window.scrollY")
+            page_height = await sc.page.evaluate(
+                "Math.max(document.body.scrollHeight, document.documentElement.scrollHeight)"
+            )
+            return f"Scrolled {direction} by {amount}px. Position: {scroll_y}/{page_height}px."
 
     async def press_key(self, key: str, session: str = "default") -> str:
         """Press a keyboard key (Enter, Escape, Tab, etc.)."""
