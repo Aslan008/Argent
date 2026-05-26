@@ -160,6 +160,75 @@ class TestBrowserEnhancements(unittest.TestCase):
         self.assertIn("button \"Submit Form\"", elements_multi)
         self.assertNotIn("Cancel Link", elements_multi)
         self.assertIn('input[type=text] "Email Address"', elements_multi)
+ 
+    def test_pointer_cursor_detection(self):
+        # 1. Open a page with a div having cursor: pointer in style
+        html = "data:text/html,<html><body><div id='custom-btn' style='cursor: pointer;'>Custom Clickable Div</div></body></html>"
+        browser_engine.run(browser_engine.open_page(html, session="test_pointer"))
+        
+        # 2. Get state and verify the custom div is indexed
+        state = browser_engine.run(browser_engine.get_state(session="test_pointer"))
+        self.assertIn("div \"Custom Clickable Div\"", state)
+
+    def test_deduplication(self):
+        # 1. Open a page where a button has nested elements with text or pointer cursor
+        html = "data:text/html,<html><body><button id='btn'><span style='cursor: pointer;'>Nested Text</span></button></body></html>"
+        browser_engine.run(browser_engine.open_page(html, session="test_dedup"))
+        
+        # 2. Get state and verify only the button is indexed, not the span
+        state = browser_engine.run(browser_engine.get_state(session="test_dedup"))
+        elements_part = state.split("---")[1]
+        self.assertIn("button \"Nested Text\"", elements_part)
+        self.assertNotIn("span", elements_part)
+ 
+    def test_svg_and_parent_labels(self):
+        # 1. Open a page with an SVG icon inside a button, where the SVG has a <title>
+        # and another element with a parent aria-label
+        html = """data:text/html,<html><body>
+            <button id='btn1'><svg><title>Close Modal</title></svg></button>
+            <div aria-label='Parent Container Label'><span id='inner' style='cursor: pointer; display: inline-block; width: 10px; height: 10px;'></span></div>
+        </body></html>"""
+        browser_engine.run(browser_engine.open_page(html, session="test_labels"))
+        
+        # 2. Get state and verify label extraction
+        state = browser_engine.run(browser_engine.get_state(session="test_labels"))
+        elements_part = state.split("---")[1]
+        self.assertIn("Close Modal", elements_part)
+        self.assertIn("Parent Container Label (parent)", elements_part)
+ 
+    def test_viewport_prioritization(self):
+        # 1. Open a page where one button is at the top (in viewport) and one is far below
+        html = """data:text/html,<html><body>
+            <button id='top-btn'>Top Button</button>
+            <div style='height: 2000px;'>Spacer</div>
+            <button id='bottom-btn'>Bottom Button</button>
+        </body></html>"""
+        browser_engine.run(browser_engine.open_page(html, session="test_viewport"))
+        
+        # Wait a bit
+        sc = browser_engine.run(browser_engine._get_session("test_viewport"))
+        browser_engine.run(sc.page.wait_for_timeout(1000))
+        
+        # 2. Extract state
+        state = browser_engine.run(browser_engine.get_state(session="test_viewport"))
+        elements_part = state.split("---")[1]
+        
+        # Verify both are present
+        self.assertIn("Top Button", elements_part)
+        self.assertIn("Bottom Button", elements_part)
+        
+        # The top button (in viewport) must have a smaller index than bottom button
+        top_idx = None
+        bottom_idx = None
+        for line in elements_part.split("\n"):
+            if line.startswith("[") and "Top Button" in line:
+                top_idx = int(line.split("]")[0].replace("[", ""))
+            elif line.startswith("[") and "Bottom Button" in line:
+                bottom_idx = int(line.split("]")[0].replace("[", ""))
+                
+        self.assertIsNotNone(top_idx)
+        self.assertIsNotNone(bottom_idx)
+        self.assertLess(top_idx, bottom_idx)
 
 if __name__ == "__main__":
     unittest.main()

@@ -115,12 +115,7 @@ _STATE_EXTRACTION_JS = """
 (args) => {
     const startIdx = args.startIdx || 1;
     const query = args.query || null;
-    // ---------------------------------------------------------------
-    // Shadow DOM-aware interactive element extractor for Argent.
-    // Modern sites (YouTube, GitHub, etc.) use Web Components with
-    // Shadow DOM. Standard TreeWalker does NOT cross shadow boundaries,
-    // so we recursively walk both light DOM and all shadow roots.
-    // ---------------------------------------------------------------
+    const MAX_ELEMENTS = 600;
 
     // Clean up previous markers (including inside shadow roots)
     function removeMarkers(root) {
@@ -145,35 +140,119 @@ _STATE_EXTRACTION_JS = """
         'slider', 'spinbutton', 'menuitemcheckbox', 'menuitemradio'
     ]);
 
-    const elements = [];
-    let idx = startIdx;
-    const MAX_ELEMENTS = 600;
-    let totalFiltered = 0;
+    function getParentNode(node) {
+        if (node.parentNode) {
+            return node.parentNode;
+        }
+        if (node.parentNode === null && node.host) {
+            return node.host;
+        }
+        const root = node.getRootNode ? node.getRootNode() : null;
+        if (root && root.host) {
+            return root.host;
+        }
+        return null;
+    }
 
-    function isVisible(node) {
+    function isVisible(node, style) {
+        if (!style) return false;
+        if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') {
+            return false;
+        }
+        const rect = node.getBoundingClientRect();
+        if (rect.width === 0 && rect.height === 0) {
+            return false;
+        }
+        return true;
+    }
+
+    function hasInteractiveParent(node, candidatesSet) {
+        let parent = getParentNode(node);
+        while (parent) {
+            if (candidatesSet.has(parent)) {
+                const tag = node.tagName;
+                if (interactiveTags.has(tag) || (node.getAttribute && interactiveRoles.has(node.getAttribute('role')))) {
+                    return false;
+                }
+                return true;
+            }
+            parent = getParentNode(parent);
+        }
+        return false;
+    }
+
+    function extractLabel(node) {
+        // 1. Атрибуты самого элемента
+        const ariaLabel = node.getAttribute && node.getAttribute('aria-label');
+        if (ariaLabel && ariaLabel.trim()) return ariaLabel.trim();
+        
+        if (node.placeholder && node.placeholder.trim()) return node.placeholder.trim();
+        if (node.title && node.title.trim()) return node.title.trim();
+        
+        // 2. Текстовое содержимое самого элемента
+        const text = (node.innerText || node.textContent || '').trim();
+        if (text) return text.substring(0, 80);
+
+        // 3. Поиск во вложенных SVG
         try {
-            const style = window.getComputedStyle(node);
-            if (style.display === 'none' || style.visibility === 'hidden' ||
-                style.opacity === '0') {
-                return false;
+            const svgs = node.querySelectorAll('svg');
+            for (const svg of svgs) {
+                const svgAria = svg.getAttribute('aria-label');
+                if (svgAria && svgAria.trim()) return svgAria.trim();
+                
+                const titleTag = svg.querySelector('title');
+                if (titleTag && titleTag.textContent && titleTag.textContent.trim()) {
+                    return titleTag.textContent.trim();
+                }
             }
-            // offsetParent is null for hidden elements, but also for
-            // position:fixed and elements inside shadow DOM, so we
-            // only use it as a hint combined with dimensions
+        } catch (e) {}
+
+        // 4. Поиск по родителям (до 3 уровней вверх)
+        let parent = getParentNode(node);
+        for (let i = 0; i < 3 && parent; i++) {
+            if (parent.getAttribute) {
+                const pAria = parent.getAttribute('aria-label');
+                if (pAria && pAria.trim()) return pAria.trim() + " (parent)";
+                
+                const pTitle = parent.getAttribute('title');
+                if (pTitle && pTitle.trim()) return pTitle.trim() + " (parent)";
+            }
+            parent = getParentNode(parent);
+        }
+
+        return '';
+    }
+
+    function isInViewport(node) {
+        try {
             const rect = node.getBoundingClientRect();
-            if (rect.width === 0 && rect.height === 0) {
-                return false;
-            }
-            return true;
-        } catch(e) {
+            const windowHeight = (window.innerHeight || document.documentElement.clientHeight);
+            const windowWidth = (window.innerWidth || document.documentElement.clientWidth);
+            return (
+                rect.top < windowHeight &&
+                rect.bottom > 0 &&
+                rect.left < windowWidth &&
+                rect.right > 0
+            );
+        } catch (e) {
             return false;
         }
     }
 
+    const candidates = [];
+    const candidatesSet = new Set();
+
     function processNode(node) {
-        if (idx > MAX_ELEMENTS) return;
         if (!node.tagName) return;
-        if (!isVisible(node)) return;
+        
+        let style = null;
+        try {
+            style = window.getComputedStyle(node);
+        } catch (e) {
+            return;
+        }
+
+        if (!isVisible(node, style)) return;
 
         const tag = node.tagName;
         const role = node.getAttribute && node.getAttribute('role');
@@ -182,30 +261,29 @@ _STATE_EXTRACTION_JS = """
         const tabindex = node.getAttribute && node.getAttribute('tabindex');
         const contentEditable = node.isContentEditable &&
                                node.getAttribute('contenteditable') !== 'false';
+        
+        // CSS pointer cursor heuristic
+        const isPointerCursor = style && style.cursor === 'pointer';
+
         const isInteractive = interactiveTags.has(tag) ||
                               interactiveRoles.has(role) ||
                               isClickable ||
                               contentEditable ||
+                              isPointerCursor ||
                               (tabindex !== null && tabindex !== '-1');
 
         if (isInteractive) {
+            if (hasInteractiveParent(node, candidatesSet)) {
+                return; // Skip duplicates
+            }
+
+            candidatesSet.add(node);
+
             let descriptor = tag.toLowerCase();
             const type = node.getAttribute('type');
             if (type) descriptor += `[type=${type}]`;
 
-            // Gather label text
-            let label = '';
-            const ariaLabel = node.getAttribute('aria-label');
-            if (ariaLabel) {
-                label = ariaLabel;
-            } else if (node.placeholder) {
-                label = node.placeholder;
-            } else if (node.title) {
-                label = node.title;
-            } else {
-                const text = (node.innerText || node.textContent || '').trim();
-                label = text.substring(0, 80);
-            }
+            const label = extractLabel(node);
 
             // Current value for inputs
             let value = '';
@@ -222,44 +300,20 @@ _STATE_EXTRACTION_JS = """
                 checked = node.checked;
             }
 
-            // Optional keyword filter (supports comma-separated list for OR matching)
-            if (query) {
-                const keywords = query.split(',').map(s => s.trim().toLowerCase()).filter(s => s.length > 0);
-                if (keywords.length > 0) {
-                    const matches = keywords.some(q => {
-                        return (label || '').toLowerCase().includes(q) ||
-                               descriptor.toLowerCase().includes(q) ||
-                               (value || '').toLowerCase().includes(q) ||
-                               (tag === 'A' ? (node.href || '').toLowerCase().includes(q) : false);
-                    });
-                    if (!matches) {
-                        totalFiltered++;
-                        return; // Skip element if it doesn't match any of the keywords
-                    }
-                }
-            }
-
-            // Mark element for later retrieval
-            node.setAttribute('data-argent-idx', idx);
-
-            elements.push({
-                idx: idx,
+            candidates.push({
+                node: node,
                 tag: descriptor,
                 label: label,
                 value: value,
                 checked: checked,
                 href: tag === 'A' ? (node.href || '') : '',
+                inViewport: isInViewport(node)
             });
-
-            idx++;
         }
     }
 
     // Recursive DOM walker that crosses Shadow DOM boundaries
     function walkDOM(root) {
-        if (idx > MAX_ELEMENTS) return;
-        
-        // Get all elements in this root (light DOM or shadow root)
         let allElements;
         try {
             allElements = root.querySelectorAll('*');
@@ -268,10 +322,7 @@ _STATE_EXTRACTION_JS = """
         }
 
         for (const el of allElements) {
-            if (idx > MAX_ELEMENTS) break;
             processNode(el);
-
-            // If this element has a shadow root, recurse into it
             if (el.shadowRoot) {
                 walkDOM(el.shadowRoot);
             }
@@ -280,11 +331,61 @@ _STATE_EXTRACTION_JS = """
 
     walkDOM(document);
 
+    // Filter by query if present
+    let filteredCandidates = candidates;
+    let totalFiltered = 0;
+    if (query) {
+        const keywords = query.split(',').map(s => s.trim().toLowerCase()).filter(s => s.length > 0);
+        if (keywords.length > 0) {
+            filteredCandidates = candidates.filter(c => {
+                const matches = keywords.some(q => {
+                    return (c.label || '').toLowerCase().includes(q) ||
+                           c.tag.toLowerCase().includes(q) ||
+                           (c.value || '').toLowerCase().includes(q) ||
+                           (c.href || '').toLowerCase().includes(q);
+                });
+                if (!matches) totalFiltered++;
+                return matches;
+            });
+        }
+    }
+
+    // Prioritize elements in viewport
+    const inViewport = [];
+    const outOfViewport = [];
+    filteredCandidates.forEach(c => {
+        if (c.inViewport) {
+            inViewport.push(c);
+        } else {
+            outOfViewport.push(c);
+        }
+    });
+
+    const finalElements = inViewport.concat(outOfViewport).slice(0, MAX_ELEMENTS);
+
+    // Apply indexes and write data-argent-idx attributes
+    const elementsResult = [];
+    finalElements.forEach((el, index) => {
+        const idxVal = startIdx + index;
+        try {
+            el.node.setAttribute('data-argent-idx', idxVal);
+        } catch (e) {}
+        
+        elementsResult.push({
+            idx: idxVal,
+            tag: el.tag,
+            label: el.label,
+            value: el.value,
+            checked: el.checked,
+            href: el.href
+        });
+    });
+
     return {
         url: window.location.href,
         title: document.title,
-        elements: elements,
-        nextIdx: idx,
+        elements: elementsResult,
+        nextIdx: startIdx + finalElements.length,
         totalFiltered: totalFiltered
     };
 }

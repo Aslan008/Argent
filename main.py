@@ -108,9 +108,20 @@ def main():
     orchestrator = ProjectOrchestrator(agent)
     
     builtin_cmds = [
+        # Base commands
         '/help', '/provider', '/model', '/obsidian', '/clear', '/research', '/enable_rag', '/disable_rag', '/rag_provider',
         '/hooks', '/tools', '/save', '/setup_terminal', '/project', '/work', '/commit',
-        '/sessions', '/load', '/diff', '/undo', '/undo_all', '/copy', '/logs', '/skills', '/auto', '/verbose', '/browser', '/exit', '/quit'
+        '/sessions', '/load', '/diff', '/undo', '/undo_all', '/copy', '/logs', '/skills', '/auto', '/verbose', '/browser', '/exit', '/quit',
+        '/mcp', '/thinking', '/temp', '/temperature',
+        
+        # Subcommands and parameter variations
+        '/mcp list', '/mcp add', '/mcp remove', '/mcp test', '/mcp start', '/mcp stop',
+        '/browser user', '/browser isolated', '/browser chrome', '/browser yandex', '/browser edge', '/browser brave', '/browser auto',
+        '/hooks auto',
+        '/temp 0.2', '/temp 0.7', '/temp 1.0',
+        '/temperature 0.2', '/temperature 0.7', '/temperature 1.0',
+        '/work --auto',
+        '/logs clear', '/logs error'
     ]
     
     def get_all_commands():
