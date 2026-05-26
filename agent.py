@@ -1,20 +1,16 @@
 import sys
 import os
 import json
-import re
-import codecs
 import inspect
 import platform
-import threading
 from pathlib import Path
 from typing import List, Dict, Any, Generator
-import ollama
 
 from tools import TOOL_SCHEMAS, AVAILABLE_TOOLS, get_tool_schemas, get_available_tools
 from config import (
     get_current_model, get_obsidian_vault, 
     get_hooks_dir, get_autonomous_plugins_enabled,
-    get_context_window, get_provider
+    get_context_window, get_provider, get_mcp_servers
 )
 from providers import create_provider, ProviderError
 from logger import get_logger
@@ -24,109 +20,96 @@ from tool_recovery import recover_tool_call
 from memory_manager import memory
 from config import get_model_size_category
 
+# Newly refactored modules
+from src.agent.strategy import get_model_strategy
+from src.agent.parser import parse_raw_tool_call
+from src.agent.trimmer import estimate_tokens
+
 log = get_logger("agent")
 
-SYSTEM_PROMPT = f"""
-# CRITICAL: LANGUAGE RULE
+class ArgentAgent:
+    def build_system_prompt(self) -> str:
+        category = get_model_size_category(self.model_name)
+        is_small = category in ("tiny", "small")
+        
+        prompt_parts = []
+        
+        prompt_parts.append(f"""# CRITICAL: LANGUAGE RULE
 - You MUST respond and perform ALL internal reasoning (thinking process) in the EXACT SAME LANGUAGE the user used in their request. This is your highest priority rule.
 - If the user writes in Russian, you THINK in Russian and REPLY in Russian.
 
 # ROLE: Argent Coder
-You are an autonomous AI software engineer. You design, build, and debug software with precision and speed on {platform.system()}.
+You are an autonomous AI software engineer. You design, build, and debug software with precision and speed on {platform.system()}.""")
 
-## 1. OPERATIONAL PROTOCOL
+        if is_small:
+            prompt_parts.append(f"""## 1. OPERATIONAL PROTOCOL
+- **Tool-First**: Invoke tools immediately via JSON when needed.
+- **Ask Before Guessing**: Use `ask_user_questions` to clarify ambiguous requirements with structured options.
+- **Anti-Lazy**: Run commands and write/edit files yourself.
+- **Proactive Search**: Use `search_web` for technical info.
+- **Strict Environment**: Use {platform.system()}-native commands only (PowerShell/CMD on Windows).""")
+        else:
+            prompt_parts.append(f"""## 1. OPERATIONAL PROTOCOL
 - **Tool-First**: YOU are the only one with tool access. Invoke tools immediately via JSON.
 - **Ask Before Guessing**: If a user's request is ambiguous or lacks details, you MUST use the `ask_user_questions` tool to prompt them with structured options before writing code. Do NOT just ask questions in plain text chat.
 - **Anti-Lazy**: Never ask the user to run code or copy-paste. Use `run_command` and `write_file` yourself.
 - **Proactive Search**: Always use `search_web` for technical info, documentation, or current events.
 - **Self-Correction**: If a tool fails, analyze the error and fix it proactively. Do not apologize.
-- **Strict Environment**: Use {platform.system()}-native commands ONLY (e.g., PowerShell/CMD on Windows, NOT unix commands like 'ls' or 'grep').
+- **Strict Environment**: Use {platform.system()}-native commands ONLY (e.g., PowerShell/CMD on Windows, NOT unix commands like 'ls' or 'grep').""")
 
-## 2. PROJECT & PLUGIN ARCHITECTURE
-### Standard Plugin Development
-When asked to create/manage a "plugin" or "new command":
-1. **Primary Tools**: Use `create_plugin` to write new logic and `delete_plugin` to remove it. These tools handle the `./plugins/` directory and reloading automatically.
-2. **Slash Commands**: Define a function `command_NAME(*args)`. Argent will automatically extract 'NAME' as a new slash command (e.g., `command_hello` becomes `/hello`).
-3. **Internal Hooks**: Use these event names for automatic execution:
-    - `on_startup()`: Runs when Argent starts.
-    - `pre_prompt(text)`: Modifies user input before AI sees it.
-    - `on_tool_call(func_name, args)`: Runs before tool execution. Return `False` to block.
-    - `post_response(text)`: Runs after AI finishes speaking.
-    - `on_chat_saved(file_path)`: Runs after chat log is saved.
-4. **Implementation**: Always use `from ui import console` for output.
+        auto_plugins = get_autonomous_plugins_enabled()
+        if auto_plugins or not is_small:
+            hooks_dir = get_hooks_dir()
+            prompt_parts.append(f"""## 2. PLUGIN DEVELOPMENT
+- **HOOKS_DIR**: `{hooks_dir}`
+- **AUTONOMOUS_EXTENSION**: {'ENABLED' if auto_plugins else 'DISABLED'}
+- **Standard Plugin Development**:
+  1. Use `create_plugin` to write new logic and `delete_plugin` to remove it (handles ./plugins/ and reloading).
+  2. Define a function `command_NAME(*args)` for slash commands (e.g., `command_hello` -> `/hello`).
+  3. Use events: `on_startup()`, `pre_prompt(text)`, `on_tool_call(func_name, args)`, `post_response(text)`, `on_chat_saved(file_path)`.
+  4. Always use `from ui import console` for output.""")
 
-### Skills System
-You have access to "Skills" — instruction-based extensions stored in markdown files.
-1. **Discovery**: Use `list_skills` to see what specialized instructions are available.
-2. **Usage**: If a user's request matches a skill's description, use `read_skill` to get the full instructions and FOLLOW THEM strictly.
-3. **Persistence**: Use `create_skill` to save complex workflows, expert personas, or specific logic patterns for future use.
+        prompt_parts.append("""## 3. SKILLS SYSTEM
+- You have access to instruction-based extensions stored in markdown files.
+- Use `list_skills` to discover skills. Use `read_skill` to read and follow instructions. Use `create_skill` to persist complex workflows.""")
 
-### Project Brain Mode
+        if not is_small:
+            prompt_parts.append("""## 4. PROJECT BRAIN MODE
 - Tools like `add_project_task`, `write_project_spec`, etc., are EXCLUSIVELY for massive multi-step projects.
-- If these tools are not in your `allowed_tools` list, DO NOT attempt to call them. Use regular file tools instead.
+- If these tools are not in your `allowed_tools` list, DO NOT attempt to call them.""")
 
-## 3. UI & TERMINOLOGY STANDARDS
-- **"Panel"**: Always refers to `rich.panel.Panel` for terminal UI. NEVER start web servers or use web-dashboard libraries (like HoloViz Panel) unless explicitly building a web app.
+        if not is_small:
+            prompt_parts.append("""## 5. UI & TERMINOLOGY STANDARDS
+- **"Panel"**: Always refers to `rich.panel.Panel` for terminal UI. NEVER start web servers or use web-dashboard libraries unless building a web app.
 - **"Table"**: Always refers to `rich.table.Table`.
-- **Output**: Use `console.print()` or `print_system()` for beautiful terminal results.
+- **Output**: Use `console.print()` or `print_system()` for beautiful terminal results.""")
 
-## 4. THINK & VERIFY PROTOCOL
-- **Outcome Analysis**: After EACH tool call, analyze if the result truly moves you closer to the goal.
-- **False Success**: "Requirement already satisfied" or "Exit code: 0" does NOT always mean success. If a tool reports success but the problem persists (e.g., a package still can't be imported), you MUST try a different approach (e.g., check paths, use `--force-reinstall`, or investigate environment).
-- **Proactive Verification**: After installing things or writing complex files, use `run_command` or `read_file` to VERIFY they work as intended.
-- **Self-Correction**: If you are stuck in a loop, STOP. Rethink your strategy. Explain your new reasoning to the user.
-
-## 5. COMMUNICATION
-- **Language**: Follow the CRITICAL LANGUAGE RULE at the top of this prompt.
-- **Transparency**: Briefly state your reasoning before executing tools, especially if you are changing your plan.
-- **Visuals**: If a complex concept, UI mockup, or architecture diagram would help the user, USE the `create_svg_image` tool. This will automatically open a browser window for the user to see your work.
-"""
-
-class ArgentAgent:
-    def __init__(self, max_history_messages: int = None):
-        self.model_name = get_current_model()
-        self.provider = get_provider()
-        self.max_context_tokens = get_context_window()
-        
-        if max_history_messages is not None:
-            self.max_history_messages = max_history_messages
+        if is_small:
+            prompt_parts.append("""## 6. THINK & VERIFY PROTOCOL
+- **Outcome Analysis**: Verify if tool results truly move you closer to the goal.
+- **Proactive Verification**: After writing files or executing commands, verify they work as intended.
+- **Self-Correction**: If stuck in a loop, stop, rethink, and explain to the user.""")
         else:
-            category = get_model_size_category(self.model_name)
-            self.max_history_messages = {
-                "tiny": 6,
-                "small": 10,
-                "medium": 20,
-                "large": 30,
-                "cloud": 40,
-            }.get(category, 20)
-        system_prompt = SYSTEM_PROMPT
-        
+            prompt_parts.append("""## 6. THINK & VERIFY PROTOCOL
+- **Outcome Analysis**: After EACH tool call, analyze if the result truly moves you closer to the goal.
+- **False Success**: "Requirement already satisfied" or "Exit code: 0" does NOT always mean success. If a tool reports success but the problem persists, try a different approach.
+- **Proactive Verification**: After installing things or writing complex files, use `run_command` or `read_file` to VERIFY they work as intended.
+- **Self-Correction**: If you are stuck in a loop, STOP. Rethink your strategy. Explain your new reasoning to the user.""")
+
+        prompt_parts.append("""## 7. COMMUNICATION
+- **Language**: Follow the CRITICAL LANGUAGE RULE at the top of this prompt.
+- **Transparency**: Briefly state your reasoning before executing tools.
+- **Visuals**: Use `create_svg_image` to explain complex concepts or UI mockups via browser.""")
+
         vault = get_obsidian_vault()
         if vault:
-            system_prompt += f"""
-## 5. OBSIDIAN INTEGRATION
+            prompt_parts.append(f"""## 8. OBSIDIAN INTEGRATION
 - **Active Vault**: `{vault}`
 - **Protocols**:
     - Use `write_obsidian_note` for creating notes.
     - Use ABSOLUTE paths (e.g., `{vault}\\Note.md`) for `read_file` or `replace_in_file` on notes.
-    - NEVER use `update_obsidian_properties` for text body edits; use `replace_in_file`.
-"""
-            
-        # Plugin & Autonomous Awareness
-        hooks_dir = get_hooks_dir()
-        auto_plugins = get_autonomous_plugins_enabled()
-        
-        system_prompt += f"""
-## 6. DYNAMIC CONFIGURATION
-- **HOOKS_DIR**: `{hooks_dir}`
-- **AUTONOMOUS_EXTENSION**: {'ENABLED' if auto_plugins else 'DISABLED'}
-"""
-        if auto_plugins:
-            system_prompt += "- **Note**: You ARE allowed to autonomously create plugins to solve tasks more efficiently.\n"
-        else:
-            system_prompt += "- **Note**: You ARE NOT allowed to create plugins unless explicitly requested by the user.\n"
+    - NEVER use `update_obsidian_properties` for text body edits; use `replace_in_file`.""")
 
-        # Load AGENTS.md project instructions if present
         agents_md_paths = [
             Path(".argent/AGENTS.md"),
             Path("AGENTS.md"),
@@ -136,470 +119,104 @@ class ArgentAgent:
                 try:
                     agents_content = p.read_text(encoding="utf-8").strip()
                     if agents_content:
-                        system_prompt += f"\n## 7. PROJECT INSTRUCTIONS (from {p})\n{agents_content}\n"
+                        prompt_parts.append(f"## PROJECT INSTRUCTIONS (from {p})\n{agents_content}")
                     break
                 except Exception:
                     pass
 
-        compressed_prompt = compress_system_prompt(system_prompt, self.model_name)
+        try:
+            from mcp_client import mcp_client
+            mcp_servers = get_mcp_servers()
+            if mcp_servers:
+                mcp_section = "## MCP SERVERS (External Tool Integration)\n"
+                mcp_section += "You have access to external tool servers via `call_mcp_tool(server_name, tool_name, arguments_json)`.\n"
+                mcp_section += "When the user asks to do something related to these servers, use call_mcp_tool AUTOMATICALLY.\n\n"
+                for srv_cfg in mcp_servers:
+                    srv_name = srv_cfg["name"]
+                    stype = srv_cfg.get("type", "stdio")
+                    endpoint = srv_cfg.get("url") or f"{srv_cfg.get('command', '?')} {' '.join(srv_cfg.get('args', []))}".strip()
+                    mcp_section += f"### Server: `{srv_name}` ({stype})\n"
+                    mcp_section += f"- **Endpoint**: {endpoint}\n"
+                    try:
+                        tools = mcp_client.list_tools(srv_name)
+                        valid_tools = [t for t in tools if "name" in t and "error" not in t]
+                        if valid_tools:
+                            mcp_section += "- **Tools**:\n"
+                            for t in valid_tools:
+                                tname = t["name"]
+                                desc = t.get("description", "").split(".")[0]
+                                params = t.get("parameters", {}).get("properties", {})
+                                param_str = ", ".join(f'"{p}": value' for p in params)
+                                mcp_section += f"  - `{tname}`: {desc}\n"
+                                if param_str:
+                                    example_args = "{" + param_str + "}"
+                                    mcp_section += f"    -> call_mcp_tool(\"{srv_name}\", \"{tname}\", '{example_args}')\n"
+                                else:
+                                    mcp_section += f"    -> call_mcp_tool(\"{srv_name}\", \"{tname}\", '{{}}')\n"
+                        else:
+                            mcp_section += "- **Tools**: (could not fetch — server may be offline)\n"
+                    except Exception:
+                        mcp_section += "- **Tools**: (connection failed — server may be offline)\n"
+                    mcp_section += "\n"
+                prompt_parts.append(mcp_section)
+        except Exception:
+            pass
+
+        full_prompt = "\n\n".join(prompt_parts)
+        return compress_system_prompt(full_prompt, self.model_name)
+
+    def __init__(self, max_history_messages: int = None):
+        self.model_name = get_current_model()
+        self.provider = get_provider()
+        self.max_context_tokens = get_context_window()
+        
+        # Load Strategy Pattern
+        self.strategy = get_model_strategy(self.model_name, self.provider)
+        
+        if max_history_messages is not None:
+            self.max_history_messages = max_history_messages
+        else:
+            category = get_model_size_category(self.model_name)
+            self.max_history_messages = self.strategy.get_max_history_messages(category)
+            
         self.messages: List[Dict[str, Any]] = [
-            {"role": "system", "content": compressed_prompt}
+            {"role": "system", "content": self.build_system_prompt()}
         ]
 
     def set_model(self, model_name: str):
         self.model_name = model_name
-        
-    def _estimate_tokens(self, text: str) -> int:
-        """Heuristic calculation for tokens (roughly 1 token = 4 chars)."""
-        return len(text) // 4
+        self.strategy = get_model_strategy(self.model_name, self.provider)
 
-    def _summarize_messages(self, msgs_to_summarize: List[Dict], timeout: float = 30.0) -> str:
-        """Runs a synchronous LLM call to summarize old context.
-        Protected by a timeout to prevent infinite blocking.
-        Only used for cloud providers — Ollama uses hard reset instead.
-        """
-        text_to_summarize = ""
-        for m in msgs_to_summarize:
-            role = m.get("role", "unknown")
-            content = m.get("content", "")
-            if not content and "tool_calls" in m:
-                content = f"[Tool Calls: {m['tool_calls']}]"
-            text_to_summarize += f"{role.upper()}: {content}\n\n"
-            
-        summary_prompt = (
-            "You are a context-compression engine. Summarize the following past conversation strictly in 1-2 paragraphs. "
-            "Focus entirely on the technical progress, code written, and facts established. "
-            "Omit politeness and conversational filler. Here is the log:\n\n" + text_to_summarize
-        )
-        
-        result_container = [None]
-        error_container = [None]
-        
-        def _do_summarize():
-            try:
-                provider = create_provider()
-                validation_error = provider.validate_config()
-                if validation_error:
-                    result_container[0] = None
-                    return
-                result_container[0] = provider.sync_chat(
-                    model=self.model_name,
-                    messages=[{"role": "user", "content": summary_prompt}]
-                )
-            except Exception as e:
-                error_container[0] = e
-        
-        worker = threading.Thread(target=_do_summarize, daemon=True)
-        worker.start()
-        worker.join(timeout=timeout)
-        
-        if worker.is_alive():
-            log.warning("Context summarization timed out after %.0fs, falling back to hard reset.", timeout)
-            return None  # Signal to caller: summarization failed
-        
-        if error_container[0]:
-            log.warning("Context summarization error: %s", error_container[0])
-            return None
-        
-        return result_container[0] or "[Compression Failed]"
+    def _estimate_tokens(self, text: str) -> int:
+        return estimate_tokens(text, self.model_name, self.provider)
 
     def _trim_history(self):
-        """Keeps history size manageable. Strategy depends on provider:
-        - Ollama (any model size): hard reset with memory (no LLM call).
-          Ollama is single-threaded for inference, so a sync summarization
-          call before the main stream would block forever.
-        - Cloud providers (tiny/small): hard reset with memory.
-        - Cloud providers (medium/large/cloud): LLM summarization with timeout.
-        """
         self.max_context_tokens = get_context_window()
         
-        history_tokens = sum(self._estimate_tokens(str(m)) for m in self.messages[1:])
-        msg_count = len(self.messages) - 1
+        from config import get_strip_reasoning
+        from src.agent.trimmer import clean_messages_for_llm
+        strip_enabled = get_strip_reasoning()
+        
+        cleaned = clean_messages_for_llm(self.messages, strip_enabled)
+        history_tokens = sum(self._estimate_tokens(str(m)) for m in cleaned[1:])
+        msg_count = len(cleaned) - 1
         
         if msg_count <= self.max_history_messages and history_tokens <= self.max_context_tokens:
             return
 
-        # Ollama is single-threaded: a sync LLM call here would queue behind
-        # the upcoming stream_chat and hang indefinitely. Always use instant reset.
-        if self.provider != "zai":
-            self._hard_reset_with_memory()
-            return
-
-        # Cloud provider — safe to make a parallel API call
-        category = get_model_size_category(self.model_name)
-        if category in ("tiny", "small"):
-            self._hard_reset_with_memory()
-        else:
-            self._soft_trim_with_summarization()
-
-    def _hard_reset_with_memory(self):
-        """Full context reset for small models.
-        Preserves system prompt and injects structured memory note.
-        No LLM call needed — memory is accumulated incrementally during conversation.
-        """
-        self._update_memory_from_messages()
-
-        context_note = memory.build_context_note()
-
-        system_content = self.messages[0]["content"]
-        if context_note:
-            sep = "\n\n=== PERSISTENT MEMORY (context was reset) ===\n"
-            end = "\n=== END MEMORY ==="
-            existing = system_content.find("=== PERSISTENT MEMORY")
-            if existing != -1:
-                end_marker = system_content.find("=== END MEMORY ===", existing)
-                if end_marker != -1:
-                    system_content = system_content[:existing] + sep + context_note + end + system_content[end_marker + len("=== END MEMORY ==="):]
-                else:
-                    system_content += sep + context_note + end
-            else:
-                system_content += sep + context_note + end
-        # Извлекаем последний пользовательский запрос (он добавляется в массив ДО вызова этой функции)
-        last_user_msg = self.messages[-1] if self.messages and self.messages[-1].get("role") == "user" else None
-
-        self.messages = [{"role": "system", "content": system_content}]
-        if last_user_msg:
-            self.messages.append(last_user_msg)
-            
-        log.info("Hard context reset performed (model=%s, category=%s)", self.model_name, get_model_size_category(self.model_name))
-
-    def _update_memory_from_messages(self):
-        """Extract key information from recent messages before clearing them."""
-        last_user_msg = ""
-        last_assistant_action = ""
-
-        for m in reversed(self.messages):
-            if m.get("role") == "user" and not last_user_msg:
-                content = m.get("content", "")
-                if content and not content.startswith("/"):
-                    last_user_msg = content
-            elif m.get("role") == "assistant" and not last_assistant_action:
-                content = m.get("content", "")
-                if content:
-                    first_line = content.strip().split("\n")[0][:200]
-                    last_assistant_action = first_line
-
-        if last_user_msg and not memory.data.get("objective"):
-            memory.set_objective(last_user_msg)
-
-        if last_assistant_action:
-            memory.set_current_task(last_assistant_action)
-
-    def _soft_trim_with_summarization(self):
-        """LLM-based summarization for medium/large/cloud models."""
-        pinned_indices = {0}
-        for i, m in enumerate(self.messages):
-            if m.get("role") == "system":
-                content = m.get("content", "")
-                if any(x in content for x in ["PROJECT SPECIFICATION", "ARCHITECTURE MAP", "PREVIOUS CONTEXT MEMORY", "PERSISTENT MEMORY"]):
-                    pinned_indices.add(i)
-
-        msgs_to_summarize = []
-        indices_to_drop = []
-
-        current_tokens = sum(self._estimate_tokens(str(m)) for m in self.messages[1:])
-        for i in range(1, len(self.messages)):
-            if i in pinned_indices:
-                continue
-            if len(self.messages) - len(indices_to_drop) <= self.max_history_messages and current_tokens <= (self.max_context_tokens * 0.7):
-                break
-            msgs_to_summarize.append(self.messages[i])
-            indices_to_drop.append(i)
-            current_tokens -= self._estimate_tokens(str(self.messages[i]))
-
-        if not msgs_to_summarize:
-            return
-
-        from ui import console
-        with console.status("[dim magenta]Оптимизация контекста...[/dim magenta]", spinner="dots"):
-            summary = self._summarize_messages(msgs_to_summarize, timeout=30.0)
-        
-        # If summarization failed (timeout or error), fall back to hard reset
-        if summary is None:
-            log.info("Summarization failed, falling back to hard reset.")
-            self._hard_reset_with_memory()
-            return
-        
-        memory_msg = {
-            "role": "system",
-            "content": f"=== PREVIOUS CONTEXT MEMORY ===\n{summary}\n=== END MEMORY ==="
-        }
-
-        new_messages = []
-        memory_injected = False
-        for i, m in enumerate(self.messages):
-            if i in indices_to_drop:
-                if not memory_injected:
-                    new_messages.append(memory_msg)
-                    memory_injected = True
-                continue
-            new_messages.append(m)
-
-        self.messages = new_messages
-
-    # Parameter name aliases for known tools
-    _PARAM_ALIASES = {
-        "write_file": {
-            "filename": "file_path",
-            "path": "file_path",
-            "file": "file_path",
-            "filepath": "file_path",
-        },
-        "read_file": {
-            "filename": "file_path",
-            "path": "file_path",
-            "file": "file_path",
-            "filepath": "file_path",
-        },
-        "delete_file": {
-            "filename": "file_path",
-            "path": "file_path",
-            "file": "file_path",
-            "filepath": "file_path",
-        },
-        "replace_in_file": {
-            "filename": "file_path",
-            "path": "file_path",
-            "file": "file_path",
-            "filepath": "file_path",
-        },
-        "replace_python_function": {
-            "filename": "file_path",
-            "path": "file_path",
-            "file": "file_path",
-            "filepath": "file_path",
-        },
-        "create_directory": {
-            "path": "dir_path",
-            "directory": "dir_path",
-            "dir": "dir_path",
-            "directory_path": "dir_path",
-        },
-        "list_directory": {
-            "path": "dir_path",
-            "directory": "dir_path",
-            "dir": "dir_path",
-            "directory_path": "dir_path",
-        },
-        "grep_search": {
-            "dir": "directory",
-            "path": "directory",
-            "directory_path": "directory",
-        },
-        "move_file": {
-            "src": "source",
-            "source_path": "source",
-            "dst": "destination",
-            "dest": "destination",
-            "destination_path": "destination",
-        },
-        "copy_file": {
-            "src": "source",
-            "source_path": "source",
-            "dst": "destination",
-            "dest": "destination",
-            "destination_path": "destination",
-        },
-    }
-
-    def _normalize_tool_params(self, parsed: dict) -> dict:
-        """Normalize parameter names to match expected tool schemas."""
-        tool_name = parsed.get("name", "")
-        arguments = parsed.get("arguments", {})
-        aliases = self._PARAM_ALIASES.get(tool_name)
-        if aliases:
-            normalized = {}
-            for key, value in arguments.items():
-                canonical = aliases.get(key, key)
-                normalized[canonical] = value
-            parsed["arguments"] = normalized
-        return parsed
-
-    @staticmethod
-    def _extract_balanced_json(text: str, start_pos: int) -> str | None:
-        """Extract a balanced JSON object from text starting at start_pos.
-        Uses brace-counting to handle nested objects correctly.
-        Returns the complete JSON string or None if no balanced object found."""
-        if start_pos >= len(text) or text[start_pos] != '{':
-            return None
-        depth = 0
-        in_string = False
-        escape_next = False
-        for i in range(start_pos, len(text)):
-            ch = text[i]
-            if escape_next:
-                escape_next = False
-                continue
-            if ch == '\\' and in_string:
-                escape_next = True
-                continue
-            if ch == '"' and not escape_next:
-                in_string = not in_string
-                continue
-            if in_string:
-                continue
-            if ch == '{':
-                depth += 1
-            elif ch == '}':
-                depth -= 1
-                if depth == 0:
-                    return text[start_pos:i + 1]
-        return None
-
-    def _decode_json_escapes(self, s: str) -> str:
-        """Decode JSON escape sequences in a raw string extracted from malformed JSON."""
-        # Try wrapping in quotes and parsing as JSON string for proper decoding
-        try:
-            return json.loads('"' + s.replace('\\', '\\\\').replace('"', '\\"') + '"')
-        except (json.JSONDecodeError, Exception):
-            pass
-        # Manual fallback for common escapes
-        result = s
-        result = result.replace('\\n', '\n')
-        result = result.replace('\\t', '\t')
-        result = result.replace('\\r', '\r')
-        result = result.replace('\\"', '"')
-        result = result.replace('\\\\', '\\')
-        return result
+        self.messages = self.strategy.trim_history(
+            self.messages, self.model_name, self.max_history_messages, self.max_context_tokens
+        )
 
     def _parse_raw_tool_call(self, content: str) -> dict | None:
-        """Parse a raw tool call from AI-generated content.
-        Returns {"parsed": {"name": ..., "arguments": {...}}, "match_str": ...} or None.
-        
-        Supports formats:
-          1. ```json { ... } ``` or ``` { ... } ```  (markdown code blocks)
-          2. {"name": "tool", "arguments": {...}}      (standard Ollama format)
-          3. [{"name": "tool", "arguments": {...}}]    (array format)
-          4. {"tool_name": {params}}                    (shorthand format)
-        """
-        clean = content.strip()
-        
-        # --- FORMAT 1: Markdown code blocks ---
-        md_match = re.search(r'```(?:json)?\s*(\{.+)', clean, re.DOTALL)
-        if md_match:
-            # Extract balanced JSON from inside the code block
-            inner_start = md_match.start(1)
-            json_candidate = self._extract_balanced_json(clean, inner_start)
-            if json_candidate:
-                # Find the closing ``` to determine the full match string
-                end_pos = inner_start + len(json_candidate)
-                closing = clean.find('```', end_pos)
-                if closing != -1:
-                    match_str = clean[md_match.start():closing + 3]
-                else:
-                    match_str = clean[md_match.start():end_pos]
-                
-                result = self._try_parse_json_tool(json_candidate)
-                if result:
-                    result["match_str"] = match_str
-                    return result
-
-        # --- FORMAT 2, 3, 4: Find any JSON object in the content ---
-        # Look for the first { that could be the start of a tool call JSON
-        brace_pos = clean.find('{')
-        if brace_pos != -1:
-            json_candidate = self._extract_balanced_json(clean, brace_pos)
-            if json_candidate:
-                result = self._try_parse_json_tool(json_candidate)
-                if result:
-                    result["match_str"] = json_candidate
-                    return result
-
-        # --- LAST RESORT: Regex extraction for heavily malformed JSON ---
-        # (e.g., write_file with actual newlines inside the content string)
-        current_tools = get_available_tools()
-        for tool_name in current_tools:
-            if f'"{tool_name}"' in clean:
-                result = self._try_recover_malformed_tool(clean, tool_name)
-                if result:
-                    return result
-        
-        return None
-
-    def _try_parse_json_tool(self, json_str: str) -> dict | None:
-        """Try to parse a JSON string as a tool call.
-        Handles both {"name": ..., "arguments": {...}} and {"tool_name": {params}} formats."""
-        try:
-            parsed = json.loads(json_str)
-        except json.JSONDecodeError:
-            return None
-        
-        if not isinstance(parsed, dict):
-            return None
-        
-        # Format: {"name": ..., "arguments": {...}} or {"function": ..., "arguments": {...}}
-        # Support both 'name' and 'function' as a top-level key for the tool name
-        tool_id = parsed.get("name") or parsed.get("function")
-        if tool_id and isinstance(tool_id, str) and "arguments" in parsed:
-            parsed["name"] = tool_id # Canonicalize for the rest of the logic
-            parsed = self._normalize_tool_params(parsed)
-            return {"parsed": parsed}
-        
-        # Format: {"tool_name": {params}} (shorthand)
-        current_tools = get_available_tools()
-        for key, value in parsed.items():
-            if key in current_tools and isinstance(value, dict):
-                tool_parsed = {
-                    "name": key,
-                    "arguments": value
-                }
-                tool_parsed = self._normalize_tool_params(tool_parsed)
-                return {"parsed": tool_parsed}
-        
-        return None
-    
-    def _try_recover_malformed_tool(self, content: str, tool_name: str) -> dict | None:
-        """Last-resort recovery for malformed JSON (e.g., unescaped newlines in strings).
-        Uses regex to extract path and content parameters directly."""
-        # Supported tools for content recovery
-        CONTENT_TOOLS = ["write_file", "write_obsidian_note", "replace_python_function", "replace_in_file"]
-        if tool_name not in CONTENT_TOOLS:
-            return None
-        
-        # Try to find file/note path under any common parameter name
-        fp_match = re.search(
-            r'"(?:file_path|filename|filepath|path|file|note_path)"\s*:\s*"([^"]+)"', content
-        )
-        # Find content: grab everything after "content": " until we can determine the end
-        ct_match = re.search(r'"content"\s*:\s*"([\s\S]*)', content)
-        
-        if not fp_match or not ct_match:
-            return None
-        
-        recovered = ct_match.group(1)
-        # Strip trailing "} patterns (closing of JSON value + objects)
-        # We need to remove the trailing: "  }  }  or "  } depending on nesting
-        recovered = re.sub(r'"\s*\}\s*\}?\s*$', '', recovered)
-        # Also strip a trailing lone quote if present
-        recovered = recovered.rstrip().rstrip('"')
-        
-        # The recovered content has JSON escape sequences as literal characters.
-        # Decode them properly (e.g., \n → newline, \" → quote)
-        recovered = recovered.replace('\\n', '\n')
-        recovered = recovered.replace('\\t', '\t')
-        recovered = recovered.replace('\\"', '"')
-        recovered = recovered.replace('\\\\', '\\')
-        
-        # Identify the correct parameter name for the path
-        path_param = "file_path"
-        if tool_name == "write_obsidian_note":
-            path_param = "note_path"
-            
-        parsed = {
-            "name": tool_name,
-            "arguments": {
-                path_param: fp_match.group(1),
-                "content": recovered
-            }
-        }
-        
-        return {"parsed": parsed, "match_str": content}
+        return parse_raw_tool_call(content)
 
     def process_user_input(self, user_text: str, allowed_tools: List[str] = None) -> Generator[Dict[str, Any], None, None]:
         """
         Process the user input and yield chunks of response or tool activity.
         Supports streaming generation.
         """
+        self.messages[0]["content"] = self.build_system_prompt()
         self.messages.append({"role": "user", "content": user_text})
         
         if not user_text.startswith("/"):
@@ -622,10 +239,19 @@ class ArgentAgent:
             START_TAGS = ["<thought>", "<think>", "<reasoning>"]
             END_TAGS = ["</thought>", "</think>", "</reasoning>"]
             
+            from config import get_strip_reasoning
+            from src.agent.trimmer import clean_messages_for_llm
+            strip_enabled = get_strip_reasoning()
+            cleaned_messages = clean_messages_for_llm(self.messages, strip_enabled)
+            
             try:
                 active_tools = get_tool_schemas()
                 if allowed_tools is not None:
                     active_tools = [t for t in active_tools if t["function"]["name"] in allowed_tools]
+                
+                # Check if the strategy supports native tools
+                if not self.strategy.supports_native_tools():
+                    active_tools = None
 
                 provider = create_provider()
                 validation_error = provider.validate_config()
@@ -633,11 +259,15 @@ class ArgentAgent:
                     yield {"type": "error", "content": validation_error}
                     return
 
+                from config import get_temperature
+                temp = get_temperature()
+
                 response_stream = provider.stream_chat(
                     model=self.model_name,
-                    messages=self.messages,
+                    messages=cleaned_messages,
                     tools=active_tools,
                     context_window=self.max_context_tokens if self.provider != "zai" else None,
+                    temperature=temp,
                 )
 
                 for chunk in response_stream:
@@ -710,18 +340,20 @@ class ArgentAgent:
                                     # Signal progress so the UI can show a spinner
                                     yield {"type": "tool_generating", "name": "?", "bytes": len(raw_tool_buffer)}
                             
-            except ollama.ResponseError as e:
+            except Exception as e:
                 error_str = str(e).lower()
                 if "does not support tools" in error_str:
                     try:
-                        response_stream = ollama.chat(
+                        fallback_provider = create_provider()
+                        fallback_stream = fallback_provider.stream_chat(
                             model=self.model_name,
-                            messages=self.messages,
-                            options={"num_ctx": self.max_context_tokens},
-                            stream=True
+                            messages=cleaned_messages,
+                            tools=None,
+                            context_window=self.max_context_tokens if self.provider != "zai" else None,
+                            temperature=temp,
                         )
-                        for chunk in response_stream:
-                            content_chunk = chunk.get("message", {}).get("content", "")
+                        for chunk in fallback_stream:
+                            content_chunk = chunk.get("content", "")
                             if content_chunk:
                                 full_content += content_chunk
                                 yield {"type": "content_stream", "content": content_chunk}
@@ -731,16 +363,12 @@ class ArgentAgent:
                 elif "thought_signature" in error_str or "functioncall" in error_str:
                     self._flatten_tool_messages()
                     continue
-                else:
-                    yield {"type": "error", "content": f"Ollama Error: {e.error}"}
+                elif isinstance(e, ProviderError):
+                    yield {"type": "error", "content": str(e)}
                     break
-            except ProviderError as e:
-                yield {"type": "error", "content": str(e)}
-                break
-            except Exception as e:
-                log.error("Unexpected error in stream: %s", e, exc_info=True)
-                yield {"type": "error", "content": f"Connection Error: {e}"}
-                break
+                else:
+                    yield {"type": "error", "content": f"Error: {e}"}
+                    break
 
             # End of stream — parse tool call arguments from strings to dicts.
             if tool_calls_accumulator:
@@ -815,12 +443,37 @@ class ArgentAgent:
                                 provided_args = list(arguments.keys())
                                 result = f"Error executing tool '{func_name}': Missing REQUIRED arguments: {missing_args}. You provided: {provided_args}. Please check the tool schema and use the exact parameter names."
                             else:
-                                # Trigger on_tool_call hook. If any plugin returns False, we cancel the execution.
-                                hook_results = hook_manager.call_hook("on_tool_call", func_name, filtered_args)
-                                if False in hook_results:
-                                    result = f"Error: Execution of tool '{func_name}' was blocked by a user plugin."
+                                # --- SAFETY GUARDRAILS ---
+                                requires_confirmation = False
+                                warning_msg = ""
+                                if func_name == "delete_file":
+                                    requires_confirmation = True
+                                    warning_msg = f"delete file '{filtered_args.get('file_path')}'"
+                                elif func_name == "run_admin_command":
+                                    requires_confirmation = True
+                                    warning_msg = f"run ADMIN command: '{filtered_args.get('command')}'"
+                                elif func_name == "run_command":
+                                    cmd_lower = filtered_args.get("command", "").lower()
+                                    if any(danger in cmd_lower for danger in ["rm ", "del ", "remove-item", "format ", "rd "]):
+                                        requires_confirmation = True
+                                        warning_msg = f"run potentially DESTRUCTIVE command: '{filtered_args.get('command')}'"
+                                
+                                user_approved = True
+                                if requires_confirmation:
+                                    import questionary
+                                    from ui import console
+                                    console.print(f"\n[bold red]⚠️  WARNING: AI wants to {warning_msg}[/bold red]")
+                                    user_approved = questionary.confirm("Allow this action?").ask()
+                                
+                                if not user_approved:
+                                    result = f"Error: Execution of tool '{func_name}' was DENIED by the user. Please think of another way or stop."
                                 else:
-                                    result = func(**filtered_args)
+                                    # Trigger on_tool_call hook. If any plugin returns False, we cancel the execution.
+                                    hook_results = hook_manager.call_hook("on_tool_call", func_name, filtered_args)
+                                    if False in hook_results:
+                                        result = f"Error: Execution of tool '{func_name}' was blocked by a user plugin."
+                                    else:
+                                        result = func(**filtered_args)
                                     
                                     # --- AUTO PLUGIN RELOAD ---
                                     if func_name in ["write_file", "replace_in_file", "replace_python_function", "delete_file"]:

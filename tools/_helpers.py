@@ -1,0 +1,149 @@
+import os
+import ast
+import difflib
+import py_compile
+import subprocess
+from pathlib import Path
+
+from rich.syntax import Syntax
+from rich.panel import Panel
+from ui import console
+from config import get_obsidian_vault, get_hooks_dir
+from logger import get_logger
+
+log = get_logger("tools")
+
+def _resolve_path(file_path: str) -> Path:
+    """Resolve file path locally first. If missing, check if it exists in the configured Obsidian Vault."""
+    path = Path(file_path).expanduser().resolve()
+    if path.exists():
+        return path
+        
+    vault_str = get_obsidian_vault()
+    if vault_str:
+        vault_path = Path(vault_str).expanduser().resolve()
+        try:
+            possible_vault_file = (vault_path / file_path).resolve()
+            if possible_vault_file.exists() and str(possible_vault_file).startswith(str(vault_path)):
+                return possible_vault_file
+        except Exception:
+            pass
+            
+    return path
+
+def _is_plugin_path_restricted(file_path: str) -> str | None:
+    """Checks if the path is inside the plugins directory and returns an error if restricted."""
+    try:
+        abs_path = os.path.abspath(file_path)
+        hooks_dir = os.path.abspath(get_hooks_dir())
+        if abs_path.startswith(hooks_dir):
+            return (
+                f"Error: Direct modification of files in the plugins directory is restricted. "
+                f"You MUST use the `create_plugin` or `delete_plugin` tools for all plugin-related tasks. "
+                f"These tools ensure mandatory syntax validation and automatic system reloading."
+            )
+    except Exception:
+        pass
+    return None
+
+def _validate_code_syntax(file_path: str) -> str | None:
+    """Quietly checks if the written Python or C# file has syntax errors.
+    Returns the error string if failed, or None if passed."""
+    if not file_path:
+        return None
+    file_path = str(file_path).strip()
+    
+    if file_path.endswith('.py'):
+        try:
+            py_compile.compile(file_path, doraise=True)
+            return None
+        except py_compile.PyCompileError as e:
+            return f"SyntaxError in your Python code:\n{e.msg}\n\nPlease fix this syntax error using the `replace_in_file` tool."
+        except Exception as e:
+            return f"Validation Error: {e}"
+            
+    if file_path.endswith('.cs'):
+        path_obj = Path(file_path).resolve()
+        csproj_file = None
+        for p in path_obj.parents:
+            cs_files = list(p.glob("*.csproj"))
+            if cs_files:
+                csproj_file = cs_files[0]
+                break
+                
+        if csproj_file:
+            try:
+                result = subprocess.run(["dotnet", "build", str(csproj_file), "-v", "q", "/nologo"], capture_output=True, text=True, timeout=15)
+                if result.returncode != 0:
+                    return f"C# Compiler Error:\n{result.stdout}\n\nPlease fix this compiler error using the `replace_in_file` tool."
+            except subprocess.TimeoutExpired:
+                pass
+            except Exception:
+                pass
+                
+    if file_path.endswith('.json'):
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                import json
+                json.load(f)
+            return None
+        except Exception as e:
+            return f"JSON Syntax Error in your file:\n{e}\n\nPlease fix this syntax error using the `replace_in_file` tool."
+
+    if file_path.endswith(('.js', '.jsx')):
+        try:
+            result = subprocess.run(["node", "--check", file_path], capture_output=True, text=True, timeout=5, shell=(os.name == 'nt'))
+            if result.returncode != 0:
+                return f"JavaScript Syntax Error:\n{result.stderr or result.stdout}\n\nPlease fix this syntax error using the `replace_in_file` tool."
+        except Exception:
+            pass
+
+    if file_path.endswith(('.ts', '.tsx')):
+        try:
+            result = subprocess.run(["npx", "tsc", "--noEmit", "--skipLibCheck", file_path], capture_output=True, text=True, timeout=10, shell=(os.name == 'nt'))
+            if result.returncode != 0:
+                err_out = result.stderr or result.stdout
+                if "error TS" in err_out or file_path in err_out:
+                    return f"TypeScript Compiler Error:\n{err_out}\n\nPlease fix this compiler error using the `replace_in_file` tool."
+        except Exception:
+            pass
+
+    return None
+
+def _print_diff(old_text, new_text, filename):
+    """Show a beautiful unified diff in the console."""
+    diff = list(difflib.unified_diff(
+        old_text.splitlines(keepends=True),
+        new_text.splitlines(keepends=True),
+        fromfile=f"a/{filename}",
+        tofile=f"b/{filename}"
+    ))
+    if diff:
+        diff_str = "".join(diff)
+        syntax = Syntax(diff_str, "diff", theme="monokai", background_color="default")
+        console.print(Panel(syntax, title=f"Changes in {filename}", border_style="green"))
+
+def _build_match_hint(target_text: str, content: str) -> str:
+    """Build a helpful hint when target text is not found, showing the closest match."""
+    lines = target_text.strip().split('\n')
+    if not lines:
+        return ""
+    first_line = lines[0].strip()
+    if not first_line or len(first_line) <= 3:
+        return ""
+    
+    idx = content.find(first_line)
+    if idx != -1:
+        start_idx = max(0, idx - 50)
+        end_idx = min(len(content), idx + len(first_line) + 300)
+        actual_snippet = content[start_idx:end_idx]
+        return f"\n\nHint: We found a partial match for your target_text. Here is the EXACT text from the file (including whitespaces/newlines):\n```\n{actual_snippet}\n```\nCopy the exact text from this snippet for your target_text."
+    
+    content_lines = content.split('\n')
+    start_snippet = target_text[:30].strip()
+    for i, line in enumerate(content_lines):
+        if start_snippet in line:
+            context = '\n'.join(content_lines[max(0, i-2):min(len(content_lines), i+10)])
+            return f"\n\nHINT: Found something similar around line {i+1}:\n```\n{context}\n```\nMake sure your `target_text` has the EXACT spacing and indentation shown in this snippet."
+    
+    return ""

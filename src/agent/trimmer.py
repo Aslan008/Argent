@@ -1,0 +1,297 @@
+import os
+import re
+import threading
+import logging
+from typing import List, Dict, Any
+from memory_manager import memory
+from providers import create_provider, ProviderError
+from config import get_provider, get_context_window, get_model_size_category, get_strip_reasoning
+
+log = logging.getLogger("argent.agent.trimmer")
+
+def estimate_tokens(text: str, model_name: str, provider: str) -> int:
+    """Calculate tokens accurately, querying the provider API if available,
+    or falling back to a smart language-aware heuristic."""
+    if not text:
+        return 0
+        
+    try:
+        import requests
+        if provider == "ollama":
+            ollama_host = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
+            resp = requests.post(
+                f"{ollama_host}/api/tokenize",
+                json={"model": model_name, "prompt": text},
+                timeout=1.0
+            )
+            if resp.status_code == 200:
+                return len(resp.json().get("tokens", []))
+        elif provider == "koboldcpp":
+            from config import get_koboldcpp_url
+            base_url = get_koboldcpp_url()
+            if base_url.endswith("/v1"):
+                api_url = base_url[:-3] + "/api/v1/tokenize"
+            elif base_url.endswith("/v1/"):
+                api_url = base_url[:-4] + "/api/v1/tokenize"
+            else:
+                api_url = base_url.rstrip("/") + "/api/v1/tokenize"
+            resp = requests.post(
+                api_url,
+                json={"prompt": text},
+                timeout=1.0
+            )
+            if resp.status_code == 200:
+                return len(resp.json().get("tokens", []))
+    except Exception:
+        pass
+
+    try:
+        import tiktoken
+        try:
+            encoding = tiktoken.encoding_for_model(model_name)
+        except Exception:
+            encoding = tiktoken.get_encoding("cl100k_base")
+        return len(encoding.encode(text))
+    except ImportError:
+        pass
+
+    # Heuristic fallback: Cyrillic text is less compact (approx 1.8 chars/token)
+    has_cyrillic = any(u'\u0400' <= char <= u'\u04FF' for char in text)
+    if has_cyrillic:
+        return int(len(text) / 1.8)
+    return len(text) // 4
+
+
+def summarize_messages(msgs_to_summarize: List[Dict], model_name: str, timeout: float = 30.0) -> str:
+    """Runs a synchronous LLM call to summarize old context.
+    Protected by a timeout to prevent infinite blocking.
+    """
+    text_to_summarize = ""
+    for m in msgs_to_summarize:
+        role = m.get("role", "unknown")
+        content = m.get("content", "")
+        if not content and "tool_calls" in m:
+            content = f"[Tool Calls: {m['tool_calls']}]"
+        text_to_summarize += f"{role.upper()}: {content}\n\n"
+        
+    summary_prompt = (
+        "You are a context-compression engine. Summarize the following past conversation strictly in 1-2 paragraphs. "
+        "Focus entirely on the technical progress, code written, and facts established. "
+        "Omit politeness and conversational filler. Here is the log:\n\n" + text_to_summarize
+    )
+    
+    result_container = [None]
+    error_container = [None]
+    
+    def _do_summarize():
+        try:
+            provider = create_provider()
+            validation_error = provider.validate_config()
+            if validation_error:
+                result_container[0] = None
+                return
+            result_container[0] = provider.sync_chat(
+                model=model_name,
+                messages=[{"role": "user", "content": summary_prompt}]
+            )
+        except Exception as e:
+            error_container[0] = e
+    
+    worker = threading.Thread(target=_do_summarize, daemon=True)
+    worker.start()
+    worker.join(timeout=timeout)
+    
+    if worker.is_alive():
+        log.warning("Context summarization timed out after %.0fs.", timeout)
+        return None
+    
+    if error_container[0]:
+        log.warning("Context summarization error: %s", error_container[0])
+        return None
+    
+    return result_container[0] or "[Compression Failed]"
+
+
+def update_memory_from_messages(messages: List[Dict[str, Any]]):
+    """Extract key information from recent messages before clearing them."""
+    last_user_msg = ""
+    last_assistant_action = ""
+
+    for m in reversed(messages):
+        if m.get("role") == "user" and not last_user_msg:
+            content = m.get("content", "")
+            if content and not content.startswith("/"):
+                last_user_msg = content
+        elif m.get("role") == "assistant" and not last_assistant_action:
+            content = m.get("content", "")
+            if content:
+                first_line = content.strip().split("\n")[0][:200]
+                last_assistant_action = first_line
+
+    if last_user_msg and not memory.data.get("objective"):
+        memory.set_objective(last_user_msg)
+
+    if last_assistant_action:
+        memory.set_current_task(last_assistant_action)
+
+
+def hard_reset_with_memory(messages: List[Dict[str, Any]], model_name: str) -> List[Dict[str, Any]]:
+    """Full context reset. Preserves system prompt and injects structured memory note."""
+    update_memory_from_messages(messages)
+    context_note = memory.build_context_note()
+
+    system_content = messages[0]["content"]
+    if context_note:
+        sep = "\n\n=== PERSISTENT MEMORY (context was reset) ===\n"
+        end = "\n=== END MEMORY ==="
+        existing = system_content.find("=== PERSISTENT MEMORY")
+        if existing != -1:
+            end_marker = system_content.find("=== END MEMORY ===", existing)
+            if end_marker != -1:
+                system_content = system_content[:existing] + sep + context_note + end + system_content[end_marker + len("=== END MEMORY ==="):]
+            else:
+                system_content += sep + context_note + end
+        else:
+            system_content += sep + context_note + end
+            
+    last_user_msg = messages[-1] if messages and messages[-1].get("role") == "user" else None
+
+    new_messages = [{"role": "system", "content": system_content}]
+    if last_user_msg:
+        new_messages.append(last_user_msg)
+        
+    log.info("Hard context reset performed (model=%s, category=%s)", model_name, get_model_size_category(model_name))
+    return new_messages
+
+
+def soft_trim_with_summarization(messages: List[Dict[str, Any]], model_name: str, max_history_messages: int, max_context_tokens: int) -> List[Dict[str, Any]]:
+    """LLM-based summarization for history trimming."""
+    pinned_indices = {0}
+    for i, m in enumerate(messages):
+        if m.get("role") == "system":
+            content = m.get("content", "")
+            if any(x in content for x in ["PROJECT SPECIFICATION", "ARCHITECTURE MAP", "PREVIOUS CONTEXT MEMORY", "PERSISTENT MEMORY"]):
+                pinned_indices.add(i)
+
+    msgs_to_summarize = []
+    indices_to_drop = []
+
+    current_tokens = sum(estimate_tokens(str(m), model_name, get_provider()) for m in messages[1:])
+    for i in range(1, len(messages)):
+        if i in pinned_indices:
+            continue
+        if len(messages) - len(indices_to_drop) <= max_history_messages and current_tokens <= (max_context_tokens * 0.7):
+            break
+        msgs_to_summarize.append(messages[i])
+        indices_to_drop.append(i)
+        current_tokens -= estimate_tokens(str(messages[i]), model_name, get_provider())
+
+    if not msgs_to_summarize:
+        return messages
+
+    from ui import console
+    with console.status("[dim magenta]Оптимизация контекста...[/dim magenta]", spinner="dots"):
+        summary = summarize_messages(msgs_to_summarize, model_name, timeout=30.0)
+    
+    if summary is None:
+        log.info("Summarization failed, falling back to hard reset.")
+        return hard_reset_with_memory(messages, model_name)
+    
+    memory_msg = {
+        "role": "system",
+        "content": f"=== PREVIOUS CONTEXT MEMORY ===\n{summary}\n=== END MEMORY ==="
+    }
+
+    new_messages = []
+    memory_injected = False
+    for i, m in enumerate(messages):
+        if i in indices_to_drop:
+            if not memory_injected:
+                new_messages.append(memory_msg)
+                memory_injected = True
+            continue
+        new_messages.append(m)
+
+    return new_messages
+
+
+def clean_messages_for_llm(messages: List[Dict[str, Any]], strip_reasoning: bool) -> List[Dict[str, Any]]:
+    """Creates a clean copy of messages for token estimation or LLM API calls.
+    - If strip_reasoning is False and a message has a 'thinking' block, wraps it in <think>...</think>
+      and prepends/appends it to the 'content' so the model can see its past thoughts.
+    - If strip_reasoning is True, strips <think>...</think> and unclosed <think>... from 'content'.
+    - Removes the custom 'thinking' key to ensure OpenAI API schema compatibility.
+    """
+    cleaned = []
+    for m in messages:
+        m_copy = m.copy()
+        
+        # Always remove custom 'thinking' key for API compatibility,
+        # but capture it first
+        thinking = m_copy.pop("thinking", None)
+        
+        if m_copy.get("role") == "assistant":
+            content = m_copy.get("content", "") or ""
+            
+            # If we want to keep reasoning, format it back into the content
+            if not strip_reasoning and thinking:
+                # Only add if it's not already in the content
+                think_block = f"<think>\n{thinking.strip()}\n</think>"
+                if think_block not in content:
+                    content = f"{think_block}\n\n{content}".strip()
+                m_copy["content"] = content
+                
+            elif strip_reasoning:
+                # Strip reasoning blocks if enabled
+                if content:
+                    content = re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL)
+                    content = re.sub(r'<thought>.*?</thought>', '', content, flags=re.DOTALL)
+                    content = re.sub(r'<reasoning>.*?</reasoning>', '', content, flags=re.DOTALL)
+                    
+                    content = re.sub(r'<think>.*', '', content, flags=re.DOTALL)
+                    content = re.sub(r'<thought>.*', '', content, flags=re.DOTALL)
+                    content = re.sub(r'<reasoning>.*', '', content, flags=re.DOTALL)
+                    m_copy["content"] = content.strip()
+                    
+        cleaned.append(m_copy)
+    return cleaned
+
+
+def sliding_window_trim(messages: List[Dict[str, Any]], model_name: str, 
+                        max_history_messages: int, max_context_tokens: int) -> List[Dict[str, Any]]:
+    """Keeps the last N complete chat turns, falling back to fewer turns or hard reset if they exceed context limits."""
+    provider = get_provider()
+    strip_enabled = get_strip_reasoning()
+    
+    # Estimate size of current messages (cleaned)
+    cleaned_messages = clean_messages_for_llm(messages, strip_enabled)
+    current_tokens = sum(estimate_tokens(str(m), model_name, provider) for m in cleaned_messages[1:])
+    
+    if len(messages) - 1 <= max_history_messages and current_tokens <= max_context_tokens:
+        return messages
+
+    # Find the indices of all 'user' messages (excluding the system message at index 0)
+    user_indices = [i for i, m in enumerate(messages) if i > 0 and m.get("role") == "user"]
+    if not user_indices:
+        return hard_reset_with_memory(messages, model_name)
+
+    # We try keeping 3 turns, then 2, then 1
+    for turns in [3, 2, 1]:
+        if turns > len(user_indices):
+            continue
+        
+        target_user_idx = user_indices[-turns]
+        candidate = [messages[0]] + messages[target_user_idx:]
+        
+        # Estimate candidate token size using cleaned versions
+        cleaned_candidate = clean_messages_for_llm(candidate, strip_enabled)
+        candidate_tokens = sum(estimate_tokens(str(m), model_name, provider) for m in cleaned_candidate[1:])
+        
+        if len(candidate) - 1 <= max_history_messages and candidate_tokens <= (max_context_tokens * 0.75):
+            log.info("Sliding window trim successful, keeping last %d turns (%d messages)", turns, len(candidate))
+            return candidate
+
+    # Fallback to hard reset if even 1 turn is too large
+    log.info("Sliding window trim failed to fit context, falling back to hard reset.")
+    return hard_reset_with_memory(messages, model_name)
+

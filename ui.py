@@ -9,7 +9,6 @@ from rich.text import Text
 from rich.theme import Theme
 from rich.markup import escape
 from rich.syntax import Syntax
-import ollama
 from rich.progress import Progress, BarColumn, TextColumn
 
 # --- LOAD THEME ---
@@ -307,13 +306,14 @@ def print_context_usage(tokens: int, max_tokens: int, percent: float):
     safe_print(f"[dim]Context: [{color}]{percent:.1f}%[/{color}] ({tokens}/{max_tokens} tokens)[/dim]")
 
 def select_model(current_model: str) -> str:
-    """Uses questionary to display a dropdown of models for the active provider."""
+    """Select a model for the active provider. Falls back to text input if questionary fails."""
     from config import get_context_window, set_context_window
     from providers import create_provider
 
     try:
         provider = create_provider()
-    except Exception:
+    except Exception as e:
+        print_error(f"Failed to create provider: {e}")
         return current_model
 
     models = provider.list_models()
@@ -322,57 +322,92 @@ def select_model(current_model: str) -> str:
         print_error(f"No models found for {provider.name}. Check your configuration.")
         return current_model
 
-    try:
-        selected = questionary.select(
-            f"Select {provider.name.upper()} model:",
-            choices=models,
-            default=current_model if current_model in models else models[0]
-        ).ask()
+    selected = _select_from_list(
+        f"Select {provider.name.upper()} model:",
+        models,
+        current_model if current_model in models else models[0]
+    )
 
-        if not selected:
-            return current_model
+    if not selected:
+        return current_model
 
-        current_ctx = get_context_window()
+    current_ctx = get_context_window()
 
-        if provider.name == "zai":
-            ctx_choices = [
-                "8192 (Default)",
-                "16384 (Large)",
-                "32768 (Very Large)",
-                "65536 (Maximum)",
-                "131072 (Ultra - GLM-4-32B)",
-                "Keep Current",
-                "Custom Value..."
-            ]
-        else:
-            ctx_choices = [
-                "2048 (Fastest)",
-                "4096 (Standard)",
-                "8192 (Default)",
-                "16384 (Large)",
-                "32768 (Extreme - High VRAM)",
-                "Keep Current",
-                "Custom Value..."
-            ]
+    if provider.name == "zai":
+        ctx_choices = [
+            "8192 (Default)",
+            "16384 (Large)",
+            "32768 (Very Large)",
+            "65536 (Maximum)",
+            "131072 (Ultra - GLM-4-32B)",
+            "Keep Current",
+            "Custom Value..."
+        ]
+    else:
+        ctx_choices = [
+            "2048 (Fastest)",
+            "4096 (Standard)",
+            "8192 (Default)",
+            "16384 (Large)",
+            "32768 (Extreme - High VRAM)",
+            "Keep Current",
+            "Custom Value..."
+        ]
 
+    ctx_choice = _select_from_list(
+        f"Set Context Window for {selected} (Current: {current_ctx}):",
+        ctx_choices,
+        "Keep Current"
+    )
+
+    if ctx_choice == "Custom Value...":
+        custom_val = questionary.text("Enter custom context size (e.g. 32768):").ask()
+        if custom_val and custom_val.isdigit():
+            set_context_window(int(custom_val))
+    elif ctx_choice and ctx_choice != "Keep Current":
         try:
-            ctx_choice = questionary.select(
-                f"Set Context Window for {selected} (Current: {current_ctx}):",
-                choices=ctx_choices,
-                default="Keep Current"
-            ).ask()
-
-            if ctx_choice == "Custom Value...":
-                custom_val = questionary.text("Enter custom context size (e.g. 32768):").ask()
-                if custom_val and custom_val.isdigit():
-                    set_context_window(int(custom_val))
-            elif ctx_choice != "Keep Current":
-                val = int(ctx_choice.split()[0])
-                set_context_window(val)
-        except Exception:
+            val = int(ctx_choice.split()[0])
+            set_context_window(val)
+        except (ValueError, IndexError):
             pass
 
-        return selected
+    return selected
 
+
+def _select_from_list(prompt_text: str, choices: list, default: str = None) -> str:
+    """Try questionary.select, fall back to numbered text input if it fails."""
+    try:
+        result = questionary.select(
+            prompt_text,
+            choices=choices,
+            default=default if default in choices else choices[0]
+        ).ask()
+        if result:
+            return result
     except Exception:
-        return current_model
+        pass
+
+    print_system(f"\n{prompt_text}")
+    for i, choice in enumerate(choices, 1):
+        marker = " ← current" if choice == default else ""
+        console.print(f"  [cyan]{i}[/cyan]. {choice}{marker}")
+
+    try:
+        from prompt_toolkit import prompt as ptk_prompt
+        raw = ptk_prompt(f"Enter number or name (1-{len(choices)}): ").strip()
+    except (KeyboardInterrupt, EOFError):
+        return default or (choices[0] if choices else None)
+
+    if not raw:
+        return default or (choices[0] if choices else None)
+
+    if raw.isdigit():
+        idx = int(raw) - 1
+        if 0 <= idx < len(choices):
+            return choices[idx]
+
+    for choice in choices:
+        if raw.lower() == choice.lower():
+            return choice
+
+    return default or (choices[0] if choices else None)

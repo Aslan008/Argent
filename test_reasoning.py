@@ -17,18 +17,24 @@ class MockOllama:
             return iter(responses)
         return responses[0]
 
+    @staticmethod
+    def list():
+        return {"models": []}
+
 # Monkeypatch ollama
 import sys
 from types import ModuleType
 m = ModuleType("ollama")
 m.chat = MockOllama.chat
+m.list = MockOllama.list
 m.ResponseError = Exception
 sys.modules["ollama"] = m
 
-# Re-import ArgentAgent (or just use the logic from agent.py)
-# Since we want to test the REAL logic in agent.py, we should import it.
-# We need to make sure dependencies like config.py are available.
+# Force provider to ollama for testing
 sys.path.append(os.getcwd())
+import config
+config.get_provider = lambda: "ollama"
+
 from agent import ArgentAgent
 
 def test_reasoning_capture():

@@ -26,16 +26,21 @@ from ui import (
     print_context_usage, s, get_code_blocks, clear_code_blocks
 )
 from rich.markup import escape
+from command_handler import export_chat_history, handle_slash_command
 from hook_manager import hook_manager
 from rag_engine import enable_rag_for_project, disable_rag
 import subprocess
 import json
 from pathlib import Path
 from project_manager import ProjectManager
-import ollama
 from session import save_session, load_session, list_sessions, delete_session, get_last_session
 from file_tracker import snapshot, get_diff, undo, get_pending_changes, undo_all
-from pipeline import Pipeline
+from prompts import (
+    build_spec_prompt, build_work_investigation_prompt,
+    build_work_planning_prompt, build_planning_prompt, build_architecture_prompt
+)
+from src.cli.cli_ui import render_response_stream
+from src.project.orchestrator import ProjectOrchestrator
 
 # Default tools allowed in regular chat (excludes Project Brain tools)
 CHAT_ALLOWED_TOOLS = [
@@ -46,301 +51,27 @@ CHAT_ALLOWED_TOOLS = [
     "multi_replace_in_file", "write_obsidian_note", "search_obsidian_notes", 
     "update_obsidian_properties", "semantic_search", "create_plugin", "delete_plugin",
     "create_skill", "read_skill", "list_skills", "delete_skill", "create_svg_image",
-    "ask_user_questions", "create_directory", "move_file", "copy_file"
+    "ask_user_questions", "create_directory", "move_file", "copy_file",
+    "wait_heartbeat", "end_auto_mode",
+    "browser_open", "browser_state", "browser_click", "browser_input",
+    "browser_screenshot", "browser_scroll", "browser_get_content", "browser_close",
+    "read_event_logs", "get_process_info", "query_registry", "search_system_files"
 ]
 
 
-def _build_spec_prompt(objective: str, architecture: str, filename: str) -> str:
-    """Build the Phase 1b prompt for detailing one file's specification."""
-    return (
-        f"You are writing a DETAILED specification for ONE file in the project: '{objective}'.\n\n"
-        f"=== PROJECT ARCHITECTURE ===\n"
-        f"{architecture}\n\n"
-        f"Your task: write a DETAILED specification for the file: {filename}\n\n"
-        f"You MUST call `write_file_spec(filename='{filename}', spec=...)` with a TEXT DESCRIPTION (NOT code!).\n\n"
-        f"CRITICAL: Write a TEXT DESCRIPTION, NOT Python/C#/JS code! The spec must describe WHAT to implement, "
-        f"not be the implementation itself.\n\n"
-        f"Your spec MUST include:\n"
-        f"1. File path\n"
-        f"2. ALL imports/dependencies (exact module names)\n"
-        f"3. ALL classes: name, inheritance\n"
-        f"4. ALL methods/functions: name, ALL parameters with types, return type, and WHAT THE METHOD DOES (1-2 sentences of logic)\n"
-        f"5. ALL fields/variables: name, type, default value\n"
-        f"6. Which other project files this file imports and what names it uses from them\n\n"
-        f"EXAMPLE OF A GOOD SPEC (this is what you should write):\n"
-        f"  File: converter.py\n"
-        f"  Imports: json (standard library)\n"
-        f"  Dependencies: uses get_rate() from api_client.py\n"
-        f"  Class: CurrencyConverter\n"
-        f"    Fields:\n"
-        f"      - rates_cache: dict, default empty dict\n"
-        f"    Methods:\n"
-        f"      - __init__(self): initializes empty rates_cache\n"
-        f"      - convert(self, amount: float, from_cur: str, to_cur: str) -> float: calls get_rate(), multiplies amount by rate, returns result\n"
-        f"      - supported_currencies(self) -> list[str]: returns hardcoded list of supported currency codes\n\n"
-        f"EXAMPLE OF A BAD SPEC (DO NOT write code like this):\n"
-        f"  def convert(self, amount, from_cur, to_cur):\n"
-        f"      rate = get_rate(from_cur, to_cur)\n"
-        f"      return amount * rate\n\n"
-        f"BE EXTREMELY SPECIFIC with names and types. The AI that implements this will have NO OTHER CONTEXT.\n\n"
-        f"Call `write_file_spec` NOW!"
-    )
-
-def _build_work_investigation_prompt(objective: str, research_context: str = "") -> str:
-    """Build the Phase 1 prompt for investigating an existing codebase."""
-    res = (
-        f"You are the Lead Investigator for an existing codebase. Your objective is: '{objective}'.\n\n"
-    )
-    if research_context:
-        res += f"=== LATEST RESEARCH CONTEXT ===\n{research_context}\n===============================\n\n"
-    res += (
-        f"Your task is to INVESTIGATE the current codebase and devise a plan to achieve the objective.\n"
-        f"RULES:\n"
-        f"1. You MUST use tools like `list_directory`, `grep_search`, and CRITICALLY `read_file` to examine the ACTUAL CODE.\n"
-        f"2. You MUST NOT guess or hallucinate class names, method names, or file paths. READ THE FILES FIRST.\n"
-        f"3. When you have a complete plan, call `plan_work_changes` with:\n"
-        f"   - strategy: Detailed explanation of how you will solve the objective.\n"
-        f"   - files_to_edit: Comma-separated list of EXISTING files to modify.\n"
-        f"   - files_to_create: Comma-separated list of NEW files to create (leave empty if none).\n"
-        f"4. ONLY call `plan_work_changes` when you are absolutely sure about the exact files to touch.\n\n"
-        f"Start by listing the directory or searching for relevant files now!"
-    )
-    return res
-
-def _build_work_planning_prompt(objective: str, strategy: str, files_to_edit: list, files_to_create: list) -> str:
-    """Build the Phase 2 prompt for breaking a work strategy into micro-tasks."""
-    return (
-        f"The objective is: '{objective}'.\n"
-        f"The agreed strategy is:\n{strategy}\n\n"
-        f"Files to modify: {', '.join(files_to_edit) if files_to_edit else 'None'}\n"
-        f"Files to create: {', '.join(files_to_create) if files_to_create else 'None'}\n\n"
-        f"Now create implementation MICRO-TASKS using `add_work_task`. RULES:\n"
-        f"1. Break the work down into a sequence of extremely small tasks.\n"
-        f"2. For EXISTING files, create a task for EACH specific method or logic block you need to change.\n"
-        f"3. For NEW files, Task 1 must be creating the skeleton (imports, empty classes/methods), followed by tasks for each method.\n"
-        f"4. ONLY call `add_work_task`. Do NOT write code or complete tasks yet!\n"
-        f"5. IMPORTANT: When you have added ALL tasks, you MUST stop calling tools and reply exactly with 'DONE'.\n\n"
-        f"Call `add_work_task` for EVERY step NOW, then stop."
-    )
-
-def _build_planning_prompt(objective: str, specs_summary: str) -> str:
-    """Build the Phase 2 prompt for breaking raw specs into micro-tasks."""
-    return (
-        f"The project '{objective}' has detailed specifications for these files:\n{specs_summary}\n\n"
-        f"Now create implementation MICRO-TASKS. RULES:\n"
-        f"1. Break EACH FILE down into a sequence of small tasks.\n"
-        f"2. Task 1 for a file MUST be creating the 'skeleton' (imports, empty classes, methods with 'pass').\n"
-        f"3. Task 2, Task 3, etc. for that file MUST implement EXACTLY ONE method each.\n"
-        f"4. CRITICAL: ENTRY POINT FILES (like main.py) MUST have implementation tasks! Do NOT just create a skeleton for main.py. You MUST create a task to implement the main logic/function.\n"
-        f"5. Create tasks in DEPENDENCY ORDER: standalone files first, then files that depend on them.\n"
-        f"6. ONLY call `add_project_task`. Do NOT call `complete_project_task` or `write_file`!\n\n"
-        f"EXAMPLE of Micro-Tasks for 'database.py':\n"
-        f"  add_project_task('Create skeleton for database.py (imports and empty DB class)')\n"
-        f"  add_project_task('Implement DB.__init__ method in database.py')\n"
-        f"  add_project_task('Implement DB.save method in database.py')\n\n"
-        f"Call `add_project_task` for EVERY file's micro-tasks NOW. When finished adding all tasks, stop calling tools and reply exactly with 'DONE'."
-    )
-
-def export_chat_history(agent: ArgentAgent, filename: str = None, auto: bool = False):
-    """Exports the current chat history to a Markdown file."""
-    from datetime import datetime
-    from ui import s, print_system, print_error
-    
-    if auto and not s.get("auto_save_chat", True):
-        return
-        
-    # Check if there's actual user interaction
-    if not any(m.get("role") == "user" for m in agent.messages):
-        if not auto:
-            print_system("Chat history is empty. Nothing to save.")
-        return
-        
-    cwd = os.getcwd()
-    chats_dir = os.path.join(cwd, "exports")
-    os.makedirs(chats_dir, exist_ok=True)
-    
-    if not filename:
-        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        filename = f"chat_{timestamp}.md"
-    elif not filename.endswith(".md"):
-        filename += ".md"
-        
-    filepath = os.path.join(chats_dir, filename)
-    
-    try:
-        with open(filepath, "w", encoding="utf-8") as f:
-            f.write(f"# 🗓 Argent Session: {datetime.now().strftime('%Y-%m-%d %H:%M')}\n\n")
-            
-            for msg in agent.messages:
-                role = msg.get("role")
-                content = msg.get("content", "")
-                
-                if role == "system" or not content:
-                    continue
-                    
-                if role == "user":
-                    f.write(f"### 👤 Пользователь\n{content}\n\n")
-                elif role in ("assistant", "model"):
-                    f.write(f"### 🤖 Argent\n{content}\n\n")
-                    
-        if auto:
-            print_system(f"Chat autosaved to: {filepath}")
-        else:
-            print_system(f"Chat saved successfully to: {filepath}")
-            
-        hook_manager.call_hook("on_chat_saved", filepath)
-            
-    except Exception as e:
-        print_error(f"Failed to save chat: {e}")
-
-def handle_slash_command(command: str, agent: ArgentAgent) -> bool:
-    """Handle slash commands. Returns True if REPL should exit."""
-    cmd = command.lower().strip()
-    if cmd in ("/exit", "/quit"):
-        export_chat_history(agent, auto=True)
-        return True
-    elif cmd == "/clear":
-        agent.clear_history()
-        print_system("Conversation history cleared.")
-    elif cmd == "/model":
-        current = get_current_model()
-        new_model = select_model(current)
-        if new_model and new_model != current:
-            set_current_model(new_model)
-            agent.set_model(new_model)
-            print_system(f"Model updated to: {new_model}")
-        else:
-            print_system("Model unchanged.")
-    elif cmd == "/provider":
-        current_prov = get_provider()
-        choices = ["ollama", "zai"]
-        new_prov = questionary.select(
-            "Select API Provider:",
-            choices=choices,
-            default=current_prov
-        ).ask()
-        
-        if new_prov:
-            set_provider(new_prov)
-            agent.provider = new_prov
-            options_text = ""
-            if new_prov == "zai":
-                current_key = get_zai_api_key()
-                if not current_key:
-                    new_key = questionary.password("Enter Z.AI API Key:").ask()
-                    if new_key:
-                        set_zai_api_key(new_key)
-                        options_text = " (API Key saved)"
-                else:
-                    change_key = questionary.confirm("Z.AI API Key is already set. Do you want to change it?").ask()
-                    if change_key:
-                        new_key = questionary.password("Enter New Z.AI API Key:").ask()
-                        if new_key:
-                            set_zai_api_key(new_key)
-                            options_text = " (API Key updated)"
-
-                endpoint_choice = questionary.select(
-                    "Select Z.AI Endpoint:",
-                    choices=[
-                        "Coding Plan (api.z.ai/api/coding/paas/v4) - for GLM Coding Plan subscribers",
-                        "General API (api.z.ai/api/paas/v4) - standard pay-per-token",
-                    ],
-                    default="Coding Plan (api.z.ai/api/coding/paas/v4) - for GLM Coding Plan subscribers"
-                ).ask()
-                if endpoint_choice and "Coding Plan" in endpoint_choice:
-                    set_zai_endpoint(ZAI_ENDPOINT_CODING)
-                else:
-                    set_zai_endpoint(ZAI_ENDPOINT_GENERAL)
-
-            print_system(f"API Provider updated to: {new_prov}{options_text}")
-            if new_prov == "zai":
-                print_system("Select a Z.AI model to use:")
-                new_model = select_model(get_current_model())
-                if new_model != get_current_model():
-                    set_current_model(new_model)
-                    agent.model_name = new_model
-                    print_system(f"Model updated to: {new_model}")
-    elif cmd.startswith("/obsidian"):
-        parts = command.split(" ", 1)
-        if len(parts) > 1:
-            vault_path = parts[1].strip()
-        else:
-            vault_path = questionary.path("Enter the path to your Obsidian vault:").ask()
-            
-        if vault_path:
-            # basic clean up of path
-            vault_path = vault_path.strip('\'"')
-            set_obsidian_vault(vault_path)
-            print_system(f"Obsidian vault path set to: {vault_path}")
-        else:
-            print_system("Obsidian vault path unchanged.")
-    elif cmd == "/help":
-        help_text = (
-            "**Argent Coder Commands:**\n"
-            "- `/provider` - Select API Provider (Ollama / Z.ai) and endpoint\n"
-            "- `/model` - Select active LLM model\n"
-            "- `/obsidian [path]` - Set the path to your Obsidian vault\n"
-            "- `/research [topic]` - Enter Auto-Research mode to search the web and generate notes\n"
-            "- `/enable_rag` - Index the current project codebase for Semantic AI Search\n"
-            "- `/disable_rag` - Turn off Semantic AI Search\n"
-            "- `/hooks [path]` - View or change the global plugins (hooks) directory\n"
-            "- `/sandbox` - Enter an isolated Code Playground to execute and test code safely\n"
-            "- `/tools` - Open interactive menu to enable/disable tools\n"
-            "- `/save [name]` - Export the current conversation to a Markdown file\n"
-            "- `/sessions` - List saved sessions\n"
-            "- `/load <n>` - Restore a saved session by number\n"
-            "- `/diff [file]` - Show changes made to files\n"
-            "- `/undo [file]` - Restore a file to its previous version\n"
-            "- `/undo_all` - Restore all modified files\n"
-            "- `/copy <n>` - Copy code block #n to clipboard\n"
-            "- `/pipeline [task]` - Execute a multi-step task automatically\n"
-            "- `/logs [module] [n]` - View logs (e.g. /logs tools 20, /logs error)\n"
-            "- `/skills` - List available AI skills\n"
-            "- `/setup_terminal` - Make the terminal look incredibly professional (Fonts & Colors)\n"
-            "- `/project [prompt]` - Force the AI to build a massive multi-step project from scratch\n"
-            "- `/work [--auto] [task]` - Modify or fix an EXISTING codebase safely\n"
-            "- `/commit` - Generate AI commit message and commit changes\n"
-            "- `/verbose` - Toggle live status indicators (spinners)\n"
-            "- `/clear` - Clear conversation history\n"
-            "- `/help` - Show this help message\n"
-            "- `/exit` - Exit the application\n"
-        )
-        
-        # Add custom commands to help
-        custom_cmds = hook_manager.get_custom_commands()
-        if custom_cmds:
-            help_text += "\n**Plugin Commands:**\n"
-            for c in custom_cmds:
-                help_text += f"- `/{c}`\n"
-                
-        print_markdown(help_text)
-    elif cmd == "/verbose":
-        current = get_verbose_status()
-        new_val = not current
-        set_verbose_status(new_val)
-        state = "[bold green]ON[/bold green]" if new_val else "[bold red]OFF[/bold red]"
-        print_system(f"Live status indicators: {state}")
-    else:
-        # Check for custom commands in hooks
-        custom_cmds = hook_manager.get_custom_commands()
-        # strip slash and get base command
-        base_cmd = command.strip().split(" ")[0].lstrip("/")
-        if base_cmd in custom_cmds:
-            try:
-                # Pass any arguments after the command
-                args = command.strip().split(" ")[1:]
-                custom_cmds[base_cmd](*args)
-            except Exception as e:
-                print_error(f"Custom command '/{base_cmd}' failed: {e}")
-        else:
-            print_error(f"Unknown command: {command}. Type /help for available commands.")
-    return False
 
 def main():
     agent = None
 
     def cleanup():
         nonlocal agent
+        # Shut down browser engine
+        try:
+            from browser_engine import browser_engine
+            browser_engine.run(browser_engine.shutdown(), timeout=5)
+        except Exception:
+            pass
+        # Stop background command processes
         try:
             from tools import ACTIVE_PROCESSES
             for pid, proc_info in list(ACTIVE_PROCESSES.items()):
@@ -350,6 +81,13 @@ def main():
                     pass
         except Exception:
             pass
+        # Stop MCP servers
+        try:
+            from mcp_client import mcp_client
+            mcp_client.stop_all()
+        except Exception:
+            pass
+        # Stop background agents or hooks if any
         if agent and agent.messages:
             try:
                 save_session(agent.messages, {
@@ -367,11 +105,12 @@ def main():
     print_system("Type /help for commands.")
     
     agent = ArgentAgent()
+    orchestrator = ProjectOrchestrator(agent)
     
     builtin_cmds = [
-        '/help', '/provider', '/model', '/obsidian', '/clear', '/research', '/enable_rag', '/disable_rag',
-        '/hooks', '/sandbox', '/tools', '/save', '/setup_terminal', '/project', '/work', '/commit',
-        '/sessions', '/load', '/diff', '/undo', '/undo_all', '/copy', '/pipeline', '/logs', '/skills', '/verbose', '/exit', '/quit'
+        '/help', '/provider', '/model', '/obsidian', '/clear', '/research', '/enable_rag', '/disable_rag', '/rag_provider',
+        '/hooks', '/tools', '/save', '/setup_terminal', '/project', '/work', '/commit',
+        '/sessions', '/load', '/diff', '/undo', '/undo_all', '/copy', '/logs', '/skills', '/auto', '/verbose', '/exit', '/quit'
     ]
     
     def get_all_commands():
@@ -387,6 +126,19 @@ def main():
     vault = get_obsidian_vault()
     if vault:
         print_system(f"Obsidian Vault: {vault}")
+
+    from config import get_mcp_servers
+    from mcp_client import mcp_client
+    mcp_servers = get_mcp_servers()
+    if mcp_servers:
+        for srv in mcp_servers:
+            name = srv["name"]
+            cfg = {k: v for k, v in srv.items() if k != "name"}
+            try:
+                result = mcp_client.register_and_start(name, cfg)
+                print_system(result)
+            except Exception as e:
+                print_system(f"MCP server '{name}': failed to start — {e}")
 
     # Offer to restore last session
     last = get_last_session()
@@ -404,19 +156,36 @@ def main():
     hook_manager.call_hook("on_startup")
 
     is_project_mode = False
+    is_auto_mode = False
+    auto_sleep_time = 0
+    auto_wake_context = ""
     auto_continue_input = None
     last_task_id = None
     task_retries = 0
     project_iterations = 0
     MAX_TASK_RETRIES = 3
     turn_counter = 0
-    turn_counter = 0
     
     while True:
         try:
             print() # Visual spacing
             
-            if auto_continue_input:
+            if is_auto_mode:
+                if auto_sleep_time > 0:
+                    print_system(f"*[Heartbeat] Переход в сон на {auto_sleep_time} сек. (Ctrl+C для прерывания)*")
+                    import time
+                    try:
+                        time.sleep(auto_sleep_time)
+                    except KeyboardInterrupt:
+                        print_system("Состояние Heartbeat прервано. Выход из автоматического режима.")
+                        is_auto_mode = False
+                        continue
+                    auto_sleep_time = 0
+                
+                user_input = auto_wake_context if auto_wake_context else "[Режим Автоматизма] Продолжай автономную работу. Анализируй результат предыдущего шага. Если нужно подождать — используй `wait_heartbeat`. Если глобальная задача завершена — вызови `end_auto_mode`."
+                auto_wake_context = ""
+                print_system("\n❯ [Автономный импульс]")
+            elif auto_continue_input:
                 user_input = auto_continue_input
                 auto_continue_input = None
                 print_system("Продолжение рабочего процесса...")
@@ -456,23 +225,76 @@ def main():
                     f"Do not ask for permission, start by calling `run_deep_research` right away." 
                 )
                 print_system(f"Starting auto-research on: {topic}...")
+            elif user_input.startswith("/auto"):
+                parts = user_input.split(" ", 1)
+                if len(parts) < 2:
+                    print_error("Укажите задачу. Пример: /auto Написать проект на python")
+                    continue
+                auto_task = parts[1].strip()
+                is_auto_mode = True
+                auto_sleep_time = 0
+                auto_wake_context = ""
+                user_input = (
+                    f"Активирован режим полного автоматизма 'Экспериментатор'.\n\n"
+                    f"Ваша общая задача: {auto_task}\n\n"
+                    f"ПРАВИЛА:\n"
+                    f"1. Вы полностью самостоятельны. Используйте все доступные инструменты для разведки, планирования, написания кода или тестирования.\n"
+                    f"2. Вам не нужно ждать ответа или одобрения от пользователя, просто продолжайте работать.\n"
+                    f"3. Вы можете развивать идею задачи. Если считаете нужным добавить функционал — добавляйте.\n"
+                    f"4. Если вам нужно 'уснуть' и дождаться события (окончание установки, ответ сервера и т.д.), используйте инструмент `wait_heartbeat`.\n"
+                    f"5. Когда вы ПОЛНОСТЬЮ закончите работу над задачей, обязательно вызовите инструмент `end_auto_mode`."
+                )
+                print_system(f"🚀 Запущен автоматический режим для: {auto_task}")
+                is_project_mode = False
             elif user_input.strip() == "/enable_rag":
                 cwd = os.getcwd()
-                print_system(f"Enabling RAG for project at {cwd}...")
-                result = enable_rag_for_project(cwd)
-                if "ERROR: 'chromadb' is not installed" in result:
+                try:
+                    import chromadb
+                except ImportError:
                     print_error("ChromaDB is not installed.")
-                    install = questionary.confirm("Would you like Argent to install it now? (pip install chromadb)").ask()
+                    install = questionary.confirm("Would you like Argent to install it now? (pip install chromadb sentence-transformers)").ask()
                     if install:
                         os.system("pip install chromadb sentence-transformers")
-                        print_system("Libraries installed! Attempting to enable RAG again...")
-                        result = enable_rag_for_project(cwd)
-                
-                print_system(result)
+                        print_system("Attempting to run RAG in background...")
+                    else:
+                        continue
+
+                import threading
+                def _bg_indexing():
+                    result = enable_rag_for_project(cwd)
+                    # Print the status notification directly to console when finished
+                    print_system(f"\n[RAG Status] {result}")
+
+                print_system(f"Enabling RAG for project at {cwd} in background... You can continue typing commands.")
+                t = threading.Thread(target=_bg_indexing, daemon=True)
+                t.start()
                 continue
             elif user_input.strip() == "/disable_rag":
                 disable_rag()
                 print_system("Semantic Search (RAG) has been disabled.")
+                continue
+            elif user_input.strip() == "/rag_provider":
+                from config import get_embedding_provider, set_embedding_provider, get_ollama_embedding_model, set_ollama_embedding_model
+                current = get_embedding_provider()
+                choice = questionary.select(
+                    "Select embedding provider for RAG:",
+                    choices=[
+                        f"sentence_transformers (current)" if current == "sentence_transformers" else "sentence_transformers",
+                        f"ollama (current)" if current == "ollama" else "ollama",
+                    ],
+                ).ask()
+                if choice:
+                    provider = choice.split(" ")[0]
+                    set_embedding_provider(provider)
+                    if provider == "ollama":
+                        current_model = get_ollama_embedding_model()
+                        new_model = questionary.text(
+                            f"Ollama embedding model (current: {current_model}):",
+                            default=current_model
+                        ).ask()
+                        if new_model:
+                            set_ollama_embedding_model(new_model)
+                    print_system(f"Embedding provider set to: {provider}")
                 continue
             elif user_input.startswith("/skills"):
                 from skill_manager import skill_manager
@@ -690,33 +512,7 @@ def main():
                     except ValueError:
                         print_error("Usage: /copy <number>")
                 continue
-            elif user_input.startswith("/pipeline"):
-                parts = user_input.split(" ", 1)
-                if len(parts) < 2:
-                    print_error("Usage: /pipeline <task description>")
-                    print_system("Example: /pipeline Find all TODO comments in the codebase and create a report")
-                    continue
-                pipeline_task = parts[1].strip()
-                print_system(f"Planning pipeline for: {pipeline_task}")
-                try:
-                    pipe = Pipeline(agent)
-                    steps = pipe.plan(pipeline_task)
-                    if not steps:
-                        print_error("Failed to plan pipeline steps.")
-                        continue
-                    print_system(f"[bold cyan]Pipeline planned: {len(steps)} steps[/bold cyan]")
-                    for s in steps:
-                        print_system(f"  {s.get('step', '?')}. {s.get('action', s.get('task', ''))}")
-                    approved = questionary.confirm("Execute this pipeline?").ask()
-                    if approved:
-                        result = pipe.execute()
-                        print_system("[bold green]Pipeline complete.[/bold green]")
-                        print_markdown(result)
-                    else:
-                        print_system("Pipeline cancelled.")
-                except Exception as e:
-                    print_error(f"Pipeline error: {e}")
-                continue
+
             elif user_input.startswith("/logs"):
                 log_dir = Path.home() / ".argent" / "logs"
                 parts = user_input.strip().split()
@@ -781,224 +577,9 @@ def main():
                     print_error("Please specify a project prompt. Example: /project Build a Snake game in Python")
                     continue
                 proj_prompt = parts[1].strip()
+                is_project_mode, user_input = orchestrator.start_project(proj_prompt)
                 
-                # Phase 0: Ask for Deep Research
-                run_research = questionary.confirm("Run Deep Research (Phase 0) to gather up-to-date context before planning?").ask()
-                
-                # TDD Mode
-                tdd_mode = questionary.confirm("Enable TDD Mode? (AI will write tests BEFORE code)").ask()
-                
-                # Obsidian Mode
-                use_obsidian = False
-                if get_obsidian_vault():
-                    use_obsidian = questionary.confirm("Enable Obsidian integration for this project? (Create notes instead of normal files)").ask()
-                
-                # Initialize Project Brain
-                pm = ProjectManager()
-                pm.destroy()
-                
-                if run_research:
-                    pm.create(proj_prompt, status="researching", tdd_mode=tdd_mode, use_obsidian=use_obsidian)
-                    user_input = (
-                        f"You are the Phase 0 Research Agent for the new project: '{proj_prompt}'.\n\n"
-                        f"Your task is to gather the MAXIMUM amount of up-to-date information, best practices, and API references required to build this project.\n"
-                        f"You MUST call `run_deep_research(objective='...')` right now to search the web.\n"
-                        f"When the research is complete, output a detailed markdown report of everything you found.\n"
-                        f"DO NOT write code or architecture yet. Just gather information."
-                    )
-                    print_system(f"[Brain] Phase 0: Starting Deep Research...")
-                else:
-                    pm.create(proj_prompt, status="specifying_architecture", tdd_mode=tdd_mode, use_obsidian=use_obsidian)
-                    user_input = (
-                        f"You are the architect for this project: '{proj_prompt}'.\n\n"
-                        f"Your task is to design the HIGH-LEVEL ARCHITECTURE.\n"
-                        f"You MUST call `write_project_architecture` with TWO parameters:\n"
-                        f"  1. architecture = text description of all files and their dependencies\n"
-                        f"  2. files = comma-separated list of ALL file paths to create\n\n"
-                        f"EXAMPLE call:\n"
-                        f"  write_project_architecture(\n"
-                        f"    architecture='Files:\\n1. MyApp/main.py — Entry point. Uses: calculator.py\\n2. MyApp/calculator.py — Math logic. Standalone.',\n"
-                        f"    files='MyApp/main.py, MyApp/calculator.py'\n"
-                        f"  )\n\n"
-                        f"RULES:\n"
-                        f"- ALL file paths MUST include the project folder (e.g. MyProject/main.py, NOT just main.py)\n"
-                        f"- The 'files' parameter must list ONLY the files to CREATE, not referenced libraries\n"
-                        f"- Do NOT describe implementation details (no method names, no types)\n"
-                        f"- Do NOT create any files yet\n"
-                        f"- Do NOT call any other tools\n"
-                        f"- Call `write_project_architecture` NOW!"
-                    )
-                    print_system(f"[Brain] Phase 1a: Designing architecture...")
-                
-                is_project_mode = True
-                last_task_id = None
-                task_retries = 0
-                
-            elif user_input.strip() == "/sandbox":
-                from sandbox import SandboxManager
-                sm = SandboxManager()
-                
-                print_system("\n[bold cyan]=== ENTERING ARGENT SANDBOX ===[/bold cyan]")
-                print_system("Welcome to the isolated Code Playground.")
-                print_system(f"Sandbox Directory: {sm.sandbox_dir}")
-                print_system(f"Available Commands:\n"
-                             f"  /run python - Execute sandbox_main.py\n"
-                             f"  /run csharp - Compile and execute SandboxMain.cs\n"
-                             f"  /run js     - Execute sandbox_main.js via Node.js\n"
-                             f"  /run web    - Start Local HTTP server and open browser\n"
-                             f"  /stop web   - Stop Local HTTP server\n"
-                             f"  /export [dir]- Export working code to main project\n"
-                             f"  /clean      - Wipe the sandbox clean\n"
-                             f"  /exit       - Leave Sandbox and return to main chat")
-                
-                # Sandbox tool restrictions
-                SANDBOX_ALLOWED_TOOLS = [
-                    "read_file", "write_file", "delete_file", "replace_in_file", "replace_python_function",
-                    "list_directory", "grep_search", "search_files", "run_command", "run_admin_command",
-                    "start_background_command", "read_background_command", "send_background_command",
-                    "stop_background_command", "search_web", "read_webpage", "get_file_outline", "multi_replace_in_file"
-                ]
 
-                # Switch AI context forcefully
-                agent.messages.append({
-                    "role": "system", 
-                    "content": (
-                        f"You are now in SANDBOX MODE. You MUST write all code ONLY to {sm.sandbox_dir}.\n"
-                        "DO NOT modify the main project. DO NOT use Project Brain tools like `add_project_task` or `complete_project_task`.\n"
-                        "Your goal is to experiment and build small prototypes or test isolated logic.\n"
-                        "Wait for the user to ask you to write code before doing anything."
-                    )
-                })
-                
-                # Nested sandbox loop
-                while True:
-                    try:
-                        print()
-                        sb_input = prompt("Sandbox ❯ ", history=session_history).strip()
-                        if not sb_input:
-                            continue
-                            
-                        # Sandbox Commands
-                        if sb_input in ("/exit", "/quit"):
-                            sm.stop_web()
-                            print_system("Exiting Sandbox. Returning to main chat.")
-                            agent.messages.append({"role": "system", "content": "Sandbox mode disabled. You are back in the main project directory."})
-                            break
-                        elif sb_input.startswith("/run"):
-                            args = sb_input.split(" ")
-                            lang = args[1].lower() if len(args) > 1 else "python"
-                            
-                            res = ""
-                            if lang == "python":
-                                res = sm.run_python()
-                            elif lang == "csharp":
-                                res = sm.run_csharp()
-                            elif lang == "js":
-                                res = sm.run_js()
-                            elif lang == "web":
-                                res = sm.run_web()
-                            else:
-                                print_error(f"Unknown language: {lang}")
-                                continue
-                                
-                            print_system(f"=== EXECUTION RESULT ===\n{res}")
-                            
-                            # Feed the result back to AI if it crashed
-                            if "STDERR:" in res or "Compilation failed" in res:
-                                auto_fix = questionary.confirm("Code generated an error. Upload error to AI for automatic fixing?").ask()
-                                if auto_fix:
-                                    sb_input = f"I ran the code but it failed with this output:\n```\n{res}\n```\nPlease fix the error in the sandbox code."
-                                else:
-                                    continue
-                            else:
-                                continue
-                                
-                        elif sb_input.startswith("/export"):
-                            parts = sb_input.split(" ", 1)
-                            if len(parts) > 1:
-                                sm.export_files(parts[1].strip())
-                            else:
-                                print_error("Please specify destination directory. Example: /export src/new_feature")
-                            continue
-                        elif sb_input == "/clean":
-                            sm.clean_sandbox()
-                            continue
-                        elif sb_input == "/stop web":
-                            sm.stop_web()
-                            continue
-                            
-                        # If normal chat input inside Sandbox, send to AI directly via inner spinner
-                        response_chunks = agent.process_user_input(sb_input, allowed_tools=SANDBOX_ALLOWED_TOOLS)
-                        
-                        chunk_iterator = iter(response_chunks)
-                        streamed_text = ""
-                        is_tool_executing = False
-                        
-                        from ui import s
-                        
-                        while True:
-                            try:
-                                done = False
-                                if not is_tool_executing:
-                                    spinner_text = "[dim]AI is thinking...[/dim]" if s.get("use_spinners", True) else ""
-                                    with console.status(spinner_text, spinner="dots", speed=1.5):
-                                        while True:
-                                            try:
-                                                chunk = next(chunk_iterator)
-                                            except StopIteration:
-                                                if streamed_text:
-                                                    print_markdown(streamed_text)
-                                                done = True
-                                                break
-                                                
-                                            type_ = chunk.get("type")
-                                            
-                                            if type_ in ("content_stream", "content"):
-                                                streamed_text += chunk["content"]
-                                            elif type_ == "content_replace":
-                                                streamed_text = chunk["content"]
-                                            else:
-                                                if streamed_text:
-                                                    print_markdown(streamed_text)
-                                                    streamed_text = ""
-                                                    
-                                                if type_ == "tool_start":
-                                                    print_tool_start(chunk["name"], chunk.get("args", {}))
-                                                    is_tool_executing = True
-                                                elif type_ == "tool_end":
-                                                    print_tool_end(chunk["name"], chunk.get("result", ""))
-                                                elif type_ == "error":
-                                                    print_error(chunk["content"])
-                                                
-                                                break
-                                else:
-                                    try:
-                                        chunk = next(chunk_iterator)
-                                    except StopIteration:
-                                        done = True
-                                         
-                                    if not done:
-                                        type_ = chunk.get("type")
-                                        if type_ == "tool_end":
-                                            print_tool_end(chunk["name"], chunk.get("result", ""))
-                                            is_tool_executing = False
-                                        elif type_ == "tool_start":
-                                            print_tool_start(chunk["name"], chunk.get("args", {}))
-                                        elif type_ == "error":
-                                            print_error(chunk["content"])
-                                    
-                                if done:
-                                    break
-                                             
-                            except StopIteration:
-                                break
-                            
-                    except KeyboardInterrupt:
-                        continue
-                    except EOFError:
-                        break
-                        
-                continue # loop back to main loop AFTER exiting sandbox
                 
             elif user_input.startswith("/work"):
                 parts = user_input.split(" ", 1)
@@ -1015,35 +596,7 @@ def main():
                         print_error("Please specify a work task after --auto.")
                         continue
                 
-                # Phase 0: Ask for Deep Research
-                run_research = questionary.confirm("Run Deep Research (Phase 0) to gather up-to-date context before investigation?").ask()
-                
-                # TDD Mode
-                tdd_mode = questionary.confirm("Enable TDD Mode? (AI will write tests BEFORE code)").ask()
-
-                # Obsidian Mode
-                use_obsidian = False
-                if get_obsidian_vault():
-                    use_obsidian = questionary.confirm("Enable Obsidian integration for this work task?").ask()
-
-                # Initialize Project Brain in Work mode
-                pm = ProjectManager()
-                pm.destroy()
-                
-                if run_research:
-                    pm.create(work_prompt, status="work_researching", mode="work", auto_mode=auto_mode, tdd_mode=tdd_mode, use_obsidian=use_obsidian)
-                    user_input = (
-                        f"You are the Phase 0 Research Agent for the codebase modification task: '{work_prompt}'.\n\n"
-                        f"Your task is to gather the MAXIMUM amount of up-to-date information, best practices, and API references required for this task.\n"
-                        f"You MUST call `run_deep_research(objective='...')` right now to search the web.\n"
-                        f"When the research is complete, output a detailed markdown report of everything you found.\n"
-                        f"DO NOT write code or investigate files yet. Just gather information."
-                    )
-                    print_system(f"[Brain] Phase 0: Starting Deep Research...")
-                else:
-                    pm.create(work_prompt, status="work_investigating", mode="work", auto_mode=auto_mode, tdd_mode=tdd_mode, use_obsidian=use_obsidian)
-                    user_input = _build_work_investigation_prompt(work_prompt, "")
-                    print_system(f"[Brain] Phase 1: Investigating codebase...")
+                is_project_mode, user_input = orchestrator.start_work(work_prompt, auto_mode=auto_mode)
 
             elif user_input.startswith("/commit"):
                 try:
@@ -1112,9 +665,14 @@ def main():
                 print_system(f"Running local command: {cmd}")
                 
                 try:
+                    import shlex
+                    try:
+                        cmd_parts = shlex.split(cmd, posix=(os.name != 'nt'))
+                    except ValueError:
+                        cmd_parts = cmd.split()
                     result = subprocess.run(
-                        cmd,
-                        shell=True,
+                        cmd_parts,
+                        shell=False,
                         capture_output=True,
                         text=True
                     )
@@ -1178,212 +736,9 @@ def main():
                 active_tools = CHAT_ALLOWED_TOOLS
 
             response_chunks = agent.process_user_input(user_input, allowed_tools=active_tools)
-            chunk_iterator = iter(response_chunks)
-            streamed_text = ""
-            streamed_thinking = ""
-            is_tool_executing = False
-            current_tool_name = ""
-            
-            # Using the rich Live display for real-time response rendering
-            from rich.live import Live
-            from rich.console import Group
-            from rich.text import Text
-            from rich.markdown import Markdown
-            from rich.spinner import Spinner as RichSpinner
-            from ui import s, c, create_response_panel, create_content_panel, print_reasoning, print_reasoning_header
-            
-            verbose = get_verbose_status()
-            
-            while True:
-                try:
-                    done = False
-                    if not is_tool_executing:
-                        # Phase 1: Thinking/Reasoning Stream (NATIVE STREAMING)
-                        # We don't use Live here because Live prevents natural terminal scrolling 
-                        # for content larger than the viewport.
-                        has_started_reasoning = False
-                        is_waiting_ttft = True
-                        while True:
-                            try:
-                                if is_waiting_ttft and verbose:
-                                    with console.status("[bold cyan]Обработка...[/bold cyan]", spinner="dots"):
-                                        chunk = next(chunk_iterator)
-                                    is_waiting_ttft = False
-                                else:
-                                    chunk = next(chunk_iterator)
-                                    is_waiting_ttft = False
-                            except StopIteration:
-                                done = True
-                                break
-                            
-                            type_ = chunk.get("type")
-                            if type_ == "thinking_stream":
-                                if not has_started_reasoning:
-                                    print_reasoning_header()
-                                    has_started_reasoning = True
-                                
-                                content = chunk["content"]
-                                streamed_thinking += content
-                                # Native print without Live keeps scrolling lock-free
-                                console.print(content, end="", style=c.get("reasoning_text", "dim white"))
-                            elif type_ == "tool_generating":
-                                if has_started_reasoning:
-                                    console.print("\n")
-                                    has_started_reasoning = False
-                                # Show a spinner while the LLM generates tool arguments
-                                tool_gen_name = chunk.get("name", "?")
-                                tool_gen_bytes = chunk.get("bytes", 0)
-                                if verbose:
-                                    with console.status(f"[dim cyan]Генерация {tool_gen_name}... ({tool_gen_bytes} B)[/dim cyan]", spinner="dots") as status:
-                                        while True:
-                                            try:
-                                                chunk = next(chunk_iterator)
-                                            except StopIteration:
-                                                done = True
-                                                break
-                                            type_ = chunk.get("type")
-                                            if type_ == "tool_generating":
-                                                tool_gen_name = chunk.get("name", tool_gen_name)
-                                                tool_gen_bytes = chunk.get("bytes", 0)
-                                                status.update(f"[dim cyan]Генерация {tool_gen_name}... ({tool_gen_bytes} B)[/dim cyan]")
-                                            else:
-                                                break
-                                else:
-                                    while True:
-                                        try:
-                                            chunk = next(chunk_iterator)
-                                        except StopIteration:
-                                            done = True
-                                            break
-                                        type_ = chunk.get("type")
-                                        if type_ != "tool_generating":
-                                            break
-                                # After exiting spinner, re-check what chunk type we got
-                                if done:
-                                    break
-                                if type_ == "tool_start":
-                                    print_tool_start(chunk["name"], chunk.get("args", {}))
-                                    is_tool_executing = True
-                                    current_tool_name = chunk["name"]
-                                    break
-                                elif type_ in ("content_stream", "content"):
-                                    # Shouldn't happen often — but handle gracefully
-                                    break
-                                else:
-                                    break
-                            else:
-                                if has_started_reasoning:
-                                    console.print("\n") # Newline after reasoning
-                                break
-                            
-                        # Phase 2: Main Content/Tool Stream (LIVE PANEL)
-                        if not done and not is_tool_executing:
-                            # Live with transient=True: panel disappears after streaming ends,
-                            # replaced by clean final render without borders.
-                            with Live(create_content_panel(""), console=console, refresh_per_second=10, transient=True) as live:
-                                while True:
-                                    # If type_ is already from the previous next() call, process it first
-                                    if type_ in ("content_stream", "content"):
-                                        streamed_text += chunk["content"]
-                                        live.update(create_content_panel(streamed_text))
-                                    elif type_ == "content_replace":
-                                        streamed_text = chunk["content"]
-                                        live.update(create_content_panel(streamed_text))
-                                    elif type_ == "tool_generating":
-                                        # Tool generation started mid-content — exit Live and let next iteration handle it
-                                        break
-                                    elif type_ not in ("thinking_stream"):
-                                        # Tool or error, exit live content phase
-                                        break
-                                    
-                                    # Show animated thinking indicator while waiting for next chunk.
-                                    # Rich Live refreshes via a background thread, so the spinner
-                                    # keeps animating even while next() blocks the main thread.
-                                    if streamed_text:
-                                        live.update(Group(
-                                            create_content_panel(streamed_text),
-                                            RichSpinner("dots", text=Text(" Генерация...", style="dim cyan"))
-                                        ))
-                                    
-                                    try:
-                                        chunk = next(chunk_iterator)
-                                        type_ = chunk.get("type")
-                                        # Restore clean content panel (remove spinner)
-                                        if type_ in ("content_stream", "content", "content_replace"):
-                                            pass  # Will be updated at the top of the loop
-                                        elif streamed_text:
-                                            live.update(create_content_panel(streamed_text))
-                                    except StopIteration:
-                                        done = True
-                                        break
-                        
-                        # Re-process the last chunk that broke the Live content loop (tool or error)
-                        if not done and not is_tool_executing:
-                            if type_ == "tool_start":
-                                print_tool_start(chunk["name"], chunk.get("args", {}))
-                                is_tool_executing = True
-                                current_tool_name = chunk["name"]
-                            elif type_ == "tool_generating":
-                                # Will be caught by the next outer loop iteration
-                                pass
-                            elif type_ == "tool_end":
-                                print_tool_end(chunk["name"], chunk.get("result", ""))
-                            elif type_ == "error":
-                                print_error(chunk["content"])
-                    
-                    else:
-                        # Tool is executing — wait for tool_end
-                        # Skip spinner for interactive tools that need clean terminal
-                        # (any tool that calls questionary.confirm or similar prompts)
-                        interactive_tools = {
-                            "ask_user_questions",
-                            "run_command",
-                            "run_admin_command",
-                            "start_background_command",
-                            "delete_file",
-                            "plan_work_changes",
-                        }
-                        use_spinner = verbose and current_tool_name not in interactive_tools
-                        
-                        if use_spinner:
-                            with console.status("[dim cyan]Выполнение...[/dim cyan]", spinner="dots"):
-                                try:
-                                    chunk = next(chunk_iterator)
-                                except StopIteration:
-                                    done = True
-                        else:
-                            try:
-                                chunk = next(chunk_iterator)
-                            except StopIteration:
-                                done = True
-                             
-                        if not done:
-                            type_ = chunk.get("type")
-                            if type_ == "tool_end":
-                                print_tool_end(chunk["name"], chunk.get("result", ""))
-                                is_tool_executing = False
-                                current_tool_name = ""
-                            elif type_ == "tool_start":
-                                print_tool_start(chunk["name"], chunk.get("args", {}))
-                                current_tool_name = chunk["name"]
-                            elif type_ == "error":
-                                print_error(chunk["content"])
-                        
-                    if done:
-                        break
-                                 
-                except StopIteration:
-                    break
-                except Exception as e:
-                    print_error(f"Streaming error: {e}")
-                    break
-            
-            # Render final response without borders for easy copy-paste
-            if streamed_text:
-                from ui import create_final_panel, safe_print as _safe_print
-                for el in create_final_panel(streamed_text):
-                    _safe_print(el)
-                    _safe_print("")
+            streamed_text, is_auto_mode, auto_sleep_time, auto_wake_context = render_response_stream(
+                agent, response_chunks, is_auto_mode=is_auto_mode
+            )
             
             # Show context usage after response
             usage = agent.get_context_usage()
@@ -1406,247 +761,12 @@ def main():
                     
             # === Project Brain: State Machine ===
             if is_project_mode:
-                pm = ProjectManager()
-                
-                if not pm.active:
-                    is_project_mode = False
-                    print_system("[Brain] No active project found.")
-                    continue
-                
-                status = pm.data.get("status", "")
-                
-                # Phase 0 → 1a: Research done, save data and generate architecture
-                if status in ["researching", "work_researching"]:
-                    if not pm.data.get("research_data"):
-                        # Save the last AI response as the research synthesis
-                        pm.save_research_data(agent.messages[-1]["content"])
-                    
-                    if pm.data.get("mode") == "work":
-                        pm.set_status("work_investigating")
-                        agent.inject_context()
-                        auto_continue_input = _build_work_investigation_prompt(pm.data["objective"], pm.data.get("research_data", ""))
-                        print_system(f"[Brain] Phase 1: Investigating codebase based on research...")
-                    else:
-                        pm.set_status("specifying_architecture")
-                        agent.inject_context()
-                        
-                        proj_prompt = pm.data["objective"]
-                        research_text = pm.data.get("research_data", "")
-                        
-                        auto_continue_input = (
-                            f"You are the architect for this project: '{proj_prompt}'.\n\n"
-                        )
-                        
-                        if research_text:
-                            auto_continue_input += (
-                                f"=== LATEST RESEARCH CONTEXT ===\n"
-                                f"{research_text}\n\n"
-                            )
-                            
-                        auto_continue_input += (
-                            f"Your task is to design the HIGH-LEVEL ARCHITECTURE.\n"
-                            f"You MUST call `write_project_architecture` with TWO parameters:\n"
-                            f"  1. architecture = text description of all files and their dependencies\n"
-                            f"  2. files = comma-separated list of ALL file paths to create\n\n"
-                            f"EXAMPLE call:\n"
-                            f"  write_project_architecture(\n"
-                            f"    architecture='Files:\\n1. MyApp/main.py — Entry point. Uses: calculator.py\\n2. MyApp/calculator.py — Math logic. Standalone.',\n"
-                            f"    files='MyApp/main.py, MyApp/calculator.py'\n"
-                            f"  )\n\n"
-                            f"RULES:\n"
-                            f"- ALL file paths MUST include the project folder (e.g. MyProject/main.py, NOT just main.py)\n"
-                            f"- The 'files' parameter must list ONLY the files to CREATE, not referenced libraries\n"
-                            f"- Do NOT describe implementation details (no method names, no types)\n"
-                            f"- Do NOT create any files yet\n"
-                            f"- Do NOT call any other tools\n"
-                            f"- Call `write_project_architecture` NOW!"
-                        )
-                        
-                        print_system(f"[Brain] Phase 1a: Designing architecture based on research...")
-
-                # --- WORK MODE ---
-                # Phase 1: Investigation in progress ( waiting for plan_work_changes )
-                elif status == "work_investigating":
-                    agent.inject_context()
-                    # We just re-prompt briefly to remind it to call plan_work_changes if it got distracted
-                    auto_continue_input = "Investigation phase. Continue reading files, searching, or when ready, call `plan_work_changes`."
-                    print_system("[Brain] Phase 1: Investigation in progress...")
-
-                # Phase 1 Investigation done (plan_work_changes called) -> Phase 2 Micro-Tasking
-                elif status == "work_planning" and not pm.has_pending():
-                    # Tools.py changes status to work_planning when plan is accepted
-                    agent.inject_context()
-                    print_system("[Brain] Phase 2: Generating micro-tasks from investigation plan...")
-                    auto_continue_input = _build_work_planning_prompt(
-                        pm.data["objective"],
-                        pm.data.get("work_strategy", ""),
-                        pm.data.get("files_to_edit", []),
-                        pm.data.get("files_to_create", [])
-                    )
-                
-                # Phase 2 -> Phase 3: Start Execution
-                elif status == "work_planning" and pm.has_pending():
-                    pm.set_status("work_executing")
-                    next_task = pm.get_next_pending()
-                    last_task_id = next_task["id"]
-                    task_retries = 0
-                    agent.inject_context()
-                    auto_continue_input = pm.build_execution_context(next_task)
-                    progress = pm.get_progress_display()
-                    print_system(f"[Brain] Phase 3: {progress} >> Work Task {next_task['id']}: {next_task['description']}")
-                
-                # Phase 3: Continue executing
-                elif status == "work_executing" and pm.has_pending():
-                    next_task = pm.get_next_pending()
-                    if next_task["id"] == last_task_id:
-                        task_retries += 1
-                        if task_retries >= MAX_TASK_RETRIES:
-                            print_system(f"[Brain] Task {next_task['id']} failed {MAX_TASK_RETRIES} times.")
-                            action = questionary.select(
-                                "What should we do with this stalled task?",
-                                choices=["1. Continue trying (reset counter)", "2. Provide a hint to AI", "3. Skip task"]
-                            ).ask()
-                            
-                            if action and action.startswith("1"):
-                                task_retries = 0
-                                print_system("Retrying task...")
-                            elif action and action.startswith("2"):
-                                hint = questionary.text("Enter your hint for the AI:").ask()
-                                if hint:
-                                    next_task['description'] += f"\n\n[USER HINT AFTER FAILURE]: {hint}"
-                                    pm._save()
-                                task_retries = 0
-                                print_system("Hint added. Retrying task...")
-                            else:
-                                pm.complete_task(next_task["id"], "SKIPPED: failed to complete after multiple attempts")
-                                last_task_id = None
-                                task_retries = 0
-                                continue
-                    else:
-                        last_task_id = next_task["id"]
-                        task_retries = 0
-                    
-                    agent.inject_context()
-                    auto_continue_input = pm.build_execution_context(next_task)
-                    progress = pm.get_progress_display()
-                    print_system(f"[Brain] {progress} >> Work Task {next_task['id']}: {next_task['description']}")
-                
-                # Phase 3 done
-                elif status == "work_executing" and not pm.has_pending():
-                    is_project_mode = False
-                    pm.set_status("completed")
-                    print_system(f"[Brain] {pm.get_progress_display()} Work complete! Returning to chat.")
-
-                # --- PROJECT MODE ---
-                # Phase 1a → 1b: Architecture written, now detail each file
-                elif (status == "specifying" or status == "specifying_architecture") and pm.has_architecture():
-                    pending_files = pm.get_pending_spec_files()
-                    
-                    if pending_files:
-                        # Detail the next file
-                        next_file = pending_files[0]
-                        pm.set_status("specifying_details")
-                        agent.inject_context()
-                        
-                        print_system(f"[Brain] Phase 1b: Detailing spec for {next_file} ({len(pending_files)} files remaining)...")
-                        
-                        auto_continue_input = _build_spec_prompt(
-                            pm.data['objective'], pm.get_architecture(), next_file
-                        )
-                    else:
-                        # All files detailed — move to task creation
-                        pm.set_status("planning")
-                        agent.inject_context()
-                        
-                        all_specs = pm.get_all_file_specs()
-                        specs_summary = "\
-".join([f"  - {fname}" for fname in all_specs.keys()])
-                        
-                        print_system(f"[Brain] Phase 2: Creating tasks from {len(all_specs)} file specs...")
-                        
-                        auto_continue_input = _build_planning_prompt(pm.data['objective'], specs_summary)
-                # Phase 1b: Continue detailing files
-                elif status == "specifying_details":
-                    pending_files = pm.get_pending_spec_files()
-                    
-                    if pending_files:
-                        next_file = pending_files[0]
-                        agent.inject_context()
-                        
-                        print_system(f"[Brain] Phase 1b: Detailing spec for {next_file} ({len(pending_files)} files remaining)...")
-                        
-                        auto_continue_input = _build_spec_prompt(
-                            pm.data['objective'], pm.get_architecture(), next_file
-                        )
-                    else:
-                        # All files detailed — move to task creation
-                        pm.set_status("planning")
-                        agent.inject_context()
-                        
-                        all_specs = pm.get_all_file_specs()
-                        specs_summary = "\n".join([f"  - {fname}" for fname in all_specs.keys()])
-                        
-                        print_system(f"[Brain] Phase 2: Creating tasks from {len(all_specs)} file specs...")
-                        
-                        auto_continue_input = _build_planning_prompt(pm.data['objective'], specs_summary)
-                # Phase 2 → 3: Tasks created, start execution
-                elif status == "planning" and pm.has_pending():
-                    pm.set_status("executing")
-                    next_task = pm.get_next_pending()
-                    last_task_id = next_task["id"]
-                    task_retries = 0
-                    agent.inject_context()
-                    auto_continue_input = pm.build_execution_context(next_task)
-                    progress = pm.get_progress_display()
-                    print_system(f"[Brain] Phase 3: {progress} >> Task {next_task['id']}: {next_task['description']}")
-                # Phase 3: Continue executing next pending task
-                elif status == "executing" and pm.has_pending():
-                    next_task = pm.get_next_pending()
-                    
-                    # Per-task retry protection
-                    if next_task["id"] == last_task_id:
-                        task_retries += 1
-                        if task_retries >= MAX_TASK_RETRIES:
-                            print_system(f"[Brain] Task {next_task['id']} failed {MAX_TASK_RETRIES} times.")
-                            action = questionary.select(
-                                "What should we do with this stalled task?",
-                                choices=["1. Continue trying (reset counter)", "2. Provide a hint to AI", "3. Skip task"]
-                            ).ask()
-                            
-                            if action and action.startswith("1"):
-                                task_retries = 0
-                                print_system("Retrying task...")
-                            elif action and action.startswith("2"):
-                                hint = questionary.text("Enter your hint for the AI:").ask()
-                                if hint:
-                                    next_task['description'] += f"\n\n[USER HINT AFTER FAILURE]: {hint}"
-                                    pm._save()
-                                task_retries = 0
-                                print_system("Hint added. Retrying task...")
-                            else:
-                                pm.complete_task(next_task["id"], "SKIPPED: failed to complete after multiple attempts")
-                                last_task_id = None
-                                task_retries = 0
-                                continue # re-enter state machine to pick next task
-                    else:
-                        last_task_id = next_task["id"]
-                        task_retries = 0
-                    
-                    agent.inject_context()
-                    auto_continue_input = pm.build_execution_context(next_task)
-                    progress = pm.get_progress_display()
-                    print_system(f"[Brain] {progress} >> Task {next_task['id']}: {next_task['description']}")
-                # Execution done → Finish project
-                elif status == "executing" and not pm.has_pending():
-                    is_project_mode = False
-                    pm.set_status("completed")
-                    print_system(f"[Brain] {pm.get_progress_display()} Project complete! Returning to chat.")
-                # Fallback: no progress
-                else:
-                    is_project_mode = False
-                    print_system("[Brain] Could not advance project. Check the model output.")
+                is_project_mode, auto_continue_input = orchestrator.step()
             
         except KeyboardInterrupt:
+            if is_auto_mode:
+                is_auto_mode = False
+                print_system("\n[bold yellow]Выполнение прервано пользователем (Ctrl+C). Выход из автоматического режима.[/bold yellow]")
             continue
         except EOFError:
             export_chat_history(agent, auto=True)

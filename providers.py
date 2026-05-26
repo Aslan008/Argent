@@ -7,6 +7,7 @@ import json
 import time
 import random
 import logging
+from abc import ABC, abstractmethod
 from typing import List, Dict, Any, Optional, Generator
 
 logger = logging.getLogger("argent.providers")
@@ -45,13 +46,39 @@ def with_retry(fn, max_retries=3, base_delay=1.0):
         raise last_error
 
 
-class OllamaProvider:
+class LLMProvider(ABC):
+    """Abstract base class for all LLM providers."""
+
+    @property
+    @abstractmethod
+    def name(self) -> str: ...
+
+    @abstractmethod
+    def validate_config(self) -> Optional[str]: ...
+
+    @abstractmethod
+    def list_models(self) -> List[str]: ...
+
+    @abstractmethod
+    def stream_chat(self, model, messages, tools=None, context_window=None, temperature=None): ...
+
+    @abstractmethod
+    def sync_chat(self, model, messages, temperature=0.3, json_format=False) -> str: ...
+
+    @abstractmethod
+    def format_tool_result(self, content: str, tool_call_id: str = None) -> dict: ...
+
+
+class OllamaProvider(LLMProvider):
     """Ollama local LLM provider."""
 
     def __init__(self):
         import ollama as _ollama
         self._ollama = _ollama
-        self.name = "ollama"
+
+    @property
+    def name(self) -> str:
+        return "ollama"
 
     def validate_config(self) -> Optional[str]:
         try:
@@ -79,7 +106,7 @@ class OllamaProvider:
         except Exception:
             return []
 
-    def stream_chat(self, model, messages, tools=None, context_window=None):
+    def stream_chat(self, model, messages, tools=None, context_window=None, temperature=None):
         kwargs = {
             "model": model,
             "messages": messages,
@@ -87,8 +114,15 @@ class OllamaProvider:
         }
         if tools:
             kwargs["tools"] = tools
+            
+        options = {}
         if context_window:
-            kwargs["options"] = {"num_ctx": context_window}
+            options["num_ctx"] = context_window
+        if temperature is not None:
+            options["temperature"] = temperature
+            
+        if options:
+            kwargs["options"] = options
 
         try:
             response_stream = self._ollama.chat(**kwargs)
@@ -136,72 +170,46 @@ class OllamaProvider:
         return {"role": "tool", "content": content}
 
 
-class ZAIProvider:
-    """Z.AI cloud LLM provider (OpenAI-compatible API)."""
+class OpenAICompatibleProvider(LLMProvider, ABC):
+    """Base class for OpenAI-compatible providers."""
 
     def __init__(self, api_key: str, base_url: str):
         import openai
         self._openai = openai
         self._api_key = api_key
         self._base_url = base_url
-        self.name = "zai"
 
     def _get_client(self):
         return self._openai.OpenAI(api_key=self._api_key, base_url=self._base_url)
 
-    def validate_config(self) -> Optional[str]:
-        if not self._api_key:
-            return "Z.AI API key is not set. Use /provider to configure it."
-        return None
-
-    def list_models(self) -> List[str]:
-        return [
-            "glm-5.1", "glm-5", "glm-5-turbo",
-            "glm-4.7", "glm-4.7-flashx",
-            "glm-4.6", "glm-4.5", "glm-4.5-x",
-            "glm-4.5-air", "glm-4.5-airx",
-            "glm-4-32b-0414-128k",
-            "glm-4.7-flash", "glm-4.5-flash",
-        ]
-
-    def stream_chat(self, model, messages, tools=None, context_window=None):
+    def stream_chat(self, model, messages, tools=None, context_window=None, temperature=None):
         client = self._get_client()
         openai_tools = None
         if tools:
             openai_tools = [{"type": "function", "function": t["function"]} for t in tools]
 
+        kwargs = {
+            "model": model,
+            "messages": messages,
+            "tools": openai_tools,
+            "stream": True,
+        }
+        if temperature is not None:
+            kwargs["temperature"] = temperature
+
         try:
-            response_stream = client.chat.completions.create(
-                model=model,
-                messages=messages,
-                tools=openai_tools,
-                stream=True,
-            )
+            response_stream = client.chat.completions.create(**kwargs)
         except self._openai.APIStatusError as e:
-            if e.status_code == 429:
-                raise ProviderError(
-                    f"Z.AI: Insufficient balance or rate limited. Recharge at https://z.ai/manage-apikey/billing\n{e}",
-                    retryable=True, original_error=e
-                )
-            elif e.status_code == 401:
-                raise ProviderError(
-                    f"Z.AI: Invalid API key. Use /provider to update your key.",
-                    original_error=e
-                )
-            else:
-                raise ProviderError(
-                    f"Z.AI API Error (HTTP {e.status_code}): {e}",
-                    retryable=e.status_code >= 500, original_error=e
-                )
+            self._handle_api_status_error(e)
         except Exception as e:
-            raise ProviderError(f"Z.AI connection error: {e}", original_error=e)
+            raise ProviderError(f"{self.name.upper()} connection error: {e}", original_error=e)
 
         for chunk in response_stream:
             if not chunk.choices:
                 continue
             delta = chunk.choices[0].delta
             tool_call_deltas = []
-            if delta.tool_calls:
+            if getattr(delta, 'tool_calls', None):
                 for tc in delta.tool_calls:
                     tool_call_deltas.append({
                         "index": tc.index,
@@ -230,22 +238,11 @@ class ZAIProvider:
                 response = client.chat.completions.create(**kwargs)
                 return response.choices[0].message.content or ""
             except self._openai.APIStatusError as e:
-                if e.status_code == 429:
-                    raise ProviderError(
-                        f"Z.AI: Rate limited or insufficient balance.\n{e}",
-                        retryable=True, original_error=e
-                    )
-                elif e.status_code == 401:
-                    raise ProviderError(f"Z.AI: Invalid API key.", original_error=e)
-                else:
-                    raise ProviderError(
-                        f"Z.AI API Error: {e}",
-                        retryable=e.status_code >= 500, original_error=e
-                    )
+                self._handle_api_status_error(e)
             except Exception as e:
-                raise ProviderError(f"Z.AI error: {e}", original_error=e)
+                raise ProviderError(f"{self.name.upper()} error: {e}", original_error=e)
 
-        return with_retry(_call)
+        return with_retry(_call, max_retries=2)
 
     def format_tool_result(self, content: str, tool_call_id: str = None) -> dict:
         msg = {"role": "tool", "content": content}
@@ -253,10 +250,90 @@ class ZAIProvider:
             msg["tool_call_id"] = tool_call_id
         return msg
 
+    def _handle_api_status_error(self, e):
+        raise ProviderError(
+            f"{self.name.upper()} API Error (HTTP {e.status_code}): {e}",
+            retryable=e.status_code >= 500, original_error=e
+        )
 
-def create_provider() -> OllamaProvider | ZAIProvider:
-    from config import get_provider as _get_provider_name, get_zai_api_key, get_zai_endpoint
+
+class ZAIProvider(OpenAICompatibleProvider):
+    """Z.AI cloud LLM provider (OpenAI-compatible API)."""
+
+    def __init__(self, api_key: str, base_url: str):
+        super().__init__(api_key=api_key, base_url=base_url)
+
+    @property
+    def name(self) -> str:
+        return "zai"
+
+    def validate_config(self) -> Optional[str]:
+        if not self._api_key:
+            return "Z.AI API key is not set. Use /provider to configure it."
+        return None
+
+    def list_models(self) -> List[str]:
+        return [
+            "glm-5.1", "glm-5", "glm-5-turbo",
+            "glm-4.7", "glm-4.7-flashx",
+            "glm-4.6", "glm-4.5", "glm-4.5-x",
+            "glm-4.5-air", "glm-4.5-airx",
+            "glm-4-32b-0414-128k",
+            "glm-4.7-flash", "glm-4.5-flash",
+        ]
+
+    def _handle_api_status_error(self, e):
+        if e.status_code == 429:
+            raise ProviderError(
+                f"Z.AI: Insufficient balance or rate limited. Recharge at https://z.ai/manage-apikey/billing\n{e}",
+                retryable=True, original_error=e
+            )
+        elif e.status_code == 401:
+            raise ProviderError(
+                f"Z.AI: Invalid API key. Use /provider to update your key.",
+                original_error=e
+            )
+        else:
+            super()._handle_api_status_error(e)
+
+
+class KoboldCPPProvider(OpenAICompatibleProvider):
+    """KoboldCPP local LLM provider (OpenAI-compatible API)."""
+
+    def __init__(self, base_url: str):
+        super().__init__(api_key="dummy_key", base_url=base_url)
+
+    @property
+    def name(self) -> str:
+        return "koboldcpp"
+
+    def validate_config(self) -> Optional[str]:
+        try:
+            client = self._get_client()
+            client.models.list()
+            return None
+        except Exception as e:
+            return f"Cannot connect to KoboldCPP at {self._base_url}: {e}. Is KoboldCPP running?"
+
+    def list_models(self) -> List[str]:
+        try:
+            client = self._get_client()
+            models_response = client.models.list()
+            return [m.id for m in models_response.data]
+        except Exception:
+            return ["koboldcpp-model"]
+
+
+def create_provider() -> LLMProvider:
+    from config import (
+        get_provider as _get_provider_name,
+        get_zai_api_key,
+        get_zai_endpoint,
+        get_koboldcpp_url,
+    )
     name = _get_provider_name()
     if name == "zai":
         return ZAIProvider(api_key=get_zai_api_key(), base_url=get_zai_endpoint())
+    elif name == "koboldcpp":
+        return KoboldCPPProvider(base_url=get_koboldcpp_url())
     return OllamaProvider()

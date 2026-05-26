@@ -1,14 +1,52 @@
 import os
+import json
+import threading
+import time
+import hashlib
 from pathlib import Path
 from logger import get_logger
 
 log = get_logger("rag")
 
-# IMPORTANT: We DO NOT import chromadb here at the top level!
-# It will be imported inside functions (lazy loading) to prevent slow startup times.
-
 _RAG_ENABLED = False
 _COLLECTION = None
+_lock = threading.Lock()
+
+_SEARCH_CACHE: dict = {}
+_SEARCH_CACHE_TTL = 30
+
+
+class OllamaEmbeddingFunction:
+    """Custom ChromaDB embedding function using Ollama API. Fully offline."""
+
+    def __init__(self, model_name: str = "nomic-embed-text"):
+        self.model_name = model_name
+
+    def __call__(self, input: list[str]) -> list[list[float]]:
+        import requests
+        embeddings = []
+        for text in input:
+            try:
+                from config import get_provider
+                ollama_host = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
+                resp = requests.post(
+                    f"{ollama_host}/api/embed",
+                    json={"model": self.model_name, "input": text},
+                    timeout=60,
+                )
+                resp.raise_for_status()
+                data = resp.json()
+                embeddings.append(data["embeddings"][0])
+            except Exception as e:
+                log.warning("Ollama embedding failed for text (%d chars): %s", len(text), e)
+                embeddings.append([0.0] * 768)
+        return embeddings
+
+    def embed_query(self, query: str) -> list[float]:
+        return self.__call__([query])[0]
+
+    def embed_documents(self, documents: list[str]) -> list[list[float]]:
+        return self.__call__(documents)
 
 def is_rag_enabled() -> bool:
     """Check if the RAG module is currently active."""
@@ -25,44 +63,130 @@ def enable_rag_for_project(project_dir: str) -> str:
     """Initializes ChromaDB, creates embeddings for the project, and enables semantic search."""
     global _RAG_ENABLED, _COLLECTION
     
-    # Lazy Import checks
     try:
         import chromadb
-        from chromadb.utils import embedding_functions
     except ImportError:
         return "ERROR: 'chromadb' is not installed. Please run `pip install chromadb` to use RAG."
         
     try:
+        from config import get_embedding_provider, get_ollama_embedding_model
+
         project_path = Path(project_dir).expanduser().resolve()
         if not project_path.exists():
             return f"Error: Project directory {project_dir} does not exist."
             
         print(f"\n[INFO] Initializing Vector Database for {project_path.name}...")
         
-        # We store the local DB inside the .argent folder of the user's project
         db_path = project_path / ".argent" / "chroma_db"
         db_path.mkdir(parents=True, exist_ok=True)
         
         client = chromadb.PersistentClient(path=str(db_path))
         
-        # Use a lightweight embedding function suitable for code (MiniLM is standard)
-        sentence_transformer_ef = embedding_functions.SentenceTransformerEmbeddingFunction(model_name="all-MiniLM-L6-v2")
+        embedding_provider = get_embedding_provider()
+        if embedding_provider == "ollama":
+            ollama_model = get_ollama_embedding_model()
+            print(f"[INFO] Using Ollama embeddings (model: {ollama_model}) — fully offline.")
+            ef = OllamaEmbeddingFunction(model_name=ollama_model)
+        else:
+            try:
+                from chromadb.utils import embedding_functions
+                print("[INFO] Using sentence-transformers embeddings (all-MiniLM-L6-v2).")
+                ef = embedding_functions.SentenceTransformerEmbeddingFunction(model_name="all-MiniLM-L6-v2")
+            except ImportError:
+                return "ERROR: 'sentence-transformers' is not installed. Run `pip install sentence-transformers` or switch to Ollama embeddings."
         
-        _COLLECTION = client.get_or_create_collection(name="project_codebase", embedding_function=sentence_transformer_ef)
+        _COLLECTION = client.get_or_create_collection(name="project_codebase", embedding_function=ef)
         
-        # Now we index the codebase
         _index_codebase(project_path, _COLLECTION)
         
         _RAG_ENABLED = True
-        return f"Successfully enabled RAG for '{project_path.name}'. Indexed files and ready for /search."
+        return f"Successfully enabled RAG for '{project_path.name}' (embeddings: {embedding_provider}). Indexed files and ready for /search."
         
     except Exception as e:
         import traceback
         _RAG_ENABLED = False
         return f"Failed to enable RAG: {e}\n{traceback.format_exc()}"
 
-def _chunk_text(text: str, file_rel_path: str) -> list:
-    """Chunks text logically (by blocks if possible, otherwise by lines)."""
+def _chunk_python_ast(text: str, file_rel_path: str) -> tuple[list, list]:
+    import ast
+    docs = []
+    metadatas = []
+    try:
+        tree = ast.parse(text)
+    except Exception:
+        # Fallback to heuristic on syntax errors
+        return _chunk_heuristic(text, file_rel_path)
+
+    chunks = []
+    lines = text.splitlines()
+    if not lines:
+        return [], []
+
+    # Identify top-level classes and functions
+    blocks = []
+    for node in tree.body:
+        if isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+            start = node.lineno
+            end = getattr(node, "end_lineno", len(lines))
+            blocks.append((start, end, type(node).__name__, node.name))
+
+    # Map line number (1-based) to its class/function block
+    line_to_block = {}
+    for start, end, btype, name in blocks:
+        for l in range(start, end + 1):
+            line_to_block[l] = (btype, name, start, end)
+
+    current_chunk = []
+    chunk_start = 1
+    i = 1
+    while i <= len(lines):
+        line = lines[i - 1]
+        if i in line_to_block:
+            btype, name, bstart, bend = line_to_block[i]
+            # Flush any module level statements gathered so far
+            if current_chunk:
+                chunks.append(("\n".join(current_chunk), chunk_start, i - 1, "Module level"))
+                current_chunk = []
+            
+            block_lines = lines[bstart - 1 : bend]
+            # If the block is very large, chunk it internally but keep the context name
+            if len(block_lines) > 80:
+                for sub_idx in range(0, len(block_lines), 60):
+                    sub_chunk = block_lines[sub_idx : sub_idx + 60]
+                    sub_start = bstart + sub_idx
+                    sub_end = min(bend, bstart + sub_idx + len(sub_chunk) - 1)
+                    chunks.append(("\n".join(sub_chunk), sub_start, sub_end, f"{btype} {name} (Part {sub_idx//60 + 1})"))
+            else:
+                chunks.append(("\n".join(block_lines), bstart, bend, f"{btype} {name}"))
+            
+            i = bend + 1
+            chunk_start = i
+        else:
+            current_chunk.append(line)
+            if len(current_chunk) >= 60:
+                chunks.append(("\n".join(current_chunk), chunk_start, i, "Module level"))
+                current_chunk = []
+                chunk_start = i + 1
+            i += 1
+
+    if current_chunk:
+        chunks.append(("\n".join(current_chunk), chunk_start, len(lines), "Module level"))
+
+    for text_block, s_line, e_line, context in chunks:
+        header = f"File: {file_rel_path}\nLines {s_line}-{e_line} ({context})\n"
+        docs.append(header + text_block)
+        metadatas.append({
+            "file": str(file_rel_path),
+            "start_line": s_line,
+            "end_line": e_line,
+            "context": context
+        })
+
+    return docs, metadatas
+
+
+def _chunk_heuristic(text: str, file_rel_path: str) -> tuple[list, list]:
+    import re
     docs = []
     metadatas = []
     
@@ -70,21 +194,24 @@ def _chunk_text(text: str, file_rel_path: str) -> list:
     if not lines:
         return docs, metadatas
         
-    # Smart chunking: we look for 'class ' or 'def ' to start a new chunk in Python/CS/JS
-    # to avoid breaking functions in the middle.
     chunks = []
     current_chunk = []
     start_line = 1
     
+    # Matches definitions with optional leading spaces: class, def, function, public/private void, etc.
+    def_pattern = re.compile(
+        r'^\s*(class\s+|def\s+|function\s+|export\s+(?:default\s+)?class\s+|'
+        r'public\s+(?:class|struct|interface|void|async|static)|'
+        r'private\s+(?:class|struct|interface|void|async|static))'
+    )
+
     for i, line in enumerate(lines):
-        # Heuristic: if line starts with code definition and current chunk is sizeable, break.
-        if (line.startswith(("class ", "def ", "function ", "export ", "public class", "private class"))) and len(current_chunk) > 20:
+        if def_pattern.match(line) and len(current_chunk) > 20:
             chunks.append(("\n".join(current_chunk), start_line, i))
             current_chunk = [line]
             start_line = i + 1
         else:
             current_chunk.append(line)
-            # Hard limit at 60 lines to avoid massive chunks
             if len(current_chunk) >= 60:
                 chunks.append(("\n".join(current_chunk), start_line, i + 1))
                 current_chunk = []
@@ -99,10 +226,18 @@ def _chunk_text(text: str, file_rel_path: str) -> list:
         metadatas.append({
             "file": str(file_rel_path),
             "start_line": s_line,
-            "end_line": e_line
+            "end_line": e_line,
+            "context": "Heuristic block"
         })
         
     return docs, metadatas
+
+
+def _chunk_text(text: str, file_rel_path: str) -> list:
+    """Chunks text logically (using AST for Python, and regex heuristics for others)."""
+    if file_rel_path.endswith(".py"):
+        return _chunk_python_ast(text, file_rel_path)
+    return _chunk_heuristic(text, file_rel_path)
 
 def _load_argentignore(project_path: Path) -> set:
     """Load .argentignore patterns from the project root."""
@@ -227,29 +362,87 @@ def update_file_index(file_path: str):
         print(f"[WARN] Failed to update RAG for {file_path}: {e}")
 
 def semantic_search(query: str, n_results: int = 5) -> str:
-    """Tool for the LLM to search the vector database for code snippets."""
+    """Tool for the LLM to search the vector database for code snippets using Hybrid Search + RRF."""
     global _RAG_ENABLED, _COLLECTION
     
     if not _RAG_ENABLED or _COLLECTION is None:
         return "Error: RAG is not enabled. Cannot perform semantic search."
+    
+    cache_key = hashlib.md5(f"{query}:{n_results}".encode()).hexdigest()
+    now = time.time()
+    if cache_key in _SEARCH_CACHE:
+        cached_ts, cached_result = _SEARCH_CACHE[cache_key]
+        if now - cached_ts < _SEARCH_CACHE_TTL:
+            return cached_result
         
     try:
-        results = _COLLECTION.query(
+        # 1. Semantic (Vector) search
+        vector_results = _COLLECTION.query(
             query_texts=[query],
-            n_results=n_results
+            n_results=n_results * 2
         )
         
-        if not results['documents'] or not results['documents'][0]:
+        vector_docs = []
+        if vector_results.get('documents') and vector_results['documents'][0]:
+            for i in range(len(vector_results['documents'][0])):
+                doc = vector_results['documents'][0][i]
+                meta = vector_results['metadatas'][0][i]
+                doc_id = vector_results['ids'][0][i]
+                vector_docs.append((doc, meta, doc_id))
+                
+        # 2. Keyword Search
+        import re
+        keywords = [w.lower() for w in re.findall(r'\w+', query) if len(w) > 2]
+        keyword_docs = []
+        if keywords:
+            try:
+                data = _COLLECTION.get(include=["documents", "metadatas"])
+                if data and data.get("documents"):
+                    scored = []
+                    for doc, meta, doc_id in zip(data["documents"], data["metadatas"], data["ids"]):
+                        doc_lower = doc.lower()
+                        score = sum(doc_lower.count(kw) for kw in keywords)
+                        if score > 0:
+                            scored.append((score, doc, meta, doc_id))
+                    scored.sort(key=lambda x: x[0], reverse=True)
+                    keyword_docs = [(doc, meta, doc_id) for _, doc, meta, doc_id in scored[:n_results * 2]]
+            except Exception:
+                pass
+                
+        # 3. Reciprocal Rank Fusion (RRF)
+        rrf_scores = {}
+        doc_map = {}
+        
+        for rank, (doc, meta, doc_id) in enumerate(vector_docs):
+            rrf_scores[doc_id] = rrf_scores.get(doc_id, 0.0) + 1.0 / (60 + rank)
+            doc_map[doc_id] = (doc, meta)
+            
+        for rank, (doc, meta, doc_id) in enumerate(keyword_docs):
+            rrf_scores[doc_id] = rrf_scores.get(doc_id, 0.0) + 1.0 / (60 + rank)
+            doc_map[doc_id] = (doc, meta)
+            
+        if not rrf_scores:
             return f"No relevant code found for query: '{query}'"
             
+        # Get top n_results after fusion
+        sorted_ids = sorted(rrf_scores.keys(), key=lambda x: rrf_scores[x], reverse=True)[:n_results]
+        
         output = [f"### Semantic Search Results for '{query}' ###\n"]
-        for i, doc in enumerate(results['documents'][0]):
-            meta = results['metadatas'][0][i]
-            output.append(f"--- Snippet {i+1} | {meta['file']} (Lines {meta['start_line']}-{meta['end_line']}) ---")
+        for i, doc_id in enumerate(sorted_ids):
+            doc, meta = doc_map[doc_id]
+            context_str = f" | {meta['context']}" if 'context' in meta else ""
+            output.append(f"--- Snippet {i+1} | {meta['file']} (Lines {meta['start_line']}-{meta['end_line']}{context_str}) ---")
             output.append("```")
             output.append(doc)
             output.append("```\n")
             
-        return "\n".join(output)
+        result = "\n".join(output)
+        _SEARCH_CACHE[cache_key] = (now, result)
+        
+        if len(_SEARCH_CACHE) > 100:
+            oldest_key = min(_SEARCH_CACHE, key=lambda k: _SEARCH_CACHE[k][0])
+            del _SEARCH_CACHE[oldest_key]
+        
+        return result
     except Exception as e:
         return f"Error performing semantic search: {e}"

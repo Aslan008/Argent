@@ -7,18 +7,28 @@ CONFIG_FILE = Path.home() / ".argent_coder_config.json"
 
 DEFAULT_MODEL = "llama3.1"
 
+_CONFIG_CACHE = None
+
 def load_config() -> dict:
-    """Load configuration from disk."""
+    """Load configuration from disk with caching."""
+    global _CONFIG_CACHE
+    if _CONFIG_CACHE is not None:
+        return _CONFIG_CACHE
+
     if CONFIG_FILE.exists():
         try:
             with open(CONFIG_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
+                _CONFIG_CACHE = json.load(f)
+                return _CONFIG_CACHE
         except json.JSONDecodeError:
             pass
-    return {"model": DEFAULT_MODEL}
+    _CONFIG_CACHE = {"model": DEFAULT_MODEL}
+    return _CONFIG_CACHE
 
 def save_config(config: dict):
-    """Save configuration to disk."""
+    """Save configuration to disk and update cache."""
+    global _CONFIG_CACHE
+    _CONFIG_CACHE = config
     with open(CONFIG_FILE, "w", encoding="utf-8") as f:
         json.dump(config, f, indent=4)
 
@@ -67,6 +77,19 @@ def set_zai_endpoint(endpoint: str):
     """Save the Z.ai API endpoint to config."""
     config = load_config()
     config["zai_endpoint"] = endpoint
+    save_config(config)
+
+DEFAULT_KOBOLDCPP_URL = "http://localhost:5001/v1"
+
+def get_koboldcpp_url() -> str:
+    """Get the configured KoboldCPP API URL."""
+    config = load_config()
+    return config.get("koboldcpp_url", DEFAULT_KOBOLDCPP_URL)
+
+def set_koboldcpp_url(url: str):
+    """Save the KoboldCPP API URL to config."""
+    config = load_config()
+    config["koboldcpp_url"] = url
     save_config(config)
 
 
@@ -175,6 +198,60 @@ def set_context_window(size: int):
     config["context_window"] = size
     save_config(config)
 
+def get_embedding_provider() -> str:
+    """Get the configured embedding provider. 'sentence_transformers' or 'ollama'."""
+    config = load_config()
+    return config.get("embedding_provider", "sentence_transformers")
+
+def set_embedding_provider(provider: str):
+    """Save the embedding provider. Valid: 'sentence_transformers', 'ollama'."""
+    config = load_config()
+    config["embedding_provider"] = provider
+    save_config(config)
+
+def get_ollama_embedding_model() -> str:
+    """Get the Ollama model to use for embeddings."""
+    config = load_config()
+    return config.get("ollama_embedding_model", "nomic-embed-text")
+
+def set_ollama_embedding_model(model: str):
+    """Save the Ollama embedding model."""
+    config = load_config()
+    config["ollama_embedding_model"] = model
+    save_config(config)
+
+def get_mcp_servers() -> list[dict]:
+    """Get the list of configured MCP servers."""
+    config = load_config()
+    return config.get("mcp_servers", [])
+
+def set_mcp_servers(servers: list[dict]):
+    """Save the MCP servers configuration."""
+    config = load_config()
+    config["mcp_servers"] = servers
+    save_config(config)
+
+def add_mcp_server(name: str, server_type: str = "stdio", url: str = None,
+                   command: str = None, args: list = None, env: dict = None):
+    """Add or update an MCP server in config."""
+    servers = [s for s in get_mcp_servers() if s["name"] != name]
+    entry = {"name": name, "type": server_type}
+    if url:
+        entry["url"] = url
+    if command:
+        entry["command"] = command
+    if args:
+        entry["args"] = args
+    if env:
+        entry["env"] = env
+    servers.append(entry)
+    set_mcp_servers(servers)
+
+def remove_mcp_server(name: str):
+    """Remove an MCP server from config."""
+    servers = [s for s in get_mcp_servers() if s["name"] != name]
+    set_mcp_servers(servers)
+
 import re
 
 def get_model_size_category(model_name: str) -> str:
@@ -213,3 +290,27 @@ def get_model_size_category(model_name: str) -> str:
         return "tiny"
     
     return "medium"
+
+def get_strip_reasoning() -> bool:
+    """Check if reasoning (thinking) blocks should be stripped from history before LLM calls."""
+    config = load_config()
+    return config.get("strip_reasoning", True)
+
+def set_strip_reasoning(enabled: bool):
+    """Save user preference for stripping reasoning blocks from history."""
+    config = load_config()
+    config["strip_reasoning"] = enabled
+    save_config(config)
+
+def get_temperature() -> float:
+    """Get the configured temperature for LLM generation. Defaults to 0.3."""
+    config = load_config()
+    return config.get("temperature", 0.3)
+
+def set_temperature(val: float):
+    """Save the configured temperature for LLM generation."""
+    config = load_config()
+    config["temperature"] = val
+    save_config(config)
+
+

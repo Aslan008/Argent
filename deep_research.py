@@ -29,8 +29,6 @@ try:
 except ImportError:
     pass
 
-OLLAMA_API_URL = "http://localhost:11434/api/generate"
-
 def _call_llm_sync(prompt: str, json_format: bool = False, temperature: float = 0.3) -> str:
     """Synchronous internal call to the configured LLM provider."""
     model = get_current_model()

@@ -268,11 +268,14 @@ def read_file(file_path: str, start_line: int = None, end_line: int = None) -> s
                 header = f"[Lines {s+1}-{e} of {total}]\n"
                 return header + "".join(selected)
             else:
-                content = f.read()
-                line_count = len(content.splitlines())
-                if line_count > 500:
-                    return f"[File has {line_count} lines. Showing first 500. Use start_line/end_line to read specific sections.]\n" + "\n".join(content.splitlines()[:500])
-                return content
+                lines = []
+                for i, line in enumerate(f):
+                    if i >= 500:
+                        remaining = sum(1 for _ in f) + 1
+                        total = 500 + remaining
+                        return f"[File has {total} lines. Showing first 500. Use start_line/end_line to read specific sections.]\n" + "".join(lines)
+                    lines.append(line)
+                return "".join(lines)
     except Exception as e:
         return f"Error reading file '{file_path}': {e}"
 
@@ -294,7 +297,8 @@ def delete_file(file_path: str) -> str:
         
         if not approved:
             return f"Deletion aborted by user. The file '{file_path}' was NOT deleted."
-            
+        
+        snapshot(str(path))
         path.unlink()
         log.info("delete_file: %s", file_path)
         memory.add_completed(f"Deleted {file_path}")
@@ -356,8 +360,12 @@ def write_obsidian_note(note_path: str, content: str, tags: list = None, aliases
         full_path = (base_path / note_path).resolve()
         
         # Security check to ensure we don't write outside the vault
-        if not str(full_path).startswith(str(base_path)):
-            return f"Error: Invalid path '{note_path}' attempts to write outside the Obsidian vault."
+        try:
+            common = os.path.commonpath([str(full_path), str(base_path)])
+            if common != str(base_path):
+                return f"Error: Invalid path '{note_path}' attempts to write outside the Obsidian vault."
+        except ValueError:
+            return f"Error: Invalid path '{note_path}'."
             
         if full_path.exists() and not overwrite:
             return f"Error: Note '{note_path}' already exists. Use overwrite=True if you meant to replace it, or use replace_in_file for localized edits."
@@ -1709,6 +1717,100 @@ def run_subagent(role: str, task: str, tools_json: str = None) -> str:
 # Tool Mapping & Schemas
 # ---------------------------------------------------------------------------
 
+def wait_heartbeat(delay_seconds: int, condition_to_check: str) -> str:
+    """Schedules a delayed continuation in Auto Mode. Used to wait for background tasks or servers."""
+    return f"Heartbeat scheduled. [HEARTBEAT_REQUEST: {delay_seconds}|{condition_to_check}]"
+
+def end_auto_mode(reason: str) -> str:
+    """Stops the experimental Auto Mode."""
+    return f"Auto Mode finished. [END_AUTO_MODE] Reason: {reason}"
+
+# ---------------------------------------------------------------------------
+# Browser Automation Tools (Playwright-based, BrowserAct-style)
+# ---------------------------------------------------------------------------
+from browser_engine import browser_engine
+
+def browser_open(url: str, session: str = "default", headed: bool = False) -> str:
+    """Open a URL in the browser. Creates a new session if needed."""
+    try:
+        return browser_engine.run(browser_engine.open_page(url, session, headed))
+    except Exception as e:
+        log.error("browser_open error: %s", e)
+        return f"Error opening browser: {e}"
+
+def browser_state(session: str = "default") -> str:
+    """Get the current page state: numbered list of interactive elements."""
+    try:
+        return browser_engine.run(browser_engine.get_state(session))
+    except KeyError as e:
+        return str(e)
+    except Exception as e:
+        log.error("browser_state error: %s", e)
+        return f"Error getting browser state: {e}"
+
+def browser_click(index: int, session: str = "default") -> str:
+    """Click an element by its index from browser_state."""
+    try:
+        return browser_engine.run(browser_engine.click(index, session))
+    except KeyError as e:
+        return str(e)
+    except Exception as e:
+        log.error("browser_click error: %s", e)
+        return f"Error clicking element: {e}"
+
+def browser_input(index: int, text: str, session: str = "default") -> str:
+    """Type text into an input element by its index from browser_state."""
+    try:
+        return browser_engine.run(browser_engine.fill_input(index, text, session))
+    except KeyError as e:
+        return str(e)
+    except Exception as e:
+        log.error("browser_input error: %s", e)
+        return f"Error filling input: {e}"
+
+def browser_screenshot(path: str = None, full_page: bool = False, session: str = "default") -> str:
+    """Take a screenshot of the current page."""
+    try:
+        return browser_engine.run(browser_engine.screenshot(path, full_page, session))
+    except KeyError as e:
+        return str(e)
+    except Exception as e:
+        log.error("browser_screenshot error: %s", e)
+        return f"Error taking screenshot: {e}"
+
+def browser_scroll(direction: str = "down", amount: int = 500, session: str = "default") -> str:
+    """Scroll the page up or down."""
+    try:
+        return browser_engine.run(browser_engine.scroll(direction, amount, session))
+    except KeyError as e:
+        return str(e)
+    except Exception as e:
+        log.error("browser_scroll error: %s", e)
+        return f"Error scrolling: {e}"
+
+def browser_get_content(content_type: str = "text", index: int = None, selector: str = None, session: str = "default") -> str:
+    """Extract content from the page. content_type: 'text', 'markdown', or 'html'. Use selector for CSS targeting."""
+    try:
+        if content_type == "markdown":
+            return browser_engine.run(browser_engine.get_markdown(session))
+        elif content_type == "html":
+            return browser_engine.run(browser_engine.get_html(session))
+        else:
+            return browser_engine.run(browser_engine.get_text(index, selector, session))
+    except KeyError as e:
+        return str(e)
+    except Exception as e:
+        log.error("browser_get_content error: %s", e)
+        return f"Error getting content: {e}"
+
+def browser_close(session: str = "default") -> str:
+    """Close a browser session."""
+    try:
+        return browser_engine.run(browser_engine.close_session(session))
+    except Exception as e:
+        log.error("browser_close error: %s", e)
+        return f"Error closing browser: {e}"
+
 AVAILABLE_TOOLS = {
     "add_project_task": add_project_task,
     "complete_project_task": complete_project_task,
@@ -1750,6 +1852,8 @@ AVAILABLE_TOOLS = {
     "read_skill": read_skill,
     "create_skill": create_skill,
     "delete_skill": delete_skill,
+    "wait_heartbeat": wait_heartbeat,
+    "end_auto_mode": end_auto_mode,
     "find_definition": find_definition,
     "find_references": find_references,
     "git_checkpoint": git_checkpoint,
@@ -1757,7 +1861,15 @@ AVAILABLE_TOOLS = {
     "call_mcp_tool": call_mcp_tool,
     "run_subagent": run_subagent,
     "create_svg_image": create_svg_image,
-    "ask_user_questions": ask_user_questions
+    "ask_user_questions": ask_user_questions,
+    "browser_open": browser_open,
+    "browser_state": browser_state,
+    "browser_click": browser_click,
+    "browser_input": browser_input,
+    "browser_screenshot": browser_screenshot,
+    "browser_scroll": browser_scroll,
+    "browser_get_content": browser_get_content,
+    "browser_close": browser_close,
 }
 
 TOOL_SCHEMAS = [
@@ -2720,6 +2832,225 @@ TOOL_SCHEMAS = [
                     }
                 },
                 "required": ["questions"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "wait_heartbeat",
+            "description": "Used in Auto Mode to sleep for a specified number of seconds before waking up to check a condition. Use this to wait for compilation, server startup, or long-running background tasks.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "delay_seconds": {
+                        "type": "integer",
+                        "description": "The number of seconds to wait before waking up."
+                    },
+                    "condition_to_check": {
+                        "type": "string",
+                        "description": "What you want to check when you wake up. This will be sent back to you as context."
+                    }
+                },
+                "required": ["delay_seconds", "condition_to_check"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "end_auto_mode",
+            "description": "Ends the autonomous experimental mode and explicitly returns control to the user. MUST call this when the task is fully completed.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "reason": {
+                        "type": "string",
+                        "description": "The reason for ending auto mode (e.g., 'Task completed successfully', 'Encountered unrecoverable error')."
+                    }
+                },
+                "required": ["reason"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "browser_open",
+            "description": "Open a URL in the built-in browser. Creates a browser session if needed. Use this to navigate to websites for scraping, form filling, or interaction. After opening, call browser_state to see the interactive elements on the page.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "url": {
+                        "type": "string",
+                        "description": "The URL to navigate to (e.g. 'https://example.com')."
+                    },
+                    "session": {
+                        "type": "string",
+                        "description": "Name of the browser session. Use different names for parallel browsing. Default: 'default'."
+                    },
+                    "headed": {
+                        "type": "boolean",
+                        "description": "If true, shows the browser window (for debugging). Default: false (headless)."
+                    }
+                },
+                "required": ["url"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "browser_state",
+            "description": "Get the current state of the browser page: URL, title, and a numbered list of all interactive elements (buttons, links, inputs, etc). ALWAYS call this after browser_open or after any action to see the updated page. Use the element indices from this output for browser_click and browser_input.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "session": {
+                        "type": "string",
+                        "description": "Browser session name. Default: 'default'."
+                    }
+                }
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "browser_click",
+            "description": "Click on an interactive element by its index number. The index comes from browser_state output (e.g. [3] button \"Submit\"). IMPORTANT: After clicking, call browser_state again to see the updated page — old indices become invalid.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "index": {
+                        "type": "integer",
+                        "description": "The element index from browser_state (e.g. 3 for [3] button \"Submit\")."
+                    },
+                    "session": {
+                        "type": "string",
+                        "description": "Browser session name. Default: 'default'."
+                    }
+                },
+                "required": ["index"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "browser_input",
+            "description": "Type text into an input field or textarea by its index from browser_state. Clears the existing text before typing. Use for filling forms, search boxes, login fields.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "index": {
+                        "type": "integer",
+                        "description": "The element index from browser_state."
+                    },
+                    "text": {
+                        "type": "string",
+                        "description": "The text to type into the element."
+                    },
+                    "session": {
+                        "type": "string",
+                        "description": "Browser session name. Default: 'default'."
+                    }
+                },
+                "required": ["index", "text"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "browser_screenshot",
+            "description": "Take a screenshot of the current browser page and save it to disk. Returns the file path of the saved image.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Optional file path to save the screenshot. If not provided, saves to the visuals directory with a timestamp."
+                    },
+                    "full_page": {
+                        "type": "boolean",
+                        "description": "If true, captures the entire scrollable page. Default: false (viewport only)."
+                    },
+                    "session": {
+                        "type": "string",
+                        "description": "Browser session name. Default: 'default'."
+                    }
+                }
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "browser_scroll",
+            "description": "Scroll the browser page up or down. Use this to reveal content below the fold or to navigate long pages.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "direction": {
+                        "type": "string",
+                        "enum": ["up", "down"],
+                        "description": "Scroll direction. Default: 'down'."
+                    },
+                    "amount": {
+                        "type": "integer",
+                        "description": "Pixels to scroll. Default: 500."
+                    },
+                    "session": {
+                        "type": "string",
+                        "description": "Browser session name. Default: 'default'."
+                    }
+                }
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "browser_get_content",
+            "description": "Extract content from the current browser page. Can return plain text, markdown, or raw HTML. Use 'text' for body text, 'markdown' for structured readable content, 'html' for raw source. Use 'selector' to target a specific part of the page (e.g. '#comments' for YouTube comments, '.vacancy-list' for job listings, 'main' for main content).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "content_type": {
+                        "type": "string",
+                        "enum": ["text", "markdown", "html"],
+                        "description": "Type of content to extract. Default: 'text'."
+                    },
+                    "index": {
+                        "type": "integer",
+                        "description": "Optional element index to get text from a specific element only."
+                    },
+                    "selector": {
+                        "type": "string",
+                        "description": "Optional CSS selector to target a specific section of the page. Examples: '#comments', '.job-list', 'main', 'article'. Much more precise than reading the entire page."
+                    },
+                    "session": {
+                        "type": "string",
+                        "description": "Browser session name. Default: 'default'."
+                    }
+                }
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "browser_close",
+            "description": "Close a browser session and free resources. Always close sessions when done with browser automation.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "session": {
+                        "type": "string",
+                        "description": "Name of the session to close. Default: 'default'."
+                    }
+                }
             }
         }
     }

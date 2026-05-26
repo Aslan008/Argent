@@ -1,8 +1,8 @@
 import os
-import ollama
 from skill_manager import skill_manager
 from ui import console, print_markdown, print_error, print_system
 from config import get_current_model
+from providers import create_provider
 
 def command_audit(*args):
     """
@@ -27,7 +27,6 @@ def command_audit(*args):
         print_error(f"Error reading file: {e}")
         return
 
-    # Load the Expert Architect skill
     skill_instructions = skill_manager.read_skill("ExpertArchitect")
     if not skill_instructions:
         print_error("ExpertArchitect skill instructions not found.")
@@ -44,17 +43,15 @@ def command_audit(*args):
     )
 
     try:
-        model = get_current_model()
-        # Fast synchronous call for analysis
-        response = ollama.chat(
-            model=model,
+        provider = create_provider()
+        report = provider.sync_chat(
+            model=get_current_model(),
             messages=[{"role": "user", "content": prompt}]
         )
-        report = response.get("message", {}).get("content", "Error generating report.")
-        
+
         console.rule(f"[bold green]Audit Results Specialist: Expert Architect[/bold green]")
         print_markdown(report)
-        
+
     except Exception as e:
         print_error(f"Audit failed: {e}")
 

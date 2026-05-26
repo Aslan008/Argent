@@ -13,6 +13,7 @@ Memory structure:
 """
 
 import json
+import threading
 from pathlib import Path
 from datetime import datetime
 
@@ -26,6 +27,7 @@ MEMORY_FILE = Path(".argent") / "memory.json"
 class MemoryManager:
     def __init__(self):
         self.data = self._load()
+        self._lock = threading.Lock()
 
     def _load(self) -> dict:
         if MEMORY_FILE.exists():
@@ -44,9 +46,10 @@ class MemoryManager:
         }
 
     def _save(self):
-        MEMORY_FILE.parent.mkdir(parents=True, exist_ok=True)
-        self.data["updated_at"] = datetime.now().isoformat()
-        MEMORY_FILE.write_text(json.dumps(self.data, indent=2, ensure_ascii=False), encoding="utf-8")
+        with self._lock:
+            MEMORY_FILE.parent.mkdir(parents=True, exist_ok=True)
+            self.data["updated_at"] = datetime.now().isoformat()
+            MEMORY_FILE.write_text(json.dumps(self.data, indent=2, ensure_ascii=False), encoding="utf-8")
 
     def set_objective(self, text: str):
         self.data["objective"] = text[:500]
