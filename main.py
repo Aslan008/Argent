@@ -110,7 +110,7 @@ def main():
     builtin_cmds = [
         '/help', '/provider', '/model', '/obsidian', '/clear', '/research', '/enable_rag', '/disable_rag', '/rag_provider',
         '/hooks', '/tools', '/save', '/setup_terminal', '/project', '/work', '/commit',
-        '/sessions', '/load', '/diff', '/undo', '/undo_all', '/copy', '/logs', '/skills', '/auto', '/verbose', '/exit', '/quit'
+        '/sessions', '/load', '/diff', '/undo', '/undo_all', '/copy', '/logs', '/skills', '/auto', '/verbose', '/browser', '/exit', '/quit'
     ]
     
     def get_all_commands():
@@ -246,10 +246,43 @@ def main():
                 )
                 print_system(f"🚀 Запущен автоматический режим для: {auto_task}")
                 is_project_mode = False
+            elif user_input.startswith("/browser"):
+                parts = user_input.strip().split()
+                if len(parts) == 1:
+                    # Show current status and detected browsers
+                    from config import get_browser_mode, get_browser_name
+                    from browser_detect import detect_browsers
+                    mode = get_browser_mode()
+                    name = get_browser_name()
+                    browsers = detect_browsers()
+                    print_system(f"Browser Mode: [bold cyan]{mode}[/bold cyan]")
+                    print_system(f"Selected Browser: [bold cyan]{name}[/bold cyan]")
+                    if browsers:
+                        print_system("Detected browsers:")
+                        for b in browsers:
+                            print_system(f"  - [bold yellow]{b.key}[/bold yellow]: {b.exe_path}")
+                    else:
+                        print_system("[dim]No Chromium-based browsers detected.[/dim]")
+                    print_system("\nUsage: /browser user | isolated | chrome | yandex | edge | brave | auto")
+                elif parts[1] in ("user", "isolated"):
+                    from config import set_browser_mode
+                    set_browser_mode(parts[1])
+                    if parts[1] == "user":
+                        print_system("Browser mode: [bold green]USER[/bold green] — AI will use your real browser via CDP.")
+                    else:
+                        print_system("Browser mode: [bold yellow]ISOLATED[/bold yellow] — AI will use Playwright Chromium.")
+                elif parts[1] in ("chrome", "yandex", "edge", "brave", "auto"):
+                    from config import set_browser_name, set_browser_mode
+                    set_browser_name(parts[1])
+                    set_browser_mode("user")
+                    print_system(f"Browser set to: [bold green]{parts[1]}[/bold green] (user mode enabled).")
+                else:
+                    print_error(f"Unknown browser option: {parts[1]}. Valid: user, isolated, chrome, yandex, edge, brave, auto")
+                continue
             elif user_input.strip() == "/enable_rag":
                 cwd = os.getcwd()
                 try:
-                    import chromadb
+                    import chromadb  # type: ignore[import-not-found]
                 except ImportError:
                     print_error("ChromaDB is not installed.")
                     install = questionary.confirm("Would you like Argent to install it now? (pip install chromadb sentence-transformers)").ask()

@@ -314,3 +314,28 @@ def set_temperature(val: float):
     save_config(config)
 
 
+def get_browser_mode() -> str:
+    """Get browser mode: 'isolated' (Playwright Chromium) or 'user' (CDP to real browser).
+    Default: 'isolated'.
+    """
+    config = load_config()
+    return config.get("browser_mode", "isolated")
+
+def set_browser_mode(mode: str):
+    """Save browser mode. Valid: 'isolated', 'user'."""
+    config = load_config()
+    config["browser_mode"] = mode
+    save_config(config)
+
+def get_browser_name() -> str:
+    """Get which browser to use in 'user' mode: 'auto', 'chrome', 'yandex', 'edge', 'brave'.
+    Default: 'auto' (first detected).
+    """
+    config = load_config()
+    return config.get("browser_name", "auto")
+
+def set_browser_name(name: str):
+    """Save which browser to use. Valid: 'auto', 'chrome', 'yandex', 'edge', 'brave'."""
+    config = load_config()
+    config["browser_name"] = name
+    save_config(config)

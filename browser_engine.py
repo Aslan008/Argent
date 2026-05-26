@@ -300,13 +300,15 @@ class BrowserEngine:
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._headed = False          # Current headed mode state
         self._stealth_applied = False
+        self._cdp_mode = False        # True when connected via CDP to user's browser
+        self._cdp_process = None      # subprocess.Popen if we launched the browser ourselves
 
     # -----------------------------------------------------------------------
     # Lifecycle
     # -----------------------------------------------------------------------
 
     async def _ensure_browser(self, headed: bool = False) -> None:
-        """Lazy-initialize Playwright and launch browser if not running."""
+        """Lazy-initialize browser. Routes to isolated or CDP mode based on config."""
         # If the browser exists but headed mode changed, restart
         if self._browser and self._headed != headed:
             await self.shutdown()
@@ -321,8 +323,22 @@ class BrowserEngine:
                 "Playwright is not installed. Run: pip install playwright && playwright install chromium"
             )
 
-        self._playwright = await async_playwright().start()
+        # Start Playwright ONCE — both modes reuse this instance.
+        if not self._playwright:
+            self._playwright = await async_playwright().start()
 
+        from config import get_browser_mode
+        mode = get_browser_mode()
+
+        if mode == "user":
+            await self._connect_user_browser(headed)
+        else:
+            await self._launch_isolated(headed)
+
+    async def _launch_isolated(self, headed: bool = False) -> None:
+        """Launch Playwright's bundled Chromium (isolated, no user data).
+        Assumes self._playwright is already started.
+        """
         launch_args = [
             "--disable-blink-features=AutomationControlled",
             "--no-first-run",
@@ -334,20 +350,142 @@ class BrowserEngine:
             args=launch_args,
         )
         self._headed = headed
-        log.info("Browser launched (headed=%s)", headed)
+        self._cdp_mode = False
+        log.info("Isolated browser launched (headed=%s)", headed)
+
+    @staticmethod
+    def _is_browser_running(exe_name: str) -> bool:
+        """Check if a browser process is already running (Windows)."""
+        import subprocess
+        try:
+            result = subprocess.run(
+                ["tasklist", "/FI", f"IMAGENAME eq {exe_name}", "/NH"],
+                capture_output=True, text=True, timeout=5,
+            )
+            # tasklist returns the process name if found, otherwise "INFO: No tasks..."
+            return exe_name.lower() in result.stdout.lower()
+        except Exception:
+            return False
+
+    async def _connect_user_browser(self, headed: bool = False) -> None:
+        """Connect to the user's real browser via Chrome DevTools Protocol.
+        Assumes self._playwright is already started.
+
+        Strategy:
+        1. Try connecting to an already-running CDP endpoint (localhost:9222)
+        2. If not available, check if browser is running (profile lock risk)
+        3. If browser is NOT running, launch it with CDP
+        4. If nothing works, fall back to isolated mode
+        """
+        from config import get_browser_name
+        from browser_detect import find_browser, get_default_browser
+        import os
+
+        # 1. Try connecting to an already-running CDP endpoint
+        try:
+            self._browser = await self._playwright.chromium.connect_over_cdp(
+                "http://localhost:9222", timeout=3000
+            )
+            self._cdp_mode = True
+            self._headed = True
+            log.info("Connected to existing browser via CDP on port 9222")
+            return
+        except Exception:
+            log.info("No existing CDP endpoint found, will launch browser")
+
+        # 2. Find the user's browser
+        browser_name = get_browser_name()
+        if browser_name == "auto":
+            info = get_default_browser()
+        else:
+            info = find_browser(browser_name)
+
+        if not info:
+            log.warning("No user browser found, falling back to isolated mode")
+            await self._launch_isolated(headed)
+            return
+
+        # 3. Check if this browser is already running (profile lock risk)
+        exe_name = os.path.basename(info.exe_path)
+        if self._is_browser_running(exe_name):
+            log.warning(
+                "%s is already running without CDP. "
+                "Cannot use the same profile. "
+                "Close %s and retry, or switch to isolated mode. "
+                "Falling back to isolated mode.",
+                info.name, info.name,
+            )
+            await self._launch_isolated(headed)
+            return
+
+        # 4. Launch the browser with CDP enabled
+        import subprocess
+        cdp_args = [
+            info.exe_path,
+            "--remote-debugging-port=9222",
+            f"--user-data-dir={info.user_data_dir}",
+            "--no-first-run",
+            "--no-default-browser-check",
+        ]
+        log.info("Launching %s with CDP: %s", info.name, info.exe_path)
+
+        self._cdp_process = subprocess.Popen(
+            cdp_args,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+
+        # 5. Wait for CDP endpoint to become available
+        from urllib.request import urlopen
+        from urllib.error import URLError
+        connected = False
+        for attempt in range(30):  # 30 * 0.5s = 15s max
+            try:
+                resp = urlopen("http://localhost:9222/json/version", timeout=2)
+                if resp.status == 200:
+                    connected = True
+                    break
+            except (URLError, OSError):
+                pass
+            await asyncio.sleep(0.5)
+
+        if not connected:
+            log.error("Failed to connect to %s CDP after 15s", info.name)
+            if self._cdp_process:
+                self._cdp_process.terminate()
+                self._cdp_process = None
+            log.warning("Falling back to isolated mode")
+            await self._launch_isolated(headed)
+            return
+
+        # 6. Connect Playwright to the browser via CDP
+        self._browser = await self._playwright.chromium.connect_over_cdp(
+            "http://localhost:9222"
+        )
+        self._cdp_mode = True
+        self._headed = True
+        log.info("Connected to %s via CDP", info.name)
 
     async def shutdown(self) -> None:
-        """Close all sessions and the browser."""
+        """Close all sessions and disconnect from the browser.
+        In CDP mode, we do NOT kill the user's browser — only disconnect.
+        """
         for name in list(self._sessions.keys()):
             try:
                 ctx = self._sessions.pop(name)
-                await ctx.context.close()
+                # In CDP mode, don't close the context (it belongs to the user)
+                if not self._cdp_mode:
+                    await ctx.context.close()
             except Exception:
                 pass
 
         if self._browser:
             try:
-                await self._browser.close()
+                if self._cdp_mode:
+                    # Disconnect only — do NOT close the user's browser
+                    await self._browser.close()
+                else:
+                    await self._browser.close()
             except Exception:
                 pass
             self._browser = None
@@ -359,6 +497,9 @@ class BrowserEngine:
                 pass
             self._playwright = None
 
+        # Do NOT terminate CDP process — it's the user's real browser
+        self._cdp_process = None
+        self._cdp_mode = False
         self._stealth_applied = False
         log.info("Browser engine shut down")
 
@@ -413,26 +554,34 @@ class BrowserEngine:
         """Create a new named browser session."""
         await self._ensure_browser(headed)
 
-        # Create isolated browser context (separate cookies, cache, etc.)
-        context = await self._browser.new_context(
-            viewport={"width": 1280, "height": 720},
-            user_agent=(
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/131.0.0.0 Safari/537.36"
-            ),
-            locale="en-US",
-            timezone_id="America/New_York",
-            # Disable webdriver detection flag
-            java_script_enabled=True,
-        )
-
-        page = await context.new_page()
-        await self._apply_stealth(page)
+        if self._cdp_mode:
+            # CDP mode: use the user's existing browser context.
+            # No stealth patches — this is their real browser with real fingerprint.
+            contexts = self._browser.contexts
+            if contexts:
+                context = contexts[0]
+            else:
+                context = await self._browser.new_context()
+            page = await context.new_page()
+        else:
+            # Isolated mode: create a fresh context with stealth settings.
+            context = await self._browser.new_context(
+                viewport={"width": 1280, "height": 720},
+                user_agent=(
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/131.0.0.0 Safari/537.36"
+                ),
+                locale="en-US",
+                timezone_id="America/New_York",
+                java_script_enabled=True,
+            )
+            page = await context.new_page()
+            await self._apply_stealth(page)
 
         sc = _SessionContext(context=context, page=page)
         self._sessions[session] = sc
-        log.info("Session '%s' created", session)
+        log.info("Session '%s' created (cdp=%s)", session, self._cdp_mode)
         return sc
 
     async def _apply_stealth(self, page) -> None:
@@ -498,7 +647,8 @@ class BrowserEngine:
 
         title = await sc.page.title()
         current_url = sc.page.url
-        return f"Opened: {current_url}\nTitle: {title}"
+        mode_label = "CDP (user browser)" if self._cdp_mode else "isolated (Playwright)"
+        return f"Opened: {current_url}\nTitle: {title}\nMode: {mode_label}"
 
     async def navigate(self, url: str, session: str = "default") -> str:
         """Navigate the current session to a new URL."""
