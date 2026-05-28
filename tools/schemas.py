@@ -32,6 +32,7 @@ from tools.misc_tools import (
 from tools.browser_tools import (
     browser_open, browser_state, browser_click, browser_input,
     browser_screenshot, browser_scroll, browser_get_content, browser_close,
+    browser_switch_tab,
 )
 
 AVAILABLE_TOOLS = {
@@ -97,6 +98,7 @@ AVAILABLE_TOOLS = {
     "browser_scroll": browser_scroll,
     "browser_get_content": browser_get_content,
     "browser_close": browser_close,
+    "browser_switch_tab": browser_switch_tab,
 }
 
 TOOL_SCHEMAS = [
@@ -1218,6 +1220,10 @@ TOOL_SCHEMAS = [
                     "query": {
                         "type": "string",
                         "description": "Optional. Keyword to filter elements by (case-insensitive OR match against text, tags, values, and hrefs. Supports comma-separated list). WARNING: Use ONLY literal keywords expected to physically appear on the page (e.g. 'Videos', 'Sign In'). Do NOT use semantic descriptions of your goal (e.g. do NOT search for 'latest video' because video titles are actual names like 'Game Title Review', not the text 'latest video')."
+                    },
+                    "scroll_depth": {
+                        "type": "integer",
+                        "description": "Optional. Number of viewport heights to pre-scroll down the page to trigger lazy-loaded / infinite scroll elements before extracting state. Default: 0."
                     }
                 }
             }
@@ -1376,6 +1382,27 @@ TOOL_SCHEMAS = [
                         "description": "Name of the session to close. Default: 'default'."
                     }
                 }
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "browser_switch_tab",
+            "description": "Switch the active tab/page of a named browser session by its 1-based index (e.g. 1, 2). Use this to switch focus when a link opened a new tab.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "index": {
+                        "type": "integer",
+                        "description": "The 1-based index of the tab to switch to (e.g., 2 to switch to the second open tab)."
+                    },
+                    "session": {
+                        "type": "string",
+                        "description": "Browser session name. Default: 'default'."
+                    }
+                },
+                "required": ["index"]
             }
         }
     }

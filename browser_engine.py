@@ -181,20 +181,95 @@ _STATE_EXTRACTION_JS = """
         return false;
     }
 
+    const genericLabels = new Set([
+        'слушать', 'play', 'воспроизвести', 'открыть', 'open', 'купить', 'buy', 
+        'подробнее', 'more', 'details', 'нажать', 'click', 'show', 'показать',
+        'кнопка', 'button', 'delete', 'удалить', 'edit', 'изменить', 'запустить',
+        'начать прослушивание', 'воспроизведение', 'play music', 'слушать музыку'
+    ]);
+
+    function contextualizeLabel(node, label) {
+        const norm = (label || '').toLowerCase().trim();
+        
+        // Если лейбл пустой или совпадает с общими словами, попробуем поискать контекст
+        if (!norm || genericLabels.has(norm)) {
+            let parent = getParentNode(node);
+            // 1. Ищем первый родительский блок, содержащий заголовок или имя
+            for (let i = 0; i < 7 && parent; i++) {
+                const heading = parent.querySelector('h1, h2, h3, h4, h5, h6, [class*="title" i], [class*="name" i]');
+                if (heading) {
+                    const headingText = (heading.innerText || heading.textContent || '').trim();
+                    if (headingText && headingText.toLowerCase() !== norm) {
+                        return label ? `${label} (${headingText.substring(0, 45)})` : headingText.substring(0, 45);
+                    }
+                }
+                parent = getParentNode(parent);
+            }
+            
+            // 2. Фолбек: ищем первый родительский блок, содержащий сильный текст или обычные строки
+            parent = getParentNode(node);
+            for (let i = 0; i < 4 && parent; i++) {
+                const bold = parent.querySelector('strong, b');
+                if (bold) {
+                    const boldText = (bold.innerText || bold.textContent || '').trim();
+                    if (boldText && boldText.toLowerCase() !== norm) {
+                        return label ? `${label} (${boldText.substring(0, 45)})` : boldText.substring(0, 45);
+                    }
+                }
+                const parentText = (parent.innerText || parent.textContent || '').trim();
+                const lines = parentText.split('\\n').map(l => l.trim()).filter(l => l.length > 0 && l.toLowerCase() !== norm);
+                if (lines.length > 0) {
+                    return label ? `${label} (${lines[0].substring(0, 45)})` : lines[0].substring(0, 45);
+                }
+                parent = getParentNode(parent);
+            }
+        }
+        return label;
+    }
+
     function extractLabel(node) {
-        // 1. Атрибуты самого элемента
+        // 1. Атрибут aria-labelledby
+        const ariaLabelledBy = node.getAttribute && node.getAttribute('aria-labelledby');
+        if (ariaLabelledBy) {
+            const labelEl = document.getElementById(ariaLabelledBy.trim());
+            if (labelEl) {
+                const lblText = labelEl.innerText || labelEl.textContent;
+                if (lblText && lblText.trim()) return lblText.trim();
+            }
+        }
+
+        // 2. Атрибуты самого элемента
         const ariaLabel = node.getAttribute && node.getAttribute('aria-label');
         if (ariaLabel && ariaLabel.trim()) return ariaLabel.trim();
         
         if (node.placeholder && node.placeholder.trim()) return node.placeholder.trim();
         if (node.title && node.title.trim()) return node.title.trim();
         
-        // 2. Текстовое содержимое самого элемента
-        const text = (node.innerText || node.textContent || '').trim();
+        // 3. Для полей ввода — тег <label for="id">
+        if (node.id) {
+            const labelFor = document.querySelector(`label[for="${node.id}"]`);
+            if (labelFor) {
+                const lblText = labelFor.innerText || labelFor.textContent;
+                if (lblText && lblText.trim()) return lblText.trim();
+            }
+        }
+
+        // 4. Текстовое содержимое самого элемента
+        let text = (node.innerText || node.textContent || '').trim();
         if (text) return text.substring(0, 80);
 
-        // 3. Поиск во вложенных SVG
+        // 5. Вложенные изображения и SVG
         try {
+            // Вложенные img
+            const imgs = node.querySelectorAll('img');
+            for (const img of imgs) {
+                const alt = img.getAttribute('alt');
+                if (alt && alt.trim()) return alt.trim();
+                const title = img.getAttribute('title');
+                if (title && title.trim()) return title.trim();
+            }
+
+            // Вложенные SVG
             const svgs = node.querySelectorAll('svg');
             for (const svg of svgs) {
                 const svgAria = svg.getAttribute('aria-label');
@@ -207,7 +282,7 @@ _STATE_EXTRACTION_JS = """
             }
         } catch (e) {}
 
-        // 4. Поиск по родителям (до 3 уровней вверх)
+        // 6. Поиск по родителям (до 3 уровней вверх) для поиска aria-label
         let parent = getParentNode(node);
         for (let i = 0; i < 3 && parent; i++) {
             if (parent.getAttribute) {
@@ -218,6 +293,16 @@ _STATE_EXTRACTION_JS = """
                 if (pTitle && pTitle.trim()) return pTitle.trim() + " (parent)";
             }
             parent = getParentNode(parent);
+        }
+
+        // 7. Поиск по URL для пустых ссылок
+        if (node.tagName === 'A' && node.href) {
+            try {
+                const url = new URL(node.href);
+                if (url.pathname && url.pathname !== '/') {
+                    return url.pathname + (url.search ? url.search : '');
+                }
+            } catch(e) {}
         }
 
         return '';
@@ -283,7 +368,8 @@ _STATE_EXTRACTION_JS = """
             const type = node.getAttribute('type');
             if (type) descriptor += `[type=${type}]`;
 
-            const label = extractLabel(node);
+            let label = extractLabel(node);
+            label = contextualizeLabel(node, label);
 
             // Current value for inputs
             let value = '';
@@ -433,8 +519,8 @@ class BrowserEngine:
 
     async def _ensure_browser(self, headed: bool = False) -> None:
         """Lazy-initialize browser. Routes to isolated or CDP mode based on config."""
-        # If the browser exists but headed mode changed, restart
-        if self._browser and self._headed != headed:
+        # If the browser exists but headed mode changed, or it is disconnected, restart
+        if self._browser and (self._headed != headed or not self._browser.is_connected):
             await self.shutdown()
 
         if self._browser:
@@ -599,6 +685,15 @@ class BrowserEngine:
                 ctx = self._sessions.pop(name)
                 # In CDP mode, don't close the context (it belongs to the user)
                 if not self._cdp_mode:
+                    # Save storage state before closing context
+                    try:
+                        state_dir = Path.home() / ".argent" / "browser_sessions"
+                        state_dir.mkdir(parents=True, exist_ok=True)
+                        state_file = state_dir / f"{name}_storage.json"
+                        await ctx.context.storage_state(path=str(state_file))
+                        log.info("Saved storage state to %s", state_file)
+                    except Exception as e:
+                        log.warning("Failed to save storage state in shutdown: %s", e)
                     await ctx.context.close()
             except Exception:
                 pass
@@ -707,24 +802,42 @@ class BrowserEngine:
                 context = await self._browser.new_context()
             page = await context.new_page()
         else:
-            # Isolated mode: create a fresh context with stealth settings.
-            context = await self._browser.new_context(
-                viewport={"width": 1280, "height": 720},
-                user_agent=(
+            # Isolated mode: check if storage state exists for this session
+            state_dir = Path.home() / ".argent" / "browser_sessions"
+            state_file = state_dir / f"{session}_storage.json"
+            
+            kwargs = {
+                "viewport": {"width": 1280, "height": 720},
+                "user_agent": (
                     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                     "AppleWebKit/537.36 (KHTML, like Gecko) "
                     "Chrome/131.0.0.0 Safari/537.36"
                 ),
-                locale="en-US",
-                timezone_id="America/New_York",
-                java_script_enabled=True,
-            )
+                "locale": "en-US",
+                "timezone_id": "America/New_York",
+                "java_script_enabled": True,
+            }
+            if state_file.exists():
+                kwargs["storage_state"] = str(state_file)
+                log.info("Loading storage state from %s for session %s", state_file, session)
+                
+            context = await self._browser.new_context(**kwargs)
             page = await context.new_page()
             await self._apply_stealth(page)
 
         sc = _SessionContext(context=context, page=page)
         self._sessions[session] = sc
         log.info("Session '%s' created (cdp=%s)", session, self._cdp_mode)
+
+        # Set up auto-tab-switching listener
+        def make_page_handler(session_ctx):
+            def handle_page(new_page):
+                session_ctx.page = new_page
+                log.info("Auto-switched session to new tab: %s", new_page.url)
+            return handle_page
+        
+        context.on("page", make_page_handler(sc))
+
         return sc
 
     async def _apply_stealth(self, page) -> None:
@@ -764,6 +877,18 @@ class BrowserEngine:
                 get: () => ['en-US', 'en']
             });
         """)
+
+    async def _wait_for_page_settle(self, page, timeout_ms: int = 1500) -> None:
+        """Wait for page DOM content to load and network to settle down."""
+        try:
+            await page.wait_for_load_state("domcontentloaded", timeout=timeout_ms)
+        except Exception:
+            pass
+        try:
+            await page.wait_for_load_state("networkidle", timeout=timeout_ms)
+        except Exception:
+            pass
+        await page.wait_for_timeout(500)
 
     # -----------------------------------------------------------------------
     # Public API: Navigation
@@ -823,7 +948,7 @@ class BrowserEngine:
     # Public API: State Extraction (the key BrowserAct-like feature)
     # -----------------------------------------------------------------------
 
-    async def get_state(self, session: str = "default", query: str = None) -> str:
+    async def get_state(self, session: str = "default", query: str = None, scroll_depth: int = 0) -> str:
         """
         Extract interactive elements from the page with numbered indices.
         
@@ -835,6 +960,17 @@ class BrowserEngine:
             [3] button "Sign In"
         """
         sc = await self._get_session(session)
+        
+        # Pre-scrolling for infinite scroll / lazy-loaded pages
+        if scroll_depth > 0:
+            log.info("Pre-scrolling page for session %s with depth %d", session, scroll_depth)
+            for _ in range(scroll_depth):
+                try:
+                    await sc.page.evaluate("window.scrollBy(0, window.innerHeight);")
+                    await sc.page.wait_for_timeout(600)
+                except Exception:
+                    break
+                    
         self._element_frames.clear()
 
         combined_elements = []
@@ -868,7 +1004,24 @@ class BrowserEngine:
         except Exception as e:
             return f"Error extracting state: {e}"
 
-        lines = [f"Page: {page_url} | Title: {page_title}", "---"]
+        # Build Open Tabs list
+        tabs_list = []
+        try:
+            pages = sc.context.pages
+            for i, p in enumerate(pages):
+                active_mark = " (active)" if p == sc.page else ""
+                try:
+                    t_title = await p.title()
+                except Exception:
+                    t_title = "Untitled"
+                tabs_list.append(f"[{i+1}] {p.url} ({t_title}){active_mark}")
+        except Exception:
+            pass
+
+        lines = [f"Page: {page_url} | Title: {page_title}"]
+        if tabs_list:
+            lines.append("Open Tabs: " + ", ".join(tabs_list))
+        lines.append("---")
 
         if not combined_elements:
             lines.append("(No interactive elements found on this page)")
@@ -921,7 +1074,7 @@ class BrowserEngine:
                         "The page may have changed — call browser_state to get fresh indices."
                     )
                 await el.first.click(timeout=10000)
-                await sc.page.wait_for_timeout(800)
+                await self._wait_for_page_settle(sc.page)
                 return f"Clicked element [{index}]. Call browser_state to see the updated page."
             except Exception as e:
                 return f"Error clicking element [{index}]: {e}"
@@ -941,7 +1094,7 @@ class BrowserEngine:
                     target_locator = sc.page.locator(selector).first
                     
                 await target_locator.click(timeout=10000)
-                await sc.page.wait_for_timeout(800)
+                await self._wait_for_page_settle(sc.page)
                 return f"Clicked element matching selector '{selector}'."
             except Exception as e:
                 return f"Error clicking selector '{selector}': {e}"
@@ -961,12 +1114,33 @@ class BrowserEngine:
                     target_locator = sc.page.get_by_text(text, exact=False).first
                     
                 await target_locator.click(timeout=10000)
-                await sc.page.wait_for_timeout(800)
+                await self._wait_for_page_settle(sc.page)
                 return f"Clicked element matching text '{text}'."
             except Exception as e:
                 return f"Error clicking text '{text}': {e}"
         else:
             return "Error: You must specify index, selector, or text to click."
+
+    async def switch_tab(self, index: int, session: str = "default") -> str:
+        """Switch the active tab/page of a named session by its 1-based index."""
+        sc = await self._get_session(session)
+        pages = sc.context.pages
+        if not pages:
+            return "Error: No open tabs in browser context."
+        
+        if not (1 <= index <= len(pages)):
+            return f"Error: Invalid tab index {index}. Available indices: 1-{len(pages)}."
+        
+        target_page = pages[index - 1]
+        await target_page.bring_to_front()
+        sc.page = target_page
+        
+        title = "?"
+        try:
+            title = await target_page.title()
+        except Exception:
+            pass
+        return f"Switched to tab [{index}]: {target_page.url} ({title})"
 
     async def fill_input(self, index: int = None, text: str = "", selector: str = None,
                          session: str = "default") -> str:
@@ -1171,6 +1345,18 @@ class BrowserEngine:
             return f"Session '{session}' is not active."
 
         sc = self._sessions.pop(session)
+        
+        # Save storage state for isolated mode sessions before closing context
+        if not self._cdp_mode:
+            try:
+                state_dir = Path.home() / ".argent" / "browser_sessions"
+                state_dir.mkdir(parents=True, exist_ok=True)
+                state_file = state_dir / f"{session}_storage.json"
+                await sc.context.storage_state(path=str(state_file))
+                log.info("Saved storage state to %s", state_file)
+            except Exception as e:
+                log.warning("Failed to save storage state for session %s: %s", session, e)
+                
         try:
             await sc.context.close()
         except Exception:

@@ -12,10 +12,10 @@ def browser_open(url: str, session: str = "default", headed: bool = False) -> st
         log.error("browser_open error: %s", e)
         return f"Error opening browser: {e}"
 
-def browser_state(session: str = "default", query: str = None) -> str:
+def browser_state(session: str = "default", query: str = None, scroll_depth: int = 0) -> str:
     """Get the current page state: numbered list of interactive elements, optionally filtered by query."""
     try:
-        return browser_engine.run(browser_engine.get_state(session, query))
+        return browser_engine.run(browser_engine.get_state(session, query, scroll_depth))
     except KeyError as e:
         return str(e)
     except Exception as e:
@@ -84,3 +84,13 @@ def browser_close(session: str = "default") -> str:
     except Exception as e:
         log.error("browser_close error: %s", e)
         return f"Error closing browser: {e}"
+
+def browser_switch_tab(index: int, session: str = "default") -> str:
+    """Switch active tab in the browser context by index."""
+    try:
+        return browser_engine.run(browser_engine.switch_tab(index, session))
+    except KeyError as e:
+        return str(e)
+    except Exception as e:
+        log.error("browser_switch_tab error: %s", e)
+        return f"Error switching tab: {e}"
