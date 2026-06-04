@@ -7,10 +7,8 @@ from tools.project_tools import (
 from tools.file_ops import (
     read_file, write_file, delete_file, create_directory,
     move_file, copy_file, replace_in_file, replace_python_function,
-    multi_replace_in_file, get_file_outline, list_directory,
-)
-from tools.obsidian_ops import (
-    write_obsidian_note, search_obsidian_notes, update_obsidian_properties,
+    multi_replace_in_file, multi_replace_in_file_chunk, get_file_outline, list_directory,
+    run_deep_linter
 )
 from tools.search_ops import search_files, grep_search
 from tools.command_ops import (
@@ -27,10 +25,11 @@ from tools.skill_tools import list_skills, read_skill, create_skill, delete_skil
 from tools.misc_tools import (
     find_definition, find_references, git_checkpoint, git_rollback,
     call_mcp_tool, run_subagent, create_svg_image, ask_user_questions,
-    wait_heartbeat, end_auto_mode,
+    wait_heartbeat, end_auto_mode, create_artifact, request_user_approval,
 )
+from tools.swarm_tools import run_swarm_workers
 from tools.browser_tools import (
-    browser_open, browser_state, browser_click, browser_input,
+    run_browser_task, browser_open, browser_state, browser_click, browser_input,
     browser_screenshot, browser_scroll, browser_get_content, browser_close,
     browser_switch_tab,
 )
@@ -50,12 +49,10 @@ AVAILABLE_TOOLS = {
     "create_directory": create_directory,
     "move_file": move_file,
     "copy_file": copy_file,
-    "write_obsidian_note": write_obsidian_note,
-    "search_obsidian_notes": search_obsidian_notes,
-    "update_obsidian_properties": update_obsidian_properties,
     "run_deep_research": run_deep_research,
     "replace_in_file": replace_in_file,
     "replace_python_function": replace_python_function,
+    "run_deep_linter": run_deep_linter,
     "list_directory": list_directory,
     "search_files": search_files,
     "grep_search": grep_search,
@@ -69,6 +66,7 @@ AVAILABLE_TOOLS = {
     "read_webpage": read_webpage,
     "get_file_outline": get_file_outline,
     "multi_replace_in_file": multi_replace_in_file,
+    "multi_replace_in_file_chunk": multi_replace_in_file_chunk,
     "read_git_diff": read_git_diff,
     "create_plugin": create_plugin,
     "delete_plugin": delete_plugin,
@@ -88,8 +86,12 @@ AVAILABLE_TOOLS = {
     "git_rollback": git_rollback,
     "call_mcp_tool": call_mcp_tool,
     "run_subagent": run_subagent,
+    "run_swarm_workers": run_swarm_workers,
     "create_svg_image": create_svg_image,
     "ask_user_questions": ask_user_questions,
+    "create_artifact": create_artifact,
+    "request_user_approval": request_user_approval,
+    "run_browser_task": run_browser_task,
     "browser_open": browser_open,
     "browser_state": browser_state,
     "browser_click": browser_click,
@@ -102,6 +104,65 @@ AVAILABLE_TOOLS = {
 }
 
 TOOL_SCHEMAS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "create_artifact",
+            "description": "Create a Markdown artifact in the .argent/artifacts/ directory. Useful for documenting plans, research, or long text.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "filename": {
+                        "type": "string",
+                        "description": "The name of the file (e.g. implementation_plan.md)"
+                    },
+                    "content": {
+                        "type": "string",
+                        "description": "The markdown content of the artifact."
+                    }
+                },
+                "required": ["filename", "content"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "request_user_approval",
+            "description": "Pause execution and wait for the user to explicitly approve a plan or action. Use this before making major changes.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "message": {
+                        "type": "string",
+                        "description": "A short summary of what you want the user to approve."
+                    }
+                },
+                "required": ["message"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "multi_replace_in_file_chunk",
+            "description": "Surgically edit a file by providing multiple chunks of replacements. Specify exact start and end line numbers.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "file_path": {
+                        "type": "string",
+                        "description": "The absolute path of the file to modify."
+                    },
+                    "changes_json": {
+                        "type": "string",
+                        "description": "A JSON array string. Each object must have: start_line (int), end_line (int), target_content (string), replacement_content (string)."
+                    }
+                },
+                "required": ["file_path", "changes_json"]
+            }
+        }
+    },
     {
         "type": "function",
         "function": {
@@ -229,6 +290,23 @@ TOOL_SCHEMAS = [
     {
         "type": "function",
         "function": {
+            "name": "run_swarm_workers",
+            "description": "Decompose a massive, complex goal into smaller micro-tasks and delegate them to a swarm of isolated sub-agents. This is REQUIRED for large refactors or tasks that touch many files, as it prevents context bloat.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "tasks_json": {
+                        "type": "string",
+                        "description": "A JSON array of strings, where each string is a highly detailed instruction for a single micro-task. E.g., '[\"Refactor auth.py to use JWT\", \"Update test_auth.py\"]'."
+                    }
+                },
+                "required": ["tasks_json"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "write_project_spec",
             "description": "Write the detailed technical specification for the current project. Describe all files, classes, fields (with types), methods (with parameters), and relationships.",
             "parameters": {
@@ -331,61 +409,9 @@ TOOL_SCHEMAS = [
             }
         }
     },
-    {
-        "type": "function",
-        "function": {
-            "name": "write_obsidian_note",
-            "description": "Creates or entirely overwrites a markdown note in the user's Obsidian vault. Automatically formats YAML frontmatter for tags and aliases. WARNING: Do not use this to append or modify just a small part of an existing note unless you intend to OVERWRITE the entire note.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "note_path": {
-                        "type": "string",
-                        "description": "Relative path of the note inside the vault (e.g., 'Ideas/Game Concept.md'). Extension .md is added automatically if missing."
-                    },
-                    "content": {
-                        "type": "string",
-                        "description": "The main text content of the note (Markdown formatted)."
-                    },
-                    "tags": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": "Optional list of tags WITHOUT the '#' symbol (e.g., ['npc', 'boss'])."
-                    },
-                    "aliases": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": "Optional list of alternative titles (aliases) for the note."
-                    },
-                    "overwrite": {
-                        "type": "boolean",
-                        "description": "If true, overwrites the note if it already exists. Default is false to prevent accidental data loss."
-                    }
-                },
-                "required": ["note_path", "content"]
-            }
-        }
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "search_obsidian_notes",
-            "description": "Searches for markdown notes in the Obsidian vault by text content or tag.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "query": {
-                        "type": "string",
-                        "description": "Optional text to search for within the note contents (case-insensitive)."
-                    },
-                    "tag": {
-                        "type": "string",
-                        "description": "Optional tag to search for, either in the YAML frontmatter or inline as #tag (e.g., 'idea', 'boss')."
-                    }
-                }
-            }
-        }
-    },
+    
+
+    
     {
         "type": "function",
         "function": {
@@ -515,47 +541,7 @@ TOOL_SCHEMAS = [
             }
         }
     },
-    {
-        "type": "function",
-        "function": {
-            "name": "update_obsidian_properties",
-            "description": "Safely updates tags, aliases, and custom properties in the YAML frontmatter of an existing Obsidian note. WARNING: This tool DOES NOT modify the main text body of the note. If the user asks to rewrite, expand, or add examples to an Obsidian note, DO NOT USE THIS TOOL. Use `replace_in_file` instead.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "note_path": {
-                        "type": "string",
-                        "description": "Relative path of the note inside the vault to update."
-                    },
-                    "add_tags": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": "List of tags to add WITHOUT the '#' symbol."
-                    },
-                    "remove_tags": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": "List of tags to remove WITHOUT the '#' symbol."
-                    },
-                    "add_aliases": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": "List of aliases to add."
-                    },
-                    "remove_aliases": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": "List of aliases to remove."
-                    },
-                    "properties": {
-                        "type": "object",
-                        "description": "Dictionary of any key-value pairs to set in YAML frontmatter. To delete a key, set its value to null."
-                    }
-                },
-                "required": ["note_path"]
-            }
-        }
-    },
+
     {
         "type": "function",
         "function": {
@@ -637,6 +623,27 @@ TOOL_SCHEMAS = [
                     }
                 },
                 "required": ["dir_path"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "append_to_file",
+            "description": "Appends content to the end of an existing file or creates a new one. Ideal for taking notes, compiling research, or logging progress incrementally without overwriting the previous content.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "file_path": {
+                        "type": "string",
+                        "description": "The path to the file."
+                    },
+                    "content": {
+                        "type": "string",
+                        "description": "The content to append."
+                    }
+                },
+                "required": ["file_path", "content"]
             }
         }
     },
@@ -798,7 +805,7 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "search_web",
-            "description": "Searches the web using DuckDuckGo to find up-to-date information, documentation, or news.",
+            "description": "Searches the web using DuckDuckGo to find up-to-date information, documentation, or news. WARNING: This only returns short snippets and URLs. To read the actual content, YOU MUST call `read_webpage` with the returned URL.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -908,6 +915,10 @@ TOOL_SCHEMAS = [
                     "timeout": {
                         "type": "integer",
                         "description": "Request timeout in seconds. Default is 15."
+                    },
+                    "raw_mode": {
+                        "type": "boolean",
+                        "description": "If true, bypasses smart text extraction and returns all text from the body. Use this if the default extraction returns incomplete or chopped text (e.g. on forums)."
                     }
                 },
                 "required": ["url"]
@@ -1405,6 +1416,43 @@ TOOL_SCHEMAS = [
                 "required": ["index"]
             }
         }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "run_browser_task",
+            "description": "Delegate a browser automation task (like searching the web, logging in, or scraping) to an autonomous headless sub-agent. The sub-agent will automatically navigate, click, type, and extract the final information for you.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "task": {
+                        "type": "string",
+                        "description": "A detailed description of what the browser sub-agent needs to accomplish."
+                    },
+                    "url": {
+                        "type": "string",
+                        "description": "Optional starting URL."
+                    }
+                },
+                "required": ["task"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "run_deep_linter",
+            "description": "Run a deep static analysis (Pylint) on a file or directory. This is a heavy operation (~5-10s) but it catches complex issues like shadowing, unused variables, and control flow errors that fast AST linters miss. Use this when you've finished major architectural changes or if you suspect hidden bugs.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Path to a file or directory to lint. Defaults to the current project directory ('.')."
+                    }
+                }
+            }
+        }
     }
 ]
 
@@ -1430,12 +1478,25 @@ def get_available_tools() -> dict:
         pass
     return tools
 
-def get_tool_schemas() -> list[dict]:
+def get_tool_schemas(include_hidden: bool = False) -> list[dict]:
     """Returns the JSON schemas for the available tools, dynamically adding RAG if enabled."""
     from config import get_disabled_tools
     disabled = get_disabled_tools()
     
-    schemas = [s for s in TOOL_SCHEMAS if s["function"]["name"] not in disabled]
+    hidden_tools = {
+        "browser_open", "browser_state", "browser_click", "browser_input", 
+        "browser_screenshot", "browser_scroll", "browser_get_content", 
+        "browser_close", "browser_switch_tab"
+    }
+    
+    schemas = []
+    for s in TOOL_SCHEMAS:
+        name = s["function"]["name"]
+        if name in disabled:
+            continue
+        if not include_hidden and name in hidden_tools:
+            continue
+        schemas.append(s)
     try:
         from rag_engine import is_rag_enabled
         if is_rag_enabled() and "semantic_search" not in disabled:

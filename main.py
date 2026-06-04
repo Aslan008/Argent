@@ -42,20 +42,18 @@ from prompts import (
 from src.cli.cli_ui import render_response_stream
 from src.project.orchestrator import ProjectOrchestrator
 
-# Default tools allowed in regular chat (excludes Project Brain tools)
+# Default tools allowed in regular chat (excludes Project Brain tools and bloat OS tools)
 CHAT_ALLOWED_TOOLS = [
-    "read_file", "write_file", "delete_file", "replace_in_file", "replace_python_function",
-    "list_directory", "grep_search", "search_files", "run_command", "run_admin_command",
+    "read_file", "write_file", "append_to_file", "delete_file", "replace_in_file", "replace_python_function",
+    "grep_search", "search_files", "run_command", "run_admin_command",
     "start_background_command", "read_background_command", "send_background_command",
     "stop_background_command", "search_web", "read_webpage", "get_file_outline", 
     "multi_replace_in_file", "write_obsidian_note", "search_obsidian_notes", 
     "update_obsidian_properties", "semantic_search", "create_plugin", "delete_plugin",
-    "create_skill", "read_skill", "list_skills", "delete_skill", "create_svg_image",
-    "ask_user_questions", "create_directory", "move_file", "copy_file",
-    "wait_heartbeat", "end_auto_mode",
+    "create_skill", "read_skill", "list_skills", "delete_skill",
+    "ask_user_questions", "wait_heartbeat", "end_auto_mode",
     "browser_open", "browser_state", "browser_click", "browser_input",
-    "browser_screenshot", "browser_scroll", "browser_get_content", "browser_close",
-    "read_event_logs", "get_process_info", "query_registry", "search_system_files"
+    "browser_screenshot", "browser_scroll", "browser_get_content", "browser_close"
 ]
 
 
@@ -109,10 +107,11 @@ def main():
     
     builtin_cmds = [
         # Base commands
-        '/help', '/provider', '/model', '/obsidian', '/clear', '/research', '/enable_rag', '/disable_rag', '/rag_provider',
-        '/hooks', '/tools', '/save', '/setup_terminal', '/project', '/work', '/commit',
-        '/sessions', '/load', '/diff', '/undo', '/undo_all', '/copy', '/logs', '/skills', '/auto', '/verbose', '/browser', '/exit', '/quit',
+        '/help', '/provider', '/model', '/clear', '/research', '/rag_toggle',
+        '/hooks', '/tools', '/save', '/project', '/work', '/commit',
+        '/sessions', '/load', '/copy', '/logs', '/skills', '/auto', '/verbose', '/debug', '/browser', '/exit', '/quit',
         '/mcp', '/thinking', '/temp', '/temperature',
+        '/cd', '/undo', '/diff', '/changes', '/stats',
         
         # Subcommands and parameter variations
         '/mcp list', '/mcp add', '/mcp remove', '/mcp test', '/mcp start', '/mcp stop',
@@ -177,6 +176,20 @@ def main():
     MAX_TASK_RETRIES = 3
     turn_counter = 0
     
+    from config import get_auto_rag
+    if get_auto_rag():
+        import threading
+        cwd = os.getcwd()
+        print_system(f"Auto-RAG is enabled. Indexing {cwd} in background...")
+        def _bg_auto_rag():
+            try:
+                from rag_engine import enable_rag_for_project
+                result = enable_rag_for_project(cwd)
+                print(f"\n[RAG Status] {result}")
+            except ImportError:
+                print("\n[RAG Status] ChromaDB not installed. Auto-RAG failed.")
+        threading.Thread(target=_bg_auto_rag, daemon=True).start()
+
     while True:
         try:
             print() # Visual spacing
@@ -290,56 +303,28 @@ def main():
                 else:
                     print_error(f"Unknown browser option: {parts[1]}. Valid: user, isolated, chrome, yandex, edge, brave, auto")
                 continue
-            elif user_input.strip() == "/enable_rag":
-                cwd = os.getcwd()
-                try:
-                    import chromadb  # type: ignore[import-not-found]
-                except ImportError:
-                    print_error("ChromaDB is not installed.")
-                    install = questionary.confirm("Would you like Argent to install it now? (pip install chromadb sentence-transformers)").ask()
-                    if install:
-                        os.system("pip install chromadb sentence-transformers")
-                        print_system("Attempting to run RAG in background...")
-                    else:
-                        continue
 
-                import threading
-                def _bg_indexing():
-                    result = enable_rag_for_project(cwd)
-                    # Print the status notification directly to console when finished
-                    print_system(f"\n[RAG Status] {result}")
+            elif user_input.strip() == "/rag_toggle":
+                from config import get_auto_rag, set_auto_rag
+                current = get_auto_rag()
+                new_state = not current
+                set_auto_rag(new_state)
+                
+                status = "[bold green]ENABLED[/bold green]" if new_state else "[bold red]DISABLED[/bold red]"
+                print_system(f"Auto-RAG (Semantic Search indexing on startup) is now: {status}")
+                
+                if new_state:
+                    print_system("RAG will be enabled the next time you start Argent.")
+                    print_system("If you want to start it now without restarting, type `/work` and the agent can use semantic search if it's already active.")
+                else:
+                    try:
+                        from rag_engine import disable_rag
+                        disable_rag()
+                        print_system("Semantic Search (RAG) has been disabled for the current session.")
+                    except ImportError:
+                        pass
+                continue
 
-                print_system(f"Enabling RAG for project at {cwd} in background... You can continue typing commands.")
-                t = threading.Thread(target=_bg_indexing, daemon=True)
-                t.start()
-                continue
-            elif user_input.strip() == "/disable_rag":
-                disable_rag()
-                print_system("Semantic Search (RAG) has been disabled.")
-                continue
-            elif user_input.strip() == "/rag_provider":
-                from config import get_embedding_provider, set_embedding_provider, get_ollama_embedding_model, set_ollama_embedding_model
-                current = get_embedding_provider()
-                choice = questionary.select(
-                    "Select embedding provider for RAG:",
-                    choices=[
-                        f"sentence_transformers (current)" if current == "sentence_transformers" else "sentence_transformers",
-                        f"ollama (current)" if current == "ollama" else "ollama",
-                    ],
-                ).ask()
-                if choice:
-                    provider = choice.split(" ")[0]
-                    set_embedding_provider(provider)
-                    if provider == "ollama":
-                        current_model = get_ollama_embedding_model()
-                        new_model = questionary.text(
-                            f"Ollama embedding model (current: {current_model}):",
-                            default=current_model
-                        ).ask()
-                        if new_model:
-                            set_ollama_embedding_model(new_model)
-                    print_system(f"Embedding provider set to: {provider}")
-                continue
             elif user_input.startswith("/skills"):
                 from skill_manager import skill_manager
                 skills = skill_manager.list_skills()
@@ -359,7 +344,6 @@ def main():
                     
                     # Add interactive plugin toggle
                     from config import get_disabled_plugins, set_disabled_plugins
-                    from pathlib import Path
                     
                     hooks_dir = Path(get_hooks_dir()).expanduser().resolve()
                     if hooks_dir.exists():
@@ -405,26 +389,7 @@ def main():
                     hook_manager.reload_plugins(new_path)
                     print_system(f"Hooks Directory changed to: [bold green]{new_path}[/bold green]")
                 continue
-            elif user_input.strip() == "/setup_terminal":
-                font_guide = """
-# 🎨 Установка Серьезного UI (Шрифты Терминала)
 
-К сожалению, сам Python не имеет прав менять шрифт твоего системного терминала. Но чтобы Argent выглядел *по-настоящему стильно* и профессионально, тебе нужен шрифт программиста.
-
-**Рекомендуемый Шрифт:** `Fira Code Nerd Font` или `JetBrains Mono`.
-
-## Как установить (Займет 1 минуту):
-1. **Скачай шрифт**: Перейди на страницу [Nerd Fonts](https://www.nerdfonts.com/font-downloads) и скачай *FiraCode*.
-2. **Установи**: Распакуй архив, выдели все файлы `.ttf`, нажми ПКМ -> `Установить`.
-3. **Настрой терминал**:
-   - Если ты используешь **Windows Terminal** (настоятельно рекомендуем): Нажми шестеренку (Настройки) -> Профили -> Оформление -> Шрифт -> Выбери `FiraCode NF`.
-   - Если стандартный PowerShell: ПКМ по рамке окна -> Свойства -> Шрифт -> `Fira Code`.
-
-## Настройка цветов:
-В папке с Argent автоматически создался файл `theme.yaml`. Ты можешь открыть его в любом редакторе и настроить любые цвета (например, заменить синие рамки ИИ на хакерские зеленые `green_yellow`).
-                """
-                print_markdown(font_guide)
-                continue
             elif user_input.strip() == "/tools":
                 from tools import AVAILABLE_TOOLS
                 all_tools = list(AVAILABLE_TOOLS.keys())
@@ -501,40 +466,7 @@ def main():
                 except ValueError:
                     print_error("Please enter a valid number.")
                 continue
-            elif user_input.startswith("/diff"):
-                parts = user_input.strip().split(maxsplit=1)
-                if len(parts) < 2:
-                    pending = get_pending_changes()
-                    if not pending:
-                        print_system("No pending file changes.")
-                    else:
-                        print_system("[bold cyan]Modified files:[/bold cyan]")
-                        for ch in pending:
-                            print_system(f"  - {ch['key']} ({ch['snapshot_count']} snapshots)")
-                        print_system("Use /diff <filepath> to see changes.")
-                else:
-                    diff_output = get_diff(parts[1])
-                    print_markdown(f"```diff\n{diff_output}\n```")
-                continue
-            elif user_input.strip() == "/undo":
-                pending = get_pending_changes()
-                if not pending:
-                    print_system("No files to undo.")
-                elif len(pending) == 1:
-                    result = undo(pending[0]["key"])
-                    print_system(result)
-                else:
-                    print_system("Multiple modified files. Use /undo <filepath> or /undo_all.")
-                continue
-            elif user_input.startswith("/undo "):
-                filepath = user_input.strip()[6:]
-                result = undo(filepath)
-                print_system(result)
-                continue
-            elif user_input.strip() == "/undo_all":
-                result = undo_all()
-                print_system(result)
-                continue
+
             elif user_input.startswith("/copy"):
                 import pyperclip
                 blocks = get_code_blocks()
@@ -615,6 +547,91 @@ def main():
                 else:
                     print_system("No log entries found.")
                 continue
+            
+            elif user_input.strip() == "/stats":
+                from config import get_context_window
+                
+                model = get_current_model()
+                provider = get_provider()
+                ctx = get_context_window()
+                msg_count = len(agent.messages)
+                
+                mcp_servers = mcp_client.get_servers()
+                active_mcp = [s['name'] for s in mcp_servers if s['running']]
+                
+                plugins = list(hook_manager.plugins.keys())
+                
+                stats_msg = (
+                    f"[bold cyan]Argent Diagnostics:[/bold cyan]\n"
+                    f"  [dim]Directory:[/dim] {os.getcwd()}\n"
+                    f"  [dim]Model:[/dim] {model} ({provider})\n"
+                    f"  [dim]Context Window:[/dim] {ctx} tokens\n"
+                    f"  [dim]History:[/dim] {msg_count} messages\n"
+                )
+                
+                if active_mcp:
+                    stats_msg += f"  [dim]MCP Servers:[/dim] {', '.join(active_mcp)}\n"
+                if plugins:
+                    stats_msg += f"  [dim]Plugins:[/dim] {', '.join(plugins)}\n"
+                    
+                print_system(stats_msg)
+                continue
+
+            elif user_input.startswith("/cd"):
+                parts = user_input.split(" ", 1)
+                if len(parts) < 2:
+                    print_system(f"Current Working Directory: [bold cyan]{os.getcwd()}[/bold cyan]")
+                    print_system("Usage: /cd <path>")
+                    continue
+                target_dir = parts[1].strip()
+                try:
+                    resolved = Path(target_dir).expanduser().resolve()
+                    if not resolved.exists():
+                        print_error(f"Directory does not exist: {resolved}")
+                        continue
+                    if not resolved.is_dir():
+                        print_error(f"Not a directory: {resolved}")
+                        continue
+                    os.chdir(resolved)
+                    print_system(f"Working Directory changed to: [bold green]{os.getcwd()}[/bold green]")
+                except Exception as e:
+                    print_error(f"Failed to change directory: {e}")
+                continue
+
+            elif user_input.startswith("/undo"):
+                parts = user_input.split(" ", 1)
+                if len(parts) < 2:
+                    print_error("Usage: /undo <file_path>")
+                    continue
+                result = undo(parts[1].strip())
+                print_system(result)
+                continue
+
+            elif user_input.startswith("/diff"):
+                parts = user_input.split(" ", 1)
+                if len(parts) < 2:
+                    print_error("Usage: /diff <file_path>")
+                    continue
+                result = get_diff(parts[1].strip())
+                if result.startswith("Error") or result.startswith("No") or result.startswith("File"):
+                    print_system(result)
+                else:
+                    from rich.syntax import Syntax
+                    syntax = Syntax(result, "diff", theme="monokai", word_wrap=True)
+                    console.print(syntax)
+                continue
+
+            elif user_input.strip() == "/changes":
+                changes = get_pending_changes()
+                if not changes:
+                    print_system("No tracked file changes in this session.")
+                else:
+                    print_system("[bold cyan]Tracked File Changes:[/bold cyan]")
+                    for ch in changes:
+                        print_system(f"  - {ch['key']} ({ch['snapshot_count']} snapshots)")
+                    print_system("\nUse /diff <path> to see changes, /undo <path> to restore.")
+                continue
+
             elif user_input.startswith("/project"):
                 parts = user_input.split(" ", 1)
                 if len(parts) < 2:
@@ -747,34 +764,7 @@ def main():
                     continue
                 
             if is_project_mode:
-                pm_temp = ProjectManager()
-                if pm_temp.active:
-                    status = pm_temp.data.get("status", "")
-                    if status in ["researching", "work_researching"]:
-                        active_tools = ["run_deep_research"]
-                    elif status == "specifying_architecture":
-                        active_tools = ["write_project_architecture"]
-                    elif status == "specifying_details":
-                        active_tools = ["write_file_spec"]
-                    elif status == "work_investigating":
-                        active_tools = ["list_directory", "grep_search", "read_file", "plan_work_changes"]
-                    elif status == "planning":
-                        active_tools = ["add_project_task"]
-                    elif status == "work_planning":
-                        active_tools = ["add_work_task"]
-                    elif status in ["executing", "work_executing"]:
-                        active_tools = [
-                            "read_file", "write_file", "delete_file", "replace_in_file",
-                            "list_directory", "grep_search", "run_command", "run_admin_command",
-                            "start_background_command", "read_background_command", "send_background_command",
-                            "stop_background_command", "search_web", "read_webpage",
-                            "complete_project_task", "create_svg_image"
-                        ]
-                        if pm_temp.data.get("use_obsidian", False):
-                            active_tools.extend(["write_obsidian_note", "search_obsidian_notes", "update_obsidian_properties"])
-                else:
-                    # In normal chat, use CHAT_ALLOWED_TOOLS
-                    active_tools = CHAT_ALLOWED_TOOLS
+                active_tools = orchestrator.get_active_tools() or CHAT_ALLOWED_TOOLS
             else:
                 # Regular chat mode
                 active_tools = CHAT_ALLOWED_TOOLS

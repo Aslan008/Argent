@@ -191,7 +191,7 @@ def soft_trim_with_summarization(messages: List[Dict[str, Any]], model_name: str
 
     from ui import console
     with console.status("[dim magenta]Оптимизация контекста...[/dim magenta]", spinner="dots"):
-        summary = summarize_messages(msgs_to_summarize, model_name, timeout=30.0)
+        summary = summarize_messages(msgs_to_summarize, model_name, timeout=120.0)
     
     if summary is None:
         log.info("Summarization failed, falling back to hard reset.")

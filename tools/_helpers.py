@@ -37,11 +37,21 @@ def _is_plugin_path_restricted(file_path: str) -> str | None:
         abs_path = os.path.abspath(file_path)
         hooks_dir = os.path.abspath(get_hooks_dir())
         if abs_path.startswith(hooks_dir):
-            return (
-                f"Error: Direct modification of files in the plugins directory is restricted. "
-                f"You MUST use the `create_plugin` or `delete_plugin` tools for all plugin-related tasks. "
-                f"These tools ensure mandatory syntax validation and automatic system reloading."
-            )
+            basename = os.path.basename(file_path)
+            if basename.endswith('.py'):
+                return (
+                    f"Error: Direct modification of files in the plugins directory is restricted. "
+                    f"You MUST use the `create_plugin` or `delete_plugin` tools for all plugin-related tasks. "
+                    f"These tools ensure mandatory syntax validation and automatic system reloading."
+                )
+            else:
+                # Non-Python files (like .md, .txt) should not go in plugins/
+                cwd = os.getcwd()
+                return (
+                    f"Error: The 'plugins/' directory is for Python plugins only. "
+                    f"For documents and notes, write to the current project directory instead. "
+                    f"Example: use file_path='{basename}' or file_path='{cwd}/{basename}'."
+                )
     except Exception:
         pass
     return None
@@ -56,13 +66,28 @@ def _validate_code_syntax(file_path: str) -> str | None:
     if file_path.endswith('.py'):
         try:
             py_compile.compile(file_path, doraise=True)
+            try:
+                import sys
+                result = subprocess.run([sys.executable, "-m", "flake8", "--select=F821,E999,F822,F831", file_path], capture_output=True, text=True, timeout=5)
+                if result.returncode != 0 and result.stdout.strip():
+                    return f"Syntax is correct, but LINTER DETECTED ERRORS:\n{result.stdout.strip()}\n\nPlease fix these errors using the `multi_replace_in_file_chunk` tool."
+            except Exception:
+                pass 
             return None
         except py_compile.PyCompileError as e:
-            return f"SyntaxError in your Python code:\n{e.msg}\n\nPlease fix this syntax error using the `replace_in_file` tool."
+            return f"SyntaxError in your Python code:\n{e.msg}\n\nPlease fix this syntax error using the `multi_replace_in_file_chunk` tool."
         except Exception as e:
             return f"Validation Error: {e}"
             
     if file_path.endswith('.cs'):
+        try:
+            with open(file_path, "r", encoding="utf-8") as f:
+                content = f.read()
+                if "UnityEngine" in content or "UnityEditor" in content:
+                    return None  # Skip standard dotnet build for Unity files to prevent false MSBuild reference errors
+        except Exception:
+            pass
+
         path_obj = Path(file_path).resolve()
         csproj_file = None
         for p in path_obj.parents:
@@ -75,7 +100,7 @@ def _validate_code_syntax(file_path: str) -> str | None:
             try:
                 result = subprocess.run(["dotnet", "build", str(csproj_file), "-v", "q", "/nologo"], capture_output=True, text=True, timeout=15)
                 if result.returncode != 0:
-                    return f"C# Compiler Error:\n{result.stdout}\n\nPlease fix this compiler error using the `replace_in_file` tool."
+                    return f"C# Compiler Error:\n{result.stdout}\n\nPlease fix this compiler error using the `multi_replace_in_file_chunk` tool."
             except subprocess.TimeoutExpired:
                 pass
             except Exception:
@@ -88,14 +113,14 @@ def _validate_code_syntax(file_path: str) -> str | None:
                 json.load(f)
             return None
         except Exception as e:
-            return f"JSON Syntax Error in your file:\n{e}\n\nPlease fix this syntax error using the `replace_in_file` tool."
+            return f"JSON Syntax Error in your file:\n{e}\n\nPlease fix this syntax error using the `multi_replace_in_file_chunk` tool."
 
     if file_path.endswith(('.js', '.jsx')):
         try:
             result = subprocess.run(["node", "--check", file_path], capture_output=True, text=True, timeout=5, shell=(os.name == 'nt'))
             if result.returncode != 0:
-                return f"JavaScript Syntax Error:\n{result.stderr or result.stdout}\n\nPlease fix this syntax error using the `replace_in_file` tool."
-        except Exception:
+                return f"JavaScript Syntax Error:\n{result.stderr or result.stdout}\n\nPlease fix this syntax error using the `multi_replace_in_file_chunk` tool."
+        except Exception as e:
             pass
 
     if file_path.endswith(('.ts', '.tsx')):
@@ -104,7 +129,7 @@ def _validate_code_syntax(file_path: str) -> str | None:
             if result.returncode != 0:
                 err_out = result.stderr or result.stdout
                 if "error TS" in err_out or file_path in err_out:
-                    return f"TypeScript Compiler Error:\n{err_out}\n\nPlease fix this compiler error using the `replace_in_file` tool."
+                    return f"TypeScript Compiler Error:\n{err_out}\n\nPlease fix this compiler error using the `multi_replace_in_file_chunk` tool."
         except Exception:
             pass
 

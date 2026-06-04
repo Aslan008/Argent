@@ -41,12 +41,46 @@ class ArgentAgent:
 # ROLE: Argent Coder
 You are an autonomous AI software engineer. You design, build, and debug software with precision and speed on {platform.system()}.""")
 
+        try:
+            cwd = Path.cwd()
+            prompt_parts.append(f"## REPOSITORY MAP (Current Directory: {cwd})")
+            
+            items = []
+            dirs = []
+            files = []
+            for item in cwd.iterdir():
+                if item.name in ('.git', '__pycache__', '.venv', 'venv', 'node_modules', '.idea', '.vscode'):
+                    continue
+                if item.is_dir():
+                    dirs.append(item.name + "/")
+                else:
+                    files.append(item.name)
+            
+            dirs.sort()
+            files.sort()
+            
+            map_str = ""
+            if not dirs and not files:
+                map_str = "(Empty directory)"
+            else:
+                all_items = dirs + files
+                if len(all_items) > 30:
+                    map_str = "\n".join([f"- {x}" for x in all_items[:30]])
+                    map_str += f"\n- ... and {len(all_items) - 30} more items. Use list_directory to see all."
+                else:
+                    map_str = "\n".join([f"- {x}" for x in all_items])
+                    
+            prompt_parts.append(map_str)
+        except Exception:
+            pass
+
         if is_small:
             prompt_parts.append(f"""## 1. OPERATIONAL PROTOCOL
 - **Tool-First**: Invoke tools immediately via JSON when needed.
 - **Ask Before Guessing**: Use `ask_user_questions` to clarify ambiguous requirements with structured options.
 - **Anti-Lazy**: Run commands and write/edit files yourself.
 - **Proactive Search**: Use `search_web` for technical info.
+- **Persistence**: Do NOT stop after a single tool call. If the task requires multiple steps (read → edit → verify), execute ALL steps in a single response. Keep calling tools until the task is FULLY complete.
 - **Strict Environment**: Use {platform.system()}-native commands only (PowerShell/CMD on Windows).""")
         else:
             prompt_parts.append(f"""## 1. OPERATIONAL PROTOCOL
@@ -54,6 +88,8 @@ You are an autonomous AI software engineer. You design, build, and debug softwar
 - **Ask Before Guessing**: If a user's request is ambiguous or lacks details, you MUST use the `ask_user_questions` tool to prompt them with structured options before writing code. Do NOT just ask questions in plain text chat.
 - **Anti-Lazy**: Never ask the user to run code or copy-paste. Use `run_command` and `write_file` yourself.
 - **Proactive Search**: Always use `search_web` for technical info, documentation, or current events.
+- **Persistence**: Do NOT stop after a single tool call. If the task requires multiple steps (read → edit → verify), execute ALL steps in a single response without waiting for user input. Keep calling tools until the task is FULLY complete.
+- **Testing**: NEVER test logic or GUI apps by running `python app.py` via `run_command` (it will block). You MUST write and run `pytest` tests, or use `start_background_command`.
 - **Self-Correction**: If a tool fails, analyze the error and fix it proactively. Do not apologize.
 - **Strict Environment**: Use {platform.system()}-native commands ONLY (e.g., PowerShell/CMD on Windows, NOT unix commands like 'ls' or 'grep').""")
 
@@ -74,9 +110,12 @@ You are an autonomous AI software engineer. You design, build, and debug softwar
 - Use `list_skills` to discover skills. Use `read_skill` to read and follow instructions. Use `create_skill` to persist complex workflows.""")
 
         if not is_small:
-            prompt_parts.append("""## 4. PROJECT BRAIN MODE
-- Tools like `add_project_task`, `write_project_spec`, etc., are EXCLUSIVELY for massive multi-step projects.
-- If these tools are not in your `allowed_tools` list, DO NOT attempt to call them.""")
+            prompt_parts.append("""## 4. PLANNING MODE & ARTIFACTS
+- For complex changes, you MUST create an implementation plan before writing any code.
+- Use `create_artifact("implementation_plan.md", content)` to present your plan to the user.
+- Then, use `request_user_approval("I have created an implementation plan. Please review and approve.")` to PAUSE execution and wait for the user to confirm.
+- NEVER start making massive changes without the user's explicit approval.
+- Use `create_artifact("task.md", content)` to track your progress after approval.""")
 
         if not is_small:
             prompt_parts.append("""## 5. UI & TERMINOLOGY STANDARDS
@@ -101,14 +140,7 @@ You are an autonomous AI software engineer. You design, build, and debug softwar
 - **Transparency**: Briefly state your reasoning before executing tools.
 - **Visuals**: Use `create_svg_image` to explain complex concepts or UI mockups via browser.""")
 
-        vault = get_obsidian_vault()
-        if vault:
-            prompt_parts.append(f"""## 8. OBSIDIAN INTEGRATION
-- **Active Vault**: `{vault}`
-- **Protocols**:
-    - Use `write_obsidian_note` for creating notes.
-    - Use ABSOLUTE paths (e.g., `{vault}\\Note.md`) for `read_file` or `replace_in_file` on notes.
-    - NEVER use `update_obsidian_properties` for text body edits; use `replace_in_file`.""")
+
 
         agents_md_paths = [
             Path(".argent/AGENTS.md"),
@@ -245,7 +277,7 @@ You are an autonomous AI software engineer. You design, build, and debug softwar
             cleaned_messages = clean_messages_for_llm(self.messages, strip_enabled)
             
             try:
-                active_tools = get_tool_schemas()
+                active_tools = get_tool_schemas(include_hidden=(allowed_tools is not None))
                 if allowed_tools is not None:
                     active_tools = [t for t in active_tools if t["function"]["name"] in allowed_tools]
                 
@@ -287,7 +319,7 @@ You are an autonomous AI software engineer. You design, build, and debug softwar
                         if tc_delta.get("function_arguments_delta"):
                             tool_calls_accumulator[index]["function"]["arguments"] += tc_delta["function_arguments_delta"]
                             # Yield a progress signal so the UI can show a spinner
-                            yield {"type": "tool_generating", "name": tool_calls_accumulator[index]["function"]["name"], "bytes": len(tool_calls_accumulator[index]["function"]["arguments"])}
+                            yield {"type": "tool_generating", "name": tool_calls_accumulator[index]["function"]["name"], "bytes": len(tool_calls_accumulator[index]["function"]["arguments"]), "delta": tc_delta["function_arguments_delta"]}
 
                     content_chunk = chunk.get("content", "")
                     if content_chunk:
@@ -330,19 +362,18 @@ You are an autonomous AI software engineer. You design, build, and debug softwar
                                 raw_tool_buffer += temp_content
                                 
                                 # Detect if we are building a raw JSON tool call
-                                stripped_buffer = raw_tool_buffer.lstrip()
-                                if stripped_buffer.startswith('```json') or stripped_buffer.startswith('{'):
+                                if '```json' in raw_tool_buffer or '{\n  "name":' in raw_tool_buffer:
                                     is_building_raw_tool = True
                                 
                                 if not is_building_raw_tool:
                                     yield {"type": "content_stream", "content": temp_content}
                                 else:
                                     # Signal progress so the UI can show a spinner
-                                    yield {"type": "tool_generating", "name": "?", "bytes": len(raw_tool_buffer)}
+                                    yield {"type": "tool_generating", "name": "?", "bytes": len(raw_tool_buffer), "delta": temp_content}
                             
             except Exception as e:
                 error_str = str(e).lower()
-                if "does not support tools" in error_str:
+                if "does not support tools" in error_str or "element type" in error_str:
                     try:
                         fallback_provider = create_provider()
                         fallback_stream = fallback_provider.stream_chat(
@@ -431,6 +462,7 @@ You are an autonomous AI software engineer. You design, build, and debug softwar
                             # Filter out unknown parameters that the model may hallucinate
                             sig = inspect.signature(func)
                             valid_params = set(sig.parameters.keys())
+                            hallucinated_args = {k: v for k, v in arguments.items() if k not in valid_params}
                             filtered_args = {k: v for k, v in arguments.items() if k in valid_params}
                             
                             # Check for missing required arguments
@@ -441,7 +473,18 @@ You are an autonomous AI software engineer. You design, build, and debug softwar
                             
                             if missing_args:
                                 provided_args = list(arguments.keys())
-                                result = f"Error executing tool '{func_name}': Missing REQUIRED arguments: {missing_args}. You provided: {provided_args}. Please check the tool schema and use the exact parameter names."
+                                # Build a smart hint if the model clearly called the wrong tool
+                                hint = ""
+                                if hallucinated_args:
+                                    hint = f"\n\n[HINT]: You passed parameters that do NOT exist in '{func_name}': {list(hallucinated_args.keys())}. "
+                                    # Detect common confusion: read_file called with content= (meant write_file or append_to_file)
+                                    if func_name == "read_file" and "content" in hallucinated_args:
+                                        hint += "It looks like you want to WRITE content, not READ. Use `write_file(file_path, content)` to create a new file, or `append_to_file(file_path, content)` to add content to an existing file."
+                                    elif func_name == "write_file" and "target_text" in hallucinated_args:
+                                        hint += "It looks like you want to EDIT part of a file. Use `replace_in_file(file_path, target_text, replacement_text)` instead."
+                                    else:
+                                        hint += f"Valid parameters for '{func_name}' are: {list(valid_params)}."
+                                result = f"Error executing tool '{func_name}': Missing REQUIRED arguments: {missing_args}. You provided: {provided_args}.{hint}"
                             else:
                                 # --- SAFETY GUARDRAILS ---
                                 requires_confirmation = False
@@ -453,8 +496,9 @@ You are an autonomous AI software engineer. You design, build, and debug softwar
                                     requires_confirmation = True
                                     warning_msg = f"run ADMIN command: '{filtered_args.get('command')}'"
                                 elif func_name == "run_command":
+                                    import re
                                     cmd_lower = filtered_args.get("command", "").lower()
-                                    if any(danger in cmd_lower for danger in ["rm ", "del ", "remove-item", "format ", "rd "]):
+                                    if re.search(r'\b(rm|del|rd|format|remove-item)\b', cmd_lower):
                                         requires_confirmation = True
                                         warning_msg = f"run potentially DESTRUCTIVE command: '{filtered_args.get('command')}'"
                                 
@@ -491,15 +535,22 @@ You are an autonomous AI software engineer. You design, build, and debug softwar
                     else:
                         result = f"Error: Tool {func_name} is not available."
                         
-                    # Inject a forceful reminder on errors to prevent the model from reverting to raw python code output
-                    if func_name in ["run_command", "write_file", "replace_in_file"] and ("Error" in result or "failed" in result.lower() or "Traceback" in result or "Requirement already satisfied" in result):
-                        result += (
-                            "\n\n[SYSTEM ADVICE]: If you see an error or a 'False Success' (like 'Requirement already satisfied' while the issue persists):"
-                            "\n1. Do NOT just repeat the same command."
-                            "\n2. VERIFY the state using other tools (e.g., check python versions, site-packages, or file contents)."
-                            "\n3. Try alternative methods (e.g., --force-reinstall, checking environment variables)."
-                            "\n4. If building code, ensure you didn't leave syntax errors from previous edits."
-                        )
+                    # Auto-Healing Mechanism
+                    err_str = str(result).upper()
+                    if func_name in ["run_command", "write_file", "replace_in_file", "replace_python_function"]:
+                        if "ERROR:" in err_str or "SYNTAXERROR" in err_str or "COMPILATION FAILED" in err_str or "FAILED" in err_str or "TRACEBACK" in err_str or "ASSERTIONERROR" in err_str:
+                            self.error_retries = getattr(self, 'error_retries', 0) + 1
+                            if self.error_retries <= 3:
+                                result += (
+                                    f"\n\n[AUTO-HEALING MODE TRIGGERED]: Attempt {self.error_retries}/3 to automatically fix this error. "
+                                    f"Do NOT stop or apologize. Read the error (especially if it is a Pytest AssertionError), "
+                                    f"use `read_file` if needed to see the context, and use `replace_in_file` to fix the syntax or logic immediately. "
+                                    f"If you just ran tests and they failed, you MUST fix the code and re-run the tests."
+                                )
+                            else:
+                                result += "\n\n[AUTO-HEALING FAILED]: You have failed 3 times. Stop trying and explain the failure to the user."
+                        else:
+                            self.error_retries = 0
                         
                     result = compress_tool_result(result, self.model_name)
                     

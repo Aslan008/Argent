@@ -199,11 +199,28 @@ def repair_json_strings(json_str: str) -> str:
             escape = False
     return "".join(chars)
 
+def fix_common_json_errors(json_str: str) -> str:
+    """Aggressive auto-fixing for common small model JSON errors."""
+    s = json_str.strip()
+    # Remove trailing commas before closing braces/brackets
+    s = re.sub(r',\s*\}', '}', s)
+    s = re.sub(r',\s*\]', ']', s)
+    
+    # Append missing closers
+    open_braces = s.count('{') - s.count('}')
+    open_brackets = s.count('[') - s.count(']')
+    if open_brackets > 0:
+        s += ']' * open_brackets
+    if open_braces > 0:
+        s += '}' * open_braces
+    return s
+
 def try_parse_json_tool(json_str: str) -> dict | None:
     """Try to parse a JSON string as a tool call."""
     try:
         # First repair control chars inside JSON strings
         repaired_json = repair_json_strings(json_str)
+        repaired_json = fix_common_json_errors(repaired_json)
         parsed = json.loads(repaired_json)
     except json.JSONDecodeError:
         return None

@@ -1704,14 +1704,15 @@ def call_mcp_tool(server_name: str, tool_name: str, arguments_json: str) -> str:
 
 def run_subagent(role: str, task: str, tools_json: str = None) -> str:
     """Spawn a specialized sub-agent for an isolated task. role can be 'Coder', 'Researcher', 'Reviewer', 'DocWriter'. tools_json is an optional JSON list of tools to allow."""
-    from orchestrator import spawn_subagent
+    from agent import ArgentSubAgent
     tools = None
     if tools_json:
         try:
             tools = json.loads(tools_json)
         except Exception:
             pass
-    return spawn_subagent(role, task, tools)
+    agent = ArgentSubAgent(role, task, tools)
+    return agent.execute()
 
 # ---------------------------------------------------------------------------
 # Tool Mapping & Schemas
@@ -2569,7 +2570,7 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "search_web",
-            "description": "Searches the web using DuckDuckGo to find up-to-date information, documentation, or news.",
+            "description": "Searches the web using DuckDuckGo to find up-to-date information, documentation, or news. WARNING: This only returns short snippets and URLs. To read the actual content, YOU MUST call `read_webpage` with the returned URL.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -2601,6 +2602,10 @@ TOOL_SCHEMAS = [
                     "timeout": {
                         "type": "integer",
                         "description": "Request timeout in seconds. Default is 15."
+                    },
+                    "raw_mode": {
+                        "type": "boolean",
+                        "description": "If true, bypasses smart text extraction and returns all text from the body. Use this if the default extraction returns incomplete or chopped text (e.g. on forums)."
                     }
                 },
                 "required": ["url"]

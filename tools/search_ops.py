@@ -83,8 +83,8 @@ def search_files(directory: str = ".", pattern: str = "*", name_contains: str = 
     except Exception as e:
         return f"Error searching files: {e}"
 
-def grep_search(directory: str, pattern: str, file_pattern: str = None, max_results: int = 30) -> str:
-    """Search file contents using regex pattern. Faster and more precise than search_files for finding specific code."""
+def _python_grep_search(directory: str, pattern: str, file_pattern: str = None, max_results: int = 30) -> str:
+    """Search file contents using regex pattern (Fallback Python implementation)."""
     try:
         start_path = _resolve_path(directory)
         if not start_path.exists():
@@ -137,7 +137,7 @@ def grep_search(directory: str, pattern: str, file_pattern: str = None, max_resu
         if not results:
             return f"No matches found for pattern '{pattern}' in '{directory}'."
         
-        output = [f"Found {len(results)} match(es) for '{pattern}':"]
+        output = [f"Found {len(results)} match(es) for '{pattern}' (via Python):"]
         output.append("-" * 60)
         current_file = None
         for r in results:
@@ -152,3 +152,67 @@ def grep_search(directory: str, pattern: str, file_pattern: str = None, max_resu
         return "\n".join(output)
     except Exception as e:
         return f"Error in grep search: {e}"
+
+def grep_search(directory: str, pattern: str, file_pattern: str = None, max_results: int = 30) -> str:
+    """Search file contents using ripgrep (rg) with fallback to regex pattern on python. Faster and more precise than search_files for finding specific code."""
+    import subprocess
+    
+    start_path = _resolve_path(directory)
+    if not start_path.exists():
+        return f"Error: Directory '{directory}' does not exist."
+    if not start_path.is_dir():
+        return f"Error: '{directory}' is not a directory."
+        
+    try:
+        cmd = ["rg", "-n", "-i", "--no-heading", "-M", "200", "-m", str(max_results)]
+        if file_pattern:
+            cmd.extend(["-g", file_pattern])
+        cmd.extend(["-g", "!*.{exe,dll,png,jpg,jpeg,gif,pdf,zip,mp3,mp4,wav,asset,meta,prefab,unity,pdb,obj,bin}"])
+        cmd.append(pattern)
+        cmd.append(str(start_path))
+        
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=10, encoding='utf-8', errors='ignore')
+        
+        if result.returncode == 0:
+            lines = result.stdout.strip().splitlines()
+            if not lines:
+                return f"No matches found for pattern '{pattern}' in '{directory}'."
+                
+            results = []
+            for line in lines:
+                parts = line.split(":", 2)
+                if len(parts) >= 3:
+                    file_p = parts[0]
+                    line_num = parts[1]
+                    text = parts[2].strip()
+                    results.append({'file': file_p, 'line': line_num, 'text': text})
+                    if len(results) >= max_results:
+                        break
+            
+            output = [f"Found {len(results)} match(es) for '{pattern}' (via ripgrep):"]
+            output.append("-" * 60)
+            current_file = None
+            for r in results:
+                if r['file'] != current_file:
+                    current_file = r['file']
+                    output.append(f"\n{current_file}:")
+                output.append(f"  {r['line']}: {r['text']}")
+            
+            if len(lines) >= max_results:
+                output.append(f"\n(Results limited to {max_results}. Use max_results to see more.)")
+                
+            return "\n".join(output)
+            
+        elif result.returncode == 1:
+            return f"No matches found for pattern '{pattern}' in '{directory}'."
+        else:
+            log.warning(f"ripgrep returned non-zero code {result.returncode}, falling back to python. Error: {result.stderr}")
+            pass
+            
+    except FileNotFoundError:
+        pass
+    except Exception as e:
+        log.warning(f"ripgrep error: {e}, falling back to python")
+        pass
+        
+    return _python_grep_search(directory, pattern, file_pattern, max_results)

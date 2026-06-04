@@ -19,6 +19,7 @@ from tools.file_ops import (
     read_file,
     delete_file,
     write_file,
+    append_to_file,
     replace_python_function,
     replace_in_file,
     multi_replace_in_file,
@@ -28,11 +29,7 @@ from tools.file_ops import (
     move_file,
     copy_file,
 )
-from tools.obsidian_ops import (
-    write_obsidian_note,
-    search_obsidian_notes,
-    update_obsidian_properties,
-)
+
 from tools.search_ops import (
     search_files,
     grep_search,

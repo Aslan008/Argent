@@ -119,8 +119,13 @@ class TestBrowserEnhancements(unittest.TestCase):
         class MockBrowser:
             def __init__(self):
                 self.contexts = [MockContext()]
+            
+            @property
+            def is_connected(self):
+                return True
 
         browser_engine._browser = MockBrowser()
+        browser_engine._headed = False
         
         # Verify that calling _get_session without browser_open auto-attaches
         sc = browser_engine.run(browser_engine._get_session("mock_session"))

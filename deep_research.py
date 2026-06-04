@@ -2,6 +2,7 @@ import sys
 import json
 import requests
 import time
+import random
 import re
 from typing import List, Dict, Any
 from bs4 import BeautifulSoup
@@ -12,6 +13,15 @@ from ui import console
 from logger import get_logger
 
 log = get_logger("research")
+
+_session = requests.Session()
+USER_AGENTS = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Safari/605.1.15",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36 Edg/121.0.0.0"
+]
 
 # New imports for advanced pipeline
 try:
@@ -82,28 +92,36 @@ Example: ["query 1", "query 2", "query 3", "query 4", "query 5"]
 
 def _scrape_url(url: str) -> str:
     """Read a webpage and extract clean Markdown/Text content."""
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-    }
     try:
-        resp = requests.get(url, headers=headers, timeout=15)
+        headers = {
+            "User-Agent": random.choice(USER_AGENTS),
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.5",
+        }
+        resp = _session.get(url, headers=headers, timeout=15)
         if resp.status_code != 200:
             return ""
             
         soup = BeautifulSoup(resp.text, 'html.parser')
         
         # Remove garbage
-        for element in soup(["script", "style", "nav", "footer", "header", "aside", "form"]):
+        for element in soup(["script", "style", "nav", "footer", "header", "aside", "form", "noscript"]):
             element.extract()
             
         # Try to find main content
-        main_content = soup.find('main') or soup.find('article') or soup.find('div', class_=re.compile(r'content|article|post|main', re.I))
+        main_content = soup.find('article') or soup.find('main') or soup.find('div', class_=lambda x: x and ('content' in x.lower() or 'article' in x.lower()))
         if main_content:
             text = main_content.get_text(separator='\n', strip=True)
         else:
-            text = soup.get_text(separator='\n', strip=True)
-            
-        return text
+            body = soup.find('body')
+            if body:
+                text = body.get_text(separator='\n', strip=True)
+            else:
+                text = soup.get_text(separator='\n', strip=True)
+        
+        # Clean up excessive newlines
+        lines = [line.strip() for line in text.splitlines() if line.strip()]
+        return '\n'.join(lines)
     except Exception as e:
         console.print(f"  [dim red]Scraping failed for {url}: {e}[/dim red]")
         return ""
@@ -188,18 +206,28 @@ def run_deep_research(objective: str) -> str:
     
     # 1. Search
     console.print("Searching DuckDuckGo...")
-    with DDGS() as ddgs:
-        for q in queries:
+    for q in queries:
+        max_retries = 3
+        base_delay = 2
+        for attempt in range(max_retries):
             try:
-                results = list(ddgs.text(q, max_results=3))
-                for r in results:
-                    url = r.get("href")
-                    if url and url not in visited_urls:
-                        if "youtube.com" not in url and "youtu.be" not in url:
-                            visited_urls.add(url)
-                            all_links.append(url)
+                with DDGS() as ddgs:
+                    results = list(ddgs.text(q, max_results=3))
+                    for r in results:
+                        url = r.get("href")
+                        if url and url not in visited_urls:
+                            if "youtube.com" not in url and "youtu.be" not in url:
+                                visited_urls.add(url)
+                                all_links.append(url)
+                break  # Success, exit retry loop
             except Exception as e:
-                console.print(f"[dim yellow]Search warning for '{q}': {e}[/dim yellow]")
+                error_msg = str(e).lower()
+                if "ratelimit" in error_msg or "202" in error_msg or attempt < max_retries - 1:
+                    console.print(f"[dim yellow]DDGS rate limited (attempt {attempt+1}/{max_retries}). Retrying in {base_delay}s...[/dim yellow]")
+                    time.sleep(base_delay)
+                    base_delay *= 2
+                else:
+                    console.print(f"[dim yellow]Search failed for '{q}': {e}[/dim yellow]")
                 
     console.print(f"Found {len(all_links)} unique sources to analyze.")
     

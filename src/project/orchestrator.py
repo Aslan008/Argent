@@ -15,6 +15,39 @@ class ProjectOrchestrator:
         self.task_retries = 0
         self.MAX_TASK_RETRIES = 3
 
+    def get_active_tools(self) -> list[str] | None:
+        """Return the allowed tools based on the current project state."""
+        self.pm = ProjectManager()
+        if not self.pm.active:
+            return None
+            
+        status = self.pm.data.get("status", "")
+        if status in ["researching", "work_researching"]:
+            return ["run_deep_research"]
+        elif status == "specifying_architecture":
+            return ["write_project_architecture"]
+        elif status == "specifying_details":
+            return ["write_file_spec"]
+        elif status == "work_investigating":
+            return ["list_directory", "grep_search", "read_file", "plan_work_changes"]
+        elif status == "planning":
+            return ["add_project_task"]
+        elif status == "work_planning":
+            return ["add_work_task"]
+        elif status in ["executing", "work_executing"]:
+            active_tools = [
+                "read_file", "write_file", "append_to_file", "delete_file", "replace_in_file",
+                "grep_search", "run_command", "run_admin_command",
+                "start_background_command", "read_background_command", "send_background_command",
+                "stop_background_command", "search_web", "read_webpage",
+                "complete_project_task"
+            ]
+            if self.pm.data.get("use_obsidian", False):
+                active_tools.extend(["write_obsidian_note", "search_obsidian_notes", "update_obsidian_properties"])
+            return active_tools
+            
+        return None
+
     def start_project(self, proj_prompt: str) -> tuple[bool, str]:
         """Start a new project. Prompts user for parameters."""
         run_research = questionary.confirm("Run Deep Research (Phase 0) to gather up-to-date context before planning?").ask()

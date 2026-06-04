@@ -189,14 +189,40 @@ def call_mcp_tool(server_name: str, tool_name: str, arguments_json: str) -> str:
 
 def run_subagent(role: str, task: str, tools_json: str = None) -> str:
     """Spawn a specialized sub-agent for an isolated task."""
-    from orchestrator import spawn_subagent
+    from agent import ArgentSubAgent
     tools = None
     if tools_json:
         try:
             tools = json.loads(tools_json)
         except Exception:
             pass
-    return spawn_subagent(role, task, tools)
+    agent = ArgentSubAgent(role, task, tools)
+    return agent.execute()
+
+def create_artifact(filename: str, content: str) -> str:
+    """Create a Markdown artifact in the .argent/artifacts/ directory. Useful for plans or long text."""
+    try:
+        path = Path(".argent") / "artifacts" / filename
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(content)
+        log.info("create_artifact: %s", path)
+        return f"Artifact created at {path.absolute()}. The user can now review it."
+    except Exception as e:
+        return f"Error creating artifact: {e}"
+
+def request_user_approval(message: str) -> str:
+    """Pause execution and ask the user for approval. Use this after generating an implementation plan."""
+    from ui import console
+    import questionary
+    console.print(f"\n[bold yellow]Agent requests approval:[/bold yellow] {message}")
+    approved = questionary.confirm("Do you approve this plan/action?").ask()
+    if approved:
+        memory.add_completed(f"Approved plan: {message}")
+        return "User approved. Proceed with execution."
+    else:
+        memory.add_completed(f"Rejected plan: {message}")
+        return "User REJECTED. Please ask the user for feedback or revise your plan."
 
 def wait_heartbeat(delay_seconds: int, condition_to_check: str) -> str:
     """Schedules a delayed continuation in Auto Mode."""

@@ -58,24 +58,29 @@ def compress_system_prompt(full_prompt: str, model_name: str) -> str:
 
 
 def compress_tool_result(result: str, model_name: str, max_lines: int = None) -> str:
-    """Compress tool output for small models.
-    Truncates long outputs and keeps only the tail (most relevant part).
+    """Compress tool output to prevent context window explosion.
+    Truncates long outputs, keeping the beginning and the end.
+    Applies to all models, but thresholds vary by model size.
     """
     category = get_model_size_category(model_name)
     
-    if category in ("medium", "large", "cloud"):
-        return result
-    
     if max_lines is None:
-        max_lines = 30 if category == "tiny" else 60
+        if category == "tiny": max_lines = 40
+        elif category == "small": max_lines = 100
+        elif category == "medium": max_lines = 500
+        else: max_lines = 2000 # cloud and large
     
     lines = result.splitlines()
     if len(lines) <= max_lines:
         return result
     
-    kept = lines[-max_lines:]
-    header = f"... [{len(lines) - max_lines} lines truncated for {category} model] ...\n"
-    return header + "\n".join(kept)
+    half = max_lines // 2
+    head = lines[:half]
+    tail = lines[-half:]
+    
+    separator = f"\n... [{len(lines) - max_lines} lines truncated to protect context window] ...\n"
+    
+    return "\n".join(head) + separator + "\n".join(tail)
 
 
 def get_adaptive_context_window(model_name: str, base_window: int) -> int:

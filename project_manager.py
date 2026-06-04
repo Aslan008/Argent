@@ -138,13 +138,14 @@ class ProjectManager:
 
     # ─── Tasks ───────────────────────────────────────────────────────
 
-    def add_task(self, description: str) -> int:
+    def add_task(self, description: str, target_files: list = None) -> int:
         """Add a task to the project. Returns the task ID."""
         tasks = self.data["tasks"]
         task_id = len(tasks) + 1
         tasks.append({
             "id": task_id,
             "description": description,
+            "target_files": target_files or [],
             "status": "pending",
             "result_summary": "",
             "files_affected": []
@@ -215,10 +216,14 @@ class ProjectManager:
         return '\n'.join(interface_lines)
 
     def _get_task_filename(self, task: dict) -> str | None:
-        """Try to extract a filename from the task description."""
+        """Extract a filename from the task's explicit target_files list or description."""
+        targets = task.get("target_files", [])
+        if targets:
+            return targets[0].replace('\\', '/')
+            
         import re
         desc = task.get("description", "")
-        # Look for filenames in the description
+        # Look for filenames in the description (fallback)
         match = re.search(r'[\w/\\]+\.\w+', desc)
         return match.group(0).replace('\\', '/') if match else None
 

@@ -126,6 +126,16 @@ def set_verbose_status(enabled: bool):
     config["verbose_status"] = enabled
     save_config(config)
 
+def get_debug_mode() -> bool:
+    """Check if debug mode (detailed logs in chat) is enabled."""
+    config = load_config()
+    return config.get("debug_mode", False)
+
+def set_debug_mode(enabled: bool):
+    config = load_config()
+    config["debug_mode"] = enabled
+    save_config(config)
+
 def get_hooks_dir() -> str:
     """Get the configured hooks directory path."""
     config = load_config()
@@ -190,7 +200,7 @@ def get_context_window() -> int:
     """Get the configured context window size."""
     config = load_config()
     # Default to 8192 if not set
-    return config.get("context_window", 8192)
+    return config.get("context_window", 32768)
 
 def set_context_window(size: int):
     """Save the context window size to config."""
@@ -338,4 +348,15 @@ def set_browser_name(name: str):
     """Save which browser to use. Valid: 'auto', 'chrome', 'yandex', 'edge', 'brave'."""
     config = load_config()
     config["browser_name"] = name
+    save_config(config)
+
+def get_auto_rag() -> bool:
+    """Check if RAG semantic search should be automatically enabled on startup."""
+    config = load_config()
+    return config.get("auto_rag", False)
+
+def set_auto_rag(enabled: bool):
+    """Enable or disable automatic RAG startup."""
+    config = load_config()
+    config["auto_rag"] = enabled
     save_config(config)

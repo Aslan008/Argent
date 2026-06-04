@@ -29,7 +29,7 @@ class TinyLocalStrategy(ModelStrategy):
     """Optimization strategy for extremely small local models (< 3B)."""
 
     def get_max_history_messages(self, category: str) -> int:
-        return 6
+        return 12
 
     def trim_history(self, messages: List[Dict[str, Any]], model_name: str, 
                      max_history_messages: int, max_context_tokens: int) -> List[Dict[str, Any]]:
@@ -49,12 +49,13 @@ class StandardLocalStrategy(ModelStrategy):
 
     def get_max_history_messages(self, category: str) -> int:
         if category == "small":
-            return 10
-        return 20
+            return 20
+        return 40
 
     def trim_history(self, messages: List[Dict[str, Any]], model_name: str, 
                      max_history_messages: int, max_context_tokens: int) -> List[Dict[str, Any]]:
-        return sliding_window_trim(messages, model_name, max_history_messages, max_context_tokens)
+        # Use Dynamic Summarization for 14-20b models to compress context without losing key facts
+        return soft_trim_with_summarization(messages, model_name, max_history_messages, max_context_tokens)
 
     def parse_response(self, content: str) -> Dict[str, Any] | None:
         return parse_raw_tool_call(content)
@@ -68,10 +69,10 @@ class CloudStrategy(ModelStrategy):
 
     def get_max_history_messages(self, category: str) -> int:
         if category == "medium":
-            return 20
+            return 40
         elif category == "large":
-            return 30
-        return 40
+            return 60
+        return 80
 
     def trim_history(self, messages: List[Dict[str, Any]], model_name: str, 
                      max_history_messages: int, max_context_tokens: int) -> List[Dict[str, Any]]:

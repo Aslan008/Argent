@@ -213,6 +213,9 @@ def read_background_command(pid: str) -> str:
     retcode = process.poll()
     if retcode is not None:
         status = f"Process {pid} has EXITED with code {retcode}."
+        with ACTIVE_PROCESSES_LOCK:
+            if pid in ACTIVE_PROCESSES:
+                del ACTIVE_PROCESSES[pid]
     else:
         status = f"Process {pid} is RUNNING."
         

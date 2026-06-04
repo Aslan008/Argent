@@ -5,12 +5,13 @@ from logger import get_logger
 
 log = get_logger("tools")
 
-def add_project_task(description: str) -> str:
+def add_project_task(description: str, files_to_edit: str = "") -> str:
     """Add a task to the current project plan."""
     pm = ProjectManager()
     if not pm.active:
         return "Error: No active project. Use /project to start one."
-    task_id = pm.add_task(description)
+    file_list = [f.strip() for f in files_to_edit.split(',')] if files_to_edit else []
+    task_id = pm.add_task(description, target_files=file_list)
     return f"Task {task_id} added: '{description}'. If you have no more tasks to add, stop calling tools and reply 'DONE'."
 
 def complete_project_task(task_id: int, summary: str) -> str:
@@ -45,12 +46,13 @@ def plan_work_changes(strategy: str, files_to_edit: str, files_to_create: str) -
     pm.set_status("work_planning")
     return "Plan accepted. Moving to task generation phase."
 
-def add_work_task(description: str) -> str:
+def add_work_task(description: str, files_to_edit: str = "") -> str:
     """Add a micro-task for the current /work session."""
     pm = ProjectManager()
     if not pm.active or pm.data.get("mode") != "work":
         return "Error: No active /work session."
-    task_id = pm.add_task(description)
+    file_list = [f.strip() for f in files_to_edit.split(',')] if files_to_edit else []
+    task_id = pm.add_task(description, target_files=file_list)
     return f"Work task {task_id} added: '{description}'. If you have no more tasks to add, stop calling tools and reply 'DONE'."
 
 def list_project_tasks() -> str:

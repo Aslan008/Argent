@@ -68,7 +68,12 @@ def safe_print(*args, **kwargs):
     try:
         console.print(*args, **kwargs)
     except UnicodeEncodeError:
-        pass
+        try:
+            raw_text = " ".join(str(a) for a in args)
+            enc = sys.stdout.encoding or 'utf-8'
+            print(raw_text.encode(enc, errors='replace').decode(enc), **kwargs)
+        except Exception:
+            pass
 
 # ----------------------------------------------------
 
@@ -256,9 +261,14 @@ def print_tool_start(name: str, args: dict):
     if name in ("ask_user_questions",):
         return
     args_str = ", ".join(f"{k}={v!r}" for k, v in args.items())
+    
+    from config import get_debug_mode
+    is_debug = get_debug_mode()
+    limit = 2000 if is_debug else 150
+    
     # Keep arguments somewhat truncated if massive
-    if len(args_str) > 150:
-        args_str = args_str[:147] + "..."
+    if len(args_str) > limit:
+        args_str = args_str[:limit-3] + "..."
     
     try:
         console.print(f"\n[tool_start]> Executing:[/] [tool_name]{name}[/]([tool_args]{args_str}[/])")
@@ -270,9 +280,15 @@ def print_tool_end(name: str, result: str):
     if name in ("ask_user_questions",):
         return
     res_preview = str(result)
-    # Give it a subtle, narrow panel for tool results to distinguish from AI chat
-    if len(res_preview) > 200:
-        res_preview = res_preview[:197] + "..."
+    
+    from config import get_debug_mode
+    is_debug = get_debug_mode()
+    
+    lines = res_preview.splitlines()
+    max_lines = 100 if is_debug else 15
+    
+    if len(lines) > max_lines:
+        res_preview = "\n".join(lines[:max_lines]) + f"\n... [{len(lines) - max_lines} lines hidden in UI]"
         
     try:
         panel = Panel(

@@ -24,22 +24,30 @@ class OllamaEmbeddingFunction:
 
     def __call__(self, input: list[str]) -> list[list[float]]:
         import requests
-        embeddings = []
-        for text in input:
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        
+        embeddings = [[0.0] * 768] * len(input)
+        ollama_host = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
+        
+        def fetch_embedding(idx, text):
             try:
-                from config import get_provider
-                ollama_host = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
                 resp = requests.post(
                     f"{ollama_host}/api/embed",
                     json={"model": self.model_name, "input": text},
                     timeout=60,
                 )
                 resp.raise_for_status()
-                data = resp.json()
-                embeddings.append(data["embeddings"][0])
+                return idx, resp.json()["embeddings"][0]
             except Exception as e:
                 log.warning("Ollama embedding failed for text (%d chars): %s", len(text), e)
-                embeddings.append([0.0] * 768)
+                return idx, [0.0] * 768
+
+        with ThreadPoolExecutor(max_workers=10) as executor:
+            futures = [executor.submit(fetch_embedding, i, text) for i, text in enumerate(input)]
+            for future in as_completed(futures):
+                idx, emb = future.result()
+                embeddings[idx] = emb
+                
         return embeddings
 
     def embed_query(self, query: str) -> list[float]:
@@ -302,7 +310,8 @@ def _index_codebase(project_path: Path, collection):
                     for d, m in zip(file_docs, file_metas):
                         docs.append(d)
                         metadatas.append(m)
-                        ids.append(f"doc_{doc_id_counter}")
+                        chunk_id = hashlib.md5(f"{rel}_{m.get('start_line', doc_id_counter)}".encode()).hexdigest()
+                        ids.append(f"doc_{chunk_id}")
                         doc_id_counter += 1
                 except Exception:
                     pass

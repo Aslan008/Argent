@@ -4,6 +4,30 @@ log = get_logger("tools")
 
 from browser_engine import browser_engine
 
+def run_browser_task(task: str, url: str = None) -> str:
+    """Delegate a browser automation task to a specialized headless sub-agent."""
+    from agent import ArgentSubAgent
+    import json
+    
+    # We provide the sub-agent with the legacy, manual browser tools so IT can do the clicking,
+    # while the main agent just waits for the result.
+    allowed_tools = [
+        "browser_open", "browser_state", "browser_click", 
+        "browser_input", "browser_get_content", "browser_scroll"
+    ]
+    
+    prompt = f"You are an autonomous browser agent. Your task is to navigate the web and retrieve the requested information or perform the requested action.\n\nTask: {task}"
+    if url:
+        prompt += f"\n\nStart by opening this URL: {url}"
+        
+    try:
+        agent = ArgentSubAgent(role="BrowserWorker", task=prompt, tools_override=allowed_tools)
+        result = agent.execute()
+        return f"Browser Sub-Agent completed the task.\n\nResult:\n{result}"
+    except Exception as e:
+        log.error("run_browser_task error: %s", e)
+        return f"Error running browser task: {e}"
+
 def browser_open(url: str, session: str = "default", headed: bool = False) -> str:
     """Open a URL in the browser. Creates a new session if needed."""
     try:

@@ -29,10 +29,8 @@ def read_file(file_path: str, start_line: int = None, end_line: int = None) -> s
             else:
                 lines = []
                 for i, line in enumerate(f):
-                    if i >= 500:
-                        remaining = sum(1 for _ in f) + 1
-                        total = 500 + remaining
-                        return f"[File has {total} lines. Showing first 500. Use start_line/end_line to read specific sections.]\n" + "".join(lines)
+                    if i >= 3000:
+                        return f"[File exceeds 3000 lines. Showing first 3000. Use start_line/end_line to read specific sections.]\n" + "".join(lines)
                     lines.append(line)
                 return "".join(lines)
     except Exception as e:
@@ -99,6 +97,40 @@ def write_file(file_path: str, content: str) -> str:
     except Exception as e:
         log.error("write_file error %s: %s", file_path, e)
         return f"Error writing file '{file_path}': {e}"
+
+def append_to_file(file_path: str, content: str) -> str:
+    """Append content to an existing file or create a new one. Ideal for taking notes."""
+    restriction_error = _is_plugin_path_restricted(file_path)
+    if restriction_error:
+        return restriction_error
+        
+    try:
+        path = _resolve_path(file_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if path.exists():
+            snapshot(str(path))
+            
+        if '\\n' in content or '\\t' in content:
+            content = content.replace('\\n', '\n').replace('\\t', '\t').replace('\\\\', '\\')
+            
+        with open(path, "a", encoding="utf-8") as f:
+            if not content.startswith('\n'):
+                f.write('\n')
+            f.write(content)
+            
+        try:
+            from rag_engine import update_file_index
+            update_file_index(str(path))
+        except ImportError:
+            pass
+
+        log.info("append_to_file: %s (%d chars)", file_path, len(content))
+        memory.add_file_modified(file_path)
+        memory.add_completed(f"Appended to {file_path} ({len(content)} chars)")
+        return f"Successfully appended content to '{file_path}'."
+    except Exception as e:
+        log.error("append_to_file error %s: %s", file_path, e)
+        return f"Error appending to file '{file_path}': {e}"
 
 def replace_python_function(file_path: str, function_name: str, new_code: str) -> str:
     """Surgically replace a top-level function or class method in a Python file. 
@@ -230,13 +262,78 @@ def replace_in_file(file_path: str, target_text: str, replacement_text: str) -> 
             replacement_text_processed = replacement_text_processed.replace('\\n', '\n').replace('\\t', '\t').replace('\\\\', '\\')
 
         if target_text_processed not in content:
-            hint = _build_match_hint(target_text_processed, content)
-            return f"Error: The target text was not found in '{file_path}'. Make sure it matches exactly, including whitespace and indentation.{hint}"
+            # --- SMART EDIT: FUZZY FALLBACK ---
+            target_lines = [line.strip() for line in target_text_processed.splitlines() if line.strip()]
+            if target_lines:
+                content_lines = content.splitlines()
+                matches = []
+                for i in range(len(content_lines)):
+                    t_idx = 0
+                    c_idx = i
+                    match_start = c_idx
+                    while c_idx < len(content_lines) and t_idx < len(target_lines):
+                        if not content_lines[c_idx].strip():
+                            c_idx += 1
+                            continue
+                        if content_lines[c_idx].strip() == target_lines[t_idx]:
+                            t_idx += 1
+                            c_idx += 1
+                        else:
+                            break
+                    
+                    if t_idx == len(target_lines):
+                        matches.append((match_start, c_idx))
+                
+                if len(matches) == 1:
+                    start_line, end_line = matches[0]
+                    # We found exactly one fuzzy match. Extract the EXACT text from the file.
+                    exact_target_in_file = "\n".join(content_lines[start_line:end_line])
+                    
+                    # Determine base indentation from the original code
+                    original_first_line = ""
+                    for l in content_lines[start_line:end_line]:
+                        if l.strip():
+                            original_first_line = l
+                            break
+                    base_indent = original_first_line[:len(original_first_line) - len(original_first_line.lstrip())]
+                    
+                    # Re-indent replacement text
+                    repl_lines = replacement_text_processed.splitlines()
+                    if repl_lines:
+                        first_repl_line = ""
+                        for l in repl_lines:
+                            if l.strip():
+                                first_repl_line = l
+                                break
+                        repl_base_indent = first_repl_line[:len(first_repl_line) - len(first_repl_line.lstrip())]
+                        
+                        adjusted_repl_lines = []
+                        for line in repl_lines:
+                            if not line.strip():
+                                adjusted_repl_lines.append("")
+                            elif line.startswith(repl_base_indent):
+                                adjusted_repl_lines.append(base_indent + line[len(repl_base_indent):])
+                            else:
+                                adjusted_repl_lines.append(base_indent + line.lstrip())
+                        
+                        replacement_text_processed = "\n".join(adjusted_repl_lines)
+                        
+                    # Override target text with the exact one found in the file
+                    target_text_processed = exact_target_in_file
+                    log.info("Smart Edit (Fuzzy Match) successfully resolved the target block.")
+                elif len(matches) > 1:
+                    return f"Error: The target text is ambiguous (found {len(matches)} fuzzy matches). Provide more context."
+            
+            # If still not found after fuzzy attempt:
+            if target_text_processed not in content:
+                hint = _build_match_hint(target_text_processed, content)
+                return f"Error: The target text was not found in '{file_path}'. Make sure it matches exactly, including whitespace and indentation.{hint}"
 
         count = content.count(target_text_processed)
         if count > 1:
             return f"Error: The target text appears {count} times in '{file_path}'. Please provide a more specific, unique block of text to replace."
 
+        snapshot(str(path))
         new_content = content.replace(target_text_processed, replacement_text_processed)
         with open(path, "w", encoding="utf-8") as f:
             f.write(new_content)
@@ -262,6 +359,98 @@ def replace_in_file(file_path: str, target_text: str, replacement_text: str) -> 
     except Exception as e:
         log.error("replace_in_file error %s: %s", file_path, e)
         return f"Error replacing text in '{file_path}': {e}"
+
+def multi_replace_in_file_chunk(file_path: str, changes_json: str) -> str:
+    """Surgically replace multiple chunks of text in a single file by specifying line ranges."""
+    import json
+    restriction_error = _is_plugin_path_restricted(file_path)
+    if restriction_error:
+        return restriction_error
+        
+    try:
+        from tools._helpers import _print_diff, _validate_code_syntax
+        path = _resolve_path(file_path)
+        if not path.exists():
+            return f"Error: File '{file_path}' does not exist."
+        if not path.is_file():
+            return f"Error: '{file_path}' is not a file."
+            
+        changes = json.loads(changes_json)
+        if not isinstance(changes, list):
+            return "Error: changes_json must be a JSON array of objects."
+            
+        snapshot(str(path))
+        
+        with open(path, "r", encoding="utf-8") as f:
+            lines = f.read().splitlines()
+            
+        lines = [line + "\n" for line in lines]
+        original_content = "".join(lines)
+            
+        try:
+            changes.sort(key=lambda x: x.get("start_line", 1), reverse=True)
+        except TypeError:
+            return "Error: Invalid chunk format. 'start_line' must be an integer."
+
+        for change in changes:
+            start_line = change.get("start_line")
+            end_line = change.get("end_line")
+            target = change.get("target_content", "")
+            repl = change.get("replacement_content", "")
+            
+            if start_line is None or end_line is None:
+                return "Error: Every chunk must contain 'start_line' and 'end_line'."
+                
+            s_idx = max(0, start_line - 1)
+            e_idx = min(len(lines), end_line)
+            
+            if s_idx > e_idx or s_idx < 0:
+                return f"Error: Invalid line range {start_line}-{end_line}."
+                
+            actual_target_lines = lines[s_idx:e_idx]
+            actual_target = "".join(actual_target_lines)
+            
+            def normalize(t):
+                return t.replace("\\n", "\n").replace("\\t", "\t").strip()
+                
+            norm_target = normalize(target)
+            norm_actual = normalize(actual_target)
+            
+            if norm_target and norm_target != norm_actual:
+                return f"Error: The target_content for lines {start_line}-{end_line} does not match the actual file content.\nExpected:\n{norm_target}\n\nActual:\n{norm_actual}"
+                
+            repl_processed = repl
+            if '\\n' in repl_processed or '\\t' in repl_processed:
+                repl_processed = repl_processed.replace('\\n', '\n').replace('\\t', '\t').replace('\\\\', '\\')
+            
+            if repl_processed and not repl_processed.endswith('\n'):
+                repl_processed += '\n'
+                
+            lines[s_idx:e_idx] = [repl_processed] if repl_processed else []
+            
+        new_content = "".join(lines)
+        
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(new_content)
+            
+        validation_error = _validate_code_syntax(str(path))
+        if validation_error:
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(original_content)
+            return f"Modification aborted because it broke code compilation. Changes reverted.\n\n{validation_error}"
+            
+        _print_diff(original_content, new_content, file_path)
+        
+        log.info("multi_replace_in_file_chunk: %s", file_path)
+        memory.add_file_modified(file_path)
+        memory.add_completed(f"Edited {file_path} via chunk patcher")
+        return f"Successfully applied chunk replacements to '{file_path}'."
+        
+    except json.JSONDecodeError:
+        return "Error: changes_json is not valid JSON."
+    except Exception as e:
+        log.error("multi_replace_in_file_chunk error %s: %s", file_path, e)
+        return f"Error replacing chunks in '{file_path}': {e}"
 
 def multi_replace_in_file(changes_json: str) -> str:
     """Apply multiple text replacements across one or multiple files using a JSON array string."""
@@ -442,3 +631,22 @@ def list_directory(dir_path: str) -> str:
         return "\n".join(output)
     except Exception as e:
         return f"Error listing directory '{dir_path}': {e}"
+
+def run_deep_linter(path: str = ".") -> str:
+    """Run a deep static analysis (Pylint) on a file or directory."""
+    import subprocess
+    import os
+    try:
+        abs_path = str(_resolve_path(path))
+        print(f"\n[bold yellow]Agent running deep linter on:[/bold yellow] {abs_path}")
+        result = subprocess.run(
+            ["pylint", abs_path, "-E", "--output-format=text"], 
+            capture_output=True, text=True, timeout=60
+        )
+        if result.returncode == 0 and not result.stdout.strip():
+            return "Pylint: No errors found. The code is structurally sound."
+        return f"Pylint Analysis Results:\n{result.stdout}\n{result.stderr}"
+    except FileNotFoundError:
+        return "Error: pylint is not installed. Run 'pip install pylint' first."
+    except Exception as e:
+        return f"Error running deep linter: {e}"

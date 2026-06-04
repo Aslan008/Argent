@@ -10,6 +10,7 @@ from config import (
     get_zai_endpoint, set_zai_endpoint, ZAI_ENDPOINT_GENERAL, ZAI_ENDPOINT_CODING,
     get_koboldcpp_url, set_koboldcpp_url,
     get_verbose_status, set_verbose_status,
+    get_debug_mode, set_debug_mode,
     add_mcp_server, remove_mcp_server, get_mcp_servers,
     get_strip_reasoning, set_strip_reasoning,
     get_temperature, set_temperature
@@ -146,19 +147,6 @@ def handle_slash_command(command: str, agent: ArgentAgent) -> bool:
                     set_current_model(new_model)
                     agent.model_name = new_model
                     print_system(f"Model updated to: {new_model}")
-    elif cmd.startswith("/obsidian"):
-        parts = command.split(" ", 1)
-        if len(parts) > 1:
-            vault_path = parts[1].strip()
-        else:
-            vault_path = questionary.path("Enter the path to your Obsidian vault:").ask()
-            
-        if vault_path:
-            vault_path = vault_path.strip('\'"')
-            set_obsidian_vault(vault_path)
-            print_system(f"Obsidian vault path set to: {vault_path}")
-        else:
-            print_system("Obsidian vault path unchanged.")
     elif cmd.startswith("/mcp"):
         _handle_mcp_command(command)
     elif cmd == "/help":
@@ -166,28 +154,27 @@ def handle_slash_command(command: str, agent: ArgentAgent) -> bool:
             "**Argent Coder Commands:**\n"
             "- `/provider` - Select API Provider (Ollama / Z.ai) and endpoint\n"
             "- `/model` - Select active LLM model\n"
-            "- `/obsidian [path]` - Set the path to your Obsidian vault\n"
             "- `/research [topic]` - Enter Auto-Research mode to search the web and generate notes\n"
-            "- `/enable_rag` - Index the current project codebase for Semantic AI Search\n"
-            "- `/disable_rag` - Turn off Semantic AI Search\n"
-            "- `/rag_provider` - Switch embedding provider (sentence-transformers / Ollama)\n"
+            "- `/rag_toggle` - Enable/Disable automatic Semantic Search indexing on startup\n"
             "- `/hooks [path]` - View or change the global plugins (hooks) directory\n"
             "- `/tools` - Open interactive menu to enable/disable tools\n"
             "- `/mcp` - Manage MCP servers (add/remove/start/stop/test)\n"
             "- `/save [name]` - Export the current conversation to a Markdown file\n"
             "- `/sessions` - List saved sessions\n"
             "- `/load <n>` - Restore a saved session by number\n"
-            "- `/diff [file]` - Show changes made to files\n"
-            "- `/undo [file]` - Restore a file to its previous version\n"
-            "- `/undo_all` - Restore all modified files\n"
             "- `/copy <n>` - Copy code block #n to clipboard\n"
             "- `/logs [module] [n]` - View logs (e.g. /logs tools 20, /logs error)\n"
             "- `/skills` - List available AI skills\n"
-            "- `/setup_terminal` - Make the terminal look incredibly professional (Fonts & Colors)\n"
             "- `/project [prompt]` - Force the AI to build a massive multi-step project from scratch\n"
             "- `/work [--auto] [task]` - Modify or fix an EXISTING codebase safely\n"
             "- `/commit` - Generate AI commit message and commit changes\n"
+            "- `/cd [path]` - Change working directory (show current if no path given)\n"
+            "- `/undo <file>` - Restore a file to its state before AI modified it\n"
+            "- `/diff <file>` - Show diff between current file and its pre-modification snapshot\n"
+            "- `/changes` - List all files modified by AI in this session\n"
+            "- `/stats` - View session diagnostics (model, context, plugins, MCP)\n"
             "- `/verbose` - Toggle live status indicators (spinners)\n"
+            "- `/debug` - Toggle detailed tool logs (full arguments and raw results in chat)\n"
             "- `/thinking` - Toggle forced removal of reasoning blocks from history\n"
             "- `/temp [value]` - Set or view the model temperature (range: 0.0 - 2.0)\n"
             "- `/clear` - Clear conversation history\n"
@@ -208,6 +195,12 @@ def handle_slash_command(command: str, agent: ArgentAgent) -> bool:
         set_verbose_status(new_val)
         state = "[bold green]ON[/bold green]" if new_val else "[bold red]OFF[/bold red]"
         print_system(f"Live status indicators: {state}")
+    elif cmd == "/debug":
+        current = get_debug_mode()
+        new_val = not current
+        set_debug_mode(new_val)
+        state = "[bold green]ON[/bold green]" if new_val else "[bold red]OFF[/bold red]"
+        print_system(f"Detailed logs in chat (Debug mode): {state}")
     elif cmd == "/thinking":
         current = get_strip_reasoning()
         new_val = not current
