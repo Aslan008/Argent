@@ -816,6 +816,7 @@ class BrowserEngine:
                 "locale": "en-US",
                 "timezone_id": "America/New_York",
                 "java_script_enabled": True,
+                "accept_downloads": True,
             }
             if state_file.exists():
                 kwargs["storage_state"] = str(state_file)
@@ -829,10 +830,26 @@ class BrowserEngine:
         self._sessions[session] = sc
         log.info("Session '%s' created (cdp=%s)", session, self._cdp_mode)
 
+        # Download handler
+        async def handle_download(download):
+            try:
+                downloads_dir = Path.home() / "Downloads"
+                downloads_dir.mkdir(exist_ok=True)
+                final_path = downloads_dir / (download.suggested_filename or "downloaded_file")
+                log.info("Downloading to %s...", final_path)
+                await download.save_as(str(final_path))
+                log.info("Successfully downloaded: %s", final_path)
+            except Exception as e:
+                log.error("Download failed: %s", e)
+
+        # Attach to the initial page
+        page.on("download", handle_download)
+
         # Set up auto-tab-switching listener
         def make_page_handler(session_ctx):
             def handle_page(new_page):
                 session_ctx.page = new_page
+                new_page.on("download", handle_download)
                 log.info("Auto-switched session to new tab: %s", new_page.url)
             return handle_page
         

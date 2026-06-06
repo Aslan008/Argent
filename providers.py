@@ -197,6 +197,14 @@ class OpenAICompatibleProvider(LLMProvider, ABC):
         if temperature is not None:
             kwargs["temperature"] = temperature
 
+        # Pass max generation tokens to prevent premature truncation.
+        # Without this, providers like KoboldCPP use their own default
+        # (often 256-512 tokens), which causes the model to stop mid-response.
+        from config import get_max_generation_tokens
+        max_gen = get_max_generation_tokens()
+        if max_gen:
+            kwargs["max_tokens"] = max_gen
+
         try:
             response_stream = client.chat.completions.create(**kwargs)
         except self._openai.APIStatusError as e:
@@ -207,7 +215,8 @@ class OpenAICompatibleProvider(LLMProvider, ABC):
         for chunk in response_stream:
             if not chunk.choices:
                 continue
-            delta = chunk.choices[0].delta
+            choice = chunk.choices[0]
+            delta = choice.delta
             tool_call_deltas = []
             if getattr(delta, 'tool_calls', None):
                 for tc in delta.tool_calls:
@@ -217,11 +226,20 @@ class OpenAICompatibleProvider(LLMProvider, ABC):
                         "function_name_delta": getattr(tc.function, 'name', '') or "",
                         "function_arguments_delta": getattr(tc.function, 'arguments', '') or "",
                     })
-            yield {
+
+            result = {
                 "content": delta.content or "",
                 "thinking": getattr(delta, 'reasoning_content', '') or "",
                 "tool_call_deltas": tool_call_deltas,
             }
+
+            # Detect forced truncation: finish_reason="length" means the model
+            # was cut off by max_tokens, not because it finished naturally.
+            finish_reason = getattr(choice, 'finish_reason', None)
+            if finish_reason == "length":
+                result["truncated"] = True
+
+            yield result
 
     def sync_chat(self, model, messages, temperature=0.3, json_format=False) -> str:
         client = self._get_client()

@@ -176,11 +176,14 @@ def soft_trim_with_summarization(messages: List[Dict[str, Any]], model_name: str
     msgs_to_summarize = []
     indices_to_drop = []
 
+    target_messages = max_history_messages // 2
+    target_tokens = int(max_context_tokens * 0.5)
+
     current_tokens = sum(estimate_tokens(str(m), model_name, get_provider()) for m in messages[1:])
     for i in range(1, len(messages)):
         if i in pinned_indices:
             continue
-        if len(messages) - len(indices_to_drop) <= max_history_messages and current_tokens <= (max_context_tokens * 0.7):
+        if len(messages) - len(indices_to_drop) <= target_messages and current_tokens <= target_tokens:
             break
         msgs_to_summarize.append(messages[i])
         indices_to_drop.append(i)

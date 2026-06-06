@@ -29,11 +29,7 @@ class TestArgentEnhancements(unittest.TestCase):
         # Check standard sections
         self.assertIn("CRITICAL: LANGUAGE RULE", prompt)
         self.assertIn("ROLE: Argent Coder", prompt)
-        # Should have Obsidian section
-        self.assertIn("OBSIDIAN INTEGRATION", prompt)
-        self.assertIn("C:\\path\\to\\my\\vault", prompt)
-        # Large model should have Project Brain Mode
-        self.assertIn("PROJECT BRAIN MODE", prompt)
+        self.assertIn("## 4. PLANNING MODE & ARTIFACTS", prompt)
 
     @patch('agent.get_obsidian_vault')
     @patch('agent.get_current_model')

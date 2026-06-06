@@ -387,6 +387,34 @@ def select_model(current_model: str) -> str:
         except (ValueError, IndexError):
             pass
 
+    # --- Step 3: Model classification ---
+    from config import (
+        get_model_size_category, get_model_category_override,
+        set_model_category_override
+    )
+    # Reset override so auto-detection shows the real value for the new model
+    set_model_category_override(None)
+    auto_category = get_model_size_category(selected)
+
+    category_choices = [
+        f"Auto: {auto_category} (рекомендуется)",
+        "tiny  — <3B, без native tools, минимальная история",
+        "small — 3-7B, native tools, короткая история",
+        "medium — 7-13B, native tools, средняя история",
+        "large — >13B, native tools, длинная история",
+        "cloud — облачные API (Gemini, GPT, GLM)",
+    ]
+
+    cat_choice = _select_from_list(
+        f"Классификация модели (авто: {auto_category}):",
+        category_choices,
+        category_choices[0]
+    )
+
+    if cat_choice and not cat_choice.startswith("Auto"):
+        manual_cat = cat_choice.split()[0].strip()
+        set_model_category_override(manual_cat)
+
     return selected
 
 

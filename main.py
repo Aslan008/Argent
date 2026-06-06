@@ -549,12 +549,19 @@ def main():
                 continue
             
             elif user_input.strip() == "/stats":
-                from config import get_context_window
+                from config import (
+                    get_context_window, get_model_size_category,
+                    get_model_category_override
+                )
                 
                 model = get_current_model()
                 provider = get_provider()
                 ctx = get_context_window()
                 msg_count = len(agent.messages)
+                
+                category = get_model_size_category(model)
+                override = get_model_category_override()
+                cat_source = "manual" if override else "auto"
                 
                 mcp_servers = mcp_client.get_servers()
                 active_mcp = [s['name'] for s in mcp_servers if s['running']]
@@ -565,6 +572,7 @@ def main():
                     f"[bold cyan]Argent Diagnostics:[/bold cyan]\n"
                     f"  [dim]Directory:[/dim] {os.getcwd()}\n"
                     f"  [dim]Model:[/dim] {model} ({provider})\n"
+                    f"  [dim]Classification:[/dim] {category} ({cat_source})\n"
                     f"  [dim]Context Window:[/dim] {ctx} tokens\n"
                     f"  [dim]History:[/dim] {msg_count} messages\n"
                 )

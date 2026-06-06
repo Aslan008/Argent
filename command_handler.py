@@ -13,7 +13,8 @@ from config import (
     get_debug_mode, set_debug_mode,
     add_mcp_server, remove_mcp_server, get_mcp_servers,
     get_strip_reasoning, set_strip_reasoning,
-    get_temperature, set_temperature
+    get_temperature, set_temperature,
+    get_external_kbs, add_external_kb, remove_external_kb, toggle_external_kb
 )
 from ui import (
     console, print_markdown, print_system, print_error,
@@ -149,11 +150,13 @@ def handle_slash_command(command: str, agent: ArgentAgent) -> bool:
                     print_system(f"Model updated to: {new_model}")
     elif cmd.startswith("/mcp"):
         _handle_mcp_command(command)
+    elif cmd.startswith("/kb"):
+        _handle_kb_command(command)
     elif cmd == "/help":
         help_text = (
             "**Argent Coder Commands:**\n"
             "- `/provider` - Select API Provider (Ollama / Z.ai) and endpoint\n"
-            "- `/model` - Select active LLM model\n"
+            "- `/model` - Select active LLM model (includes context window and classification)\n"
             "- `/research [topic]` - Enter Auto-Research mode to search the web and generate notes\n"
             "- `/rag_toggle` - Enable/Disable automatic Semantic Search indexing on startup\n"
             "- `/hooks [path]` - View or change the global plugins (hooks) directory\n"
@@ -400,3 +403,86 @@ def _mcp_add(parts: list):
 
     else:
         print_error(f"Unknown flag '{flag}'. Use: --stdio, --sse, --rest")
+
+def _handle_kb_command(command: str):
+    """Handle /kb subcommands: list, add, remove, toggle, index."""
+    parts = command.strip().split()
+    
+    if len(parts) == 1 or parts[1] == "list":
+        kbs = get_external_kbs()
+        if not kbs:
+            print_system("No External Knowledge Bases configured.")
+            print_system("Usage:")
+            print_system('  /kb add <id> "<Name>" "<Path>"')
+            return
+            
+        print_system("[bold cyan]External Knowledge Bases:[/bold cyan]")
+        for kb in kbs:
+            status = "[green]ENABLED[/green]" if kb.get("enabled", True) else "[red]DISABLED[/red]"
+            print_system(f"  - [yellow]{kb['id']}[/yellow] — {kb['name']} ({kb['path']}) {status}")
+        return
+
+    subcmd = parts[1].lower()
+
+    if subcmd == "add":
+        if len(parts) < 5:
+            print_error("Usage: /kb add <id> <name> <path>")
+            print_system('Example: /kb add unity64 "Unity 6.4" "D:/UnityDocs"')
+            return
+        kb_id = parts[2]
+        
+        # Need to re-parse considering quotes
+        import shlex
+        try:
+            parsed = shlex.split(command)
+        except ValueError as e:
+            print_error(f"Error parsing arguments: {e}")
+            return
+            
+        if len(parsed) < 5:
+            print_error('Usage: /kb add <id> "Name" "Path"')
+            return
+            
+        kb_id = parsed[2]
+        name = parsed[3]
+        path = parsed[4]
+        
+        add_external_kb(kb_id, name, path)
+        print_system(f"Added Knowledge Base '{name}' ({kb_id}) at {path}.")
+        print_system(f"Don't forget to index it: /kb index {kb_id}")
+        
+    elif subcmd == "remove":
+        if len(parts) < 3:
+            print_error("Usage: /kb remove <id>")
+            return
+        kb_id = parts[2]
+        remove_external_kb(kb_id)
+        print_system(f"Removed Knowledge Base '{kb_id}'.")
+        
+    elif subcmd == "toggle":
+        if len(parts) < 3:
+            print_error("Usage: /kb toggle <id>")
+            return
+        kb_id = parts[2]
+        new_status = toggle_external_kb(kb_id)
+        status_str = "ENABLED" if new_status else "DISABLED"
+        print_system(f"Knowledge Base '{kb_id}' is now {status_str}.")
+        
+    elif subcmd == "index":
+        if len(parts) < 3:
+            print_error("Usage: /kb index <id>")
+            return
+        kb_id = parts[2]
+        kbs = get_external_kbs()
+        target_kb = next((kb for kb in kbs if kb["id"] == kb_id), None)
+        if not target_kb:
+            print_error(f"Knowledge Base '{kb_id}' not found.")
+            return
+            
+        from rag_engine import index_external_kb
+        print_system(f"[yellow]Starting indexing for {target_kb['name']}... This may take a while.[/yellow]")
+        result = index_external_kb(target_kb)
+        print_system(result)
+    else:
+        print_error(f"Unknown /kb subcommand: '{subcmd}'")
+        print_system("Usage: /kb [list|add|remove|toggle|index]")

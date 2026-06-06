@@ -10,6 +10,8 @@ log = get_logger("rag")
 
 _RAG_ENABLED = False
 _COLLECTION = None
+_GLOBAL_DB_CLIENT = None
+_ACTIVE_KB_COLLECTIONS = []
 _lock = threading.Lock()
 
 _SEARCH_CACHE: dict = {}
@@ -63,13 +65,15 @@ def is_rag_enabled() -> bool:
 
 def disable_rag():
     """Disables RAG and clears the collection reference."""
-    global _RAG_ENABLED, _COLLECTION
+    global _RAG_ENABLED, _COLLECTION, _GLOBAL_DB_CLIENT, _ACTIVE_KB_COLLECTIONS
     _RAG_ENABLED = False
     _COLLECTION = None
+    _GLOBAL_DB_CLIENT = None
+    _ACTIVE_KB_COLLECTIONS = []
 
 def enable_rag_for_project(project_dir: str) -> str:
     """Initializes ChromaDB, creates embeddings for the project, and enables semantic search."""
-    global _RAG_ENABLED, _COLLECTION
+    global _RAG_ENABLED, _COLLECTION, _GLOBAL_DB_CLIENT, _ACTIVE_KB_COLLECTIONS
     
     try:
         import chromadb
@@ -106,6 +110,24 @@ def enable_rag_for_project(project_dir: str) -> str:
         _COLLECTION = client.get_or_create_collection(name="project_codebase", embedding_function=ef)
         
         _index_codebase(project_path, _COLLECTION)
+        
+        # --- Load External Knowledge Bases ---
+        from config import get_external_kbs
+        kbs = get_external_kbs()
+        enabled_kbs = [kb for kb in kbs if kb.get("enabled", True)]
+        
+        if enabled_kbs:
+            global_db_path = Path.home() / ".argent_coder_kbs"
+            global_db_path.mkdir(parents=True, exist_ok=True)
+            _GLOBAL_DB_CLIENT = chromadb.PersistentClient(path=str(global_db_path))
+            _ACTIVE_KB_COLLECTIONS = []
+            for kb in enabled_kbs:
+                try:
+                    col = _GLOBAL_DB_CLIENT.get_collection(name=f"kb_{kb['id']}", embedding_function=ef)
+                    _ACTIVE_KB_COLLECTIONS.append(col)
+                    print(f"[INFO] Loaded External Knowledge Base: {kb['name']}")
+                except Exception:
+                    print(f"[WARN] External KB '{kb['name']}' is enabled but not indexed. Use /kb index {kb['id']} to index it.")
         
         _RAG_ENABLED = True
         return f"Successfully enabled RAG for '{project_path.name}' (embeddings: {embedding_provider}). Indexed files and ready for /search."
@@ -241,6 +263,90 @@ def _chunk_heuristic(text: str, file_rel_path: str) -> tuple[list, list]:
     return docs, metadatas
 
 
+def index_external_kb(kb_dict: dict) -> str:
+    """Indexes an external knowledge base directory into the global ChromaDB."""
+    global _GLOBAL_DB_CLIENT, _ACTIVE_KB_COLLECTIONS
+    try:
+        import chromadb
+    except ImportError:
+        return "ERROR: 'chromadb' is not installed. Please run `pip install chromadb`."
+        
+    try:
+        from config import get_embedding_provider, get_ollama_embedding_model
+        kb_path = Path(kb_dict["path"]).expanduser().resolve()
+        if not kb_path.exists():
+            return f"Error: Knowledge Base path '{kb_path}' does not exist."
+            
+        global_db_path = Path.home() / ".argent_coder_kbs"
+        global_db_path.mkdir(parents=True, exist_ok=True)
+        client = chromadb.PersistentClient(path=str(global_db_path))
+        
+        embedding_provider = get_embedding_provider()
+        if embedding_provider == "ollama":
+            ollama_model = get_ollama_embedding_model()
+            ef = OllamaEmbeddingFunction(model_name=ollama_model)
+        else:
+            try:
+                from chromadb.utils import embedding_functions
+                ef = embedding_functions.SentenceTransformerEmbeddingFunction(model_name="all-MiniLM-L6-v2")
+            except ImportError:
+                return "ERROR: 'sentence-transformers' is not installed."
+                
+        col_name = f"kb_{kb_dict['id']}"
+        try:
+            client.delete_collection(name=col_name)
+        except Exception:
+            pass
+            
+        collection = client.create_collection(name=col_name, embedding_function=ef)
+        
+        print(f"[INFO] Indexing Knowledge Base at {kb_path}...")
+        docs = []
+        ids = []
+        metadatas = []
+        doc_id_counter = 0
+        
+        for root, dirs, files in os.walk(kb_path):
+            for file in files:
+                file_path = Path(root) / file
+                if file_path.suffix.lower() in {".md", ".txt", ".html", ".htm", ".pdf", ".json", ".csv"}:
+                    try:
+                        with open(file_path, 'r', encoding="utf-8", errors="ignore") as f:
+                            source = f.read()
+                        
+                        if file_path.suffix.lower() in {".html", ".htm"}:
+                            try:
+                                from bs4 import BeautifulSoup
+                                soup = BeautifulSoup(source, "html.parser")
+                                source = soup.get_text(separator="\n", strip=True)
+                            except ImportError:
+                                pass
+                                
+                        rel = str(file_path.relative_to(kb_path))
+                        file_docs, file_metas = _chunk_heuristic(source, rel)
+                        for d, m in zip(file_docs, file_metas):
+                            docs.append(d)
+                            m["source_type"] = "external_kb"
+                            metadatas.append(m)
+                            import hashlib
+                            chunk_id = hashlib.md5(f"{rel}_{m.get('start_line', doc_id_counter)}".encode()).hexdigest()
+                            ids.append(f"kb_{chunk_id}_{doc_id_counter}")
+                            doc_id_counter += 1
+                    except Exception:
+                        pass
+                        
+        if docs:
+            print(f"[INFO] Uploading {len(docs)} chunks to ChromaDB...")
+            batch_size = 5000
+            for i in range(0, len(docs), batch_size):
+                collection.upsert(documents=docs[i:i+batch_size], metadatas=metadatas[i:i+batch_size], ids=ids[i:i+batch_size])
+        
+        return f"Successfully indexed Knowledge Base '{kb_dict['name']}' ({len(docs)} chunks)."
+    except Exception as e:
+        import traceback
+        return f"Failed to index Knowledge Base: {e}\n{traceback.format_exc()}"
+
+
 def _chunk_text(text: str, file_rel_path: str) -> list:
     """Chunks text logically (using AST for Python, and regex heuristics for others)."""
     if file_rel_path.endswith(".py"):
@@ -372,10 +478,18 @@ def update_file_index(file_path: str):
 
 def semantic_search(query: str, n_results: int = 5) -> str:
     """Tool for the LLM to search the vector database for code snippets using Hybrid Search + RRF."""
-    global _RAG_ENABLED, _COLLECTION
+    global _RAG_ENABLED, _COLLECTION, _ACTIVE_KB_COLLECTIONS
     
-    if not _RAG_ENABLED or _COLLECTION is None:
+    if not _RAG_ENABLED:
         return "Error: RAG is not enabled. Cannot perform semantic search."
+        
+    collections_to_search = []
+    if _COLLECTION is not None:
+        collections_to_search.append(_COLLECTION)
+    collections_to_search.extend(_ACTIVE_KB_COLLECTIONS)
+    
+    if not collections_to_search:
+        return "Error: No active collections to search."
     
     cache_key = hashlib.md5(f"{query}:{n_results}".encode()).hexdigest()
     now = time.time()
@@ -385,50 +499,41 @@ def semantic_search(query: str, n_results: int = 5) -> str:
             return cached_result
         
     try:
-        # 1. Semantic (Vector) search
-        vector_results = _COLLECTION.query(
-            query_texts=[query],
-            n_results=n_results * 2
-        )
-        
-        vector_docs = []
-        if vector_results.get('documents') and vector_results['documents'][0]:
-            for i in range(len(vector_results['documents'][0])):
-                doc = vector_results['documents'][0][i]
-                meta = vector_results['metadatas'][0][i]
-                doc_id = vector_results['ids'][0][i]
-                vector_docs.append((doc, meta, doc_id))
-                
-        # 2. Keyword Search
         import re
         keywords = [w.lower() for w in re.findall(r'\w+', query) if len(w) > 2]
-        keyword_docs = []
-        if keywords:
-            try:
-                data = _COLLECTION.get(include=["documents", "metadatas"])
-                if data and data.get("documents"):
-                    scored = []
-                    for doc, meta, doc_id in zip(data["documents"], data["metadatas"], data["ids"]):
-                        doc_lower = doc.lower()
-                        score = sum(doc_lower.count(kw) for kw in keywords)
-                        if score > 0:
-                            scored.append((score, doc, meta, doc_id))
-                    scored.sort(key=lambda x: x[0], reverse=True)
-                    keyword_docs = [(doc, meta, doc_id) for _, doc, meta, doc_id in scored[:n_results * 2]]
-            except Exception:
-                pass
-                
-        # 3. Reciprocal Rank Fusion (RRF)
+        
         rrf_scores = {}
         doc_map = {}
         
-        for rank, (doc, meta, doc_id) in enumerate(vector_docs):
-            rrf_scores[doc_id] = rrf_scores.get(doc_id, 0.0) + 1.0 / (60 + rank)
-            doc_map[doc_id] = (doc, meta)
-            
-        for rank, (doc, meta, doc_id) in enumerate(keyword_docs):
-            rrf_scores[doc_id] = rrf_scores.get(doc_id, 0.0) + 1.0 / (60 + rank)
-            doc_map[doc_id] = (doc, meta)
+        for col in collections_to_search:
+            try:
+                # 1. Semantic (Vector) search
+                v_res = col.query(query_texts=[query], n_results=n_results * 2)
+                if v_res.get('documents') and v_res['documents'][0]:
+                    for rank, i in enumerate(range(len(v_res['documents'][0]))):
+                        doc = v_res['documents'][0][i]
+                        meta = v_res['metadatas'][0][i]
+                        doc_id = v_res['ids'][0][i]
+                        
+                        rrf_scores[doc_id] = rrf_scores.get(doc_id, 0.0) + 1.0 / (60 + rank)
+                        doc_map[doc_id] = (doc, meta)
+                        
+                # 2. Keyword Search
+                if keywords:
+                    data = col.get(include=["documents", "metadatas"])
+                    if data and data.get("documents"):
+                        scored = []
+                        for doc, meta, doc_id in zip(data["documents"], data["metadatas"], data["ids"]):
+                            doc_lower = doc.lower()
+                            score = sum(doc_lower.count(kw) for kw in keywords)
+                            if score > 0:
+                                scored.append((score, doc, meta, doc_id))
+                        scored.sort(key=lambda x: x[0], reverse=True)
+                        for rank, (_, doc, meta, doc_id) in enumerate(scored[:n_results * 2]):
+                            rrf_scores[doc_id] = rrf_scores.get(doc_id, 0.0) + 1.0 / (60 + rank)
+                            doc_map[doc_id] = (doc, meta)
+            except Exception:
+                pass
             
         if not rrf_scores:
             return f"No relevant code found for query: '{query}'"

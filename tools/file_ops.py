@@ -29,8 +29,8 @@ def read_file(file_path: str, start_line: int = None, end_line: int = None) -> s
             else:
                 lines = []
                 for i, line in enumerate(f):
-                    if i >= 3000:
-                        return f"[File exceeds 3000 lines. Showing first 3000. Use start_line/end_line to read specific sections.]\n" + "".join(lines)
+                    if i >= 500:
+                        return f"[File exceeds 500 lines. Showing first 500. Use start_line/end_line to read specific sections.]\n" + "".join(lines)
                     lines.append(line)
                 return "".join(lines)
     except Exception as e:
@@ -64,7 +64,7 @@ def delete_file(file_path: str) -> str:
         log.error("delete_file error %s: %s", file_path, e)
         return f"Error deleting file '{file_path}': {e}"
 
-def write_file(file_path: str, content: str) -> str:
+def write_file(file_path: str, content: str, overwrite: bool = False) -> str:
     """Write or overwrite content to a file. Creates directories if needed."""
     restriction_error = _is_plugin_path_restricted(file_path)
     if restriction_error:
@@ -72,6 +72,17 @@ def write_file(file_path: str, content: str) -> str:
         
     try:
         path = _resolve_path(file_path)
+        
+        if path.exists() and path.is_file() and not overwrite:
+            try:
+                file_size_bytes = path.stat().st_size
+                with open(path, "r", encoding="utf-8", errors="ignore") as f:
+                    existing_lines = sum(1 for _ in f)
+                if existing_lines > 150 or file_size_bytes > 10000:
+                    return f"Error: File '{file_path}' already exists (Size: {existing_lines} lines, {file_size_bytes} bytes). To prevent truncation, you MUST use 'replace_in_file' to edit it. If you truly intend to DESTROY and completely rewrite this file from scratch, call write_file again with the argument 'overwrite': true."
+            except Exception:
+                pass
+                
         path.parent.mkdir(parents=True, exist_ok=True)
         if path.exists():
             snapshot(str(path))
@@ -286,41 +297,8 @@ def replace_in_file(file_path: str, target_text: str, replacement_text: str) -> 
                 
                 if len(matches) == 1:
                     start_line, end_line = matches[0]
-                    # We found exactly one fuzzy match. Extract the EXACT text from the file.
                     exact_target_in_file = "\n".join(content_lines[start_line:end_line])
-                    
-                    # Determine base indentation from the original code
-                    original_first_line = ""
-                    for l in content_lines[start_line:end_line]:
-                        if l.strip():
-                            original_first_line = l
-                            break
-                    base_indent = original_first_line[:len(original_first_line) - len(original_first_line.lstrip())]
-                    
-                    # Re-indent replacement text
-                    repl_lines = replacement_text_processed.splitlines()
-                    if repl_lines:
-                        first_repl_line = ""
-                        for l in repl_lines:
-                            if l.strip():
-                                first_repl_line = l
-                                break
-                        repl_base_indent = first_repl_line[:len(first_repl_line) - len(first_repl_line.lstrip())]
-                        
-                        adjusted_repl_lines = []
-                        for line in repl_lines:
-                            if not line.strip():
-                                adjusted_repl_lines.append("")
-                            elif line.startswith(repl_base_indent):
-                                adjusted_repl_lines.append(base_indent + line[len(repl_base_indent):])
-                            else:
-                                adjusted_repl_lines.append(base_indent + line.lstrip())
-                        
-                        replacement_text_processed = "\n".join(adjusted_repl_lines)
-                        
-                    # Override target text with the exact one found in the file
-                    target_text_processed = exact_target_in_file
-                    log.info("Smart Edit (Fuzzy Match) successfully resolved the target block.")
+                    return f"Error: target_text not found exactly in file. Fuzzy matcher found a similar block:\n\n{exact_target_in_file}\n\nIf this is the block you meant to replace, call replace_in_file again using this EXACT text as target_text to ensure safe replacement."
                 elif len(matches) > 1:
                     return f"Error: The target text is ambiguous (found {len(matches)} fuzzy matches). Provide more context."
             

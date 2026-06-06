@@ -136,6 +136,16 @@ def set_debug_mode(enabled: bool):
     config["debug_mode"] = enabled
     save_config(config)
 
+def get_max_generation_tokens() -> int:
+    """Get max tokens for generation. Default 8192 to prevent truncation in local APIs."""
+    config = load_config()
+    return config.get("max_generation_tokens", 8192)
+
+def set_max_generation_tokens(tokens: int):
+    config = load_config()
+    config["max_generation_tokens"] = tokens
+    save_config(config)
+
 def get_hooks_dir() -> str:
     """Get the configured hooks directory path."""
     config = load_config()
@@ -264,18 +274,68 @@ def remove_mcp_server(name: str):
 
 import re
 
+VALID_MODEL_CATEGORIES = ("tiny", "small", "medium", "large", "cloud")
+
+def get_model_category_override() -> str | None:
+    """Get the user's manual model category override, or None for auto-detection."""
+    config = load_config()
+    val = config.get("model_category_override")
+    if val and val in VALID_MODEL_CATEGORIES:
+        return val
+    return None
+
+def set_model_category_override(category: str | None):
+    """Set or clear the manual model category override.
+    Pass None to revert to auto-detection."""
+    config = load_config()
+    if category is None:
+        config.pop("model_category_override", None)
+    else:
+        if category not in VALID_MODEL_CATEGORIES:
+            raise ValueError(f"Invalid category '{category}'. Valid: {VALID_MODEL_CATEGORIES}")
+        config["model_category_override"] = category
+    save_config(config)
+
+def _classify_by_size(size_b: float) -> str:
+    """Classify model by parameter count in billions."""
+    if size_b < 3:
+        return "tiny"
+    elif size_b < 7:
+        return "small"
+    elif size_b < 13:
+        return "medium"
+    else:
+        return "large"
+
 def get_model_size_category(model_name: str) -> str:
     """Detect model size category from model name.
     Returns: 'tiny' (<3B), 'small' (3-7B), 'medium' (7-13B), 'large' (>13B), 'cloud' (z.ai).
+    
+    Priority: manual override > MoE active params > total params > keyword fallback.
     """
     if not model_name:
         return "medium"
     
+    # Priority 1: Manual user override
+    override = get_model_category_override()
+    if override:
+        return override
+    
     name = model_name.lower()
     
+    # Cloud provider detection
     if any(k in name for k in ["glm-", "gpt-", "claude-", "gemini-"]):
         return "cloud"
     
+    # Priority 2: MoE active parameter detection
+    # Models like "LFM2.5-8B-A1B" have 8B total but only 1B active params.
+    # The "A<N>B" suffix indicates active parameters — classify by those.
+    moe_match = re.search(r'[-_]a(\d+(?:\.\d+)?)b', name)
+    if moe_match:
+        active_b = float(moe_match.group(1))
+        return _classify_by_size(active_b)
+    
+    # Priority 3: Total parameter count (existing logic)
     size_patterns = [
         (r':(\d+(?:\.\d+)?)b', 1.0),
         (r'[-_](\d+(?:\.\d+)?)b', 1.0),
@@ -286,15 +346,9 @@ def get_model_size_category(model_name: str) -> str:
         match = re.search(pattern, name)
         if match:
             size_b = float(match.group(1)) * multiplier
-            if size_b < 3:
-                return "tiny"
-            elif size_b < 7:
-                return "small"
-            elif size_b < 13:
-                return "medium"
-            else:
-                return "large"
+            return _classify_by_size(size_b)
     
+    # Priority 4: Keyword fallback
     tiny_keywords = ["0.5b", "1b", "1.5b", "2b", "tiny", "mini", "nano", "micro"]
     if any(k in name for k in tiny_keywords):
         return "tiny"
@@ -360,3 +414,39 @@ def set_auto_rag(enabled: bool):
     config = load_config()
     config["auto_rag"] = enabled
     save_config(config)
+
+def get_external_kbs() -> list[dict]:
+    """Get the list of configured external Knowledge Bases."""
+    config = load_config()
+    return config.get("external_kbs", [])
+
+def set_external_kbs(kbs: list[dict]):
+    """Save the external Knowledge Bases configuration."""
+    config = load_config()
+    config["external_kbs"] = kbs
+    save_config(config)
+
+def add_external_kb(kb_id: str, name: str, path: str):
+    """Add a new external Knowledge Base."""
+    kbs = get_external_kbs()
+    # Remove if exists to update
+    kbs = [kb for kb in kbs if kb["id"] != kb_id]
+    kbs.append({"id": kb_id, "name": name, "path": path, "enabled": True})
+    set_external_kbs(kbs)
+
+def remove_external_kb(kb_id: str):
+    """Remove an external Knowledge Base."""
+    kbs = [kb for kb in get_external_kbs() if kb["id"] != kb_id]
+    set_external_kbs(kbs)
+
+def toggle_external_kb(kb_id: str) -> bool:
+    """Toggle the enabled status of an external Knowledge Base. Returns the new status."""
+    kbs = get_external_kbs()
+    new_status = False
+    for kb in kbs:
+        if kb["id"] == kb_id:
+            kb["enabled"] = not kb.get("enabled", True)
+            new_status = kb["enabled"]
+            break
+    set_external_kbs(kbs)
+    return new_status

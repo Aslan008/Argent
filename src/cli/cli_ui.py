@@ -147,6 +147,7 @@ def render_response_stream(
     chunk_iterator = iter(response_chunks)
     start_total_time = time.time()
     streamed_text = ""
+    full_streamed_text = ""
     is_tool_executing = False
     current_tool_name = ""
 
@@ -250,6 +251,7 @@ def render_response_stream(
                 if not done and not is_tool_executing and type_ in (
                     "content_stream", "content", "content_replace",
                 ):
+                    streamed_text = ""
                     with Live(
                         create_content_panel(""),
                         console=console,
@@ -259,9 +261,11 @@ def render_response_stream(
                         while True:
                             if type_ in ("content_stream", "content"):
                                 streamed_text += chunk["content"]
+                                full_streamed_text += chunk["content"]
                                 live.update(create_content_panel(streamed_text))
                             elif type_ == "content_replace":
                                 streamed_text = chunk["content"]
+                                full_streamed_text = chunk["content"]
                                 live.update(create_content_panel(streamed_text))
                             elif type_ == "tool_generating":
                                 break
@@ -377,8 +381,8 @@ def render_response_stream(
             break
 
     # Final static render
-    if streamed_text:
-        for el in create_final_panel(streamed_text):
+    if full_streamed_text:
+        for el in create_final_panel(full_streamed_text):
             safe_print(el)
             safe_print("")
 
@@ -386,4 +390,4 @@ def render_response_stream(
     safe_print(f"[dim](Время ответа: {elapsed_time:.1f}s)[/dim]")
     safe_print("")
 
-    return streamed_text, final_is_auto_mode, auto_sleep_time, auto_wake_context
+    return full_streamed_text, final_is_auto_mode, auto_sleep_time, auto_wake_context

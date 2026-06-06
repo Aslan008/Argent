@@ -79,6 +79,7 @@ You are an autonomous AI software engineer. You design, build, and debug softwar
 - **Tool-First**: Invoke tools immediately via JSON when needed.
 - **Ask Before Guessing**: Use `ask_user_questions` to clarify ambiguous requirements with structured options.
 - **Anti-Lazy**: Run commands and write/edit files yourself.
+- **File Editing**: NEVER use write_file to overwrite existing large files (>150 lines). You MUST use replace_in_file or multi_replace_in_file_chunk to apply targeted patches.
 - **Proactive Search**: Use `search_web` for technical info.
 - **Persistence**: Do NOT stop after a single tool call. If the task requires multiple steps (read → edit → verify), execute ALL steps in a single response. Keep calling tools until the task is FULLY complete.
 - **Strict Environment**: Use {platform.system()}-native commands only (PowerShell/CMD on Windows).""")
@@ -87,6 +88,7 @@ You are an autonomous AI software engineer. You design, build, and debug softwar
 - **Tool-First**: YOU are the only one with tool access. Invoke tools immediately via JSON.
 - **Ask Before Guessing**: If a user's request is ambiguous or lacks details, you MUST use the `ask_user_questions` tool to prompt them with structured options before writing code. Do NOT just ask questions in plain text chat.
 - **Anti-Lazy**: Never ask the user to run code or copy-paste. Use `run_command` and `write_file` yourself.
+- **File Editing**: NEVER use write_file to overwrite existing large files (>150 lines). You MUST use replace_in_file or multi_replace_in_file_chunk to apply targeted patches.
 - **Proactive Search**: Always use `search_web` for technical info, documentation, or current events.
 - **Persistence**: Do NOT stop after a single tool call. If the task requires multiple steps (read → edit → verify), execute ALL steps in a single response without waiting for user input. Keep calling tools until the task is FULLY complete.
 - **Testing**: NEVER test logic or GUI apps by running `python app.py` via `run_command` (it will block). You MUST write and run `pytest` tests, or use `start_background_command`.
@@ -268,6 +270,7 @@ You are an autonomous AI software engineer. You design, build, and debug softwar
             raw_tool_buffer = ""
             raw_tool_char_count = 0
             reasoning_tag_active = False
+            is_truncated = False
             START_TAGS = ["<thought>", "<think>", "<reasoning>"]
             END_TAGS = ["</thought>", "</think>", "</reasoning>"]
             
@@ -303,6 +306,9 @@ You are an autonomous AI software engineer. You design, build, and debug softwar
                 )
 
                 for chunk in response_stream:
+                    if chunk.get("truncated"):
+                        is_truncated = True
+
                     thinking_chunk = chunk.get("thinking", "")
                     if thinking_chunk:
                         full_reasoning += thinking_chunk
@@ -402,7 +408,7 @@ You are an autonomous AI software engineer. You design, build, and debug softwar
                     break
 
             # End of stream — parse tool call arguments from strings to dicts.
-            if tool_calls_accumulator:
+            if tool_calls_accumulator and not is_truncated:
                 for tc in tool_calls_accumulator:
                     if isinstance(tc["function"]["arguments"], str):
                         try:
@@ -414,7 +420,7 @@ You are an autonomous AI software engineer. You design, build, and debug softwar
             # --- FALLBACK: Parse tool calls from raw JSON in content ---
             # Models like Qwen2.5-Coder, nanbeige, etc. often write tool calls
             # as raw JSON strings instead of using the native tool_calls mechanism.
-            if not tool_calls_accumulator:
+            if not tool_calls_accumulator and not is_truncated:
                 clean_content = full_content.strip()
                 parsed_tool = self._parse_raw_tool_call(clean_content)
                 
@@ -427,6 +433,27 @@ You are an autonomous AI software engineer. You design, build, and debug softwar
                         full_content = ""
                     yield {"type": "content_replace", "content": full_content}
             # --- END FALLBACK ---
+            
+            # If the model was truncated mid-generation (max_tokens limit reached)
+            if is_truncated:
+                msg_to_append = {"role": "assistant", "content": full_content}
+                if full_reasoning:
+                    msg_to_append["thinking"] = full_reasoning
+                if tool_calls_accumulator:
+                    # Clear accumulator because it's incomplete JSON
+                    tool_calls_accumulator = []
+                self.messages.append(msg_to_append)
+                
+                # Yield a warning to the user
+                yield {"type": "error", "content": "\n[System: Model generation was truncated by max_tokens limit. Auto-continuing...]"}
+                
+                # Append a system prompt asking the model to continue exactly where it left off
+                self.messages.append({
+                    "role": "user",
+                    "content": "Your previous response was cut off due to length limits. Please continue exactly where you left off, without any introductory text."
+                })
+                # Loop continues to let the model finish
+                continue
             
             if full_content or tool_calls_accumulator or full_reasoning:
                 msg_to_append = {"role": "assistant", "content": full_content}
@@ -442,9 +469,26 @@ You are an autonomous AI software engineer. You design, build, and debug softwar
                 if allowed_tools is not None:
                     current_tools = {name: func for name, func in current_tools.items() if name in allowed_tools}
                 
+                has_fatal_error = False
+                
                 for tool_call in tool_calls_accumulator:
                     func_name = tool_call["function"]["name"]
                     arguments = tool_call["function"].get("arguments", {})
+                    
+                    if has_fatal_error:
+                        result = "Error: Execution cancelled due to failure in a previous tool call."
+                        yield {"type": "tool_start", "name": func_name, "args": arguments}
+                        yield {"type": "tool_end", "name": func_name, "result": result}
+                        try:
+                            provider = create_provider()
+                        except Exception:
+                            provider = None
+                        if provider:
+                            tool_result_msg = provider.format_tool_result(str(result), tool_call.get("id"))
+                        else:
+                            tool_result_msg = {"role": "tool", "content": str(result)}
+                        self.messages.append(tool_result_msg)
+                        continue
                     
                     if func_name not in current_tools:
                         recovered = recover_tool_call(tool_call, current_tools)
@@ -539,6 +583,7 @@ You are an autonomous AI software engineer. You design, build, and debug softwar
                     err_str = str(result).upper()
                     if func_name in ["run_command", "write_file", "replace_in_file", "replace_python_function"]:
                         if "ERROR:" in err_str or "SYNTAXERROR" in err_str or "COMPILATION FAILED" in err_str or "FAILED" in err_str or "TRACEBACK" in err_str or "ASSERTIONERROR" in err_str:
+                            has_fatal_error = True
                             self.error_retries = getattr(self, 'error_retries', 0) + 1
                             if self.error_retries <= 3:
                                 result += (

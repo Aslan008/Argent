@@ -392,7 +392,7 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "write_file",
-            "description": "Writes content to a file, replacing its current contents. Creates intermediate directories if missing.",
+            "description": "Writes content to a file. WARNING: DO NOT USE THIS TO EDIT EXISTING FILES >150 LINES! It will be blocked to prevent truncation. Use replace_in_file or multi_replace_in_file_chunk instead. This tool is ONLY for creating NEW files or writing very small scripts.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -403,6 +403,10 @@ TOOL_SCHEMAS = [
                     "content": {
                         "type": "string",
                         "description": "The string content to write into the file."
+                    },
+                    "overwrite": {
+                        "type": "boolean",
+                        "description": "Optional. Set to true ONLY if you want to completely DESTROY and replace a large existing file. Defaults to false to prevent accidental corruption."
                     }
                 },
                 "required": ["file_path", "content"]
