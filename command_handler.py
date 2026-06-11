@@ -152,6 +152,9 @@ def handle_slash_command(command: str, agent: ArgentAgent) -> bool:
         _handle_mcp_command(command)
     elif cmd.startswith("/kb"):
         _handle_kb_command(command)
+    elif cmd == "/doctor":
+        from doctor import print_diagnostics
+        print_diagnostics()
     elif cmd == "/help":
         help_text = (
             "**Argent Coder Commands:**\n"
@@ -176,6 +179,7 @@ def handle_slash_command(command: str, agent: ArgentAgent) -> bool:
             "- `/diff <file>` - Show diff between current file and its pre-modification snapshot\n"
             "- `/changes` - List all files modified by AI in this session\n"
             "- `/stats` - View session diagnostics (model, context, plugins, MCP)\n"
+            "- `/doctor` - Run environment self-diagnostics (provider, tier, deps, browser)\n"
             "- `/verbose` - Toggle live status indicators (spinners)\n"
             "- `/debug` - Toggle detailed tool logs (full arguments and raw results in chat)\n"
             "- `/thinking` - Toggle forced removal of reasoning blocks from history\n"
