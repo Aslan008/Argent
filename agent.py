@@ -325,7 +325,7 @@ You are an autonomous AI software engineer. You design, build, and debug softwar
                     for tc_delta in chunk.get("tool_call_deltas", []):
                         index = tc_delta["index"]
                         while len(tool_calls_accumulator) <= index:
-                            tool_calls_accumulator.append({"id": "", "function": {"name": "", "arguments": ""}})
+                            tool_calls_accumulator.append({"id": "", "type": "function", "function": {"name": "", "arguments": ""}})
                         if tc_delta.get("id"):
                             tool_calls_accumulator[index]["id"] = tc_delta["id"]
                         if tc_delta.get("function_name_delta"):
@@ -432,7 +432,7 @@ You are an autonomous AI software engineer. You design, build, and debug softwar
                 parsed_tool = self._parse_raw_tool_call(clean_content)
                 
                 if parsed_tool:
-                    tool_calls_accumulator.append({"function": parsed_tool["parsed"]})
+                    tool_calls_accumulator.append({"type": "function", "function": parsed_tool["parsed"]})
                     # Clean the raw JSON out of full_content
                     if parsed_tool.get("match_str"):
                         full_content = full_content.replace(parsed_tool["match_str"], "").strip()
