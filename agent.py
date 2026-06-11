@@ -30,6 +30,11 @@ from src.agent.loop_guard import LoopGuard, build_loop_note
 
 log = get_logger("agent")
 
+# How many times a truncated generation may auto-continue within one turn
+# before the turn is aborted (prevents the infinite regenerate-truncate loop
+# on small context windows).
+MAX_TRUNCATE_CONTINUES = 2
+
 class ArgentAgent:
     def build_system_prompt(self) -> str:
         category = get_model_size_category(self.model_name)
@@ -286,6 +291,7 @@ Example: {"tool": {"name": "read_file", "arguments": {"file_path": "main.py"}}}"
                 memory.set_current_task(user_text[:200])
         
         self._trim_history()
+        self._truncate_continues = 0
 
         # One provider instance per turn: tool-result formatting and retries
         # below reuse it instead of re-creating a provider on every call.
@@ -523,22 +529,58 @@ Example: {"tool": {"name": "read_file", "arguments": {"file_path": "main.py"}}}"
             
             # If the model was truncated mid-generation (max_tokens limit reached)
             if is_truncated:
-                msg_to_append = {"role": "assistant", "content": full_content}
-                if full_reasoning:
-                    msg_to_append["thinking"] = full_reasoning
-                if tool_calls_accumulator:
-                    # Clear accumulator because it's incomplete JSON
+                self._truncate_continues += 1
+                was_building_tool = bool(
+                    tool_calls_accumulator
+                    or is_building_raw_tool
+                    or (constrained_extractor is not None and constrained_extractor.mode == "tool")
+                )
+
+                if self._truncate_continues > MAX_TRUNCATE_CONTINUES:
+                    # Hard stop: endless regenerate-truncate cycles burn the
+                    # context without ever converging.
+                    if full_content and not was_building_tool:
+                        self.messages.append({"role": "assistant", "content": full_content})
+                    yield {"type": "error", "content": (
+                        f"\n[System: Generation hit the length limit {self._truncate_continues} times in a row — "
+                        "auto-continue stopped. Increase the context window or split the task into smaller pieces.]"
+                    )}
+                    break
+
+                if was_building_tool:
+                    # A cut-off tool call cannot be "continued": the partial JSON
+                    # is garbage that only burns context. Drop it and steer the
+                    # model towards writing in chunks — the only converging path.
                     tool_calls_accumulator = []
-                self.messages.append(msg_to_append)
-                
-                # Yield a warning to the user
-                yield {"type": "error", "content": "\n[System: Model generation was truncated by max_tokens limit. Auto-continuing...]"}
-                
-                # Append a system prompt asking the model to continue exactly where it left off
-                self.messages.append({
-                    "role": "user",
-                    "content": "Your previous response was cut off due to length limits. Please continue exactly where you left off, without any introductory text."
-                })
+                    yield {"type": "error", "content": "\n[System: Tool call was truncated by the length limit. Asking the model to work in smaller chunks...]"}
+                    self.messages.append({
+                        "role": "user",
+                        "content": (
+                            "Your tool call was cut off by the generation length limit. "
+                            "Do NOT retry the same single huge call — it will be cut off again. "
+                            "Produce the result in SMALLER STEPS instead: create the file with "
+                            "`write_file` containing only the FIRST part of the content, then "
+                            "extend it with several `append_to_file` calls. Keep each call small."
+                        )
+                    })
+                else:
+                    msg_to_append = {"role": "assistant", "content": full_content}
+                    if full_reasoning:
+                        msg_to_append["thinking"] = full_reasoning
+                    self.messages.append(msg_to_append)
+
+                    # Yield a warning to the user
+                    yield {"type": "error", "content": "\n[System: Model generation was truncated by max_tokens limit. Auto-continuing...]"}
+
+                    # Append a system prompt asking the model to continue exactly where it left off
+                    self.messages.append({
+                        "role": "user",
+                        "content": "Your previous response was cut off due to length limits. Please continue exactly where you left off, without any introductory text."
+                    })
+
+                # Relieve context pressure before retrying: on small windows the
+                # partial output itself is what keeps re-triggering truncation.
+                self._trim_history()
                 # Loop continues to let the model finish
                 continue
             
