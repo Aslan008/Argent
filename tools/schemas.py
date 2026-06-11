@@ -26,6 +26,7 @@ from tools.misc_tools import (
     find_definition, find_references, git_checkpoint, git_rollback,
     call_mcp_tool, run_subagent, create_svg_image, ask_user_questions,
     wait_heartbeat, end_auto_mode, create_artifact, request_user_approval,
+    calculate,
 )
 from tools.swarm_tools import run_swarm_workers
 from tools.browser_tools import (
@@ -89,6 +90,7 @@ AVAILABLE_TOOLS = {
     "run_swarm_workers": run_swarm_workers,
     "create_svg_image": create_svg_image,
     "ask_user_questions": ask_user_questions,
+    "calculate": calculate,
     "create_artifact": create_artifact,
     "request_user_approval": request_user_approval,
     "run_browser_task": run_browser_task,
@@ -1117,6 +1119,23 @@ TOOL_SCHEMAS = [
             "parameters": {
                 "type": "object",
                 "properties": {}
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "calculate",
+            "description": "Evaluate an arithmetic expression exactly and return the result. ALWAYS use this instead of doing math in your head. Supports +, -, *, /, //, %, ** (or ^) and functions: sqrt, sin, cos, tan, log, log2, log10, exp, floor, ceil, abs, round, min, max, factorial, gcd. Constants: pi, e, tau.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "expression": {
+                        "type": "string",
+                        "description": "Pure arithmetic expression, e.g. '(1847 * 0.15) + sqrt(2)'. No variables or code."
+                    }
+                },
+                "required": ["expression"]
             }
         }
     },

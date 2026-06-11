@@ -55,7 +55,7 @@ CHAT_ALLOWED_TOOLS = [
     "ask_user_questions", "wait_heartbeat", "end_auto_mode",
     "browser_open", "browser_state", "browser_click", "browser_input",
     "browser_screenshot", "browser_scroll", "browser_get_content", "browser_close",
-    "call_mcp_tool"
+    "call_mcp_tool", "calculate"
 ]
 
 

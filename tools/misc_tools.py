@@ -1,4 +1,7 @@
+import ast
 import json
+import math
+import operator
 import subprocess
 import webbrowser
 from datetime import datetime
@@ -11,6 +14,79 @@ from ui import console
 from logger import get_logger
 
 log = get_logger("tools")
+
+
+def _safe_pow(a, b):
+    # Guard against DoS expressions like 9**9**9 that hang the process.
+    if abs(b) > 10000 or (abs(a) > 1e6 and abs(b) > 100):
+        raise ValueError("exponent too large for the calculator")
+    return operator.pow(a, b)
+
+
+_CALC_OPERATORS = {
+    ast.Add: operator.add,
+    ast.Sub: operator.sub,
+    ast.Mult: operator.mul,
+    ast.Div: operator.truediv,
+    ast.FloorDiv: operator.floordiv,
+    ast.Mod: operator.mod,
+    ast.Pow: _safe_pow,
+    ast.USub: operator.neg,
+    ast.UAdd: operator.pos,
+}
+
+_CALC_FUNCTIONS = {name: getattr(math, name) for name in (
+    "sqrt", "sin", "cos", "tan", "asin", "acos", "atan", "atan2",
+    "log", "log2", "log10", "exp", "floor", "ceil", "fabs",
+    "degrees", "radians", "factorial", "gcd",
+)}
+_CALC_FUNCTIONS.update({"abs": abs, "round": round, "min": min, "max": max})
+
+_CALC_CONSTANTS = {"pi": math.pi, "e": math.e, "tau": math.tau, "inf": math.inf}
+
+
+def _eval_calc_node(node):
+    """Recursively evaluate a whitelisted arithmetic AST node. No code execution."""
+    if isinstance(node, ast.Constant):
+        if isinstance(node.value, (int, float)) and not isinstance(node.value, bool):
+            return node.value
+        raise ValueError(f"unsupported constant: {node.value!r}")
+    if isinstance(node, ast.BinOp) and type(node.op) in _CALC_OPERATORS:
+        return _CALC_OPERATORS[type(node.op)](_eval_calc_node(node.left), _eval_calc_node(node.right))
+    if isinstance(node, ast.UnaryOp) and type(node.op) in _CALC_OPERATORS:
+        return _CALC_OPERATORS[type(node.op)](_eval_calc_node(node.operand))
+    if isinstance(node, ast.Name):
+        if node.id in _CALC_CONSTANTS:
+            return _CALC_CONSTANTS[node.id]
+        raise ValueError(f"unknown identifier '{node.id}'")
+    if isinstance(node, ast.Call):
+        if isinstance(node.func, ast.Name) and node.func.id in _CALC_FUNCTIONS and not node.keywords:
+            args = [_eval_calc_node(a) for a in node.args]
+            return _CALC_FUNCTIONS[node.func.id](*args)
+        raise ValueError("only these functions are allowed: " + ", ".join(sorted(_CALC_FUNCTIONS)))
+    raise ValueError(f"unsupported expression element: {type(node).__name__}")
+
+
+def calculate(expression: str) -> str:
+    """Safely evaluate an arithmetic expression and return the exact result. Supports +, -, *, /, //, %, ** and math functions (sqrt, sin, log, ...). No code execution."""
+    if not expression or not expression.strip():
+        return "Error: expression is empty."
+    # Models often write ^ meaning exponentiation.
+    normalized = expression.strip().replace("^", "**")
+    try:
+        tree = ast.parse(normalized, mode="eval")
+        result = _eval_calc_node(tree.body)
+    except ZeroDivisionError:
+        return f"Error: division by zero in '{expression}'."
+    except (ValueError, SyntaxError, OverflowError, TypeError) as e:
+        return (
+            f"Error: cannot evaluate '{expression}': {e}. "
+            f"Provide a pure arithmetic expression, e.g. '(1847 * 0.15) + sqrt(2)'."
+        )
+    if isinstance(result, float) and result.is_integer() and abs(result) < 1e15:
+        result = int(result)
+    log.info("calculate: %s = %s", expression, result)
+    return f"{expression} = {result}"
 
 def ask_user_questions(questions: list) -> str:
     """Ask the user a series of structured questions."""
