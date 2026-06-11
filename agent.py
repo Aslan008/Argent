@@ -26,6 +26,7 @@ from src.agent.parser import parse_raw_tool_call
 from src.agent.trimmer import estimate_tokens
 from src.agent.healing import detect_tool_failure, build_healing_hint, HEALING_TOOLS
 from src.agent.constrained import build_step_schema, build_tool_catalog, StepStreamExtractor
+from src.agent.loop_guard import LoopGuard, build_loop_note
 
 log = get_logger("agent")
 
@@ -224,6 +225,7 @@ Example: {"tool": {"name": "read_file", "arguments": {"file_path": "main.py"}}}"
             category = get_model_size_category(self.model_name)
             self.max_history_messages = self.strategy.get_max_history_messages(category)
             
+        self.loop_guard = LoopGuard()
         self.messages: List[Dict[str, Any]] = [
             {"role": "system", "content": self.build_system_prompt()}
         ]
@@ -316,6 +318,7 @@ Example: {"tool": {"name": "read_file", "arguments": {"file_path": "main.py"}}}"
             reasoning_tag_active = False
             is_truncated = False
             constrained_extractor = StepStreamExtractor() if step_schema is not None else None
+            loop_guard_stop = False
             START_TAGS = ["<thought>", "<think>", "<reasoning>"]
             END_TAGS = ["</thought>", "</think>", "</reasoning>"]
             
@@ -631,6 +634,14 @@ Example: {"tool": {"name": "read_file", "arguments": {"file_path": "main.py"}}}"
                     else:
                         result = f"Error: Tool {func_name} is not available."
                         
+                    # Loop guard: deterministically catch verbatim-repeated calls
+                    # that small models never notice on their own.
+                    guard_level = self.loop_guard.record(func_name, arguments, str(result))
+                    if guard_level:
+                        result = str(result) + build_loop_note(guard_level)
+                        if guard_level == "stop":
+                            loop_guard_stop = True
+
                     # Auto-Healing Mechanism: trigger only on structured failure
                     # signals (exit codes / tool error prefixes), not on substrings.
                     if func_name in HEALING_TOOLS:
@@ -647,6 +658,9 @@ Example: {"tool": {"name": "read_file", "arguments": {"file_path": "main.py"}}}"
                     yield {"type": "tool_end", "name": func_name, "result": result}
 
                     self.messages.append(provider.format_tool_result(str(result), tool_call.get("id")))
+                if loop_guard_stop:
+                    yield {"type": "error", "content": "\n[Loop Guard]: повторяющийся цикл инструментов остановлен — ход завершён принудительно."}
+                    break
                 # Loop continues to let the model react to tool results
             else:
                 break
@@ -740,6 +754,7 @@ Example: {"tool": {"name": "read_file", "arguments": {"file_path": "main.py"}}}"
 
     def clear_history(self):
         memory.clear()
+        self.loop_guard.reset()
         self.messages = [self.messages[0]]
 
     def get_context_usage(self) -> Dict[str, Any]:
