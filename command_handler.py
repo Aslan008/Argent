@@ -104,7 +104,7 @@ def handle_slash_command(command: str, agent: ArgentAgent) -> bool:
         
         if new_prov:
             set_provider(new_prov)
-            agent.provider = new_prov
+            agent.set_provider(new_prov)
             options_text = ""
             if new_prov == "zai":
                 current_key = get_zai_api_key()

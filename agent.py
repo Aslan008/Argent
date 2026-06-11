@@ -219,25 +219,38 @@ Example: {"tool": {"name": "read_file", "arguments": {"file_path": "main.py"}}}"
     def __init__(self, max_history_messages: int = None):
         self.model_name = get_current_model()
         self.provider = get_provider()
-        self.max_context_tokens = get_context_window()
-        
-        # Load Strategy Pattern
-        self.strategy = get_model_strategy(self.model_name, self.provider)
-        
+        self.refresh_tier()
+
         if max_history_messages is not None:
             self.max_history_messages = max_history_messages
-        else:
-            category = get_model_size_category(self.model_name)
-            self.max_history_messages = self.strategy.get_max_history_messages(category)
-            
+
         self.loop_guard = LoopGuard()
         self.messages: List[Dict[str, Any]] = [
             {"role": "system", "content": self.build_system_prompt()}
         ]
 
+    def refresh_tier(self):
+        """Recompute every tier-dependent knob after a model/provider change.
+
+        Switching tiny -> cloud (or back) mid-session must fully swap the
+        behaviour profile: strategy, history budget, context size and the
+        constrained-decoding availability flag. Nothing from the previous
+        tier may leak into the new one.
+        """
+        self.strategy = get_model_strategy(self.model_name, self.provider)
+        category = get_model_size_category(self.model_name)
+        self.max_history_messages = self.strategy.get_max_history_messages(category)
+        self.max_context_tokens = get_context_window()
+        # A new model/provider may support what the previous one didn't.
+        self._constrained_unsupported = False
+
     def set_model(self, model_name: str):
         self.model_name = model_name
-        self.strategy = get_model_strategy(self.model_name, self.provider)
+        self.refresh_tier()
+
+    def set_provider(self, provider_name: str):
+        self.provider = provider_name
+        self.refresh_tier()
 
     def _estimate_tokens(self, text: str) -> int:
         return estimate_tokens(text, self.model_name, self.provider)
