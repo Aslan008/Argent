@@ -3,7 +3,7 @@ import shutil
 from pathlib import Path
 from file_tracker import snapshot
 from memory_manager import memory
-from tools._helpers import _resolve_path, _is_plugin_path_restricted, _validate_code_syntax, _print_diff
+from tools._helpers import _resolve_path, _is_plugin_path_restricted, _validate_code_syntax, _print_diff, _shift_indent
 from logger import get_logger
 
 log = get_logger("tools")
@@ -271,12 +271,21 @@ def replace_in_file(file_path: str, target_text: str, replacement_text: str) -> 
         if '\\n' in replacement_text_processed or '\\t' in replacement_text_processed:
             replacement_text_processed = replacement_text_processed.replace('\\n', '\n').replace('\\t', '\t').replace('\\\\', '\\')
 
-        if target_text_processed not in content:
+        fuzzy_note = ""
+        if target_text_processed in content:
+            count = content.count(target_text_processed)
+            if count > 1:
+                return f"Error: The target text appears {count} times in '{file_path}'. Please provide a more specific, unique block of text to replace."
+            new_content = content.replace(target_text_processed, replacement_text_processed)
+        else:
             # --- SMART EDIT: FUZZY FALLBACK ---
+            # Small models reproduce code blocks with broken whitespace; a
+            # single unambiguous whitespace-insensitive match is applied
+            # automatically (re-indented), saving a full model round-trip.
             target_lines = [line.strip() for line in target_text_processed.splitlines() if line.strip()]
+            content_lines = content.splitlines()
+            matches = []
             if target_lines:
-                content_lines = content.splitlines()
-                matches = []
                 for i in range(len(content_lines)):
                     t_idx = 0
                     c_idx = i
@@ -290,28 +299,31 @@ def replace_in_file(file_path: str, target_text: str, replacement_text: str) -> 
                             c_idx += 1
                         else:
                             break
-                    
+
                     if t_idx == len(target_lines):
                         matches.append((match_start, c_idx))
-                
-                if len(matches) == 1:
-                    start_line, end_line = matches[0]
-                    exact_target_in_file = "\n".join(content_lines[start_line:end_line])
-                    return f"Error: target_text not found exactly in file. Fuzzy matcher found a similar block:\n\n{exact_target_in_file}\n\nIf this is the block you meant to replace, call replace_in_file again using this EXACT text as target_text to ensure safe replacement."
-                elif len(matches) > 1:
-                    return f"Error: The target text is ambiguous (found {len(matches)} fuzzy matches). Provide more context."
-            
-            # If still not found after fuzzy attempt:
-            if target_text_processed not in content:
+
+            if len(matches) > 1:
+                return f"Error: The target text is ambiguous (found {len(matches)} fuzzy matches). Provide more context."
+            if not matches:
                 hint = _build_match_hint(target_text_processed, content)
                 return f"Error: The target text was not found in '{file_path}'. Make sure it matches exactly, including whitespace and indentation.{hint}"
 
-        count = content.count(target_text_processed)
-        if count > 1:
-            return f"Error: The target text appears {count} times in '{file_path}'. Please provide a more specific, unique block of text to replace."
+            start_line, end_line = matches[0]
+            # Re-base the replacement onto the file's actual indentation.
+            file_first = content_lines[start_line]
+            file_indent = file_first[:len(file_first) - len(file_first.lstrip())]
+            model_first = next((l for l in target_text_processed.splitlines() if l.strip()), "")
+            model_indent = model_first[:len(model_first) - len(model_first.lstrip())]
+            adjusted_replacement = _shift_indent(replacement_text_processed, model_indent, file_indent)
+            new_content = "\n".join(
+                content_lines[:start_line] + adjusted_replacement.splitlines() + content_lines[end_line:]
+            )
+            if content.endswith("\n") and not new_content.endswith("\n"):
+                new_content += "\n"
+            fuzzy_note = " (fuzzy match: whitespace/indentation differences in target_text were corrected automatically)"
 
         snapshot(str(path))
-        new_content = content.replace(target_text_processed, replacement_text_processed)
         with open(path, "w", encoding="utf-8") as f:
             f.write(new_content)
             
@@ -329,10 +341,10 @@ def replace_in_file(file_path: str, target_text: str, replacement_text: str) -> 
         except ImportError:
             pass
 
-        log.info("replace_in_file: %s (replaced %d chars)", file_path, len(target_text_processed))
+        log.info("replace_in_file: %s (replaced %d chars)%s", file_path, len(target_text_processed), fuzzy_note)
         memory.add_file_modified(file_path)
         memory.add_completed(f"Edited {file_path}")
-        return f"Successfully replaced text in '{file_path}'."
+        return f"Successfully replaced text in '{file_path}'.{fuzzy_note}"
     except Exception as e:
         log.error("replace_in_file error %s: %s", file_path, e)
         return f"Error replacing text in '{file_path}': {e}"

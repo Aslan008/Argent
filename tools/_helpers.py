@@ -148,6 +148,23 @@ def _print_diff(old_text, new_text, filename):
         syntax = Syntax(diff_str, "diff", theme="monokai", background_color="default")
         console.print(Panel(syntax, title=f"Changes in {filename}", border_style="green"))
 
+def _shift_indent(text: str, old_indent: str, new_indent: str) -> str:
+    """Re-base the indentation of a block: every line carrying old_indent gets
+    it swapped for new_indent; relative depth inside the block is preserved.
+    Lines that don't carry old_indent are left untouched."""
+    if old_indent == new_indent:
+        return text
+    out = []
+    for line in text.splitlines():
+        if not line.strip():
+            out.append("")
+        elif line.startswith(old_indent):
+            out.append(new_indent + line[len(old_indent):])
+        else:
+            out.append(line)
+    return "\n".join(out)
+
+
 def _build_match_hint(target_text: str, content: str) -> str:
     """Build a helpful hint when target text is not found, showing the closest match."""
     lines = target_text.strip().split('\n')
