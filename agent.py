@@ -24,6 +24,7 @@ from config import get_model_size_category
 from src.agent.strategy import get_model_strategy
 from src.agent.parser import parse_raw_tool_call
 from src.agent.trimmer import estimate_tokens
+from src.agent.healing import detect_tool_failure, build_healing_hint, HEALING_TOOLS
 
 log = get_logger("agent")
 
@@ -261,7 +262,19 @@ You are an autonomous AI software engineer. You design, build, and debug softwar
                 memory.set_current_task(user_text[:200])
         
         self._trim_history()
-        
+
+        # One provider instance per turn: tool-result formatting and retries
+        # below reuse it instead of re-creating a provider on every call.
+        try:
+            provider = create_provider()
+            validation_error = provider.validate_config()
+            if validation_error:
+                yield {"type": "error", "content": validation_error}
+                return
+        except Exception as e:
+            yield {"type": "error", "content": f"Provider error: {e}"}
+            return
+
         while True:
             # Variables to accumulate the streamed response
             full_content = ""
@@ -288,12 +301,6 @@ You are an autonomous AI software engineer. You design, build, and debug softwar
                 # Check if the strategy supports native tools
                 if not self.strategy.supports_native_tools():
                     active_tools = None
-
-                provider = create_provider()
-                validation_error = provider.validate_config()
-                if validation_error:
-                    yield {"type": "error", "content": validation_error}
-                    return
 
                 from config import get_temperature
                 temp = get_temperature()
@@ -382,8 +389,7 @@ You are an autonomous AI software engineer. You design, build, and debug softwar
                 error_str = str(e).lower()
                 if "does not support tools" in error_str or "element type" in error_str:
                     try:
-                        fallback_provider = create_provider()
-                        fallback_stream = fallback_provider.stream_chat(
+                        fallback_stream = provider.stream_chat(
                             model=self.model_name,
                             messages=cleaned_messages,
                             tools=None,
@@ -480,15 +486,7 @@ You are an autonomous AI software engineer. You design, build, and debug softwar
                         result = "Error: Execution cancelled due to failure in a previous tool call."
                         yield {"type": "tool_start", "name": func_name, "args": arguments}
                         yield {"type": "tool_end", "name": func_name, "result": result}
-                        try:
-                            provider = create_provider()
-                        except Exception:
-                            provider = None
-                        if provider:
-                            tool_result_msg = provider.format_tool_result(str(result), tool_call.get("id"))
-                        else:
-                            tool_result_msg = {"role": "tool", "content": str(result)}
-                        self.messages.append(tool_result_msg)
+                        self.messages.append(provider.format_tool_result(str(result), tool_call.get("id")))
                         continue
                     
                     if func_name not in current_tools:
@@ -531,86 +529,47 @@ You are an autonomous AI software engineer. You design, build, and debug softwar
                                         hint += f"Valid parameters for '{func_name}' are: {list(valid_params)}."
                                 result = f"Error executing tool '{func_name}': Missing REQUIRED arguments: {missing_args}. You provided: {provided_args}.{hint}"
                             else:
-                                # --- SAFETY GUARDRAILS ---
-                                requires_confirmation = False
-                                warning_msg = ""
-                                if func_name == "delete_file":
-                                    requires_confirmation = True
-                                    warning_msg = f"delete file '{filtered_args.get('file_path')}'"
-                                elif func_name == "run_admin_command":
-                                    requires_confirmation = True
-                                    warning_msg = f"run ADMIN command: '{filtered_args.get('command')}'"
-                                elif func_name == "run_command":
-                                    import re
-                                    cmd_lower = filtered_args.get("command", "").lower()
-                                    if re.search(r'\b(rm|del|rd|format|remove-item)\b', cmd_lower):
-                                        requires_confirmation = True
-                                        warning_msg = f"run potentially DESTRUCTIVE command: '{filtered_args.get('command')}'"
-                                
-                                user_approved = True
-                                if requires_confirmation:
-                                    import questionary
-                                    from ui import console
-                                    console.print(f"\n[bold red]⚠️  WARNING: AI wants to {warning_msg}[/bold red]")
-                                    user_approved = questionary.confirm("Allow this action?").ask()
-                                
-                                if not user_approved:
-                                    result = f"Error: Execution of tool '{func_name}' was DENIED by the user. Please think of another way or stop."
+                                # Confirmation for dangerous actions happens inside the tools
+                                # themselves via the central `approval` module (single gate).
+                                # Trigger on_tool_call hook. If any plugin returns False, we cancel the execution.
+                                hook_results = hook_manager.call_hook("on_tool_call", func_name, filtered_args)
+                                if False in hook_results:
+                                    result = f"Error: Execution of tool '{func_name}' was blocked by a user plugin."
                                 else:
-                                    # Trigger on_tool_call hook. If any plugin returns False, we cancel the execution.
-                                    hook_results = hook_manager.call_hook("on_tool_call", func_name, filtered_args)
-                                    if False in hook_results:
-                                        result = f"Error: Execution of tool '{func_name}' was blocked by a user plugin."
-                                    else:
-                                        result = func(**filtered_args)
-                                    
-                                    # --- AUTO PLUGIN RELOAD ---
-                                    if func_name in ["write_file", "replace_in_file", "replace_python_function", "delete_file"]:
-                                        target_file = filtered_args.get("file_path")
-                                        if target_file and "Error" not in result:
-                                            # Normalize to absolute path
-                                            abs_target = os.path.abspath(target_file)
-                                            hooks_dir = os.path.abspath(get_hooks_dir())
-                                            if abs_target.startswith(hooks_dir):
-                                                hook_manager.reload_plugins(hooks_dir)
-                                                # Append a small notification to the tool result so the AI knows its new tool is ready
-                                                result += f"\n\n[Argent]: Plugin system reloaded. Any new or modified commands in '{os.path.basename(abs_target)}' are now active."
+                                    result = func(**filtered_args)
+
+                                # --- AUTO PLUGIN RELOAD ---
+                                if func_name in ["write_file", "replace_in_file", "replace_python_function", "delete_file"]:
+                                    target_file = filtered_args.get("file_path")
+                                    if target_file and "Error" not in result:
+                                        # Normalize to absolute path
+                                        abs_target = os.path.abspath(target_file)
+                                        hooks_dir = os.path.abspath(get_hooks_dir())
+                                        if abs_target.startswith(hooks_dir):
+                                            hook_manager.reload_plugins(hooks_dir)
+                                            # Append a small notification to the tool result so the AI knows its new tool is ready
+                                            result += f"\n\n[Argent]: Plugin system reloaded. Any new or modified commands in '{os.path.basename(abs_target)}' are now active."
                         except Exception as e:
                             result = f"Error executing tool {func_name}: {e}"
                     else:
                         result = f"Error: Tool {func_name} is not available."
                         
-                    # Auto-Healing Mechanism
-                    err_str = str(result).upper()
-                    if func_name in ["run_command", "write_file", "replace_in_file", "replace_python_function"]:
-                        if "ERROR:" in err_str or "SYNTAXERROR" in err_str or "COMPILATION FAILED" in err_str or "FAILED" in err_str or "TRACEBACK" in err_str or "ASSERTIONERROR" in err_str:
+                    # Auto-Healing Mechanism: trigger only on structured failure
+                    # signals (exit codes / tool error prefixes), not on substrings.
+                    if func_name in HEALING_TOOLS:
+                        cmd_arg = arguments.get("command") if isinstance(arguments, dict) else None
+                        if detect_tool_failure(func_name, str(result), command=cmd_arg):
                             has_fatal_error = True
                             self.error_retries = getattr(self, 'error_retries', 0) + 1
-                            if self.error_retries <= 3:
-                                result += (
-                                    f"\n\n[AUTO-HEALING MODE TRIGGERED]: Attempt {self.error_retries}/3 to automatically fix this error. "
-                                    f"Do NOT stop or apologize. Read the error (especially if it is a Pytest AssertionError), "
-                                    f"use `read_file` if needed to see the context, and use `replace_in_file` to fix the syntax or logic immediately. "
-                                    f"If you just ran tests and they failed, you MUST fix the code and re-run the tests."
-                                )
-                            else:
-                                result += "\n\n[AUTO-HEALING FAILED]: You have failed 3 times. Stop trying and explain the failure to the user."
+                            result += build_healing_hint(self.error_retries)
                         else:
                             self.error_retries = 0
                         
                     result = compress_tool_result(result, self.model_name)
                     
                     yield {"type": "tool_end", "name": func_name, "result": result}
-                    
-                    try:
-                        provider = create_provider()
-                    except Exception:
-                        provider = None
-                    if provider:
-                        tool_result_msg = provider.format_tool_result(str(result), tool_call.get("id"))
-                    else:
-                        tool_result_msg = {"role": "tool", "content": str(result)}
-                    self.messages.append(tool_result_msg)
+
+                    self.messages.append(provider.format_tool_result(str(result), tool_call.get("id")))
                 # Loop continues to let the model react to tool results
             else:
                 break
@@ -661,6 +620,47 @@ You are an autonomous AI software engineer. You design, build, and debug softwar
                 i += 1
         
         self.messages = new_messages
+
+    def repair_history(self):
+        """Restore message-history invariants after an interrupted turn.
+
+        If the last assistant message carries tool_calls that lack matching
+        tool results (e.g. the user pressed Ctrl+C mid-execution), append
+        synthetic results so the next request doesn't violate the API contract.
+        """
+        if not self.messages:
+            return
+        # Find the last assistant message; only repair if it carries tool_calls.
+        idx = None
+        for i in range(len(self.messages) - 1, -1, -1):
+            role = self.messages[i].get("role")
+            if role == "assistant":
+                if self.messages[i].get("tool_calls"):
+                    idx = i
+                break
+            if role in ("user", "system"):
+                break
+        if idx is None:
+            return
+
+        tool_calls = self.messages[idx]["tool_calls"]
+        results_after = sum(1 for m in self.messages[idx + 1:] if m.get("role") == "tool")
+        missing = tool_calls[results_after:]
+        if not missing:
+            return
+
+        try:
+            provider = create_provider()
+        except Exception:
+            provider = None
+        note = "Interrupted by user (Ctrl+C). The tool did not finish."
+        for tc in missing:
+            if provider:
+                self.messages.append(provider.format_tool_result(note, tc.get("id")))
+            else:
+                self.messages.append({"role": "tool", "content": note})
+        log.info("repair_history: appended %d synthetic tool result(s)", len(missing))
+
     def clear_history(self):
         memory.clear()
         self.messages = [self.messages[0]]

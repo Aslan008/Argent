@@ -1,4 +1,3 @@
-import questionary
 from project_manager import ProjectManager
 from ui import console
 from logger import get_logger
@@ -35,8 +34,11 @@ def plan_work_changes(strategy: str, files_to_edit: str, files_to_create: str) -
     create_list = [f.strip() for f in files_to_create.split(',') if f.strip()] if files_to_create else []
     
     if create_list and not pm.data.get("work_auto_mode", False):
-        print(f"\n[bold yellow]Agent requesting to create NEW files for /work:[/bold yellow] {', '.join(create_list)}")
-        approved = questionary.confirm("Do you want to allow these files to be created?").ask()
+        from approval import request_approval
+        approved = request_approval(
+            f"создать НОВЫЕ файлы для /work: {', '.join(create_list)}",
+            grant_key="create_files",
+        )
         if not approved:
             return f"Error: User denied creation of {', '.join(create_list)}. Revise your plan to ONLY modify existing files, without creating these new ones. Call plan_work_changes again."
         

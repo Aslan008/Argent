@@ -1,7 +1,6 @@
 import ast
 import shutil
 from pathlib import Path
-import questionary
 from file_tracker import snapshot
 from memory_manager import memory
 from tools._helpers import _resolve_path, _is_plugin_path_restricted, _validate_code_syntax, _print_diff
@@ -48,10 +47,10 @@ def delete_file(file_path: str) -> str:
             return f"Error: File '{file_path}' does not exist."
         if not path.is_file():
             return f"Error: '{file_path}' is not a file."
-        
-        print(f"\n[bold yellow]Agent requesting to delete file:[/bold yellow] {file_path}")
-        approved = questionary.confirm("Do you want to allow this file to be deleted?").ask()
-        
+
+        from approval import request_approval
+        approved = request_approval(f"удалить файл '{file_path}'", destructive=True)
+
         if not approved:
             return f"Deletion aborted by user. The file '{file_path}' was NOT deleted."
         

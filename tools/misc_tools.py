@@ -161,15 +161,18 @@ def git_rollback() -> str:
         if not last_msg.startswith("Argent Checkpoint:"):
             return f"Error: The last commit ('{last_msg}') was not an Argent Checkpoint. Rollback aborted for safety."
             
-        print(f"\n[bold red]Rolling back last checkpoint:[/bold red] {last_msg}")
-        approved = questionary.confirm("Are you sure you want to revert ALL changes to the last checkpoint?").ask()
+        from approval import request_approval
+        approved = request_approval(
+            f"откатить ВСЕ изменения до чекпоинта '{last_msg}' (git reset --hard)",
+            destructive=True,
+        )
         if not approved:
             return "Rollback aborted by user."
-            
+
         # Stash unstaged and untracked changes for safety before hard reset
         status_res = subprocess.run(["git", "status", "--porcelain"], capture_output=True, text=True)
         if status_res.stdout.strip():
-            print("\n[bold yellow]Unstaged or untracked changes detected. Stashing them for safety before rollback...[/bold yellow]")
+            console.print("\n[bold yellow]Unstaged or untracked changes detected. Stashing them for safety before rollback...[/bold yellow]")
             subprocess.run(["git", "stash", "push", "-u", "-m", f"Argent Auto-Save before Rollback to {last_msg}"], capture_output=True)
             
         subprocess.run(["git", "reset", "--hard", "HEAD~1"], check=True)

@@ -3,7 +3,7 @@ import queue
 import threading
 import ctypes
 import time
-import questionary
+from approval import request_approval, is_destructive_command, command_grant_key
 from memory_manager import memory
 from ui import console
 from logger import get_logger
@@ -17,9 +17,14 @@ MAX_BACKGROUND_PROCESSES = 10
 
 def run_command(command: str) -> str:
     """Execute a console command and return its output. Requires user confirmation. Streams output to console."""
-    console.print(f"\n[bold yellow]Agent requesting to run command:[/bold yellow] {command}")
-    approved = questionary.confirm("Do you want to allow this command to run?").ask()
-    
+    destructive = is_destructive_command(command)
+    label = "выполнить ДЕСТРУКТИВНУЮ команду" if destructive else "выполнить команду"
+    approved = request_approval(
+        f"{label}: {command}",
+        destructive=destructive,
+        grant_key=command_grant_key(command),
+    )
+
     if not approved:
         return f"Execution aborted by user. The command '{command}' was NOT run."
         
@@ -75,9 +80,11 @@ def run_command(command: str) -> str:
 
 def run_admin_command(command: str) -> str:
     """Execute a PowerShell command with Administrator privileges (UAC prompt)."""
-    console.print(f"\n[bold yellow]Agent requesting to run command as ADMINISTRATOR:[/bold yellow] {command}")
-    approved = questionary.confirm("Do you want to allow this command to run with Admin privileges (UAC)?").ask()
-    
+    approved = request_approval(
+        f"выполнить команду с правами АДМИНИСТРАТОРА (UAC): {command}",
+        destructive=True,
+    )
+
     if not approved:
         return f"Execution aborted by user. The admin command '{command}' was NOT run."
         
@@ -130,9 +137,12 @@ def start_background_command(command: str) -> str:
         if len(ACTIVE_PROCESSES) >= MAX_BACKGROUND_PROCESSES:
             return f"Error: Maximum number of background processes ({MAX_BACKGROUND_PROCESSES}) reached. Stop an existing process first."
     
-    console.print(f"\n[bold yellow]Agent requesting to start background command:[/bold yellow] {command}")
-    approved = questionary.confirm("Do you want to allow this background process?").ask()
-    
+    approved = request_approval(
+        f"запустить фоновый процесс: {command}",
+        destructive=is_destructive_command(command),
+        grant_key=command_grant_key(command),
+    )
+
     if not approved:
         return f"Execution aborted by user. The command '{command}' was NOT started."
         
@@ -241,7 +251,7 @@ def send_background_command(pid: str, input_string: str) -> str:
         return f"Error: Process {pid} has already exited."
         
     try:
-        print(f"\n[bold yellow]Agent sending input to PID {pid}:[/bold yellow] {input_string.strip()}")
+        console.print(f"\n[bold yellow]Agent sending input to PID {pid}:[/bold yellow] {input_string.strip()}")
         if not input_string.endswith('\n'):
             input_string += '\n'
         process.stdin.write(input_string.encode('utf-8'))

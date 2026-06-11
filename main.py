@@ -11,6 +11,7 @@ from rich.markdown import Markdown
 from rich.console import Console
 import questionary
 
+import approval
 from agent import ArgentAgent
 from config import (
     get_current_model, set_current_model, get_obsidian_vault, set_obsidian_vault,
@@ -778,6 +779,10 @@ def main():
                 # Regular chat mode
                 active_tools = CHAT_ALLOWED_TOOLS
 
+            # Sync the approval policy with the current mode: in autonomous mode
+            # safe actions are auto-approved, destructive ones still prompt.
+            approval.set_policy(approval.POLICY_AUTO if is_auto_mode else approval.POLICY_ASK)
+
             response_chunks = agent.process_user_input(user_input, allowed_tools=active_tools)
             streamed_text, is_auto_mode, auto_sleep_time, auto_wake_context = render_response_stream(
                 agent, response_chunks, is_auto_mode=is_auto_mode
@@ -807,6 +812,12 @@ def main():
                 is_project_mode, auto_continue_input = orchestrator.step()
             
         except KeyboardInterrupt:
+            # Heal the history: an interrupted turn may have left tool_calls
+            # without matching tool results, which would poison the next request.
+            try:
+                agent.repair_history()
+            except Exception:
+                pass
             if is_auto_mode:
                 is_auto_mode = False
                 print_system("\n[bold yellow]Выполнение прервано пользователем (Ctrl+C). Выход из автоматического режима.[/bold yellow]")
