@@ -44,6 +44,9 @@ theme.yaml
 .env
 *.log
 
+# cmd.exe artifact from a PowerShell-style "> $null" redirect
+$null
+
 # IDEs
 .vscode/
 .idea/
