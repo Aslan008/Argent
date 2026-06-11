@@ -9,12 +9,28 @@ from config import get_provider, get_context_window, get_model_size_category, ge
 
 log = logging.getLogger("argent.agent.trimmer")
 
-def estimate_tokens(text: str, model_name: str, provider: str) -> int:
-    """Calculate tokens accurately, querying the provider API if available,
-    or falling back to a smart language-aware heuristic."""
-    if not text:
-        return 0
-        
+# estimate_tokens is on the hot path: _trim_history and get_context_usage call
+# it for EVERY message EVERY turn. Without a cache that meant one HTTP request
+# per message to the provider's tokenize endpoint \u2014 while the same provider was
+# busy generating. The cache makes repeat estimates free; the circuit breaker
+# stops querying an endpoint after its first failure.
+_TOKEN_CACHE: Dict[tuple, int] = {}
+_TOKEN_CACHE_MAX = 4096
+_API_TOKENIZE_BROKEN: set = set()
+_API_MAX_CHARS = 16000  # beyond this size heuristic precision is plenty
+
+
+def _heuristic_tokens(text: str) -> int:
+    # Cyrillic text is less compact (approx 1.8 chars/token)
+    has_cyrillic = any(u'\u0400' <= char <= u'\u04FF' for char in text)
+    if has_cyrillic:
+        return int(len(text) / 1.8)
+    return len(text) // 4
+
+
+def _query_tokenize_api(text: str, model_name: str, provider: str) -> int | None:
+    """Ask the provider to tokenize. Marks the provider broken on any failure
+    so the session never waits on a dead endpoint twice."""
     try:
         import requests
         if provider == "ollama":
@@ -24,8 +40,6 @@ def estimate_tokens(text: str, model_name: str, provider: str) -> int:
                 json={"model": model_name, "prompt": text},
                 timeout=1.0
             )
-            if resp.status_code == 200:
-                return len(resp.json().get("tokens", []))
         elif provider == "koboldcpp":
             from config import get_koboldcpp_url
             base_url = get_koboldcpp_url()
@@ -35,31 +49,47 @@ def estimate_tokens(text: str, model_name: str, provider: str) -> int:
                 api_url = base_url[:-4] + "/api/v1/tokenize"
             else:
                 api_url = base_url.rstrip("/") + "/api/v1/tokenize"
-            resp = requests.post(
-                api_url,
-                json={"prompt": text},
-                timeout=1.0
-            )
-            if resp.status_code == 200:
-                return len(resp.json().get("tokens", []))
+            resp = requests.post(api_url, json={"prompt": text}, timeout=1.0)
+        else:
+            return None
+        if resp.status_code == 200:
+            return len(resp.json().get("tokens", []))
     except Exception:
         pass
+    _API_TOKENIZE_BROKEN.add(provider)
+    return None
 
-    try:
-        import tiktoken
+
+def estimate_tokens(text: str, model_name: str, provider: str) -> int:
+    """Calculate tokens accurately, querying the provider API if available,
+    or falling back to tiktoken / a language-aware heuristic. Cached."""
+    if not text:
+        return 0
+
+    key = (provider, model_name, len(text), hash(text))
+    cached = _TOKEN_CACHE.get(key)
+    if cached is not None:
+        return cached
+
+    count = None
+    if provider not in _API_TOKENIZE_BROKEN and len(text) <= _API_MAX_CHARS:
+        count = _query_tokenize_api(text, model_name, provider)
+
+    if count is None:
         try:
-            encoding = tiktoken.encoding_for_model(model_name)
-        except Exception:
-            encoding = tiktoken.get_encoding("cl100k_base")
-        return len(encoding.encode(text))
-    except ImportError:
-        pass
+            import tiktoken
+            try:
+                encoding = tiktoken.encoding_for_model(model_name)
+            except Exception:
+                encoding = tiktoken.get_encoding("cl100k_base")
+            count = len(encoding.encode(text))
+        except ImportError:
+            count = _heuristic_tokens(text)
 
-    # Heuristic fallback: Cyrillic text is less compact (approx 1.8 chars/token)
-    has_cyrillic = any(u'\u0400' <= char <= u'\u04FF' for char in text)
-    if has_cyrillic:
-        return int(len(text) / 1.8)
-    return len(text) // 4
+    if len(_TOKEN_CACHE) >= _TOKEN_CACHE_MAX:
+        _TOKEN_CACHE.clear()
+    _TOKEN_CACHE[key] = count
+    return count
 
 
 def summarize_messages(msgs_to_summarize: List[Dict], model_name: str, timeout: float = 30.0) -> str:
