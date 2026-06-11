@@ -1,6 +1,10 @@
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 from skill_manager import skill_manager
 from hook_manager import hook_manager
-import os
 
 print(f"--- Argent System Verification ---")
 

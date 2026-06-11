@@ -3,7 +3,7 @@ import os
 from pathlib import Path
 
 # Add project root to sys.path
-sys.path.append(os.getcwd())
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from tools import create_svg_image
 from config import get_visuals_dir

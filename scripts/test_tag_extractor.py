@@ -29,7 +29,7 @@ m.ResponseError = Exception
 sys.modules["ollama"] = m
 
 # Force provider to ollama for testing
-sys.path.append(os.getcwd())
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import config
 config.get_provider = lambda: "ollama"
 
