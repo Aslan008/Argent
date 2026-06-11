@@ -179,7 +179,8 @@ You are an autonomous AI software engineer. You design, build, and debug softwar
                             for t in valid_tools:
                                 tname = t["name"]
                                 desc = t.get("description", "").split(".")[0]
-                                params = t.get("parameters", {}).get("properties", {})
+                                schema = t.get("inputSchema", t.get("parameters", {}))
+                                params = schema.get("properties", {})
                                 param_str = ", ".join(f'"{p}": value' for p in params)
                                 mcp_section += f"  - `{tname}`: {desc}\n"
                                 if param_str:

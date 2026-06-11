@@ -179,11 +179,28 @@ def git_rollback() -> str:
 
 def call_mcp_tool(server_name: str, tool_name: str, arguments_json: str) -> str:
     """Call a standardized tool from an MCP server. arguments_json must be a valid JSON string."""
+    args = None
     try:
         args = json.loads(arguments_json)
-        return mcp_client.call_tool(server_name, tool_name, args)
     except json.JSONDecodeError:
-        return "Error: arguments_json must be a valid JSON string."
+        try:
+            import json5
+            args = json5.loads(arguments_json)
+        except ImportError:
+            pass # Если json5 не установлен, просто падаем ниже
+        except Exception:
+            pass # Если json5 тоже не справился, идем к ошибке
+
+    if args is None:
+        return (
+            "Error: arguments_json is invalid JSON. "
+            "Did you use single quotes instead of double quotes? "
+            "Did you forget to escape newlines (\\n) or quotes (\\\") inside your prompt? "
+            "Fix the syntax and try again."
+        )
+
+    try:
+        return mcp_client.call_tool(server_name, tool_name, args)
     except Exception as e:
         return f"Error calling MCP tool: {e}"
 

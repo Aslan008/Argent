@@ -366,7 +366,7 @@ class MCPServer:
         result = self.transport.send_request("tools/call", {
             "name": tool_name,
             "arguments": arguments
-        })
+        }, timeout=600)
 
         if "error" in result:
             err = result["error"]

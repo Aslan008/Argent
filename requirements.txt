@@ -13,3 +13,4 @@ rich
 ollama
 jedi
 pyyaml
+json5
