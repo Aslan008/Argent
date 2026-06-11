@@ -1,5 +1,7 @@
 # Argent: The Elite AI Coding Assistant
 
+[![CI](https://github.com/Aslan008/Argent/actions/workflows/ci.yml/badge.svg)](https://github.com/Aslan008/Argent/actions/workflows/ci.yml)
+
 Argent is a high-performance, professional AI pair programmer designed to live in your terminal. It supports local **Ollama** models, **Z.ai**, and **KoboldCPP** API providers, leveraging advanced architectural patterns to provide an autonomous, efficient, and secure development environment.
 
 > [!NOTE]
@@ -37,6 +39,15 @@ Argent includes a powerful browser automation engine based on Playwright:
 - **Visual & Structural Analysis**: Recursively crawls DOM trees across nested `iframe` and Shadow DOM boundaries.
 - **Smart Filtering**: Supports multi-keyword search queries (logical OR) to filter complex web pages and reduce prompt size, with automatic feedback warnings for over-filtering.
 - **Robust Actions**: Interact with elements using dynamic ID indexing, precise CSS selectors, or visible text, with automatic scrolling into view.
+
+### 🛡 Centralized Approval & Safe Autonomy
+Every dangerous action (shell commands, file deletion, git rollback) passes through a single approval gate:
+- **Destructive-command detection**: `rm` / `Remove-Item` / `format` / `git reset --hard` / `taskkill` and friends always require explicit confirmation — even in autonomous mode.
+- **Session grants**: approve once with *"always allow `git` this session"* and stop clicking through repeated prompts.
+- **Working autonomy**: in `/auto` mode safe actions are auto-approved so the agent can actually run unattended, while destructive ones still pause for you.
+
+### 🧮 Exact Arithmetic
+The `calculate` tool evaluates math expressions through a whitelisted AST interpreter (no `eval`, no code execution). Small local models no longer guess numbers — they compute them.
 
 ### 🤝 Professional Git Integration
 - **Smart Commits**: Use `/commit` to let the AI analyze your diffs and generate professional Conventional Commit messages.
@@ -130,6 +141,15 @@ Argent содержит мощный движок автоматизации б�
 - **Умная фильтрация**: Фильтрует сложные страницы по ключевым словам (через запятую, логическое ИЛИ) с выводом предупреждения о скрытом контенте для оптимизации контекста ИИ.
 - **Гибкое управление**: Кликает и заполняет поля по автоиндексам, CSS-селекторам или тексту с автопрокруткой элементов в зону видимости.
 
+### 🛡 Централизованные подтверждения и безопасная автономия
+Каждое опасное действие (команды оболочки, удаление файлов, git-откаты) проходит через единый шлюз подтверждений:
+- **Детектор деструктивных команд**: `rm` / `Remove-Item` / `format` / `git reset --hard` / `taskkill` и подобные всегда требуют явного подтверждения — даже в автономном режиме.
+- **Сессионные разрешения**: одобрите один раз с опцией *«всегда разрешать `git` в этой сессии»* — и повторные запросы исчезнут.
+- **Рабочая автономия**: в режиме `/auto` безопасные действия одобряются автоматически, поэтому агент действительно может работать без присмотра, а деструктивные — по-прежнему ставятся на паузу.
+
+### 🧮 Точная арифметика
+Инструмент `calculate` вычисляет выражения через AST-интерпретатор с белым списком операций (никакого `eval` и исполнения кода). Маленькие локальные модели больше не угадывают числа — они их считают.
+
 ### 🤝 Профессиональная интеграция с Git
 - **Умные коммиты**: Используйте `/commit`, чтобы ИИ проанализировал ваши diff'ы и составил профессиональные сообщения в стиле Conventional Commits.
 - **Понимание Diff**: Argent видит собственные изменения для обеспечения целостности контекста.
@@ -179,3 +199,16 @@ Argent содержит мощный движок автоматизации б�
 - `/clear` — Очистить историю текущего диалога.
 - `/help` — Показать справку по командам.
 - `/exit` (или `/quit`) — Выйти из приложения.
+
+---
+
+## 🧑‍💻 Development
+
+```bash
+pip install -r requirements.txt   # full runtime dependencies
+python -m pytest                  # unit tests (browser tests excluded)
+python -m pytest -m integration   # browser tests (launch a real CDP browser)
+```
+
+CI runs the unit suite on `windows-latest` for every push and pull request
+using the lightweight `requirements-ci.txt` set.

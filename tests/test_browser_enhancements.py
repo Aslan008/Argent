@@ -1,8 +1,14 @@
 import unittest
 import os
 import asyncio
+import pytest
 from browser_engine import browser_engine, _SessionContext
 import config
+
+# These tests launch a real browser via CDP: slow, environment-dependent
+# and occasionally flaky when run in the same process as the unit suite.
+# Run them explicitly with: pytest -m integration
+pytestmark = pytest.mark.integration
 
 class TestBrowserEnhancements(unittest.TestCase):
     def setUp(self):

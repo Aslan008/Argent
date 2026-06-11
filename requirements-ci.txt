@@ -1,0 +1,18 @@
+# Lightweight dependency set for CI: enough to import every module the
+# unit suite touches, without the heavy optional stacks (sentence-transformers,
+# crawl4ai) that are only imported lazily at runtime.
+pytest
+requests>=2.31.0
+beautifulsoup4>=4.12.0
+ddgs
+playwright
+playwright-stealth
+prompt-toolkit
+questionary
+rich
+ollama
+openai>=1.0
+jedi
+pyyaml
+json5
+numpy
