@@ -60,7 +60,12 @@ class LLMProvider(ABC):
     def list_models(self) -> List[str]: ...
 
     @abstractmethod
-    def stream_chat(self, model, messages, tools=None, context_window=None, temperature=None): ...
+    def stream_chat(self, model, messages, tools=None, context_window=None, temperature=None,
+                    format_schema=None): ...
+
+    def supports_constrained_decoding(self) -> bool:
+        """Whether stream_chat can constrain output to a JSON schema (format_schema)."""
+        return False
 
     @abstractmethod
     def sync_chat(self, model, messages, temperature=0.3, json_format=False) -> str: ...
@@ -106,7 +111,11 @@ class OllamaProvider(LLMProvider):
         except Exception:
             return []
 
-    def stream_chat(self, model, messages, tools=None, context_window=None, temperature=None):
+    def supports_constrained_decoding(self) -> bool:
+        return True
+
+    def stream_chat(self, model, messages, tools=None, context_window=None, temperature=None,
+                    format_schema=None):
         kwargs = {
             "model": model,
             "messages": messages,
@@ -114,7 +123,11 @@ class OllamaProvider(LLMProvider):
         }
         if tools:
             kwargs["tools"] = tools
-            
+        if format_schema:
+            # Ollama >= 0.5 constrains generation to the JSON schema at the
+            # decoder level: invalid step output becomes impossible.
+            kwargs["format"] = format_schema
+
         options = {}
         if context_window:
             options["num_ctx"] = context_window
@@ -182,7 +195,10 @@ class OpenAICompatibleProvider(LLMProvider, ABC):
     def _get_client(self):
         return self._openai.OpenAI(api_key=self._api_key, base_url=self._base_url)
 
-    def stream_chat(self, model, messages, tools=None, context_window=None, temperature=None):
+    def stream_chat(self, model, messages, tools=None, context_window=None, temperature=None,
+                    format_schema=None):
+        # format_schema is ignored: OpenAI-compatible cloud endpoints use
+        # native tool calling and don't need constrained step decoding.
         client = self._get_client()
         openai_tools = None
         if tools:

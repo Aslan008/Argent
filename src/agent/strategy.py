@@ -24,6 +24,17 @@ class ModelStrategy(ABC):
     def supports_native_tools(self) -> bool:
         pass
 
+    def wants_constrained_decoding(self) -> bool:
+        """Whether agent steps should be grammar-constrained to the step JSON
+        schema (only effective when the provider supports it)."""
+        return False
+
+    def wants_objective_anchor(self) -> bool:
+        """Whether a trailing OBJECTIVE reminder should be appended to long
+        contexts: small models attend to the end of the prompt and lose the
+        original goal as history grows."""
+        return False
+
 
 class TinyLocalStrategy(ModelStrategy):
     """Optimization strategy for extremely small local models (< 3B)."""
@@ -43,6 +54,12 @@ class TinyLocalStrategy(ModelStrategy):
     def supports_native_tools(self) -> bool:
         return False
 
+    def wants_constrained_decoding(self) -> bool:
+        return True
+
+    def wants_objective_anchor(self) -> bool:
+        return True
+
 
 class StandardLocalStrategy(ModelStrategy):
     """Optimization strategy for standard local models (3B - 14B, e.g. Qwen2.5-Coder)."""
@@ -61,6 +78,9 @@ class StandardLocalStrategy(ModelStrategy):
         return parse_raw_tool_call(content)
 
     def supports_native_tools(self) -> bool:
+        return True
+
+    def wants_objective_anchor(self) -> bool:
         return True
 
 

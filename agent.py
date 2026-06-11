@@ -25,6 +25,7 @@ from src.agent.strategy import get_model_strategy
 from src.agent.parser import parse_raw_tool_call
 from src.agent.trimmer import estimate_tokens
 from src.agent.healing import detect_tool_failure, build_healing_hint, HEALING_TOOLS
+from src.agent.constrained import build_step_schema, build_tool_catalog, StepStreamExtractor
 
 log = get_logger("agent")
 
@@ -95,6 +96,14 @@ You are an autonomous AI software engineer. You design, build, and debug softwar
 - **Testing**: NEVER test logic or GUI apps by running `python app.py` via `run_command` (it will block). You MUST write and run `pytest` tests, or use `start_background_command`.
 - **Self-Correction**: If a tool fails, analyze the error and fix it proactively. Do not apologize.
 - **Strict Environment**: Use {platform.system()}-native commands ONLY (e.g., PowerShell/CMD on Windows, NOT unix commands like 'ls' or 'grep').""")
+
+        if category == "tiny" and self.provider == "ollama":
+            prompt_parts.append("""## RESPONSE FORMAT (STRICT JSON STEPS)
+Every response is EXACTLY ONE JSON object, one of:
+1. {"tool": {"name": "<tool_name>", "arguments": {...}}} — perform an action.
+2. {"reply": "<final answer to the user>"} — ONLY when the task is fully complete or you must ask the user something.
+Never mix plain text with JSON. Prefer "tool" steps until the task is done.
+Example: {"tool": {"name": "read_file", "arguments": {"file_path": "main.py"}}}""")
 
         auto_plugins = get_autonomous_plugins_enabled()
         if auto_plugins or not is_small:
@@ -247,6 +256,19 @@ You are an autonomous AI software engineer. You design, build, and debug softwar
     def _parse_raw_tool_call(self, content: str) -> dict | None:
         return parse_raw_tool_call(content)
 
+    def _build_objective_anchor(self) -> str | None:
+        """Trailing reminder of the goal for long contexts (local models)."""
+        obj = memory.data.get("objective")
+        task = memory.data.get("current_task")
+        if not obj and not task:
+            return None
+        parts = ["[REMINDER — do not lose the goal]"]
+        if obj:
+            parts.append(f"OBJECTIVE: {obj}")
+        if task and task != obj:
+            parts.append(f"CURRENT TASK: {task}")
+        return "\n".join(parts)
+
     def process_user_input(self, user_text: str, allowed_tools: List[str] = None) -> Generator[Dict[str, Any], None, None]:
         """
         Process the user input and yield chunks of response or tool activity.
@@ -275,6 +297,14 @@ You are an autonomous AI software engineer. You design, build, and debug softwar
             yield {"type": "error", "content": f"Provider error: {e}"}
             return
 
+        # Grammar-constrained steps: tiny models on Ollama get the step schema
+        # enforced at the decoder level — malformed tool JSON becomes impossible.
+        step_schema = None
+        if (self.strategy.wants_constrained_decoding()
+                and provider.supports_constrained_decoding()
+                and not getattr(self, "_constrained_unsupported", False)):
+            step_schema = build_step_schema()
+
         while True:
             # Variables to accumulate the streamed response
             full_content = ""
@@ -285,6 +315,7 @@ You are an autonomous AI software engineer. You design, build, and debug softwar
             raw_tool_char_count = 0
             reasoning_tag_active = False
             is_truncated = False
+            constrained_extractor = StepStreamExtractor() if step_schema is not None else None
             START_TAGS = ["<thought>", "<think>", "<reasoning>"]
             END_TAGS = ["</thought>", "</think>", "</reasoning>"]
             
@@ -300,7 +331,20 @@ You are an autonomous AI software engineer. You design, build, and debug softwar
                 
                 # Check if the strategy supports native tools
                 if not self.strategy.supports_native_tools():
+                    if constrained_extractor is not None and active_tools:
+                        # No native tool channel: give the model a compact
+                        # in-context catalog near the end of the prompt instead.
+                        cleaned_messages = cleaned_messages + [
+                            {"role": "system", "content": build_tool_catalog(active_tools)}
+                        ]
                     active_tools = None
+
+                # Objective anchor: re-pin the goal at the end of long
+                # histories, where small models actually look.
+                if self.strategy.wants_objective_anchor() and len(cleaned_messages) > 8:
+                    anchor = self._build_objective_anchor()
+                    if anchor:
+                        cleaned_messages = cleaned_messages + [{"role": "system", "content": anchor}]
 
                 from config import get_temperature
                 temp = get_temperature()
@@ -311,6 +355,7 @@ You are an autonomous AI software engineer. You design, build, and debug softwar
                     tools=active_tools,
                     context_window=self.max_context_tokens if self.provider != "zai" else None,
                     temperature=temp,
+                    format_schema=step_schema,
                 )
 
                 for chunk in response_stream:
@@ -336,7 +381,16 @@ You are an autonomous AI software engineer. You design, build, and debug softwar
                             yield {"type": "tool_generating", "name": tool_calls_accumulator[index]["function"]["name"], "bytes": len(tool_calls_accumulator[index]["function"]["arguments"]), "delta": tc_delta["function_arguments_delta"]}
 
                     content_chunk = chunk.get("content", "")
-                    if content_chunk:
+                    if content_chunk and constrained_extractor is not None:
+                        # Constrained mode: the chunk is part of the step JSON.
+                        # Stream the decoded "reply" text; buffer tool steps.
+                        emitted = constrained_extractor.feed(content_chunk)
+                        if emitted:
+                            full_content += emitted
+                            yield {"type": "content_stream", "content": emitted}
+                        elif constrained_extractor.mode == "tool":
+                            yield {"type": "tool_generating", "name": "?", "bytes": constrained_extractor.size, "delta": content_chunk}
+                    elif content_chunk:
                         # Logic to handle tags that might be split across chunks
                         # and redirect content to reasoning if a tag is active.
                         temp_content = content_chunk
@@ -407,6 +461,13 @@ You are an autonomous AI software engineer. You design, build, and debug softwar
                 elif "thought_signature" in error_str or "functioncall" in error_str:
                     self._flatten_tool_messages()
                     continue
+                elif step_schema is not None and any(k in error_str for k in ("format", "schema", "grammar")):
+                    # Older Ollama versions reject schema-constrained format —
+                    # degrade gracefully to the raw-JSON parsing path for good.
+                    log.warning("Constrained decoding unsupported by provider, falling back: %s", e)
+                    self._constrained_unsupported = True
+                    step_schema = None
+                    continue
                 elif isinstance(e, ProviderError):
                     yield {"type": "error", "content": str(e)}
                     break
@@ -424,10 +485,26 @@ You are an autonomous AI software engineer. You design, build, and debug softwar
                             log.warning("Failed to parse tool args for %s: %s", tc["function"]["name"], e)
                             tc["function"]["arguments"] = {}
 
+            # Constrained mode: materialize the final step from the JSON buffer.
+            if constrained_extractor is not None and not is_truncated and not tool_calls_accumulator:
+                final_step = constrained_extractor.finalize()
+                if final_step and "tool" in final_step:
+                    tool_calls_accumulator.append({
+                        "type": "function",
+                        "function": {
+                            "name": final_step["tool"]["name"],
+                            "arguments": final_step["tool"]["arguments"],
+                        },
+                    })
+                elif final_step and "reply" in final_step and not full_content:
+                    # Streaming extraction missed the reply (unusual key order).
+                    full_content = final_step["reply"]
+                    yield {"type": "content_replace", "content": full_content}
+
             # --- FALLBACK: Parse tool calls from raw JSON in content ---
             # Models like Qwen2.5-Coder, nanbeige, etc. often write tool calls
             # as raw JSON strings instead of using the native tool_calls mechanism.
-            if not tool_calls_accumulator and not is_truncated:
+            if not tool_calls_accumulator and not is_truncated and constrained_extractor is None:
                 clean_content = full_content.strip()
                 parsed_tool = self._parse_raw_tool_call(clean_content)
                 
