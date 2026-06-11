@@ -84,6 +84,7 @@ Run local shell commands directly from the prompt by prefixing them with `!`. If
 - `/hooks auto [on/off]` — Toggle autonomous AI plugin creation.
 - `/research [topic]` — Deep autonomous web research.
 - `/tools` — Interactive menu to enable/disable specific AI capabilities.
+- `/doctor` — Run environment self-diagnostics (provider, model tier, dependencies, browser, MCP).
 - `/setup_terminal` — UI optimization guide (Fonts & Colors).
 - `/provider` — Select API Provider (Ollama / Z.ai / KoboldCPP) and endpoint.
 - `/model` — Select active LLM model.
@@ -192,6 +193,7 @@ Argent определяет размер модели по имени и нез�
 - `/hooks auto [on/off]` — Переключить режим создания плагинов самим ИИ.
 - `/research [topic]` — Глубокое автономное исследование темы в сети.
 - `/tools` — Интерактивное меню для настройки инструментов ИИ.
+- `/doctor` — Самодиагностика окружения (провайдер, ярус модели, зависимости, браузер, MCP).
 - `/setup_terminal` — Гайд по настройке интерфейса (Шрифты и Цвета).
 - `/provider` — Выбрать провайдера API (Ollama / Z.ai / KoboldCPP) и эндпоинт.
 - `/model` — Выбрать активную модель ИИ.

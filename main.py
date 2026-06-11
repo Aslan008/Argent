@@ -60,6 +60,32 @@ CHAT_ALLOWED_TOOLS = [
 
 
 
+def offer_safety_checkpoint(task: str) -> None:
+    """Before unattended /auto work: offer one git checkpoint if the tree is
+    dirty. A clean tree needs no insurance; outside git there is nothing to do.
+    Rollback path: git_rollback (only ever touches 'Argent Checkpoint' commits)."""
+    try:
+        is_git = subprocess.run("git rev-parse --is-inside-work-tree",
+                                shell=True, capture_output=True, text=True)
+        if is_git.returncode != 0:
+            return
+        dirty = subprocess.run("git status --porcelain",
+                               shell=True, capture_output=True, text=True).stdout.strip()
+        if not dirty:
+            return
+        approved = questionary.confirm(
+            "Рабочее дерево содержит незакоммиченные изменения. "
+            "Создать страховочный git-чекпоинт перед автономной работой?",
+            default=True
+        ).ask()
+        if approved:
+            from tools.misc_tools import git_checkpoint
+            from ui import print_system as _ps
+            _ps(git_checkpoint(f"перед /auto: {task[:60]}"))
+    except Exception:
+        pass
+
+
 def main():
     agent = None
 
@@ -257,6 +283,7 @@ def main():
                     print_error("Укажите задачу. Пример: /auto Написать проект на python")
                     continue
                 auto_task = parts[1].strip()
+                offer_safety_checkpoint(auto_task)
                 is_auto_mode = True
                 auto_sleep_time = 0
                 auto_wake_context = ""
