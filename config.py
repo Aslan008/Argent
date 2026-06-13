@@ -50,6 +50,7 @@ def _set(key: str, value):
 ZAI_ENDPOINT_GENERAL = "https://api.z.ai/api/paas/v4/"
 ZAI_ENDPOINT_CODING = "https://api.z.ai/api/coding/paas/v4/"
 DEFAULT_KOBOLDCPP_URL = "http://localhost:5001/v1"
+DEFAULT_OPENROUTER_URL = "https://openrouter.ai/api/v1"
 
 
 def get_current_model() -> str:
@@ -91,6 +92,22 @@ def get_koboldcpp_url() -> str:
 
 def set_koboldcpp_url(url: str):
     _set("koboldcpp_url", url)
+
+
+def get_openrouter_api_key() -> str | None:
+    return _get("openrouter_api_key")
+
+
+def set_openrouter_api_key(api_key: str):
+    _set("openrouter_api_key", api_key)
+
+
+def get_openrouter_url() -> str:
+    return _get("openrouter_url", DEFAULT_OPENROUTER_URL)
+
+
+def set_openrouter_url(url: str):
+    _set("openrouter_url", url)
 
 
 def get_temperature() -> float:

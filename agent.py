@@ -375,7 +375,7 @@ Example: {"tool": {"name": "read_file", "arguments": {"file_path": "main.py"}}}"
                     model=self.model_name,
                     messages=cleaned_messages,
                     tools=active_tools,
-                    context_window=self.max_context_tokens if self.provider != "zai" else None,
+                    context_window=self.max_context_tokens if self.provider not in ("zai", "openrouter") else None,
                     temperature=temp,
                     format_schema=step_schema,
                 )
@@ -469,7 +469,7 @@ Example: {"tool": {"name": "read_file", "arguments": {"file_path": "main.py"}}}"
                             model=self.model_name,
                             messages=cleaned_messages,
                             tools=None,
-                            context_window=self.max_context_tokens if self.provider != "zai" else None,
+                            context_window=self.max_context_tokens if self.provider not in ("zai", "openrouter") else None,
                             temperature=temp,
                         )
                         for chunk in fallback_stream:

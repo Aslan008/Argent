@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/Aslan008/Argent/actions/workflows/ci.yml/badge.svg)](https://github.com/Aslan008/Argent/actions/workflows/ci.yml)
 
-Argent is a high-performance, professional AI pair programmer designed to live in your terminal. It supports local **Ollama** models, **Z.ai**, and **KoboldCPP** API providers, leveraging advanced architectural patterns to provide an autonomous, efficient, and secure development environment.
+Argent is a high-performance, professional AI pair programmer designed to live in your terminal. It supports local **Ollama** models, **Z.ai**, **OpenRouter**, and **KoboldCPP** API providers, leveraging advanced architectural patterns to provide an autonomous, efficient, and secure development environment.
 
 > [!NOTE]
 > Argent is a **personal experiment** in building high-autonomy AI agents for terminal-based development.
@@ -86,7 +86,7 @@ Run local shell commands directly from the prompt by prefixing them with `!`. If
 - `/tools` — Interactive menu to enable/disable specific AI capabilities.
 - `/doctor` — Run environment self-diagnostics (provider, model tier, dependencies, browser, MCP).
 - `/setup_terminal` — UI optimization guide (Fonts & Colors).
-- `/provider` — Select API Provider (Ollama / Z.ai / KoboldCPP) and endpoint.
+- `/provider` — Select API Provider (Ollama / Z.ai / OpenRouter / KoboldCPP) and endpoint.
 - `/model` — Select active LLM model.
 - `/obsidian [path]` — Set the path to your Obsidian vault.
 - `/mcp [subcommand]` — Manage MCP servers (list / add / remove / start / stop / test).
@@ -111,7 +111,7 @@ Run local shell commands directly from the prompt by prefixing them with `!`. If
 
 ## Argent: Элитный ИИ-Ассистент для Программирования
 
-Argent — это высокопроизводительный профессиональный ИИ-напарник, который живет в вашем терминале. Он поддерживает локальные модели **Ollama**, а также API-провайдеров **Z.ai** и **KoboldCPP**, используя продвинутые архитектурные паттерны для создания автономной и безопасной среды разработки.
+Argent — это высокопроизводительный профессиональный ИИ-напарник, который живет в вашем терминале. Он поддерживает локальные модели **Ollama**, а также API-провайдеров **Z.ai**, **OpenRouter** и **KoboldCPP**, используя продвинутые архитектурные паттерны для создания автономной и безопасной среды разработки.
 
 > [!NOTE]
 > Argent является моим **личным экспериментом** по созданию высокоавтономных ИИ-агентов для терминальной разработки.
@@ -195,7 +195,7 @@ Argent определяет размер модели по имени и нез�
 - `/tools` — Интерактивное меню для настройки инструментов ИИ.
 - `/doctor` — Самодиагностика окружения (провайдер, ярус модели, зависимости, браузер, MCP).
 - `/setup_terminal` — Гайд по настройке интерфейса (Шрифты и Цвета).
-- `/provider` — Выбрать провайдера API (Ollama / Z.ai / KoboldCPP) и эндпоинт.
+- `/provider` — Выбрать провайдера API (Ollama / Z.ai / OpenRouter / KoboldCPP) и эндпоинт.
 - `/model` — Выбрать активную модель ИИ.
 - `/obsidian [path]` — Задать путь к хранилищу Obsidian.
 - `/mcp [subcommand]` — Управление MCP-серверами (list / add / remove / start / stop / test).

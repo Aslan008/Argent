@@ -109,7 +109,7 @@ class CloudStrategy(ModelStrategy):
 def get_model_strategy(model_name: str, provider: str) -> ModelStrategy:
     """Factory to retrieve the appropriate strategy for the active model and provider."""
     category = get_model_size_category(model_name)
-    if provider == "zai" or category == "cloud":
+    if provider in ("zai", "openrouter") or category == "cloud":
         return CloudStrategy()
     elif category == "tiny":
         return TinyLocalStrategy()

@@ -349,13 +349,13 @@ def select_model(current_model: str) -> str:
 
     current_ctx = get_context_window()
 
-    if provider.name == "zai":
+    if provider.name in ("zai", "openrouter"):
         ctx_choices = [
             "8192 (Default)",
             "16384 (Large)",
             "32768 (Very Large)",
             "65536 (Maximum)",
-            "131072 (Ultra - GLM-4-32B)",
+            "131072 (Ultra)",
             "Keep Current",
             "Custom Value..."
         ]

@@ -186,14 +186,18 @@ class OllamaProvider(LLMProvider):
 class OpenAICompatibleProvider(LLMProvider, ABC):
     """Base class for OpenAI-compatible providers."""
 
-    def __init__(self, api_key: str, base_url: str):
+    def __init__(self, api_key: str, base_url: str, default_headers: dict = None):
         import openai
         self._openai = openai
         self._api_key = api_key
         self._base_url = base_url
+        self._default_headers = default_headers
 
     def _get_client(self):
-        return self._openai.OpenAI(api_key=self._api_key, base_url=self._base_url)
+        kwargs = {"api_key": self._api_key, "base_url": self._base_url}
+        if self._default_headers:
+            kwargs["default_headers"] = self._default_headers
+        return self._openai.OpenAI(**kwargs)
 
     def stream_chat(self, model, messages, tools=None, context_window=None, temperature=None,
                     format_schema=None):
@@ -358,16 +362,91 @@ class KoboldCPPProvider(OpenAICompatibleProvider):
             return ["koboldcpp-model"]
 
 
+class OpenRouterProvider(OpenAICompatibleProvider):
+    """OpenRouter cloud aggregator (OpenAI-compatible API).
+
+    Exposes models from many vendors (Anthropic, OpenAI, Google, Meta,
+    DeepSeek, ...) behind one OpenAI-compatible endpoint. Model ids are
+    vendor-prefixed slugs, e.g. 'anthropic/claude-3.5-sonnet'.
+    """
+
+    # Optional attribution headers OpenRouter uses for its app rankings.
+    _ATTRIBUTION_HEADERS = {
+        "HTTP-Referer": "https://github.com/Aslan008/Argent",
+        "X-Title": "Argent",
+    }
+
+    def __init__(self, api_key: str, base_url: str):
+        super().__init__(api_key=api_key, base_url=base_url,
+                         default_headers=self._ATTRIBUTION_HEADERS)
+
+    @property
+    def name(self) -> str:
+        return "openrouter"
+
+    def validate_config(self) -> Optional[str]:
+        if not self._api_key:
+            return "OpenRouter API key is not set. Use /provider to configure it (get one at https://openrouter.ai/keys)."
+        return None
+
+    def list_models(self) -> List[str]:
+        try:
+            client = self._get_client()
+            models_response = client.models.list()
+            ids = [m.id for m in models_response.data]
+            return sorted(ids) if ids else self._fallback_models()
+        except Exception:
+            return self._fallback_models()
+
+    @staticmethod
+    def _fallback_models() -> List[str]:
+        # Shown when the catalog can't be fetched (e.g. no key yet). The user
+        # can also type any valid OpenRouter slug manually.
+        return [
+            "anthropic/claude-3.5-sonnet",
+            "anthropic/claude-3.7-sonnet",
+            "openai/gpt-4o",
+            "openai/gpt-4o-mini",
+            "google/gemini-2.0-flash-001",
+            "deepseek/deepseek-chat",
+            "meta-llama/llama-3.3-70b-instruct",
+            "qwen/qwen-2.5-coder-32b-instruct",
+        ]
+
+    def _handle_api_status_error(self, e):
+        if e.status_code == 401:
+            raise ProviderError(
+                "OpenRouter: Invalid API key. Use /provider to update it.",
+                original_error=e
+            )
+        elif e.status_code == 402:
+            raise ProviderError(
+                "OpenRouter: Insufficient credits. Top up at https://openrouter.ai/credits",
+                original_error=e
+            )
+        elif e.status_code == 429:
+            raise ProviderError(
+                "OpenRouter: Rate limited. Slow down or check your plan limits.",
+                retryable=True, original_error=e
+            )
+        else:
+            super()._handle_api_status_error(e)
+
+
 def create_provider() -> LLMProvider:
     from config import (
         get_provider as _get_provider_name,
         get_zai_api_key,
         get_zai_endpoint,
         get_koboldcpp_url,
+        get_openrouter_api_key,
+        get_openrouter_url,
     )
     name = _get_provider_name()
     if name == "zai":
         return ZAIProvider(api_key=get_zai_api_key(), base_url=get_zai_endpoint())
     elif name == "koboldcpp":
         return KoboldCPPProvider(base_url=get_koboldcpp_url())
+    elif name == "openrouter":
+        return OpenRouterProvider(api_key=get_openrouter_api_key(), base_url=get_openrouter_url())
     return OllamaProvider()

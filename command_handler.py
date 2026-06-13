@@ -9,6 +9,7 @@ from config import (
     get_provider, set_provider, get_zai_api_key, set_zai_api_key,
     get_zai_endpoint, set_zai_endpoint, ZAI_ENDPOINT_GENERAL, ZAI_ENDPOINT_CODING,
     get_koboldcpp_url, set_koboldcpp_url,
+    get_openrouter_api_key, set_openrouter_api_key,
     get_verbose_status, set_verbose_status,
     get_debug_mode, set_debug_mode,
     add_mcp_server, remove_mcp_server, get_mcp_servers,
@@ -95,7 +96,7 @@ def handle_slash_command(command: str, agent: ArgentAgent) -> bool:
             print_system("Model unchanged.")
     elif cmd == "/provider":
         current_prov = get_provider()
-        choices = ["ollama", "zai", "koboldcpp"]
+        choices = ["ollama", "zai", "openrouter", "koboldcpp"]
         new_prov = questionary.select(
             "Select API Provider:",
             choices=choices,
@@ -133,6 +134,20 @@ def handle_slash_command(command: str, agent: ArgentAgent) -> bool:
                     set_zai_endpoint(ZAI_ENDPOINT_CODING)
                 else:
                     set_zai_endpoint(ZAI_ENDPOINT_GENERAL)
+            elif new_prov == "openrouter":
+                current_key = get_openrouter_api_key()
+                if not current_key:
+                    new_key = questionary.password("Enter OpenRouter API Key (https://openrouter.ai/keys):").ask()
+                    if new_key:
+                        set_openrouter_api_key(new_key)
+                        options_text = " (API Key saved)"
+                else:
+                    change_key = questionary.confirm("OpenRouter API Key is already set. Do you want to change it?").ask()
+                    if change_key:
+                        new_key = questionary.password("Enter New OpenRouter API Key:").ask()
+                        if new_key:
+                            set_openrouter_api_key(new_key)
+                            options_text = " (API Key updated)"
             elif new_prov == "koboldcpp":
                 current_url = get_koboldcpp_url()
                 new_url = questionary.text("Enter KoboldCPP API URL:", default=current_url).ask()
@@ -141,7 +156,7 @@ def handle_slash_command(command: str, agent: ArgentAgent) -> bool:
                     options_text = f" (URL: {new_url})"
 
             print_system(f"API Provider updated to: {new_prov}{options_text}")
-            if new_prov in ("zai", "koboldcpp"):
+            if new_prov in ("zai", "koboldcpp", "openrouter"):
                 print_system(f"Select a {new_prov.upper()} model to use:")
                 new_model = select_model(get_current_model())
                 if new_model != get_current_model():
