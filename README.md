@@ -88,6 +88,7 @@ Run local shell commands directly from the prompt by prefixing them with `!`. If
 - `/research [topic]` — Deep autonomous web research.
 - `/tools` — Interactive menu to enable/disable specific AI capabilities.
 - `/doctor` — Run environment self-diagnostics (provider, model tier, dependencies, browser, MCP).
+- `/aux` — Set a cheap/local auxiliary model for service tasks (summarization, `/commit`).
 - `/setup_terminal` — UI optimization guide (Fonts & Colors).
 - `/provider` — Select API Provider (Ollama / Z.ai / OpenRouter / KoboldCPP) and endpoint.
 - `/model` — Select active LLM model.
@@ -200,6 +201,7 @@ OpenRouter требует один API-ключ (достаточно **бесп
 - `/research [topic]` — Глубокое автономное исследование темы в сети.
 - `/tools` — Интерактивное меню для настройки инструментов ИИ.
 - `/doctor` — Самодиагностика окружения (провайдер, ярус модели, зависимости, браузер, MCP).
+- `/aux` — Задать дешёвую/локальную вспомогательную модель для сервисных задач (суммаризация, `/commit`).
 - `/setup_terminal` — Гайд по настройке интерфейса (Шрифты и Цвета).
 - `/provider` — Выбрать провайдера API (Ollama / Z.ai / OpenRouter / KoboldCPP) и эндпоинт.
 - `/model` — Выбрать активную модель ИИ.
@@ -234,3 +236,11 @@ python -m pytest -m integration   # browser tests (launch a real CDP browser)
 
 CI runs the unit suite on `windows-latest` for every push and pull request
 using the lightweight `requirements-ci.txt` set.
+
+Handy diagnostic scripts (require a configured provider / Ollama):
+
+```bash
+python scripts/benchmark_models.py qwen3.5:9b gemma4:e4b   # score models on agent tasks
+python scripts/check_constrained.py                        # constrained decoding on Ollama
+python scripts/check_openrouter_toolcall.py                # OpenRouter tool-call regression
+```
