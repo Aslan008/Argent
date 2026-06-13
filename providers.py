@@ -199,6 +199,33 @@ class OpenAICompatibleProvider(LLMProvider, ABC):
             kwargs["default_headers"] = self._default_headers
         return self._openai.OpenAI(**kwargs)
 
+    @staticmethod
+    def _normalize_outgoing_messages(messages):
+        """Make message history conform to the OpenAI tool-call spec.
+
+        The spec requires tool_calls[].function.arguments to be a JSON *string*.
+        Argent stores it as a dict internally (Ollama wants a dict, and the dict
+        is what actually invokes the tool), so it must be stringified on the way
+        out. Strict OpenAI-compatible backends (e.g. vLLM behind OpenRouter)
+        reject a dict with HTTP 400; lenient ones (Z.AI) happen to accept it.
+        Copies only the parts it changes — never mutates the agent's history.
+        """
+        out = []
+        for m in messages:
+            tcs = m.get("tool_calls")
+            if not tcs:
+                out.append(m)
+                continue
+            new_tcs = []
+            for tc in tcs:
+                fn = tc.get("function")
+                if fn is not None and not isinstance(fn.get("arguments"), str):
+                    fn = {**fn, "arguments": json.dumps(fn.get("arguments") or {}, ensure_ascii=False)}
+                    tc = {**tc, "function": fn}
+                new_tcs.append(tc)
+            out.append({**m, "tool_calls": new_tcs})
+        return out
+
     def stream_chat(self, model, messages, tools=None, context_window=None, temperature=None,
                     format_schema=None):
         # format_schema is ignored: OpenAI-compatible cloud endpoints use
@@ -210,7 +237,7 @@ class OpenAICompatibleProvider(LLMProvider, ABC):
 
         kwargs = {
             "model": model,
-            "messages": messages,
+            "messages": self._normalize_outgoing_messages(messages),
             "tools": openai_tools,
             "stream": True,
         }
