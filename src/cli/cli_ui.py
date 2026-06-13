@@ -144,7 +144,18 @@ def render_response_stream(
     Handles thinking, content panels with Rich Live, tool execution, and errors.
     Returns (streamed_text, final_is_auto_mode, auto_sleep_time, auto_wake_context).
     """
-    chunk_iterator = iter(response_chunks)
+    # Capture usage chunks in a side-channel so the streaming state machine
+    # below doesn't have to handle them at every next() call site.
+    captured_usage = {}
+
+    def _capture_usage(source):
+        for ch in source:
+            if ch.get("type") == "usage":
+                captured_usage.update(ch.get("data", {}))
+                continue
+            yield ch
+
+    chunk_iterator = _capture_usage(iter(response_chunks))
     start_total_time = time.time()
     streamed_text = ""
     full_streamed_text = ""
@@ -387,7 +398,15 @@ def render_response_stream(
             safe_print("")
 
     elapsed_time = time.time() - start_total_time
-    safe_print(f"[dim](Время ответа: {elapsed_time:.1f}s)[/dim]")
+    usage_str = ""
+    if captured_usage:
+        try:
+            from usage_tracker import usage as session_usage
+            session_usage.add(captured_usage)
+            usage_str = " · " + session_usage.format_last(captured_usage)
+        except Exception:
+            usage_str = ""
+    safe_print(f"[dim](Время ответа: {elapsed_time:.1f}s{usage_str})[/dim]")
     safe_print("")
 
     return full_streamed_text, final_is_auto_mode, auto_sleep_time, auto_wake_context

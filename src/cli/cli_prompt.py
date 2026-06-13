@@ -113,11 +113,19 @@ def build_bottom_toolbar(agent, ui_state):
             tier = _tier_label(agent)
             mode = ui_state.get("mode", "CHAT")
             cwd = os.path.basename(os.getcwd()) or os.getcwd()
+            # Running session token/cost total, once anything has been spent.
+            usage_str = ""
+            try:
+                from usage_tracker import usage as session_usage
+                if session_usage.requests:
+                    usage_str = f"| {session_usage.format_session()} "
+            except Exception:
+                usage_str = ""
             # ASCII separators only: legacy Windows consoles (cp1251) choke on
             # box-drawing chars and emoji.
             return HTML(
                 f" <b>{mode}</b> | {provider}:{model} | tier:{tier} | cwd:{cwd} "
-                f"| <style fg='#888888'>/help</style> "
+                f"{usage_str}| <style fg='#888888'>/help</style> "
             )
         except Exception:
             return ""

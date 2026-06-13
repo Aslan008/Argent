@@ -384,6 +384,10 @@ Example: {"tool": {"name": "read_file", "arguments": {"file_path": "main.py"}}}"
                     if chunk.get("truncated"):
                         is_truncated = True
 
+                    usage_data = chunk.get("usage")
+                    if usage_data:
+                        yield {"type": "usage", "data": usage_data}
+
                     thinking_chunk = chunk.get("thinking", "")
                     if thinking_chunk:
                         full_reasoning += thinking_chunk

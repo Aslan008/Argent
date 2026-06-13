@@ -46,6 +46,58 @@ def with_retry(fn, max_retries=3, base_delay=1.0):
         raise last_error
 
 
+def _parse_openai_usage(usage) -> dict:
+    """Normalize an OpenAI usage object to {prompt, completion, total, cost?}.
+
+    cost is non-standard: OpenRouter returns it (when requested) on the usage
+    object, surfaced by the SDK via model_extra.
+    """
+    d = {
+        "prompt": getattr(usage, "prompt_tokens", 0) or 0,
+        "completion": getattr(usage, "completion_tokens", 0) or 0,
+        "total": getattr(usage, "total_tokens", 0) or 0,
+    }
+    cost = getattr(usage, "cost", None)
+    if cost is None:
+        extra = getattr(usage, "model_extra", None)
+        if isinstance(extra, dict):
+            cost = extra.get("cost")
+    if cost is not None:
+        d["cost"] = cost
+    return d
+
+
+def _friendly_api_error(provider_name: str, e) -> str:
+    """Turn an openai APIStatusError into a one-line, human-readable message.
+
+    Strict backends (e.g. vLLM behind OpenRouter) return a deeply nested error
+    payload; dumping it raw buries the user in JSON. This surfaces the salient
+    message and the upstream provider, logs the full payload for /logs, and
+    caps the length.
+    """
+    status = getattr(e, "status_code", "?")
+    msg = None
+    body = getattr(e, "body", None)
+    if isinstance(body, dict):
+        err = body.get("error")
+        if isinstance(err, dict):
+            msg = err.get("message")
+            meta = err.get("metadata")
+            if isinstance(meta, dict):
+                upstream = meta.get("provider_name")
+                if upstream and msg:
+                    msg = f"{msg} (upstream: {upstream})"
+    if not msg:
+        msg = getattr(e, "message", None) or str(e)
+    msg = " ".join(str(msg).split())  # collapse whitespace/newlines
+    if len(msg) > 280:
+        msg = msg[:277] + "..."
+
+    logger.warning("%s API error HTTP %s: %s", provider_name.upper(), status,
+                   getattr(e, "body", None) or e)
+    return f"{provider_name.upper()} error (HTTP {status}): {msg}"
+
+
 class LLMProvider(ABC):
     """Abstract base class for all LLM providers."""
 
@@ -154,11 +206,18 @@ class OllamaProvider(LLMProvider):
                         "function_name_delta": tc.get("function", {}).get("name", ""),
                         "function_arguments_delta": json.dumps(args) if isinstance(args, dict) else str(args),
                     })
-            yield {
+            result = {
                 "content": msg.get("content", ""),
                 "thinking": msg.get("thinking", ""),
                 "tool_call_deltas": tool_call_deltas,
             }
+            # The final Ollama chunk carries token counts (local = no cost).
+            if chunk.get("done"):
+                prompt = chunk.get("prompt_eval_count", 0) or 0
+                completion = chunk.get("eval_count", 0) or 0
+                result["usage"] = {"prompt": prompt, "completion": completion,
+                                   "total": prompt + completion}
+            yield result
 
     def sync_chat(self, model, messages, temperature=0.3, json_format=False) -> str:
         kwargs = {
@@ -240,7 +299,10 @@ class OpenAICompatibleProvider(LLMProvider, ABC):
             "messages": self._normalize_outgoing_messages(messages),
             "tools": openai_tools,
             "stream": True,
+            # Ask for a final usage-only chunk (token counts) at end of stream.
+            "stream_options": {"include_usage": True},
         }
+        kwargs.update(self._extra_create_kwargs())
         if temperature is not None:
             kwargs["temperature"] = temperature
 
@@ -260,7 +322,13 @@ class OpenAICompatibleProvider(LLMProvider, ABC):
             raise ProviderError(f"{self.name.upper()} connection error: {e}", original_error=e)
 
         for chunk in response_stream:
+            # Usage may arrive either as a trailing usage-only chunk (no
+            # choices) or attached to the final content chunk (OpenRouter/vLLM).
+            chunk_usage = getattr(chunk, "usage", None)
             if not chunk.choices:
+                if chunk_usage:
+                    yield {"content": "", "thinking": "", "tool_call_deltas": [],
+                           "usage": _parse_openai_usage(chunk_usage)}
                 continue
             choice = chunk.choices[0]
             delta = choice.delta
@@ -285,6 +353,9 @@ class OpenAICompatibleProvider(LLMProvider, ABC):
             finish_reason = getattr(choice, 'finish_reason', None)
             if finish_reason == "length":
                 result["truncated"] = True
+
+            if chunk_usage:
+                result["usage"] = _parse_openai_usage(chunk_usage)
 
             yield result
 
@@ -315,10 +386,14 @@ class OpenAICompatibleProvider(LLMProvider, ABC):
             msg["tool_call_id"] = tool_call_id
         return msg
 
+    def _extra_create_kwargs(self) -> dict:
+        """Provider-specific kwargs for chat.completions.create (override me)."""
+        return {}
+
     def _handle_api_status_error(self, e):
         raise ProviderError(
-            f"{self.name.upper()} API Error (HTTP {e.status_code}): {e}",
-            retryable=e.status_code >= 500, original_error=e
+            _friendly_api_error(self.name, e),
+            retryable=getattr(e, "status_code", 0) >= 500, original_error=e
         )
 
 
@@ -406,6 +481,10 @@ class OpenRouterProvider(OpenAICompatibleProvider):
     def __init__(self, api_key: str, base_url: str):
         super().__init__(api_key=api_key, base_url=base_url,
                          default_headers=self._ATTRIBUTION_HEADERS)
+
+    def _extra_create_kwargs(self) -> dict:
+        # Ask OpenRouter to include the request cost in the usage payload.
+        return {"extra_body": {"usage": {"include": True}}}
 
     @property
     def name(self) -> str:
