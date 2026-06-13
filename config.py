@@ -136,6 +136,35 @@ def set_max_generation_tokens(tokens: int):
     _set("max_generation_tokens", tokens)
 
 
+def get_auxiliary_model() -> str | None:
+    """Optional lightweight model for service tasks (summarization, /commit).
+    None means service tasks reuse the main model."""
+    return _get("auxiliary_model")
+
+
+def set_auxiliary_model(model: str | None):
+    if model is None:
+        config = load_config()
+        config.pop("auxiliary_model", None)
+        save_config(config)
+    else:
+        _set("auxiliary_model", model)
+
+
+def get_auxiliary_provider() -> str | None:
+    """Provider for the auxiliary model. None means reuse the main provider."""
+    return _get("auxiliary_provider")
+
+
+def set_auxiliary_provider(provider: str | None):
+    if provider is None:
+        config = load_config()
+        config.pop("auxiliary_provider", None)
+        save_config(config)
+    else:
+        _set("auxiliary_provider", provider)
+
+
 def get_strip_reasoning() -> bool:
     """Whether reasoning (thinking) blocks are stripped from history before LLM calls."""
     return _get("strip_reasoning", True)

@@ -83,6 +83,14 @@ def _check_model_tier():
     return (OK, detail)
 
 
+def _check_auxiliary_model():
+    from config import get_auxiliary_model, get_auxiliary_provider, get_provider as _gp
+    aux = get_auxiliary_model()
+    if not aux:
+        return (OK, "not set - service tasks use the main model")
+    return (OK, f"{get_auxiliary_provider() or _gp()}:{aux} (summarization, /commit)")
+
+
 def _check_browser():
     if not _module_available("playwright"):
         return (WARN, "playwright not installed — browser tools unavailable")
@@ -164,6 +172,7 @@ CHECKS = [
     ("Python", _check_python),
     ("Provider", _check_provider),
     ("Model & tier", _check_model_tier),
+    ("Auxiliary model", _check_auxiliary_model),
     ("Browser automation", _check_browser),
     ("RAG / semantic search", _check_rag),
     ("Optional deps", _check_optional_deps),

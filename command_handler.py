@@ -10,6 +10,8 @@ from config import (
     get_zai_endpoint, set_zai_endpoint, ZAI_ENDPOINT_GENERAL, ZAI_ENDPOINT_CODING,
     get_koboldcpp_url, set_koboldcpp_url,
     get_openrouter_api_key, set_openrouter_api_key,
+    get_auxiliary_model, set_auxiliary_model,
+    get_auxiliary_provider, set_auxiliary_provider,
     get_verbose_status, set_verbose_status,
     get_debug_mode, set_debug_mode,
     add_mcp_server, remove_mcp_server, get_mcp_servers,
@@ -167,6 +169,8 @@ def handle_slash_command(command: str, agent: ArgentAgent) -> bool:
         _handle_mcp_command(command)
     elif cmd.startswith("/kb"):
         _handle_kb_command(command)
+    elif cmd == "/aux":
+        _handle_aux_command()
     elif cmd == "/doctor":
         from doctor import print_diagnostics
         print_diagnostics()
@@ -194,6 +198,7 @@ def handle_slash_command(command: str, agent: ArgentAgent) -> bool:
             "- `/diff <file>` - Show diff between current file and its pre-modification snapshot\n"
             "- `/changes` - List all files modified by AI in this session\n"
             "- `/stats` - View session diagnostics (model, context, plugins, MCP)\n"
+            "- `/aux` - Set a cheap/local auxiliary model for service tasks (summarization, /commit)\n"
             "- `/doctor` - Run environment self-diagnostics (provider, tier, deps, browser)\n"
             "- `/verbose` - Toggle live status indicators (spinners)\n"
             "- `/debug` - Toggle detailed tool logs (full arguments and raw results in chat)\n"
@@ -292,6 +297,50 @@ def handle_slash_command(command: str, agent: ArgentAgent) -> bool:
         else:
             print_error(f"Unknown command: {command}. Type /help for available commands.")
     return False
+
+
+def _handle_aux_command():
+    """Configure the auxiliary model used for service tasks (summarization,
+    /commit). Lets you point service work at a cheap/local model while the main
+    model stays a powerful (possibly paid) one."""
+    from providers import create_provider
+    from ui import _select_from_list
+
+    current_p = get_auxiliary_provider()
+    current_m = get_auxiliary_model()
+    if current_m:
+        print_system(f"Текущая вспомогательная модель: [bold cyan]{current_p or get_provider()}:{current_m}[/bold cyan]")
+    else:
+        print_system("Вспомогательная модель не задана — сервисные задачи идут на основной модели.")
+
+    DISABLE = "Отключить (использовать основную модель)"
+    prov = questionary.select(
+        "Провайдер для вспомогательных задач (суммаризация контекста, /commit):",
+        choices=["ollama", "openrouter", "zai", "koboldcpp", DISABLE],
+    ).ask()
+    if not prov:
+        return
+    if prov == DISABLE:
+        set_auxiliary_model(None)
+        set_auxiliary_provider(None)
+        print_system("Вспомогательная модель отключена.")
+        return
+
+    models = []
+    try:
+        models = create_provider(prov).list_models()
+    except Exception:
+        models = []
+
+    if models:
+        model = _select_from_list(f"Модель {prov} для сервисных задач:", models, models[0])
+    else:
+        model = questionary.text(f"Имя модели {prov} (список недоступен, введите вручную):").ask()
+
+    if model:
+        set_auxiliary_provider(prov)
+        set_auxiliary_model(model)
+        print_system(f"Вспомогательная модель: [bold cyan]{prov}:{model}[/bold cyan]")
 
 
 def _handle_mcp_command(command: str):

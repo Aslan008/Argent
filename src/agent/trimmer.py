@@ -115,13 +115,16 @@ def summarize_messages(msgs_to_summarize: List[Dict], model_name: str, timeout: 
     
     def _do_summarize():
         try:
-            provider = create_provider()
+            # Use the auxiliary model when configured (a cheap/local model is
+            # plenty for summarization), falling back to the main model.
+            from providers import create_service_provider
+            provider, svc_model = create_service_provider()
             validation_error = provider.validate_config()
             if validation_error:
                 result_container[0] = None
                 return
             result_container[0] = provider.sync_chat(
-                model=model_name,
+                model=svc_model,
                 messages=[{"role": "user", "content": summary_prompt}]
             )
         except Exception as e:

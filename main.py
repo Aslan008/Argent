@@ -138,7 +138,7 @@ def main():
         '/hooks', '/tools', '/save', '/project', '/work', '/commit',
         '/sessions', '/load', '/copy', '/logs', '/skills', '/auto', '/verbose', '/debug', '/browser', '/exit', '/quit',
         '/mcp', '/thinking', '/temp', '/temperature',
-        '/cd', '/undo', '/diff', '/changes', '/stats',
+        '/cd', '/undo', '/diff', '/changes', '/stats', '/aux', '/doctor',
         
         # Subcommands and parameter variations
         '/mcp list', '/mcp add', '/mcp remove', '/mcp test', '/mcp start', '/mcp stop',
@@ -721,10 +721,10 @@ def main():
                     
                     gen_message = ""
                     try:
-                        from providers import create_provider
-                        provider = create_provider()
+                        from providers import create_service_provider
+                        provider, svc_model = create_service_provider()
                         gen_message = provider.sync_chat(
-                            model=agent.model_name,
+                            model=svc_model,
                             messages=[{"role": "user", "content": commit_prompt}]
                         ).strip().strip('"').strip("'")
                     except Exception as e:

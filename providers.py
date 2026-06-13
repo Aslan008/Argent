@@ -556,7 +556,9 @@ class OpenRouterProvider(OpenAICompatibleProvider):
             super()._handle_api_status_error(e)
 
 
-def create_provider() -> LLMProvider:
+def create_provider(provider_name: str = None) -> LLMProvider:
+    """Build a provider. Defaults to the configured main provider; pass a name
+    to build a specific one (used for the auxiliary service model)."""
     from config import (
         get_provider as _get_provider_name,
         get_zai_api_key,
@@ -565,7 +567,7 @@ def create_provider() -> LLMProvider:
         get_openrouter_api_key,
         get_openrouter_url,
     )
-    name = _get_provider_name()
+    name = provider_name or _get_provider_name()
     if name == "zai":
         return ZAIProvider(api_key=get_zai_api_key(), base_url=get_zai_endpoint())
     elif name == "koboldcpp":
@@ -573,3 +575,19 @@ def create_provider() -> LLMProvider:
     elif name == "openrouter":
         return OpenRouterProvider(api_key=get_openrouter_api_key(), base_url=get_openrouter_url())
     return OllamaProvider()
+
+
+def create_service_provider():
+    """Provider + model for lightweight service tasks (summarization, commit
+    messages). Uses the auxiliary model when configured — e.g. a free local
+    Ollama model while the main provider is a paid cloud one — otherwise falls
+    back to the main provider and model. Returns (provider, model_name)."""
+    from config import (
+        get_auxiliary_model, get_auxiliary_provider,
+        get_provider as _get_provider_name, get_current_model,
+    )
+    aux_model = get_auxiliary_model()
+    if aux_model:
+        aux_provider = get_auxiliary_provider() or _get_provider_name()
+        return create_provider(aux_provider), aux_model
+    return create_provider(), get_current_model()
