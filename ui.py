@@ -434,15 +434,40 @@ def select_model(current_model: str) -> str:
 
 
 def _select_from_list(prompt_text: str, choices: list, default: str = None) -> str:
-    """Try questionary.select, fall back to numbered text input if it fails."""
+    """Try questionary.select, fall back to numbered text input if it fails.
+
+    For long lists (e.g. OpenRouter's hundreds of models) the picker enables
+    type-to-filter search so the user can jump straight to a model by name
+    instead of scrolling."""
+    safe_default = default if default in choices else (choices[0] if choices else None)
     try:
-        result = questionary.select(
-            prompt_text,
-            choices=choices,
-            default=default if default in choices else choices[0]
-        ).ask()
+        # Type-to-filter pays off once a list is too long to eyeball; short
+        # menus stay as plain arrow-key selects.
+        if len(choices) > 12:
+            result = questionary.select(
+                prompt_text,
+                choices=choices,
+                default=safe_default,
+                use_search_filter=True,
+                use_jk_keys=False,
+                instruction="(печатайте для поиска, ↑↓ выбор, Enter подтвердить)",
+            ).ask()
+        else:
+            result = questionary.select(
+                prompt_text,
+                choices=choices,
+                default=safe_default,
+            ).ask()
         if result:
             return result
+    except TypeError:
+        # Older questionary without search-filter kwargs: plain select.
+        try:
+            result = questionary.select(prompt_text, choices=choices, default=safe_default).ask()
+            if result:
+                return result
+        except Exception:
+            pass
     except Exception:
         pass
 

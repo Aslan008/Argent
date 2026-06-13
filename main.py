@@ -3,10 +3,9 @@ import os
 import signal
 import atexit
 from prompt_toolkit import prompt
-from prompt_toolkit.completion import WordCompleter
 from prompt_toolkit.styles import Style
-from prompt_toolkit.history import InMemoryHistory
 from prompt_toolkit.shortcuts import prompt as ptk_prompt # Renamed to avoid conflict with our own prompt
+from src.cli.cli_prompt import build_prompt_session
 from rich.markdown import Markdown
 from rich.console import Console
 import questionary
@@ -154,9 +153,13 @@ def main():
     def get_all_commands():
         custom_names = [f"/{c}" for c in hook_manager.get_custom_commands().keys()]
         return builtin_cmds + custom_names
-    
-    command_completer = WordCompleter(get_all_commands, ignore_case=True, match_middle=False, sentence=True)
-    session_history = InMemoryHistory()
+
+    # Shared mutable state the bottom toolbar reads each keystroke.
+    ui_state = {"mode": "CHAT"}
+    prompt_session = build_prompt_session(
+        get_all_commands, agent, ui_state,
+        history_path=Path(".argent") / "input_history",
+    )
     
     print_system(f"Active Provider: {get_provider().upper()}")
     print_system(f"Active Model: {get_current_model()}")
@@ -243,7 +246,7 @@ def main():
                 print_system("Продолжение рабочего процесса...")
             else:
                 try:
-                    user_input = prompt("❯ ", completer=command_completer, history=session_history)
+                    user_input = prompt_session.prompt("❯ ")
                 except EOFError:
                     break
                     
@@ -809,6 +812,9 @@ def main():
             # Sync the approval policy with the current mode: in autonomous mode
             # safe actions are auto-approved, destructive ones still prompt.
             approval.set_policy(approval.POLICY_AUTO if is_auto_mode else approval.POLICY_ASK)
+
+            # Reflect the active mode in the status bar.
+            ui_state["mode"] = "AUTO" if is_auto_mode else ("PROJECT" if is_project_mode else "CHAT")
 
             response_chunks = agent.process_user_input(user_input, allowed_tools=active_tools)
             streamed_text, is_auto_mode, auto_sleep_time, auto_wake_context = render_response_stream(
