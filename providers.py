@@ -67,6 +67,35 @@ def _parse_openai_usage(usage) -> dict:
     return d
 
 
+# Substrings marking a transient backend failure worth retrying / hinting about.
+_TRANSIENT_HINTS = (
+    "idle", "timeout", "timed out", "upstream", "overload", "unavailable",
+    "502", "503", "504", "rate limit", "connection reset", "connection error",
+)
+
+
+def _is_transient_stream_error(e) -> bool:
+    return any(h in str(e).lower() for h in _TRANSIENT_HINTS)
+
+
+def _friendly_stream_error(provider_name: str, e) -> str:
+    """One-line message for an error raised WHILE iterating the stream (the
+    backend stopped sending mid-response). Adds an actionable hint for the
+    common transient case so the user isn't left staring at a frozen panel."""
+    msg = " ".join(str(e).split())
+    if len(msg) > 200:
+        msg = msg[:197] + "..."
+    logger.warning("%s stream error: %s", provider_name.upper(), e)
+    if _is_transient_stream_error(e):
+        return (
+            f"{provider_name.upper()}: {msg}. The model backend stopped responding "
+            f"mid-generation — common on free/overloaded models. Retry, switch model "
+            f"with /model, or split big outputs into smaller steps (create the file, "
+            f"then append to it)."
+        )
+    return f"{provider_name.upper()} stream error: {msg}"
+
+
 def _friendly_api_error(provider_name: str, e) -> str:
     """Turn an openai APIStatusError into a one-line, human-readable message.
 
@@ -321,7 +350,7 @@ class OpenAICompatibleProvider(LLMProvider, ABC):
         except Exception as e:
             raise ProviderError(f"{self.name.upper()} connection error: {e}", original_error=e)
 
-        for chunk in response_stream:
+        for chunk in self._guarded_stream(response_stream):
             # Usage may arrive either as a trailing usage-only chunk (no
             # choices) or attached to the final content chunk (OpenRouter/vLLM).
             chunk_usage = getattr(chunk, "usage", None)
@@ -389,6 +418,21 @@ class OpenAICompatibleProvider(LLMProvider, ABC):
     def _extra_create_kwargs(self) -> dict:
         """Provider-specific kwargs for chat.completions.create (override me)."""
         return {}
+
+    def _guarded_stream(self, response_stream):
+        """Iterate the response stream, converting mid-stream backend failures
+        (idle/upstream timeouts, 5xx) into a friendly ProviderError instead of
+        leaking a raw exception that surfaces as a frozen panel + double 'Error'."""
+        try:
+            for chunk in response_stream:
+                yield chunk
+        except self._openai.APIStatusError as e:
+            self._handle_api_status_error(e)
+        except Exception as e:
+            raise ProviderError(
+                _friendly_stream_error(self.name, e),
+                retryable=_is_transient_stream_error(e), original_error=e,
+            )
 
     def _handle_api_status_error(self, e):
         raise ProviderError(

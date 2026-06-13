@@ -1,6 +1,12 @@
 from types import SimpleNamespace
 
-from providers import _friendly_api_error, _parse_openai_usage
+import pytest
+
+from providers import (
+    _friendly_api_error, _parse_openai_usage,
+    _is_transient_stream_error, _friendly_stream_error,
+    ProviderError, OpenRouterProvider,
+)
 
 
 def fake_status_error(status, body=None, message=None):
@@ -38,6 +44,58 @@ class TestFriendlyApiError:
         out = _friendly_api_error("openrouter", e)
         assert "deeply" not in out
         assert "boom" in out
+
+
+class TestTransientStreamErrors:
+    @pytest.mark.parametrize("text", [
+        "Upstream idle timeout exceeded",
+        "Request timed out",
+        "503 Service Unavailable",
+        "upstream connect error",
+        "Provider overloaded",
+        "Connection reset by peer",
+    ])
+    def test_transient_detected(self, text):
+        assert _is_transient_stream_error(Exception(text))
+
+    @pytest.mark.parametrize("text", [
+        "Invalid request: bad parameter",
+        "context length exceeded",
+    ])
+    def test_non_transient_not_flagged(self, text):
+        assert not _is_transient_stream_error(Exception(text))
+
+    def test_friendly_stream_error_adds_hint_for_transient(self):
+        msg = _friendly_stream_error("openrouter", Exception("Upstream idle timeout exceeded"))
+        assert "OPENROUTER" in msg
+        assert "Upstream idle timeout exceeded" in msg
+        assert "/model" in msg  # actionable hint present
+
+    def test_friendly_stream_error_plain_for_other(self):
+        msg = _friendly_stream_error("zai", Exception("weird parse failure"))
+        assert "weird parse failure" in msg
+        assert "/model" not in msg
+
+
+class TestGuardedStream:
+    def _provider(self):
+        return OpenRouterProvider(api_key="k", base_url="https://openrouter.ai/api/v1")
+
+    def test_passes_chunks_through(self):
+        provider = self._provider()
+        out = list(provider._guarded_stream(iter(["a", "b", "c"])))
+        assert out == ["a", "b", "c"]
+
+    def test_midstream_timeout_becomes_provider_error(self):
+        def stream():
+            yield "partial"
+            raise Exception("Upstream idle timeout exceeded")
+
+        provider = self._provider()
+        with pytest.raises(ProviderError) as exc:
+            list(provider._guarded_stream(stream()))
+        assert exc.value.retryable is True
+        assert "/model" in str(exc.value)
 
 
 class TestParseUsage:
