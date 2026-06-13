@@ -1,6 +1,7 @@
 import unittest
 import sys
 import os
+from unittest.mock import patch
 
 # Ensure project root is in sys.path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -12,7 +13,16 @@ from src.agent.strategy import (
     CloudStrategy
 )
 
+
 class TestAgentStrategy(unittest.TestCase):
+    def setUp(self):
+        # Strategy selection reads the model category, which honours a manual
+        # override stored in the user's real config. Neutralize it so these
+        # tests verify name-based classification regardless of the machine.
+        patcher = patch("config.get_model_category_override", return_value=None)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def test_cloud_strategy_selection(self):
         # zai provider -> CloudStrategy
         strategy = get_model_strategy("some-model", "zai")
