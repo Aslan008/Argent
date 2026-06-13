@@ -338,6 +338,21 @@ def select_model(current_model: str) -> str:
         print_error(f"No models found for {provider.name}. Check your configuration.")
         return current_model
 
+    # OpenRouter exposes hundreds of paid and free models mixed together.
+    # Let the user jump straight to the free tier so they don't have to hunt.
+    if provider.name == "openrouter":
+        free = sorted(m for m in models if provider.is_free_model(m))
+        if free and len(models) > len(free):
+            scope = _select_from_list(
+                "Which OpenRouter models to show?",
+                [f"Free only ({len(free)})", f"All models ({len(models)})"],
+                f"Free only ({len(free)})",
+            )
+            if scope and scope.startswith("Free"):
+                models = free
+        # Surface free models first in the combined list.
+        models = provider.sort_free_first(models)
+
     selected = _select_from_list(
         f"Select {provider.name.upper()} model:",
         models,

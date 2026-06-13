@@ -384,9 +384,23 @@ class OpenRouterProvider(OpenAICompatibleProvider):
     def name(self) -> str:
         return "openrouter"
 
+    @staticmethod
+    def is_free_model(model_id: str) -> bool:
+        """OpenRouter marks zero-cost models with a ':free' slug suffix."""
+        return model_id.endswith(":free")
+
+    @classmethod
+    def sort_free_first(cls, models: List[str]) -> List[str]:
+        """Free models first, then alphabetical — so they're easy to spot."""
+        return sorted(models, key=lambda m: (not cls.is_free_model(m), m))
+
     def validate_config(self) -> Optional[str]:
         if not self._api_key:
-            return "OpenRouter API key is not set. Use /provider to configure it (get one at https://openrouter.ai/keys)."
+            return (
+                "OpenRouter API key is not set. Use /provider to configure it. "
+                "A free key from https://openrouter.ai/keys is enough to use the free "
+                "(':free') models; add credits later only if you want the paid ones."
+            )
         return None
 
     def list_models(self) -> List[str]:
@@ -400,17 +414,20 @@ class OpenRouterProvider(OpenAICompatibleProvider):
 
     @staticmethod
     def _fallback_models() -> List[str]:
-        # Shown when the catalog can't be fetched (e.g. no key yet). The user
-        # can also type any valid OpenRouter slug manually.
+        # Shown when the live catalog can't be fetched (e.g. no key yet). The
+        # exact set comes from the API once a key is set; the user can also type
+        # any valid OpenRouter slug manually. Includes both free and paid tiers.
         return [
-            "anthropic/claude-3.5-sonnet",
+            "deepseek/deepseek-chat-v3-0324:free",
+            "meta-llama/llama-3.3-70b-instruct:free",
+            "google/gemini-2.0-flash-exp:free",
+            "qwen/qwen-2.5-coder-32b-instruct:free",
             "anthropic/claude-3.7-sonnet",
+            "anthropic/claude-3.5-sonnet",
             "openai/gpt-4o",
             "openai/gpt-4o-mini",
             "google/gemini-2.0-flash-001",
             "deepseek/deepseek-chat",
-            "meta-llama/llama-3.3-70b-instruct",
-            "qwen/qwen-2.5-coder-32b-instruct",
         ]
 
     def _handle_api_status_error(self, e):

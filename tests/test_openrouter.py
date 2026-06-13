@@ -72,6 +72,34 @@ class TestListModels:
         assert "anthropic/claude-3.5-sonnet" in models
         assert all("/" in m for m in models)
 
+    def test_fallback_includes_free_and_paid_tiers(self):
+        models = OpenRouterProvider._fallback_models()
+        assert any(OpenRouterProvider.is_free_model(m) for m in models)
+        assert any(not OpenRouterProvider.is_free_model(m) for m in models)
+
+
+class TestFreeModelHelpers:
+    def test_is_free_model(self):
+        assert OpenRouterProvider.is_free_model("deepseek/deepseek-chat-v3-0324:free")
+        assert not OpenRouterProvider.is_free_model("anthropic/claude-3.5-sonnet")
+
+    def test_sort_free_first(self):
+        models = [
+            "openai/gpt-4o",
+            "deepseek/deepseek-chat-v3:free",
+            "anthropic/claude-3.5-sonnet",
+            "meta-llama/llama-3.3-70b:free",
+        ]
+        result = OpenRouterProvider.sort_free_first(models)
+        # All free models come before any paid one.
+        first_paid = next(i for i, m in enumerate(result) if not OpenRouterProvider.is_free_model(m))
+        assert all(OpenRouterProvider.is_free_model(m) for m in result[:first_paid])
+        # Free block is alphabetical.
+        assert result[:2] == ["deepseek/deepseek-chat-v3:free", "meta-llama/llama-3.3-70b:free"]
+
+    def test_sort_free_first_empty(self):
+        assert OpenRouterProvider.sort_free_first([]) == []
+
 
 class TestStrategy:
     def test_openrouter_always_uses_cloud_strategy(self):

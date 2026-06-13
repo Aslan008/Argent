@@ -53,6 +53,9 @@ Every dangerous action (shell commands, file deletion, git rollback) passes thro
 - **Session grants**: approve once with *"always allow `git` this session"* and stop clicking through repeated prompts.
 - **Working autonomy**: in `/auto` mode safe actions are auto-approved so the agent can actually run unattended, while destructive ones still pause for you.
 
+### 🆓 OpenRouter: free and paid models, one key
+OpenRouter requires a single API key (a **free** one from [openrouter.ai/keys](https://openrouter.ai/keys) is enough). With it you can run the zero-cost `:free` models, and the moment you want a frontier model you just pick a paid one — same key, no reconfiguration. `/provider → openrouter` lets you list **free models only** or the full catalog, with free models surfaced first. For fully offline, no-key-at-all usage, Ollama remains the local option.
+
 ### 🧮 Exact Arithmetic
 The `calculate` tool evaluates math expressions through a whitelisted AST interpreter (no `eval`, no code execution). Small local models no longer guess numbers — they compute them.
 
@@ -161,6 +164,9 @@ Argent определяет размер модели по имени и нез�
 - **Детектор деструктивных команд**: `rm` / `Remove-Item` / `format` / `git reset --hard` / `taskkill` и подобные всегда требуют явного подтверждения — даже в автономном режиме.
 - **Сессионные разрешения**: одобрите один раз с опцией *«всегда разрешать `git` в этой сессии»* — и повторные запросы исчезнут.
 - **Рабочая автономия**: в режиме `/auto` безопасные действия одобряются автоматически, поэтому агент действительно может работать без присмотра, а деструктивные — по-прежнему ставятся на паузу.
+
+### 🆓 OpenRouter: бесплатные и платные модели, один ключ
+OpenRouter требует один API-ключ (достаточно **бесплатного** с [openrouter.ai/keys](https://openrouter.ai/keys)). С ним доступны бесплатные модели с суффиксом `:free`, а как только понадобится топовая модель — просто выберите платную: тот же ключ, без перенастройки. В `/provider → openrouter` можно показать **только бесплатные** модели или весь каталог, причём бесплатные идут первыми. Для полностью офлайн-работы без ключа остаётся локальный вариант — Ollama.
 
 ### 🧮 Точная арифметика
 Инструмент `calculate` вычисляет выражения через AST-интерпретатор с белым списком операций (никакого `eval` и исполнения кода). Маленькие локальные модели больше не угадывают числа — они их считают.
