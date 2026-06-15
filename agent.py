@@ -420,7 +420,15 @@ Example: {"tool": {"name": "read_file", "arguments": {"file_path": "main.py"}}}"
                 active_tools = get_tool_schemas(include_hidden=(allowed_tools is not None))
                 if allowed_tools is not None:
                     active_tools = [t for t in active_tools if t["function"]["name"] in allowed_tools]
-                
+
+                # Tier-based slimming: weak models (tiny/small) get only the core
+                # toolset, cutting the schema budget (~6.5k tokens) and sharpening
+                # tool choice. Larger models keep the full set.
+                from tool_profiles import slim_tools_for_category
+                category = get_model_size_category(self.model_name)
+                _slim_names = set(slim_tools_for_category([t["function"]["name"] for t in active_tools], category))
+                active_tools = [t for t in active_tools if t["function"]["name"] in _slim_names]
+
                 # Check if the strategy supports native tools
                 if not self.strategy.supports_native_tools():
                     if constrained_extractor is not None and active_tools:
