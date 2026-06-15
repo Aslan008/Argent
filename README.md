@@ -89,6 +89,7 @@ Run local shell commands directly from the prompt by prefixing them with `!`. If
 - `/tools` — Interactive menu to enable/disable specific AI capabilities.
 - `/doctor` — Run environment self-diagnostics (provider, model tier, dependencies, browser, MCP).
 - `/aux` — Set a cheap/local auxiliary model for service tasks (summarization, `/commit`).
+- `/init` — Analyze the project and generate `.argent/AGENTS.md` (persistent project memory loaded every session).
 - `/setup_terminal` — UI optimization guide (Fonts & Colors).
 - `/provider` — Select API Provider (Ollama / Z.ai / OpenRouter / KoboldCPP) and endpoint.
 - `/model` — Select active LLM model.
@@ -202,6 +203,7 @@ OpenRouter требует один API-ключ (достаточно **бесп
 - `/tools` — Интерактивное меню для настройки инструментов ИИ.
 - `/doctor` — Самодиагностика окружения (провайдер, ярус модели, зависимости, браузер, MCP).
 - `/aux` — Задать дешёвую/локальную вспомогательную модель для сервисных задач (суммаризация, `/commit`).
+- `/init` — Изучить проект и сгенерировать `.argent/AGENTS.md` (постоянная память о проекте, загружается каждую сессию).
 - `/setup_terminal` — Гайд по настройке интерфейса (Шрифты и Цвета).
 - `/provider` — Выбрать провайдера API (Ollama / Z.ai / OpenRouter / KoboldCPP) и эндпоинт.
 - `/model` — Выбрать активную модель ИИ.

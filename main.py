@@ -45,7 +45,7 @@ from src.project.orchestrator import ProjectOrchestrator
 # Default tools allowed in regular chat (excludes Project Brain tools and bloat OS tools)
 CHAT_ALLOWED_TOOLS = [
     "read_file", "write_file", "append_to_file", "delete_file", "replace_in_file", "replace_python_function",
-    "grep_search", "search_files", "run_command", "run_admin_command",
+    "grep_search", "search_files", "analyze_project", "run_command", "run_admin_command",
     "start_background_command", "read_background_command", "send_background_command",
     "stop_background_command", "list_background_commands",
     "search_web", "read_webpage", "get_file_outline",
@@ -135,7 +135,7 @@ def main():
     
     builtin_cmds = [
         # Base commands
-        '/help', '/provider', '/model', '/clear', '/research', '/rag_toggle',
+        '/help', '/provider', '/model', '/clear', '/init', '/research', '/rag_toggle',
         '/hooks', '/tools', '/save', '/project', '/work', '/commit',
         '/sessions', '/load', '/copy', '/logs', '/skills', '/auto', '/verbose', '/debug', '/browser', '/exit', '/quit',
         '/mcp', '/thinking', '/temp', '/temperature',
@@ -165,6 +165,8 @@ def main():
     print_system(f"Active Provider: {get_provider().upper()}")
     print_system(f"Active Model: {get_current_model()}")
     print_system(f"Working Directory: {os.getcwd()}")
+    if not Path(".argent/AGENTS.md").exists() and not Path("AGENTS.md").exists():
+        print_system("[dim]Подсказка: нет AGENTS.md — выполните /init, чтобы Argent изучил проект и создал память о нём.[/dim]")
     vault = get_obsidian_vault()
     if vault:
         print_system(f"Obsidian Vault: {vault}")
@@ -264,7 +266,30 @@ def main():
             
             active_tools = None
 
-            if user_input.startswith("/research"):
+            if user_input.startswith("/init"):
+                user_input = (
+                    "Onboard to THIS project and create a professional `.argent/AGENTS.md` — it is "
+                    "your persistent memory about this codebase and is loaded into your context every "
+                    "session, so it must be accurate and concise.\n\n"
+                    "STRICT workflow:\n"
+                    "1. Call `analyze_project()` first to get the structure, languages, entry points and commands.\n"
+                    "2. Read the few key files you need (README, the main entry point, core config) to "
+                    "understand the real architecture — do not guess.\n"
+                    "3. Write `.argent/AGENTS.md` with `write_file`. Keep it DENSE and under ~150 lines, with:\n"
+                    "   - `## Overview` — what the project is, in 2-3 sentences.\n"
+                    "   - `## Architecture` — main modules/layers and how they relate.\n"
+                    "   - `## Build / Run / Test` — exact commands.\n"
+                    "   - `## Conventions` — code style, patterns and rules a contributor must follow.\n"
+                    "   - `## Key files` — the most important files and what each does.\n"
+                    "4. Tell the user what you wrote and remind them they can edit the file by hand.\n"
+                    "Do NOT dump full file listings or trivia — this file costs context every turn, keep it tight."
+                )
+                active_tools = [
+                    "analyze_project", "read_file", "get_file_outline", "list_directory",
+                    "grep_search", "search_files", "write_file",
+                ]
+                print_system("Изучаю проект и создаю .argent/AGENTS.md...")
+            elif user_input.startswith("/research"):
                 parts = user_input.split(" ", 1)
                 if len(parts) < 2:
                     print_error("Please specify a topic. Example: /research Unity DOTS")

@@ -190,6 +190,7 @@ def handle_slash_command(command: str, agent: ArgentAgent) -> bool:
             "**Argent Coder Commands:**\n"
             "- `/provider` - Select API Provider (Ollama / Z.ai) and endpoint\n"
             "- `/model` - Select active LLM model (includes context window and classification)\n"
+            "- `/init` - Analyze the project and generate .argent/AGENTS.md (persistent project memory)\n"
             "- `/research [topic]` - Enter Auto-Research mode to search the web and generate notes\n"
             "- `/rag_toggle` - Enable/Disable automatic Semantic Search indexing on startup\n"
             "- `/hooks [path]` - View or change the global plugins (hooks) directory\n"

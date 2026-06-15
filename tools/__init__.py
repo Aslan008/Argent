@@ -34,6 +34,7 @@ from tools.search_ops import (
     search_files,
     grep_search,
 )
+from tools.project_analysis import analyze_project
 from tools.command_ops import (
     run_command,
     run_admin_command,

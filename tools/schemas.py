@@ -11,6 +11,7 @@ from tools.file_ops import (
     run_deep_linter
 )
 from tools.search_ops import search_files, grep_search
+from tools.project_analysis import analyze_project
 from tools.command_ops import (
     run_command, run_admin_command, start_background_command,
     read_background_command, send_background_command, stop_background_command,
@@ -57,6 +58,7 @@ AVAILABLE_TOOLS = {
     "list_directory": list_directory,
     "search_files": search_files,
     "grep_search": grep_search,
+    "analyze_project": analyze_project,
     "run_command": run_command,
     "run_admin_command": run_admin_command,
     "start_background_command": start_background_command,
@@ -946,6 +948,22 @@ TOOL_SCHEMAS = [
                     }
                 },
                 "required": ["command"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "analyze_project",
+            "description": "Analyze the current project structure in one call: directory tree, detected languages/frameworks, entry points, build/test commands and file statistics. Use this FIRST when onboarding to a codebase or writing/updating AGENTS.md.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Project root to analyze. Defaults to the current directory."
+                    }
+                }
             }
         }
     },

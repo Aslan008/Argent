@@ -130,7 +130,8 @@ Example: {"tool": {"name": "read_file", "arguments": {"file_path": "main.py"}}}"
 
         prompt_parts.append("""## 3. SKILLS SYSTEM
 - You have access to instruction-based extensions stored in markdown files.
-- Use `list_skills` to discover skills. Use `read_skill` to read and follow instructions. Use `create_skill` to persist complex workflows.""")
+- Use `list_skills` to discover skills. Use `read_skill` to read and follow instructions.
+- **Be proactive**: after you work out a non-trivial, repeatable workflow for THIS project (a build/deploy sequence, a multi-step fix pattern, project-specific conventions), persist it with `create_skill` so it can be reused. Don't wait to be asked.""")
 
         if not is_small:
             prompt_parts.append("""## 4. PLANNING MODE & ARTIFACTS
@@ -165,6 +166,9 @@ Example: {"tool": {"name": "read_file", "arguments": {"file_path": "main.py"}}}"
 
 
 
+        # AGENTS.md is the project's persistent memory: loaded into context
+        # every turn, editable by the user, and maintainable by the agent.
+        AGENTS_MD_LIMIT = 12000  # chars; keeps this off-budget cap reasonable
         agents_md_paths = [
             Path(".argent/AGENTS.md"),
             Path("AGENTS.md"),
@@ -174,7 +178,20 @@ Example: {"tool": {"name": "read_file", "arguments": {"file_path": "main.py"}}}"
                 try:
                     agents_content = p.read_text(encoding="utf-8").strip()
                     if agents_content:
-                        prompt_parts.append(f"## PROJECT INSTRUCTIONS (from {p})\n{agents_content}")
+                        truncated_note = ""
+                        if len(agents_content) > AGENTS_MD_LIMIT:
+                            agents_content = agents_content[:AGENTS_MD_LIMIT]
+                            truncated_note = (
+                                f"\n\n[...truncated at {AGENTS_MD_LIMIT} chars — this file is too long; "
+                                f"trim it to keep it dense.]"
+                            )
+                        prompt_parts.append(
+                            f"## PROJECT INSTRUCTIONS (from {p})\n"
+                            f"This is your persistent project memory. Keep it accurate: when you learn "
+                            f"something durable about this codebase (architecture, conventions, commands), "
+                            f"update {p} with replace_in_file/write_file.\n\n"
+                            f"{agents_content}{truncated_note}"
+                        )
                     break
                 except Exception:
                     pass
