@@ -168,7 +168,8 @@ Example: {"tool": {"name": "read_file", "arguments": {"file_path": "main.py"}}}"
 
         # AGENTS.md is the project's persistent memory: loaded into context
         # every turn, editable by the user, and maintainable by the agent.
-        AGENTS_MD_LIMIT = 12000  # chars; keeps this off-budget cap reasonable
+        # The cap scales with the tier so a small model isn't drowned by it.
+        AGENTS_MD_LIMIT = {"tiny": 2000, "small": 4000}.get(category, 12000)
         agents_md_paths = [
             Path(".argent/AGENTS.md"),
             Path("AGENTS.md"),
@@ -929,6 +930,38 @@ Example: {"tool": {"name": "read_file", "arguments": {"file_path": "main.py"}}}"
             "max": max_tokens,
             "percent": min(percent, 100),
             "messages": len(self.messages)
+        }
+
+    def get_context_breakdown(self) -> Dict[str, Any]:
+        """Token breakdown of what the next request will carry: the system
+        prompt (incl. AGENTS.md), the tool schemas actually sent for this tier,
+        and the conversation history. Lets the user see where the budget goes."""
+        import json
+        from tool_profiles import slim_tools_for_category
+
+        system_tokens = self._estimate_tokens(str(self.messages[0])) if self.messages else 0
+        history_tokens = sum(self._estimate_tokens(str(m)) for m in self.messages[1:])
+
+        tool_tokens = 0
+        tool_count = 0
+        if self.strategy.supports_native_tools():
+            schemas = get_tool_schemas(include_hidden=False)
+            category = get_model_size_category(self.model_name)
+            keep = set(slim_tools_for_category([t["function"]["name"] for t in schemas], category))
+            sent = [t for t in schemas if t["function"]["name"] in keep]
+            tool_tokens = self._estimate_tokens(json.dumps(sent))
+            tool_count = len(sent)
+
+        max_tokens = get_context_window()
+        total = system_tokens + tool_tokens + history_tokens
+        return {
+            "system": system_tokens,
+            "tools": tool_tokens,
+            "tool_count": tool_count,
+            "history": history_tokens,
+            "total": total,
+            "max": max_tokens,
+            "percent": min((total / max_tokens) * 100, 100) if max_tokens else 0,
         }
 
     def inject_context(self):

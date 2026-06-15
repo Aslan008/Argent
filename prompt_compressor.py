@@ -16,44 +16,46 @@ _MINI_SYSTEM_SUFFIX = """
 - Be concise. No unnecessary explanations.
 """
 
-_FULL_SECTIONS_TO_STRIP = [
-    "## 5. ERROR RECOVERY",
-    "## 3. CODING CONVENTIONS",
+# Heavy sections a weak model gains little from; stripped for tiny models.
+# Names must match the real headings emitted by build_system_prompt — note
+# that several of these are already omitted there for small tiers, so this is
+# a safety net rather than the primary mechanism.
+_TINY_SECTIONS_TO_STRIP = [
+    "## 2. PLUGIN DEVELOPMENT",
+    "## 4. PLANNING MODE & ARTIFACTS",
+    "## 5. UI & TERMINOLOGY STANDARDS",
 ]
 
 
+def _strip_section(prompt: str, heading: str) -> str:
+    idx = prompt.find(heading)
+    if idx == -1:
+        return prompt
+    nxt = prompt.find("\n## ", idx + len(heading))
+    return prompt[:idx] + (prompt[nxt + 1:] if nxt != -1 else "")
+
+
 def compress_system_prompt(full_prompt: str, model_name: str) -> str:
-    """Compress system prompt for small models.
-    - tiny (<3B): aggressive compression — strip examples, verbose rules
-    - small (3-7B): moderate — remove verbose sections but keep structure
+    """Compress the system prompt for small models.
+    - tiny (<3B): strip heavy sections and append a short rules suffix
+    - small (3-7B): append a short clarification reminder
     - medium/large/cloud: no compression
     """
     category = get_model_size_category(model_name)
-    
+
     if category in ("medium", "large", "cloud"):
         return full_prompt
-    
+
     prompt = full_prompt
-    
+
     if category == "tiny":
-        for section in _FULL_SECTIONS_TO_STRIP:
-            idx = prompt.find(section)
-            if idx != -1:
-                next_section = prompt.find("\n## ", idx + len(section))
-                if next_section != -1:
-                    prompt = prompt[:idx] + prompt[next_section:]
-        
+        for section in _TINY_SECTIONS_TO_STRIP:
+            prompt = _strip_section(prompt, section)
         prompt = prompt.rstrip() + "\n" + _MINI_SYSTEM_SUFFIX
-    
+
     elif category == "small":
-        for section in _FULL_SECTIONS_TO_STRIP:
-            idx = prompt.find(section)
-            if idx != -1:
-                next_section = prompt.find("\n## ", idx + len(section))
-                if next_section != -1:
-                    prompt = prompt[:idx] + prompt[next_section:]
         prompt = prompt.rstrip() + "\n\n- IMPORTANT: If the task is unclear, use ask_user_questions to clarify before making assumptions.\n"
-    
+
     return prompt
 
 

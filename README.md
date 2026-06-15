@@ -53,6 +53,9 @@ Every dangerous action (shell commands, file deletion, git rollback) passes thro
 - **Session grants**: approve once with *"always allow `git` this session"* and stop clicking through repeated prompts.
 - **Working autonomy**: in `/auto` mode safe actions are auto-approved so the agent can actually run unattended, while destructive ones still pause for you.
 
+### 📉 Context-Aware Prompting
+Every token in the system prompt costs a local model speed and focus, so Argent keeps it lean and tier-adaptive: weak models (tiny/small) get a slimmed core toolset instead of all ~52 schemas (a ~58% cut to the largest part of the prompt), the AGENTS.md memory is capped per tier, and `/stats` shows exactly where the budget goes (system prompt / tool schemas / history).
+
 ### 🆓 OpenRouter: free and paid models, one key
 OpenRouter requires a single API key (a **free** one from [openrouter.ai/keys](https://openrouter.ai/keys) is enough). With it you can run the zero-cost `:free` models, and the moment you want a frontier model you just pick a paid one — same key, no reconfiguration. `/provider → openrouter` lets you list **free models only** or the full catalog, with free models surfaced first. For fully offline, no-key-at-all usage, Ollama remains the local option.
 
@@ -166,6 +169,9 @@ Argent определяет размер модели по имени и нез�
 - **Детектор деструктивных команд**: `rm` / `Remove-Item` / `format` / `git reset --hard` / `taskkill` и подобные всегда требуют явного подтверждения — даже в автономном режиме.
 - **Сессионные разрешения**: одобрите один раз с опцией *«всегда разрешать `git` в этой сессии»* — и повторные запросы исчезнут.
 - **Рабочая автономия**: в режиме `/auto` безопасные действия одобряются автоматически, поэтому агент действительно может работать без присмотра, а деструктивные — по-прежнему ставятся на паузу.
+
+### 📉 Контекстно-зависимый промпт
+Каждый токен системного промпта стоит локальной модели скорости и внимания, поэтому Argent держит его компактным и адаптивным по ярусам: слабые модели (tiny/small) получают урезанный набор инструментов вместо всех ~52 схем (−58% к самой крупной части промпта), память AGENTS.md ограничивается по ярусу, а `/stats` показывает, куда именно уходит бюджет (системный промпт / схемы инструментов / история).
 
 ### 🆓 OpenRouter: бесплатные и платные модели, один ключ
 OpenRouter требует один API-ключ (достаточно **бесплатного** с [openrouter.ai/keys](https://openrouter.ai/keys)). С ним доступны бесплатные модели с суффиксом `:free`, а как только понадобится топовая модель — просто выберите платную: тот же ключ, без перенастройки. В `/provider → openrouter` можно показать **только бесплатные** модели или весь каталог, причём бесплатные идут первыми. Для полностью офлайн-работы без ключа остаётся локальный вариант — Ollama.

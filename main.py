@@ -634,7 +634,20 @@ def main():
                     f"  [dim]Context Window:[/dim] {ctx} tokens\n"
                     f"  [dim]History:[/dim] {msg_count} messages\n"
                 )
-                
+
+                # Context budget breakdown — where the prompt tokens go.
+                try:
+                    b = agent.get_context_breakdown()
+                    tools_note = f" ({b['tool_count']} tools)" if b['tool_count'] else " (in-prompt catalog)"
+                    stats_msg += (
+                        f"  [dim]Context budget:[/dim] {b['total']}/{b['max']} tokens ({b['percent']:.0f}%)\n"
+                        f"    [dim]- system prompt:[/dim] {b['system']} tok\n"
+                        f"    [dim]- tool schemas:[/dim] {b['tools']} tok{tools_note}\n"
+                        f"    [dim]- history:[/dim] {b['history']} tok\n"
+                    )
+                except Exception:
+                    pass
+
                 if active_mcp:
                     stats_msg += f"  [dim]MCP Servers:[/dim] {', '.join(active_mcp)}\n"
                 if plugins:
