@@ -35,6 +35,11 @@ log = get_logger("agent")
 # on small context windows).
 MAX_TRUNCATE_CONTINUES = 2
 
+# How many times a truncated FILE WRITE may be salvaged + continued within one
+# turn. Higher than MAX_TRUNCATE_CONTINUES because a genuinely large file needs
+# many chunks, but still bounded so a stuck model can't append forever.
+MAX_SALVAGE_CONTINUES = 12
+
 class ArgentAgent:
     def build_system_prompt(self) -> str:
         category = get_model_size_category(self.model_name)
@@ -293,6 +298,36 @@ Example: {"tool": {"name": "read_file", "arguments": {"file_path": "main.py"}}}"
     def _parse_raw_tool_call(self, content: str) -> dict | None:
         return parse_raw_tool_call(content)
 
+    def _salvage_truncated_write(self, tool_calls_accumulator):
+        """If the truncated tool call was a file write, persist the partial
+        content via append_to_file and return (file_path, lines_written, tail).
+        Returns None if nothing could be salvaged."""
+        from src.agent.salvage import (
+            SALVAGEABLE_TOOLS, extract_partial_write, trim_to_last_line, last_lines,
+        )
+        if not tool_calls_accumulator:
+            return None
+        fn = tool_calls_accumulator[0].get("function", {})
+        if fn.get("name") not in SALVAGEABLE_TOOLS:
+            return None
+        extracted = extract_partial_write(fn.get("arguments", ""))
+        if not extracted:
+            return None
+        file_path, partial = extracted
+        kept = trim_to_last_line(partial)
+        if not kept.strip():
+            return None
+        try:
+            from tools.file_ops import append_to_file
+            result = append_to_file(file_path, kept)
+            if isinstance(result, str) and result.startswith("Error"):
+                log.warning("Salvage append failed: %s", result)
+                return None
+        except Exception as e:
+            log.warning("Salvage append crashed: %s", e)
+            return None
+        return file_path, kept.count("\n") or 1, last_lines(kept)
+
     def _build_objective_anchor(self) -> str | None:
         """Trailing reminder of the goal for long contexts (local models)."""
         obj = memory.data.get("objective")
@@ -322,6 +357,7 @@ Example: {"tool": {"name": "read_file", "arguments": {"file_path": "main.py"}}}"
         
         self._trim_history()
         self._truncate_continues = 0
+        self._salvage_continues = 0
 
         # One provider instance per turn: tool-result formatting and retries
         # below reuse it instead of re-creating a provider on every call.
@@ -563,16 +599,49 @@ Example: {"tool": {"name": "read_file", "arguments": {"file_path": "main.py"}}}"
             
             # If the model was truncated mid-generation (max_tokens limit reached)
             if is_truncated:
-                self._truncate_continues += 1
                 was_building_tool = bool(
                     tool_calls_accumulator
                     or is_building_raw_tool
                     or (constrained_extractor is not None and constrained_extractor.mode == "tool")
                 )
 
+                # Path 1 — salvageable file write: persist the part that WAS
+                # generated and ask the model to continue via append. This turns
+                # truncation into incremental progress, so a file of any size can
+                # be produced. It has its own, higher limit (large files take many
+                # chunks) but is still bounded so a stuck model can't loop forever.
+                salvaged = self._salvage_truncated_write(tool_calls_accumulator) if was_building_tool else None
+                if was_building_tool:
+                    tool_calls_accumulator = []
+
+                if salvaged:
+                    self._salvage_continues += 1
+                    file_path, written_lines, tail = salvaged
+                    if self._salvage_continues > MAX_SALVAGE_CONTINUES:
+                        yield {"type": "error", "content": (
+                            f"\n[System: '{file_path}' kept hitting the length limit after "
+                            f"{MAX_SALVAGE_CONTINUES} continuations — stopping. The content "
+                            f"generated so far is saved to the file.]"
+                        )}
+                        break
+                    yield {"type": "error", "content": f"\n[System: Saved {written_lines} line(s) to {file_path}; asking the model to continue the file...]"}
+                    self.messages.append({
+                        "role": "user",
+                        "content": (
+                            f"Your file write was cut off by the length limit, but I saved the "
+                            f"{written_lines} line(s) you produced into '{file_path}'. The file is "
+                            f"INCOMPLETE. Continue writing the REST of it now with "
+                            f"append_to_file('{file_path}', ...), starting exactly after this tail:\n"
+                            f"---\n{tail}\n---\n"
+                            f"Do NOT repeat content that is already written. Keep going until the file is complete."
+                        )
+                    })
+                    self._trim_history()
+                    continue
+
+                # Path 2 — non-salvageable truncation: bounded auto-continue.
+                self._truncate_continues += 1
                 if self._truncate_continues > MAX_TRUNCATE_CONTINUES:
-                    # Hard stop: endless regenerate-truncate cycles burn the
-                    # context without ever converging.
                     if full_content and not was_building_tool:
                         self.messages.append({"role": "assistant", "content": full_content})
                     yield {"type": "error", "content": (
@@ -582,10 +651,7 @@ Example: {"tool": {"name": "read_file", "arguments": {"file_path": "main.py"}}}"
                     break
 
                 if was_building_tool:
-                    # A cut-off tool call cannot be "continued": the partial JSON
-                    # is garbage that only burns context. Drop it and steer the
-                    # model towards writing in chunks — the only converging path.
-                    tool_calls_accumulator = []
+                    # A non-file tool call cannot be "continued" — steer to chunks.
                     yield {"type": "error", "content": "\n[System: Tool call was truncated by the length limit. Asking the model to work in smaller chunks...]"}
                     self.messages.append({
                         "role": "user",
@@ -602,11 +668,7 @@ Example: {"tool": {"name": "read_file", "arguments": {"file_path": "main.py"}}}"
                     if full_reasoning:
                         msg_to_append["thinking"] = full_reasoning
                     self.messages.append(msg_to_append)
-
-                    # Yield a warning to the user
                     yield {"type": "error", "content": "\n[System: Model generation was truncated by max_tokens limit. Auto-continuing...]"}
-
-                    # Append a system prompt asking the model to continue exactly where it left off
                     self.messages.append({
                         "role": "user",
                         "content": "Your previous response was cut off due to length limits. Please continue exactly where you left off, without any introductory text."
@@ -615,7 +677,6 @@ Example: {"tool": {"name": "read_file", "arguments": {"file_path": "main.py"}}}"
                 # Relieve context pressure before retrying: on small windows the
                 # partial output itself is what keeps re-triggering truncation.
                 self._trim_history()
-                # Loop continues to let the model finish
                 continue
             
             if full_content or tool_calls_accumulator or full_reasoning:

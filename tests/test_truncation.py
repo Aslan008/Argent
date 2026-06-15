@@ -63,11 +63,13 @@ def consume(gen):
 
 
 PROSE_TRUNCATED = [{"content": "very long file content...", "truncated": True}]
+# A non-file tool call: not salvageable, so it exercises the "smaller chunks"
+# path. Salvageable file writes are covered in test_salvage.py.
 TOOL_TRUNCATED = [{
     "tool_call_deltas": [{
         "index": 0, "id": "x",
-        "function_name_delta": "write_file",
-        "function_arguments_delta": '{"file_path": "big.py", "content": "incomplete...',
+        "function_name_delta": "run_command",
+        "function_arguments_delta": '{"command": "echo incomplete...',
     }],
     "truncated": True,
 }]
