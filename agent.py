@@ -213,6 +213,23 @@ Example: {"tool": {"name": "read_file", "arguments": {"file_path": "main.py"}}}"
         except Exception:
             pass
 
+        # Lightweight reminder of live background processes so the model knows
+        # they exist (and can recover PIDs) even after history summarization
+        # drops the original "PID: N" tool results.
+        try:
+            from tools import ACTIVE_PROCESSES, ACTIVE_PROCESSES_LOCK
+            with ACTIVE_PROCESSES_LOCK:
+                bg_count = len(ACTIVE_PROCESSES)
+            if bg_count:
+                prompt_parts.append(
+                    f"## BACKGROUND PROCESSES\n"
+                    f"You have {bg_count} background process(es) running this session. "
+                    f"Call `list_background_commands` to see their PIDs, status and commands "
+                    f"before reading output or stopping them — do NOT guess a PID."
+                )
+        except Exception:
+            pass
+
         full_prompt = "\n\n".join(prompt_parts)
         return compress_system_prompt(full_prompt, self.model_name)
 

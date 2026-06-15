@@ -169,6 +169,17 @@ def handle_slash_command(command: str, agent: ArgentAgent) -> bool:
         _handle_mcp_command(command)
     elif cmd.startswith("/kb"):
         _handle_kb_command(command)
+    elif cmd == "/jobs":
+        from tools.command_ops import list_background_commands
+        print_system(list_background_commands())
+    elif cmd.startswith("/stop"):
+        from tools.command_ops import stop_background_command, list_background_commands
+        parts = command.strip().split()
+        if len(parts) < 2:
+            print_system(list_background_commands())
+            print_system("Usage: /stop <pid>")
+        else:
+            print_system(stop_background_command(parts[1]))
     elif cmd == "/aux":
         _handle_aux_command()
     elif cmd == "/doctor":
@@ -199,6 +210,8 @@ def handle_slash_command(command: str, agent: ArgentAgent) -> bool:
             "- `/changes` - List all files modified by AI in this session\n"
             "- `/stats` - View session diagnostics (model, context, plugins, MCP)\n"
             "- `/aux` - Set a cheap/local auxiliary model for service tasks (summarization, /commit)\n"
+            "- `/jobs` - List background processes started this session (PID, status, command)\n"
+            "- `/stop <pid>` - Terminate a background process by PID\n"
             "- `/doctor` - Run environment self-diagnostics (provider, tier, deps, browser)\n"
             "- `/verbose` - Toggle live status indicators (spinners)\n"
             "- `/debug` - Toggle detailed tool logs (full arguments and raw results in chat)\n"

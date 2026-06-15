@@ -14,7 +14,7 @@ from tools.search_ops import search_files, grep_search
 from tools.command_ops import (
     run_command, run_admin_command, start_background_command,
     read_background_command, send_background_command, stop_background_command,
-    read_git_diff,
+    list_background_commands, read_git_diff,
 )
 from tools.web_tools import search_web, read_webpage
 from tools.plugin_tools import create_plugin, delete_plugin
@@ -63,6 +63,7 @@ AVAILABLE_TOOLS = {
     "read_background_command": read_background_command,
     "send_background_command": send_background_command,
     "stop_background_command": stop_background_command,
+    "list_background_commands": list_background_commands,
     "search_web": search_web,
     "read_webpage": read_webpage,
     "get_file_outline": get_file_outline,
@@ -945,6 +946,17 @@ TOOL_SCHEMAS = [
                     }
                 },
                 "required": ["command"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_background_commands",
+            "description": "List the background processes you started this session, with their PID, status (running/exited) and command. Use this to recover a PID you forgot before reading output or stopping a process.",
+            "parameters": {
+                "type": "object",
+                "properties": {}
             }
         }
     },

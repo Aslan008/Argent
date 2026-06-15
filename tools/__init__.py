@@ -41,6 +41,7 @@ from tools.command_ops import (
     read_background_command,
     send_background_command,
     stop_background_command,
+    list_background_commands,
     read_git_diff,
     ACTIVE_PROCESSES,
     ACTIVE_PROCESSES_LOCK,

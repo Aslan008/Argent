@@ -47,7 +47,8 @@ CHAT_ALLOWED_TOOLS = [
     "read_file", "write_file", "append_to_file", "delete_file", "replace_in_file", "replace_python_function",
     "grep_search", "search_files", "run_command", "run_admin_command",
     "start_background_command", "read_background_command", "send_background_command",
-    "stop_background_command", "search_web", "read_webpage", "get_file_outline", 
+    "stop_background_command", "list_background_commands",
+    "search_web", "read_webpage", "get_file_outline",
     "multi_replace_in_file", "write_obsidian_note", "search_obsidian_notes", 
     "update_obsidian_properties", "semantic_search", "create_plugin", "delete_plugin",
     "create_skill", "read_skill", "list_skills", "delete_skill",
@@ -138,7 +139,7 @@ def main():
         '/hooks', '/tools', '/save', '/project', '/work', '/commit',
         '/sessions', '/load', '/copy', '/logs', '/skills', '/auto', '/verbose', '/debug', '/browser', '/exit', '/quit',
         '/mcp', '/thinking', '/temp', '/temperature',
-        '/cd', '/undo', '/diff', '/changes', '/stats', '/aux', '/doctor',
+        '/cd', '/undo', '/diff', '/changes', '/stats', '/aux', '/doctor', '/jobs', '/stop',
         
         # Subcommands and parameter variations
         '/mcp list', '/mcp add', '/mcp remove', '/mcp test', '/mcp start', '/mcp stop',

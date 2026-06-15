@@ -273,6 +273,28 @@ def stop_background_command(pid: str) -> str:
         except Exception as e:
             return f"Error terminating PID {pid}: {e}"
 
+def list_background_commands() -> str:
+    """List the background processes started this session, with PID, status and command."""
+    with ACTIVE_PROCESSES_LOCK:
+        items = list(ACTIVE_PROCESSES.items())
+
+    if not items:
+        return "No background processes are currently tracked."
+
+    lines = []
+    for pid, info in items:
+        ret = info["process"].poll()
+        status = "RUNNING" if ret is None else f"EXITED (code {ret})"
+        lines.append(f"- PID {pid}: [{status}] {info['command']}")
+
+    return (
+        "Background processes:\n" + "\n".join(lines)
+        + "\n\nUse read_background_command(pid) for output, "
+          "send_background_command(pid, text) for input, "
+          "stop_background_command(pid) to terminate."
+    )
+
+
 def read_git_diff() -> str:
     """Read the current unstaged and staged git diff of the project."""
     try:
