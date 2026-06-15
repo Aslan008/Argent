@@ -42,9 +42,14 @@ class SkillManager:
         if not name.endswith(".md"):
             name += ".md"
         file_path = self.skills_dir / name
-        
-        content = f"---\ndescription: \"{description}\"\n---\n\n{instructions}"
-        
+
+        # Serialize the frontmatter via YAML so descriptions containing quotes,
+        # colons or unicode don't corrupt the file (a hand-built f-string did).
+        frontmatter = yaml.safe_dump(
+            {"description": description}, allow_unicode=True, default_flow_style=False
+        ).strip()
+        content = f"---\n{frontmatter}\n---\n\n{instructions}"
+
         try:
             with open(file_path, "w", encoding="utf-8") as f:
                 f.write(content)
