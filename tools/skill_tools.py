@@ -1,14 +1,15 @@
 from skill_manager import skill_manager
 
 def list_skills() -> str:
-    """Lists all available markdown-based skills."""
+    """Lists all available skills (flat markdown and SKILL.md folder skills)."""
     skills = skill_manager.list_skills()
     if not skills:
         return "No skills found. You can create one via `create_skill`."
-    
+
     output = "Available Skills:\n"
     for s in skills:
-        output += f"  - {s['name']}: {s['description']}\n"
+        tag = " [bundle]" if s.get("kind") == "folder" else ""
+        output += f"  - {s['name']}{tag}: {s['description']}\n"
     return output
 
 def read_skill(name: str) -> str:

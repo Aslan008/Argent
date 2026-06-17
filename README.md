@@ -62,6 +62,9 @@ OpenRouter requires a single API key (a **free** one from [openrouter.ai/keys](h
 ### 🧮 Exact Arithmetic
 The `calculate` tool evaluates math expressions through a whitelisted AST interpreter (no `eval`, no code execution). Small local models no longer guess numbers — they compute them.
 
+### 🧩 Agent Skills (SKILL.md) Support
+Argent reads both its own flat markdown skills and the cross-platform **Agent Skills** standard — a folder with a `SKILL.md` (YAML frontmatter `name`/`description`/`allowed-tools`) plus optional bundled `scripts/`, `references/` and `assets/`. Drop in a skill from the ecosystem with `/skill import <path>`; when the model reads it, the bundled resources and their paths are surfaced so it can run or reference them. Existing flat `.md` skills keep working unchanged.
+
 ### 🤝 Professional Git Integration
 - **Smart Commits**: Use `/commit` to let the AI analyze your diffs and generate professional Conventional Commit messages.
 - **Diff Awareness**: Argent can read its own changes to ensure context consistency.

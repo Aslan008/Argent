@@ -495,7 +495,7 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "read_skill",
-            "description": "Reads the full instructions of a specific skill. Use this to follow complex workflows or expert guidelines.",
+            "description": "Reads the full instructions of a specific skill. Use this to follow complex workflows or expert guidelines. SKILL.md folder skills also list bundled scripts/references/assets and their folder path — read or run those with read_file / run_command when the instructions call for them.",
             "parameters": {
                 "type": "object",
                 "properties": {

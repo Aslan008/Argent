@@ -141,7 +141,7 @@ def main():
         # Base commands
         '/help', '/provider', '/model', '/clear', '/init', '/research', '/rag_toggle', '/auto_retrieve',
         '/hooks', '/tools', '/save', '/project', '/work', '/commit',
-        '/sessions', '/load', '/copy', '/logs', '/skills', '/auto', '/verbose', '/debug', '/browser', '/exit', '/quit',
+        '/sessions', '/load', '/copy', '/logs', '/skills', '/skill import', '/auto', '/verbose', '/debug', '/browser', '/exit', '/quit',
         '/mcp', '/thinking', '/temp', '/temperature',
         '/cd', '/undo', '/diff', '/changes', '/stats', '/aux', '/doctor', '/jobs', '/stop',
         
@@ -397,15 +397,24 @@ def main():
                     print_system("Requires RAG enabled. Best for weak models that forget to search the docs themselves.")
                 continue
 
+            elif user_input.startswith("/skill import"):
+                from skill_manager import skill_manager
+                parts = user_input.split(" ", 2)
+                if len(parts) < 3 or not parts[2].strip():
+                    print_error("Usage: /skill import <path to a SKILL.md folder, SKILL.md, or .md file>")
+                else:
+                    print_system(skill_manager.import_skill(parts[2].strip().strip('"')))
+                continue
             elif user_input.startswith("/skills"):
                 from skill_manager import skill_manager
                 skills = skill_manager.list_skills()
                 if not skills:
-                    print_system("No skills found. You can create one via `create_skill` tool.")
+                    print_system("No skills found. Create one via the `create_skill` tool or import with /skill import.")
                 else:
                     print_system("[bold cyan]Available Skills:[/bold cyan]")
                     for skill in skills:
-                        print_system(f"- [bold yellow]{skill['name']}[/bold yellow]: {skill['description']}")
+                        tag = " [dim](bundle)[/dim]" if skill.get("kind") == "folder" else ""
+                        print_system(f"- [bold yellow]{skill['name']}[/bold yellow]{tag}: {skill['description']}")
                 continue
             elif user_input.startswith("/hooks"):
                 parts = user_input.split(" ")
