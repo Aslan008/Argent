@@ -14,6 +14,29 @@ from config import get_skills_dir
 SKILL_FILE = "SKILL.md"
 _RESOURCE_DIRS = ("scripts", "references", "assets")
 
+# Ecosystem skills are written against Claude Code / Cursor tool names. Argent's
+# tools do the same jobs under different names — surface a translation so the
+# model (especially a weak one) calls a tool that actually exists here.
+_TOOL_NAME_MAP = {
+    "WebSearch": "search_web",
+    "WebFetch": "read_webpage",
+    "Read": "read_file",
+    "Write": "write_file",
+    "Edit": "replace_in_file",
+    "MultiEdit": "multi_replace_in_file",
+    "Bash": "run_command",
+    "Glob": "search_files",
+    "Grep": "grep_search",
+    "LS": "list_directory",
+    "Task": "run_subagent",
+    "TodoWrite": "add_work_task",
+    "NotebookEdit": "replace_in_file",
+}
+# These names double as ordinary English words; only treat them as a tool
+# reference when the text signals it (backticked, "<Name> tool", or listed on
+# an allowed-tools line). The rest are distinctive enough to match anywhere.
+_AMBIGUOUS_TOOL_NAMES = {"Read", "Write", "Edit", "Task", "LS", "Bash"}
+
 
 class SkillManager:
     """Manages instruction-based skills for Argent.
@@ -79,19 +102,49 @@ class SkillManager:
             })
         return skills
 
+    # ── cross-agent tool-name translation ────────────────────────────────
+    @classmethod
+    def _mentions_tool(cls, text: str, name: str) -> bool:
+        """Whether `text` refers to a Claude Code tool named `name` (case-sensitive)."""
+        if name not in _AMBIGUOUS_TOOL_NAMES:
+            return re.search(rf"\b{name}\b", text) is not None
+        # ambiguous (also an English word): require an explicit tool cue
+        if re.search(rf"`{name}`", text) or re.search(rf"\b{name}\b\s+tool", text):
+            return True
+        for line in text.splitlines():
+            low = line.lower()
+            if "allowed" in low and "tool" in low and re.search(rf"\b{name}\b", line):
+                return True
+        return False
+
+    @classmethod
+    def _tool_name_hints(cls, text: str) -> str:
+        """A translation note for any foreign tool names the skill references."""
+        if not text:
+            return ""
+        found = {cc: ar for cc, ar in _TOOL_NAME_MAP.items() if cls._mentions_tool(text, cc)}
+        if not found:
+            return ""
+        lines = "\n".join(f"  - {cc} -> {ar}" for cc, ar in found.items())
+        return ("[TOOL NAMES] This skill was written for another agent. In Argent, "
+                "call the equivalent tool instead:\n" + lines)
+
     # ── reading ──────────────────────────────────────────────────────────
     def read_skill(self, name: str) -> Optional[str]:
         """Read a skill's instructions. For folder skills, also surface the
-        allowed-tools and a manifest of bundled resources the model can use."""
+        allowed-tools and a manifest of bundled resources the model can use.
+        Foreign (Claude Code / Cursor) tool names get an Argent translation."""
         path, kind = self._resolve(name)
         if not path:
             return None
         try:
-            meta, body = self._parse_frontmatter(path.read_text(encoding="utf-8"))
+            raw = path.read_text(encoding="utf-8")
         except Exception:
             return None
+        meta, body = self._parse_frontmatter(raw)
+        hint = self._tool_name_hints(raw)
         if kind == "flat":
-            return body
+            return body + (f"\n\n{hint}" if hint else "")
 
         sections = [body]
         allowed = meta.get("allowed-tools") or meta.get("allowed_tools")
@@ -115,6 +168,8 @@ class SkillManager:
                 "Read or run these with read_file / run_command when the instructions call for them:\n"
                 + "\n".join(manifest)
             )
+        if hint:
+            sections.append(hint)
         return "\n\n".join(sections)
 
     # ── creation / deletion ──────────────────────────────────────────────

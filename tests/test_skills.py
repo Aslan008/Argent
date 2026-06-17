@@ -270,3 +270,55 @@ class TestRepoImport:
         manager.import_skill("owner/repo")
         again = manager.import_skill("owner/repo")
         assert "skipped 'dup'" in again
+
+
+class TestForeignToolNameTranslation:
+    def test_distinctive_names_translated(self, manager, tmp_path):
+        _make_skill_folder(
+            tmp_path, "research",
+            {"name": "research", "description": "d"},
+            "Use WebSearch to find sources, then WebFetch each page.")
+        out = manager.read_skill("research")
+        assert "[TOOL NAMES]" in out
+        assert "WebSearch -> search_web" in out
+        assert "WebFetch -> read_webpage" in out
+
+    def test_ambiguous_name_needs_a_cue(self, manager, tmp_path):
+        # "Read"/"write" as plain prose must NOT trigger a translation
+        _make_skill_folder(
+            tmp_path, "prose",
+            {"name": "prose", "description": "d"},
+            "Read through the ledger and write a short summary of it.")
+        out = manager.read_skill("prose")
+        assert "[TOOL NAMES]" not in out
+
+    def test_ambiguous_name_with_tool_cue_translated(self, manager, tmp_path):
+        _make_skill_folder(
+            tmp_path, "pdf",
+            {"name": "pdf", "description": "d"},
+            "If WebFetch returns binary, use the Read tool on the cache path.")
+        out = manager.read_skill("pdf")
+        assert "Read -> read_file" in out
+        assert "WebFetch -> read_webpage" in out
+
+    def test_allowed_tools_line_triggers_translation(self, manager, tmp_path):
+        _make_skill_folder(
+            tmp_path, "builder",
+            {"name": "builder", "description": "d", "allowed-tools": "Bash, Read"},
+            "Run the build.")
+        out = manager.read_skill("builder")
+        assert "Bash -> run_command" in out
+        assert "Read -> read_file" in out
+
+    def test_no_foreign_names_no_note(self, manager, tmp_path):
+        _make_skill_folder(
+            tmp_path, "clean",
+            {"name": "clean", "description": "d"},
+            "Call search_web and read_webpage as usual.")
+        assert "[TOOL NAMES]" not in manager.read_skill("clean")
+
+    def test_flat_skill_also_translated(self, manager):
+        manager.create_skill("flatcc", "First WebSearch, then read with Read tool.", "d")
+        out = manager.read_skill("flatcc")
+        assert "WebSearch -> search_web" in out
+        assert "Read -> read_file" in out
