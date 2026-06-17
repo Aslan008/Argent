@@ -74,6 +74,10 @@ Argent reads both its own flat markdown skills and the cross-platform **Agent Sk
 /skill import ./path/to/a/SKILL.md-folder                                # still works for local paths
 ```
 
+Skills written for another agent's tool names (`WebSearch`, `WebFetch`, `Read`, `Bash`, …) just work: when the model reads such a skill, Argent appends a compact translation to its own tools (`search_web`, `read_webpage`, `read_file`, `run_command`, …) — only for the tools the skill actually references, so weak models don't call something that doesn't exist here.
+
+**Ships with a ready skill.** `sourced-researcher` is a built-in playbook that turns a question into a cited answer — plan → `search_web` → `read_webpage` → cross-check → an answer where every claim has an inline citation and URL. No API keys; it runs on Argent's free web tools.
+
 
 ### 🤝 Professional Git Integration
 - **Smart Commits**: Use `/commit` to let the AI analyze your diffs and generate professional Conventional Commit messages.

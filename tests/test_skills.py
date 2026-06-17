@@ -322,3 +322,35 @@ class TestForeignToolNameTranslation:
         out = manager.read_skill("flatcc")
         assert "WebSearch -> search_web" in out
         assert "Read -> read_file" in out
+
+
+class TestShippedSourcedResearcher:
+    """The sourced-researcher skill ships with Argent — guard its shape."""
+
+    @pytest.fixture
+    def repo_manager(self, monkeypatch):
+        repo_skills = Path(sm_module.__file__).resolve().parent / "skills"
+        monkeypatch.setattr(sm_module, "get_skills_dir", lambda: str(repo_skills))
+        return sm_module.SkillManager()
+
+    def test_listed_as_folder_skill(self, repo_manager):
+        entry = next((s for s in repo_manager.list_skills()
+                      if s["name"] == "sourced-researcher"), None)
+        assert entry is not None
+        assert entry["kind"] == "folder"
+        assert "source" in entry["description"].lower()
+
+    def test_read_has_phases_and_rules(self, repo_manager):
+        body = repo_manager.read_skill("sourced-researcher")
+        assert body is not None
+        for marker in ("Phase 1", "Phase 5", "Hard rules", "fetch budget"):
+            assert marker in body
+
+    def test_surfaces_bundled_reference(self, repo_manager):
+        body = repo_manager.read_skill("sourced-researcher")
+        assert "BUNDLED RESOURCES" in body and "example-report.md" in body
+
+    def test_uses_native_tools_no_translation_note(self, repo_manager):
+        body = repo_manager.read_skill("sourced-researcher")
+        assert "search_web" in body and "read_webpage" in body
+        assert "[TOOL NAMES]" not in body
