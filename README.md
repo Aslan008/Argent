@@ -63,7 +63,17 @@ OpenRouter requires a single API key (a **free** one from [openrouter.ai/keys](h
 The `calculate` tool evaluates math expressions through a whitelisted AST interpreter (no `eval`, no code execution). Small local models no longer guess numbers — they compute them.
 
 ### 🧩 Agent Skills (SKILL.md) Support
-Argent reads both its own flat markdown skills and the cross-platform **Agent Skills** standard — a folder with a `SKILL.md` (YAML frontmatter `name`/`description`/`allowed-tools`) plus optional bundled `scripts/`, `references/` and `assets/`. Drop in a skill from the ecosystem with `/skill import <path>`; when the model reads it, the bundled resources and their paths are surfaced so it can run or reference them. Existing flat `.md` skills keep working unchanged.
+Argent reads both its own flat markdown skills and the cross-platform **Agent Skills** standard — a folder with a `SKILL.md` (YAML frontmatter `name`/`description`/`allowed-tools`) plus optional bundled `scripts/`, `references/` and `assets/`. When the model reads a skill, the bundled resources and their paths are surfaced so it can run or reference them. Existing flat `.md` skills keep working unchanged.
+
+**One-step install from GitHub.** No cloning or path-juggling — point `/skill import` straight at a repository and Argent clones it, finds the `SKILL.md` skill(s) inside, and installs them into its own skills directory:
+
+```text
+/skill import AyanbekDos/unfairgaps-os                                   # owner/repo shorthand
+/skill import https://github.com/AyanbekDos/unfairgaps-os                # full URL
+/skill import https://github.com/owner/repo/tree/main/skills/<name>      # a specific skill in a subfolder
+/skill import ./path/to/a/SKILL.md-folder                                # still works for local paths
+```
+
 
 ### 🤝 Professional Git Integration
 - **Smart Commits**: Use `/commit` to let the AI analyze your diffs and generate professional Conventional Commit messages.

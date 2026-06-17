@@ -1,5 +1,8 @@
 import os
+import re
 import shutil
+import subprocess
+import tempfile
 import yaml
 from pathlib import Path
 from typing import List, Dict, Optional, Tuple
@@ -144,13 +147,141 @@ class SkillManager:
         except Exception as e:
             return f"Error deleting skill: {e}"
 
+    # ── naming / source detection ────────────────────────────────────────
+    @staticmethod
+    def _sanitize_name(raw: str) -> str:
+        """Turn an arbitrary skill name into a safe directory name."""
+        s = re.sub(r"[^\w.-]+", "-", str(raw).strip()).strip("-.")
+        return s or "imported_skill"
+
+    @staticmethod
+    def _looks_like_repo(source: str) -> bool:
+        """True if `source` is a git/GitHub reference rather than a local path."""
+        s = source.strip()
+        if s.startswith(("http://", "https://", "git@", "ssh://")) or s.endswith(".git"):
+            return True
+        # owner/repo shorthand — but only if it isn't an existing local path
+        if re.fullmatch(r"[\w.-]+/[\w.-]+", s) and not Path(s).expanduser().exists():
+            return True
+        return False
+
+    @staticmethod
+    def _parse_repo_ref(ref: str) -> Optional[Tuple[str, Optional[str], Optional[str]]]:
+        """Parse a repo reference into (clone_url, branch, subpath).
+
+        Handles GitHub web URLs (incl. /tree/<branch>/<subpath>), owner/repo
+        shorthand, SSH (git@) and generic .git URLs.
+        """
+        ref = ref.strip().rstrip("/")
+        # GitHub web URL, optionally pointing at a branch + subfolder
+        m = re.match(
+            r"https?://github\.com/([\w.-]+)/([\w.-]+?)(?:\.git)?"
+            r"(?:/tree/([^/]+)(?:/(.*))?)?$",
+            ref,
+        )
+        if m:
+            owner, repo, branch, subpath = m.groups()
+            return (f"https://github.com/{owner}/{repo}.git", branch, subpath or None)
+        # SSH or explicit .git URL — clone whole repo
+        if ref.startswith("git@") or ref.startswith("ssh://") or ref.endswith(".git"):
+            return (ref, None, None)
+        # any other http(s) git host (gitlab, bitbucket, …)
+        if ref.startswith(("http://", "https://")):
+            return (ref, None, None)
+        # owner/repo shorthand → GitHub
+        if re.fullmatch(r"[\w.-]+/[\w.-]+", ref):
+            return (f"https://github.com/{ref}.git", None, None)
+        return None
+
+    def _install_skills_from_tree(self, root: Path, fallback_name: str) -> List[str]:
+        """Find every SKILL.md under `root` and install each as its own skill.
+
+        Returns a list of human-readable per-skill result messages.
+        """
+        root = Path(root)
+        skill_files = sorted(root.rglob(SKILL_FILE))
+        messages: List[str] = []
+        for sm in skill_files:
+            folder = sm.parent
+            try:
+                meta, _ = self._parse_frontmatter(sm.read_text(encoding="utf-8"))
+            except Exception:
+                meta = {}
+            is_root = folder.resolve() == root.resolve()
+            raw = meta.get("name") or (folder.name if not is_root else fallback_name)
+            name = self._sanitize_name(raw)
+            dest = self.skills_dir / name
+            if dest.exists():
+                messages.append(f"skipped '{name}' (already exists)")
+                continue
+            try:
+                if is_root:
+                    # SKILL.md sits at the repo root: copy just the skill files,
+                    # never the whole checkout (.git, unrelated sources, …).
+                    dest.mkdir(parents=True)
+                    shutil.copy(sm, dest / SKILL_FILE)
+                    for sub in _RESOURCE_DIRS:
+                        if (folder / sub).is_dir():
+                            shutil.copytree(folder / sub, dest / sub)
+                else:
+                    shutil.copytree(folder, dest)
+                messages.append(f"installed '{name}'")
+            except Exception as e:
+                messages.append(f"failed '{name}': {e}")
+        return messages
+
+    def _import_from_repo(self, ref: str) -> str:
+        """Clone a git/GitHub reference and install the SKILL.md skill(s) it holds."""
+        parsed = self._parse_repo_ref(ref)
+        if not parsed:
+            return f"Error: could not understand repository reference '{ref}'."
+        clone_url, branch, subpath = parsed
+        tmp = Path(tempfile.mkdtemp(prefix="argent_skill_"))
+        try:
+            cmd = ["git", "clone", "--depth", "1"]
+            if branch:
+                cmd += ["--branch", branch]
+            cmd += [clone_url, str(tmp)]
+            try:
+                proc = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
+            except FileNotFoundError:
+                return "Error: git is not installed. Install git, or import from a local path."
+            except subprocess.TimeoutExpired:
+                return "Error: git clone timed out (180s)."
+            if proc.returncode != 0:
+                detail = (proc.stderr or proc.stdout or "").strip().splitlines()
+                hint = detail[-1] if detail else "unknown error"
+                return f"Error: git clone failed: {hint[:200]}"
+
+            search_root = tmp / subpath if subpath else tmp
+            if not search_root.exists():
+                return f"Error: path '{subpath}' was not found in the repository."
+            repo_name = self._sanitize_name(
+                clone_url.rstrip("/").split("/")[-1].removesuffix(".git")
+            )
+            messages = self._install_skills_from_tree(search_root, repo_name)
+            if not messages:
+                return f"No {SKILL_FILE} skill found in {ref}."
+            installed = sum(1 for m in messages if m.startswith("installed"))
+            header = (f"Installed {installed} skill(s) from {ref}:" if installed
+                      else f"From {ref} (nothing new installed):")
+            return header + "\n" + "\n".join(f"  - {m}" for m in messages)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
     # ── import (Agent Skills standard) ───────────────────────────────────
     def import_skill(self, source: str) -> str:
         """Import a SKILL.md skill into the skills directory.
 
-        Accepts a folder containing SKILL.md (copied with its bundled
-        scripts/references/assets), a standalone SKILL.md file, or a flat .md.
+        Accepts a GitHub/git reference (owner/repo, a full URL, or a
+        /tree/<branch>/<subfolder> URL — cloned automatically), a local folder
+        containing SKILL.md (copied with its bundled scripts/references/assets),
+        a standalone SKILL.md file, or a flat .md.
         """
+        source = source.strip()
+        if self._looks_like_repo(source):
+            return self._import_from_repo(source)
+
         src = Path(source).expanduser().resolve()
         if not src.exists():
             return f"Error: '{source}' does not exist."

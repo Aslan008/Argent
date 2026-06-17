@@ -397,13 +397,21 @@ def main():
                     print_system("Requires RAG enabled. Best for weak models that forget to search the docs themselves.")
                 continue
 
-            elif user_input.startswith("/skill import"):
+            elif user_input.startswith("/skill import") or user_input.startswith("/skills import"):
                 from skill_manager import skill_manager
-                parts = user_input.split(" ", 2)
-                if len(parts) < 3 or not parts[2].strip():
-                    print_error("Usage: /skill import <path to a SKILL.md folder, SKILL.md, or .md file>")
+                # split off the leading "/skill import" / "/skills import" verb
+                arg = user_input.split("import", 1)[1].strip().strip('"')
+                if not arg:
+                    print_error(
+                        "Usage: /skill import <source>\n"
+                        "  <source> can be:\n"
+                        "    • a GitHub repo:        owner/repo  or  https://github.com/owner/repo\n"
+                        "    • a specific skill:     https://github.com/owner/repo/tree/main/skills/<name>\n"
+                        "    • a local path:         a SKILL.md folder, a SKILL.md, or a .md file"
+                    )
                 else:
-                    print_system(skill_manager.import_skill(parts[2].strip().strip('"')))
+                    print_system("Importing… (cloning if remote, this may take a moment)")
+                    print_system(skill_manager.import_skill(arg))
                 continue
             elif user_input.startswith("/skills"):
                 from skill_manager import skill_manager

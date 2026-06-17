@@ -202,7 +202,7 @@ def handle_slash_command(command: str, agent: ArgentAgent) -> bool:
             "- `/copy <n>` - Copy code block #n to clipboard\n"
             "- `/logs [module] [n]` - View logs (e.g. /logs tools 20, /logs error)\n"
             "- `/skills` - List available AI skills (flat .md and SKILL.md folder skills)\n"
-            "- `/skill import <path>` - Import an Agent Skills (SKILL.md) skill folder or file\n"
+            "- `/skill import <source>` - Install a SKILL.md skill from a GitHub repo (owner/repo or URL) or a local path\n"
             "- `/project [prompt]` - Force the AI to build a massive multi-step project from scratch\n"
             "- `/work [--auto] [task]` - Modify or fix an EXISTING codebase safely\n"
             "- `/commit` - Generate AI commit message and commit changes\n"

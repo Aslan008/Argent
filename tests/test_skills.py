@@ -1,3 +1,7 @@
+import shutil
+import types
+from pathlib import Path
+
 import pytest
 
 import skill_manager as sm_module
@@ -127,3 +131,142 @@ class TestImport:
         d.mkdir()
         (d / "readme.txt").write_text("nope", encoding="utf-8")
         assert "no SKILL.md" in manager.import_skill(str(d)) or "not a skill" in manager.import_skill(str(d))
+
+
+class TestRepoReferenceParsing:
+    @pytest.mark.parametrize("ref,expected", [
+        ("owner/repo", ("https://github.com/owner/repo.git", None, None)),
+        ("https://github.com/owner/repo", ("https://github.com/owner/repo.git", None, None)),
+        ("https://github.com/owner/repo/", ("https://github.com/owner/repo.git", None, None)),
+        ("https://github.com/owner/repo.git", ("https://github.com/owner/repo.git", None, None)),
+        ("https://github.com/owner/repo/tree/main",
+         ("https://github.com/owner/repo.git", "main", None)),
+        ("https://github.com/AyanbekDos/unfairgaps-os/tree/main/skills/unfairgaps",
+         ("https://github.com/AyanbekDos/unfairgaps-os.git", "main", "skills/unfairgaps")),
+        ("git@github.com:owner/repo.git", ("git@github.com:owner/repo.git", None, None)),
+    ])
+    def test_parse_repo_ref(self, ref, expected):
+        assert sm_module.SkillManager._parse_repo_ref(ref) == expected
+
+    def test_parse_repo_ref_garbage(self):
+        assert sm_module.SkillManager._parse_repo_ref("just some text") is None
+
+    def test_looks_like_repo(self):
+        f = sm_module.SkillManager._looks_like_repo
+        assert f("owner/repo")
+        assert f("https://github.com/owner/repo")
+        assert f("git@github.com:owner/repo.git")
+        assert f("https://gitlab.com/a/b.git")
+        # local paths must NOT be mistaken for repos
+        assert not f("C:/Users/x/skills/mine")
+        assert not f(r"C:\Users\x\skills")
+
+    def test_sanitize_name(self):
+        s = sm_module.SkillManager._sanitize_name
+        assert s("My Skill") == "My-Skill"
+        assert s("a/b c") == "a-b-c"
+        assert s("  ..weird.. ") == "weird"
+        assert s("") == "imported_skill"
+
+
+def _fake_clone_from(remote: Path):
+    """Build a fake subprocess.run that 'clones' `remote` into the target dir."""
+    def fake_run(cmd, *a, **k):
+        target = Path(cmd[-1])
+        target.mkdir(parents=True, exist_ok=True)
+        for item in remote.iterdir():
+            dst = target / item.name
+            if item.is_dir():
+                shutil.copytree(item, dst)
+            else:
+                shutil.copy(item, dst)
+        return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+    return fake_run
+
+
+class TestInstallFromTree:
+    def test_subfolder_skill_uses_its_own_name(self, manager, tmp_path):
+        root = tmp_path / "_tree"
+        _make_skill_folder(root / "skills", "alpha",
+                           {"name": "alpha", "description": "d"}, "body",
+                           resources={"references": {"r.md": "ref"}})
+        msgs = manager._install_skills_from_tree(root, "fallback")
+        assert any("installed 'alpha'" in m for m in msgs)
+        assert manager.read_skill("alpha") is not None
+        assert (manager.skills_dir / "alpha" / "references" / "r.md").exists()
+
+    def test_root_level_skill_uses_fallback_and_skips_junk(self, manager, tmp_path):
+        root = tmp_path / "_root"
+        root.mkdir()
+        (root / "SKILL.md").write_text("---\ndescription: d\n---\nbody", encoding="utf-8")
+        (root / "references").mkdir()
+        (root / "references" / "x.md").write_text("ref", encoding="utf-8")
+        # a .git checkout and stray sources must NOT be copied into the skill
+        (root / ".git").mkdir()
+        (root / ".git" / "config").write_text("junk", encoding="utf-8")
+        (root / "unrelated.py").write_text("print()", encoding="utf-8")
+        msgs = manager._install_skills_from_tree(root, "myrepo")
+        assert any("installed 'myrepo'" in m for m in msgs)
+        assert (manager.skills_dir / "myrepo" / "references" / "x.md").exists()
+        assert not (manager.skills_dir / "myrepo" / ".git").exists()
+        assert not (manager.skills_dir / "myrepo" / "unrelated.py").exists()
+
+
+class TestRepoImport:
+    def test_import_clones_and_installs(self, manager, tmp_path, monkeypatch):
+        remote = tmp_path / "_remote"
+        _make_skill_folder(remote / "skills", "unfairgaps",
+                           {"name": "unfairgaps", "description": "find pains"}, "body",
+                           resources={"references": {"r.md": "ref"}})
+        monkeypatch.setattr(sm_module.subprocess, "run", _fake_clone_from(remote))
+        result = manager.import_skill("AyanbekDos/unfairgaps-os")
+        assert "Installed 1 skill" in result
+        assert manager.read_skill("unfairgaps") is not None
+        assert (manager.skills_dir / "unfairgaps" / "references" / "r.md").exists()
+
+    def test_import_subpath_url(self, manager, tmp_path, monkeypatch):
+        # a /tree/<branch>/<subpath> URL clones, then narrows to that subfolder
+        remote = tmp_path / "_remote2"
+        _make_skill_folder(remote / "skills", "wanted",
+                           {"name": "wanted", "description": "d"}, "body")
+        _make_skill_folder(remote / "other", "ignored",
+                           {"name": "ignored", "description": "d"}, "body")
+        monkeypatch.setattr(sm_module.subprocess, "run", _fake_clone_from(remote))
+        result = manager.import_skill(
+            "https://github.com/owner/repo/tree/main/skills/wanted")
+        assert "Installed 1 skill" in result
+        assert manager.read_skill("wanted") is not None
+        assert manager.read_skill("ignored") is None
+
+    def test_import_git_missing(self, manager, monkeypatch):
+        def boom(*a, **k):
+            raise FileNotFoundError()
+        monkeypatch.setattr(sm_module.subprocess, "run", boom)
+        assert "git is not installed" in manager.import_skill("owner/repo")
+
+    def test_import_clone_failure(self, manager, monkeypatch):
+        monkeypatch.setattr(
+            sm_module.subprocess, "run",
+            lambda *a, **k: types.SimpleNamespace(
+                returncode=128, stdout="", stderr="fatal: repository not found"),
+        )
+        out = manager.import_skill("owner/missing")
+        assert "git clone failed" in out and "repository not found" in out
+
+    def test_import_repo_without_skill(self, manager, monkeypatch):
+        def fake_run(cmd, *a, **k):
+            target = Path(cmd[-1])
+            target.mkdir(parents=True, exist_ok=True)
+            (target / "README.md").write_text("nothing", encoding="utf-8")
+            return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+        monkeypatch.setattr(sm_module.subprocess, "run", fake_run)
+        assert "No SKILL.md" in manager.import_skill("owner/empty")
+
+    def test_import_repo_duplicate_skipped(self, manager, tmp_path, monkeypatch):
+        remote = tmp_path / "_remote3"
+        _make_skill_folder(remote / "skills", "dup",
+                           {"name": "dup", "description": "d"}, "body")
+        monkeypatch.setattr(sm_module.subprocess, "run", _fake_clone_from(remote))
+        manager.import_skill("owner/repo")
+        again = manager.import_skill("owner/repo")
+        assert "skipped 'dup'" in again
