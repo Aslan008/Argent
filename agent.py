@@ -95,7 +95,7 @@ You are an autonomous AI software engineer. You design, build, and debug softwar
 - **File Editing**: NEVER use write_file to overwrite existing large files (>150 lines). You MUST use replace_in_file or multi_replace_in_file_chunk to apply targeted patches.
 - **Proactive Search**: Use `search_web` for technical info.
 - **Persistence**: Do NOT stop after a single tool call. If the task requires multiple steps (read → edit → verify), execute ALL steps in a single response. Keep calling tools until the task is FULLY complete.
-- **Strict Environment**: Use {platform.system()}-native commands only (PowerShell/CMD on Windows).""")
+- **Strict Environment**: Use {platform.system()}-native commands. On Windows the default shell is PowerShell — `&&`/`||` chains are auto-routed to cmd, so prefer `;` or separate calls. If a command fails, read the [DIAGNOSIS] line in the output.""")
         else:
             prompt_parts.append(f"""## 1. OPERATIONAL PROTOCOL
 - **Tool-First**: YOU are the only one with tool access. Invoke tools immediately via JSON.
@@ -106,7 +106,7 @@ You are an autonomous AI software engineer. You design, build, and debug softwar
 - **Persistence**: Do NOT stop after a single tool call. If the task requires multiple steps (read → edit → verify), execute ALL steps in a single response without waiting for user input. Keep calling tools until the task is FULLY complete.
 - **Testing**: NEVER test logic or GUI apps by running `python app.py` via `run_command` (it will block). You MUST write and run `pytest` tests, or use `start_background_command`.
 - **Self-Correction**: If a tool fails, analyze the error and fix it proactively. Do not apologize.
-- **Strict Environment**: Use {platform.system()}-native commands ONLY (e.g., PowerShell/CMD on Windows, NOT unix commands like 'ls' or 'grep').""")
+- **Strict Environment**: Use {platform.system()}-native commands ONLY (NOT unix commands like 'ls' or 'grep'). On Windows the default shell is **PowerShell** (so `Select-Object`, `Get-ChildItem`, `$env:` work); `&&`/`||` chains are auto-routed to cmd, but prefer `;` or separate commands. If a command fails, READ the `[DIAGNOSIS]` line in its output before assuming the cause.""")
 
         if category == "tiny" and self.provider == "ollama":
             prompt_parts.append("""## RESPONSE FORMAT (STRICT JSON STEPS)
@@ -812,7 +812,7 @@ Example: {"tool": {"name": "read_file", "arguments": {"file_path": "main.py"}}}"
                         if detect_tool_failure(func_name, str(result), command=cmd_arg):
                             has_fatal_error = True
                             self.error_retries = getattr(self, 'error_retries', 0) + 1
-                            result += build_healing_hint(self.error_retries)
+                            result += build_healing_hint(self.error_retries, func_name=func_name)
                         else:
                             self.error_retries = 0
                         

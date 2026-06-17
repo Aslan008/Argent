@@ -1,14 +1,27 @@
+import os
 import subprocess
 import queue
 import threading
 import ctypes
 import time
 from approval import request_approval, is_destructive_command, command_grant_key
+from src.agent.shell import choose_shell, build_command_argv
+from src.agent.command_diagnostics import diagnose_command_error
 from memory_manager import memory
 from ui import console
 from logger import get_logger
 
 log = get_logger("tools")
+
+
+def _spawn(command: str, **popen_kwargs):
+    """Start a process, picking the right shell on Windows (PowerShell vs cmd)
+    so PowerShell-only commands work and cmd-style && / || chains still run.
+    On POSIX, fall back to the default shell."""
+    if os.name == "nt":
+        argv = build_command_argv(command, choose_shell(command))
+        return subprocess.Popen(argv, **popen_kwargs)
+    return subprocess.Popen(command, shell=True, **popen_kwargs)
 
 ACTIVE_PROCESSES = {}
 ACTIVE_PROCESSES_LOCK = threading.Lock()
@@ -40,35 +53,41 @@ def run_command(command: str) -> str:
                 except UnicodeDecodeError:
                     return b.decode('cp1251', errors='replace')
                     
-        process = subprocess.Popen(
+        process = _spawn(
             command,
-            shell=True,
             stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT
+            stderr=subprocess.STDOUT,
         )
-        
+
         output_lines = []
         for raw_line in iter(process.stdout.readline, b""):
-            if not raw_line: 
+            if not raw_line:
                 break
             decoded_line = decode_output(raw_line)
             output_lines.append(decoded_line)
             console.print(f"[dim]{decoded_line.rstrip()}[/dim]")
-            
+
         process.stdout.close()
         process.wait()
-        
+
         final_output = "".join(output_lines).strip()
         output = f"Exit code: {process.returncode}\n"
-        
+
         if final_output:
             output += f"OUTPUT:\n{final_output}\n"
-            
+
+        # Append a concrete diagnostic for recognized command failures so the
+        # model fixes the real cause instead of guessing.
+        if process.returncode != 0:
+            hint = diagnose_command_error(command, final_output, process.returncode)
+            if hint:
+                output += f"\n[DIAGNOSIS]: {hint}\n"
+
         log.info("run_command: %s (exit=%d)", command, process.returncode)
-        
+
         cmd_lower = command.strip().lower()
         is_fire_and_forget = any(cmd_lower.startswith(p) for p in ["explorer", "start ", "start.", 'start"'])
-        
+
         if process.returncode != 0 and not is_fire_and_forget:
             memory.add_error(f"Command '{command}' failed (exit={process.returncode})")
         else:
@@ -152,9 +171,8 @@ def start_background_command(command: str) -> str:
         _pid_counter += 1
     
     try:
-        process = subprocess.Popen(
+        process = _spawn(
             command,
-            shell=True,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
