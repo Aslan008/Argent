@@ -1553,17 +1553,34 @@ def get_tool_schemas(include_hidden: bool = False) -> list[dict]:
     try:
         from rag_engine import is_rag_enabled
         if is_rag_enabled() and "semantic_search" not in disabled:
+            # Tell the model which indexed documentation/KBs are actually
+            # searchable, so it knows to consult them (the old description only
+            # mentioned "the project's codebase").
+            kb_note = ""
+            try:
+                from config import get_external_kbs
+                kb_names = [kb.get("name", kb.get("id")) for kb in get_external_kbs() if kb.get("enabled", True)]
+                if kb_names:
+                    kb_note = f" Indexed documentation available: {', '.join(kb_names)}."
+            except Exception:
+                pass
             schemas.append({
                 "type": "function",
                 "function": {
                     "name": "semantic_search",
-                    "description": "Searches the project's codebase conceptually using AI embeddings. Returns relevant code snippets regardless of exact keywords. Use this when you need to understand where a feature is implemented.",
+                    "description": (
+                        "Searches the project's codebase AND any indexed documentation / knowledge bases "
+                        "(library, framework or API docs) using AI embeddings + keywords. "
+                        "ALWAYS call this BEFORE answering a question about an external library, engine or API "
+                        "that has indexed docs — it returns exact, sourced snippets instead of relying on memory, "
+                        "which prevents hallucinated method names/signatures." + kb_note
+                    ),
                     "parameters": {
                         "type": "object",
                         "properties": {
                             "query": {
                                 "type": "string",
-                                "description": "A natural language query describing what code you want to find (e.g., 'where does the player take damage?')."
+                                "description": "A natural language query (e.g. 'how does Rigidbody.AddForce work?' or 'where does the player take damage?')."
                             },
                             "n_results": {
                                 "type": "integer",

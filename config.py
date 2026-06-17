@@ -370,6 +370,17 @@ def set_auto_rag(enabled: bool):
     _set("auto_rag", enabled)
 
 
+def get_auto_retrieve() -> bool:
+    """Whether to automatically run semantic_search on each user query and
+    inject the top results into context (proactive RAG), so a weak model
+    doesn't have to remember to call the tool. Off by default."""
+    return _get("auto_retrieve", False)
+
+
+def set_auto_retrieve(enabled: bool):
+    _set("auto_retrieve", enabled)
+
+
 # ─── Browser automation ──────────────────────────────────────────────────────
 
 def get_browser_mode() -> str:

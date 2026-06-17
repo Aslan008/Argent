@@ -112,8 +112,22 @@ def _check_rag():
     emb = get_embedding_provider()
     if emb == "sentence_transformers" and not _module_available("sentence_transformers"):
         return (WARN, "chromadb ok, but sentence-transformers missing (switch /rag_provider to ollama?)")
-    auto = " (auto-RAG on)" if get_auto_rag() else ""
-    return (OK, f"chromadb + {emb}{auto}")
+    from config import get_auto_retrieve, get_external_kbs
+    flags = []
+    if get_auto_rag():
+        flags.append("auto-RAG")
+    if get_auto_retrieve():
+        flags.append("auto-retrieve")
+    kbs = [kb.get("name", kb.get("id")) for kb in get_external_kbs() if kb.get("enabled", True)]
+    detail = f"chromadb + {emb}"
+    if flags:
+        detail += f" ({', '.join(flags)})"
+    if kbs:
+        detail += f"; KBs: {', '.join(kbs)}"
+    # all-MiniLM is weaker on technical docs; recommend nomic for doc-heavy KBs.
+    if kbs and emb != "ollama":
+        detail += " — tip: for docs, nomic-embed-text via Ollama beats MiniLM"
+    return (OK, detail)
 
 
 def _check_optional_deps():

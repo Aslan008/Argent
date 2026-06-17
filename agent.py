@@ -236,6 +236,25 @@ Example: {"tool": {"name": "read_file", "arguments": {"file_path": "main.py"}}}"
         except Exception:
             pass
 
+        # Tell the model that indexed documentation exists and to consult it,
+        # so a weak model actually retrieves "at the right moment" instead of
+        # answering library/API questions from memory.
+        try:
+            from rag_engine import is_rag_enabled
+            from config import get_external_kbs
+            if is_rag_enabled():
+                kb_names = [kb.get("name", kb.get("id")) for kb in get_external_kbs() if kb.get("enabled", True)]
+                if kb_names:
+                    prompt_parts.append(
+                        "## KNOWLEDGE BASES\n"
+                        f"Indexed documentation is available: {', '.join(kb_names)}. "
+                        "For ANY question about these libraries/APIs, call `semantic_search` FIRST and base your "
+                        "answer on the returned snippets — do NOT answer API/method questions from memory, it leads "
+                        "to hallucinated signatures."
+                    )
+        except Exception:
+            pass
+
         # Lightweight reminder of live background processes so the model knows
         # they exist (and can recover PIDs) even after history summarization
         # drops the original "PID: N" tool results.
@@ -346,6 +365,33 @@ Example: {"tool": {"name": "read_file", "arguments": {"file_path": "main.py"}}}"
             return None
         return file_path, kept.count("\n") or 1, last_lines(kept)
 
+    def _maybe_auto_retrieve(self, user_text: str):
+        """Proactive RAG: when auto_retrieve is on and RAG is active, run
+        semantic_search on the query and inject the top snippets as context, so
+        a weak model retrieves "at the right moment" without having to remember
+        to call the tool. Returns silently on any failure."""
+        try:
+            from config import get_auto_retrieve
+            if not get_auto_retrieve() or len(user_text.strip()) < 8:
+                return
+            from rag_engine import is_rag_enabled, semantic_search
+            if not is_rag_enabled():
+                return
+            results = semantic_search(user_text, n_results=4)
+            if not results or results.startswith("Error") or "No relevant" in results:
+                return
+            self.messages.append({
+                "role": "system",
+                "content": (
+                    "## RETRIEVED CONTEXT (auto)\n"
+                    "Snippets relevant to the user's query, pulled automatically from the knowledge base. "
+                    "Use them to ground your answer; verify before relying.\n\n" + results
+                ),
+            })
+            log.info("auto-retrieve injected context for query: %.60s", user_text)
+        except Exception as e:
+            log.warning("auto-retrieve failed: %s", e)
+
     def _build_objective_anchor(self) -> str | None:
         """Trailing reminder of the goal for long contexts (local models)."""
         obj = memory.data.get("objective")
@@ -372,7 +418,8 @@ Example: {"tool": {"name": "read_file", "arguments": {"file_path": "main.py"}}}"
                 memory.set_objective(user_text)
             else:
                 memory.set_current_task(user_text[:200])
-        
+            self._maybe_auto_retrieve(user_text)
+
         self._trim_history()
         self._truncate_continues = 0
         self._salvage_continues = 0

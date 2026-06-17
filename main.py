@@ -135,7 +135,7 @@ def main():
     
     builtin_cmds = [
         # Base commands
-        '/help', '/provider', '/model', '/clear', '/init', '/research', '/rag_toggle',
+        '/help', '/provider', '/model', '/clear', '/init', '/research', '/rag_toggle', '/auto_retrieve',
         '/hooks', '/tools', '/save', '/project', '/work', '/commit',
         '/sessions', '/load', '/copy', '/logs', '/skills', '/auto', '/verbose', '/debug', '/browser', '/exit', '/quit',
         '/mcp', '/thinking', '/temp', '/temperature',
@@ -381,6 +381,16 @@ def main():
                         print_system("Semantic Search (RAG) has been disabled for the current session.")
                     except ImportError:
                         pass
+                continue
+
+            elif user_input.strip() == "/auto_retrieve":
+                from config import get_auto_retrieve, set_auto_retrieve
+                new_state = not get_auto_retrieve()
+                set_auto_retrieve(new_state)
+                status = "[bold green]ENABLED[/bold green]" if new_state else "[bold red]DISABLED[/bold red]"
+                print_system(f"Auto-retrieve (inject semantic_search results into context each query) is now: {status}")
+                if new_state:
+                    print_system("Requires RAG enabled. Best for weak models that forget to search the docs themselves.")
                 continue
 
             elif user_input.startswith("/skills"):
