@@ -69,6 +69,9 @@ The `calculate` tool evaluates math expressions through a whitelisted AST interp
 ### 🔌 MCP Server Support (Model Context Protocol)
 Integrate external tools and resources seamlessly. Argent supports **stdio**, **SSE**, and **REST** MCP transports to connect to filesystem, github, database, or other custom APIs.
 
+### 📚 Documentation Knowledge Bases
+Point Argent at a folder of documentation (`/kb add <id> "Name" "Path"`, `/kb index <id>`) and it becomes a searchable knowledge base, stored separately from your project index. Unity documentation gets a dedicated cleaner that strips the HTML boilerplate and chunks per API symbol, so questions like *"how does Rigidbody.AddForce work?"* return exact, sourced snippets. With `/auto_retrieve` on, relevant snippets are pulled into context automatically each query — so even a weak local model consults the docs at the right moment instead of hallucinating method signatures.
+
 ### 📂 Obsidian Integration
 Link Argent to your Obsidian vault to automatically create, search, and manage markdown notes, building an external long-term memory and knowledge base.
 
@@ -185,6 +188,9 @@ OpenRouter требует один API-ключ (достаточно **бесп
 
 ### 🔌 Поддержка MCP-серверов (Model Context Protocol)
 Бесшовная интеграция внешних инструментов и ресурсов. Argent поддерживает транспорты **stdio**, **SSE** и **REST** для подключения к файловой системе, GitHub, базам данных и любым другим сторонним API.
+
+### 📚 Базы знаний из документации
+Укажите Argent папку с документацией (`/kb add <id> "Имя" "Путь"`, `/kb index <id>`) — и она станет базой для семантического поиска, отдельной от индекса проекта. Документация Unity получает специальный чистильщик, который снимает HTML-«мусор» и режёт на чанки по символу API, поэтому вопросы вроде *«как работает Rigidbody.AddForce?»* возвращают точные сниппеты с источником. С включённым `/auto_retrieve` релевантные сниппеты подмешиваются в контекст автоматически на каждый запрос — и даже слабая локальная модель заглядывает в доки в нужный момент, а не выдумывает сигнатуры методов.
 
 ### 📂 Интеграция с Obsidian
 Подключите Argent к вашему хранилищу (Vault) Obsidian. ИИ сможет автоматически создавать, искать и редактировать заметки, формируя внешнюю базу знаний и долгосрочную память.

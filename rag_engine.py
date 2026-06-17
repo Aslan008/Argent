@@ -313,16 +313,38 @@ def index_external_kb(kb_dict: dict) -> str:
                     try:
                         with open(file_path, 'r', encoding="utf-8", errors="ignore") as f:
                             source = f.read()
-                        
+
+                        rel = str(file_path.relative_to(kb_path))
+
                         if file_path.suffix.lower() in {".html", ".htm"}:
+                            # Unity docs get a symbol-aware cleaner (strips the
+                            # nav/feedback boilerplate and prepends the API
+                            # symbol); other HTML falls back to plain text.
+                            try:
+                                from src.rag.unity_docs import is_unity_doc, chunk_unity_doc
+                                if is_unity_doc(source):
+                                    unity_chunks = chunk_unity_doc(source, rel)
+                                    if unity_chunks:
+                                        file_docs = [c for c, _ in unity_chunks]
+                                        file_metas = [m for _, m in unity_chunks]
+                                        for d, m in zip(file_docs, file_metas):
+                                            docs.append(d)
+                                            m["source_type"] = "external_kb"
+                                            metadatas.append(m)
+                                            import hashlib
+                                            chunk_id = hashlib.md5(f"{rel}_{m.get('start_line', doc_id_counter)}".encode()).hexdigest()
+                                            ids.append(f"kb_{chunk_id}_{doc_id_counter}")
+                                            doc_id_counter += 1
+                                        continue  # done with this file
+                            except Exception:
+                                pass
                             try:
                                 from bs4 import BeautifulSoup
                                 soup = BeautifulSoup(source, "html.parser")
                                 source = soup.get_text(separator="\n", strip=True)
                             except ImportError:
                                 pass
-                                
-                        rel = str(file_path.relative_to(kb_path))
+
                         file_docs, file_metas = _chunk_heuristic(source, rel)
                         for d, m in zip(file_docs, file_metas):
                             docs.append(d)
@@ -341,7 +363,12 @@ def index_external_kb(kb_dict: dict) -> str:
             for i in range(0, len(docs), batch_size):
                 collection.upsert(documents=docs[i:i+batch_size], metadatas=metadatas[i:i+batch_size], ids=ids[i:i+batch_size])
         
-        return f"Successfully indexed Knowledge Base '{kb_dict['name']}' ({len(docs)} chunks)."
+        msg = f"Successfully indexed Knowledge Base '{kb_dict['name']}' ({len(docs)} chunks)."
+        # For documentation-heavy KBs, MiniLM is weaker than a doc-tuned embedder.
+        if embedding_provider != "ollama":
+            msg += ("\nTip: for technical documentation, nomic-embed-text via Ollama retrieves more "
+                    "accurately than the default MiniLM. Switch with /rag_provider, then re-run /kb index.")
+        return msg
     except Exception as e:
         import traceback
         return f"Failed to index Knowledge Base: {e}\n{traceback.format_exc()}"
