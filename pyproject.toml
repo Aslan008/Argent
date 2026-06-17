@@ -1,0 +1,56 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "argent-coder"
+dynamic = ["version"]
+description = "Argent — an elite terminal AI coding assistant for local (Ollama/KoboldCPP) and cloud (Z.AI/OpenRouter) models."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Aslan008" }]
+keywords = ["ai", "agent", "cli", "coding-assistant", "rag", "ollama", "llm"]
+dependencies = [
+    "requests>=2.31.0",
+    "beautifulsoup4>=4.12.0",
+    "ddgs",
+    "prompt-toolkit",
+    "questionary",
+    "rich",
+    "ollama",
+    "openai>=1.0",
+    "jedi",
+    "pyyaml",
+    "json5",
+    "numpy",
+]
+
+[project.optional-dependencies]
+# Heavy/optional stacks, imported lazily at runtime.
+rag = ["chromadb", "sentence-transformers", "pypdf"]
+browser = ["playwright", "playwright-stealth"]
+research = ["crawl4ai"]
+dev = ["pytest"]
+
+[project.scripts]
+argent = "main:main"
+
+[tool.setuptools]
+# Flat layout: explicit top-level modules plus the src/ and tools/ packages.
+py-modules = [
+    "agent", "approval", "browser_detect", "browser_engine", "command_handler",
+    "config", "deep_research", "doctor", "file_tracker", "hook_manager",
+    "intelligence", "logger", "main", "mcp_client", "memory_manager",
+    "project_manager", "prompt_compressor", "prompts", "providers", "rag_engine",
+    "session", "skill_manager", "storage", "tool_profiles", "tool_recovery",
+    "ui", "usage_tracker", "version",
+]
+
+[tool.setuptools.packages.find]
+include = ["src*", "tools*"]
+
+[tool.setuptools.dynamic]
+version = { attr = "version.__version__" }
+
+# pytest configuration lives in pytest.ini (single source).

@@ -244,8 +244,17 @@ OpenRouter требует один API-ключ (достаточно **бесп
 
 ```bash
 pip install -r requirements.txt   # full runtime dependencies
+python main.py                    # run from the source tree
 python -m pytest                  # unit tests (browser tests excluded)
 python -m pytest -m integration   # browser tests (launch a real CDP browser)
+```
+
+Or install it as a CLI (adds an `argent` command):
+
+```bash
+pip install -e .                  # editable install with the argent entry point
+pip install -e ".[rag,browser]"   # include optional RAG / browser stacks
+argent                            # launch from anywhere
 ```
 
 CI runs the unit suite on `windows-latest` for every push and pull request

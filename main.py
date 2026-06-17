@@ -126,7 +126,11 @@ def main():
     atexit.register(cleanup)
 
     os.system('cls' if os.name == 'nt' else 'clear')
-    console.rule("[bold cyan]Argent Coder[/bold cyan]")
+    try:
+        from version import __version__ as _ver
+    except Exception:
+        _ver = "?"
+    console.rule(f"[bold cyan]Argent Coder[/bold cyan] [dim]v{_ver}[/dim]")
     print_system("Argent Coder. Autonomous Development Environment.")
     print_system("Type /help for commands.")
     

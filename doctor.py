@@ -39,6 +39,14 @@ def _module_available(name: str) -> bool:
         return False
 
 
+def _check_version():
+    try:
+        from version import __version__
+        return (OK, f"Argent v{__version__}")
+    except Exception:
+        return (WARN, "version unknown")
+
+
 def _check_python():
     v = sys.version_info
     detail = f"Python {v.major}.{v.minor}.{v.micro} on {platform.system()}"
@@ -183,6 +191,7 @@ def _check_config():
 
 
 CHECKS = [
+    ("Argent version", _check_version),
     ("Python", _check_python),
     ("Provider", _check_provider),
     ("Model & tier", _check_model_tier),
