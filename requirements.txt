@@ -14,3 +14,4 @@ ollama
 jedi
 pyyaml
 json5
+pypdf

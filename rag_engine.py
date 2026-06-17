@@ -263,6 +263,26 @@ def _chunk_heuristic(text: str, file_rel_path: str) -> tuple[list, list]:
     return docs, metadatas
 
 
+def _read_pdf(file_path) -> str | None:
+    """Extract text from a PDF via pypdf. Returns None if no parser is available
+    or the file can't be read, so binary garbage is never indexed as text."""
+    try:
+        from pypdf import PdfReader
+    except ImportError:
+        try:
+            from PyPDF2 import PdfReader
+        except ImportError:
+            print(f"[WARN] Skipping PDF '{file_path}': install 'pypdf' to index PDFs.")
+            return None
+    try:
+        reader = PdfReader(str(file_path))
+        text = "\n".join((page.extract_text() or "") for page in reader.pages)
+        return text if text.strip() else None
+    except Exception as e:
+        print(f"[WARN] Could not read PDF '{file_path}': {e}")
+        return None
+
+
 def index_external_kb(kb_dict: dict) -> str:
     """Indexes an external knowledge base directory into the global ChromaDB."""
     global _GLOBAL_DB_CLIENT, _ACTIVE_KB_COLLECTIONS
@@ -311,8 +331,13 @@ def index_external_kb(kb_dict: dict) -> str:
                 file_path = Path(root) / file
                 if file_path.suffix.lower() in {".md", ".txt", ".html", ".htm", ".pdf", ".json", ".csv"}:
                     try:
-                        with open(file_path, 'r', encoding="utf-8", errors="ignore") as f:
-                            source = f.read()
+                        if file_path.suffix.lower() == ".pdf":
+                            source = _read_pdf(file_path)
+                            if source is None:
+                                continue  # no parser / unreadable — skip, don't index garbage
+                        else:
+                            with open(file_path, 'r', encoding="utf-8", errors="ignore") as f:
+                                source = f.read()
 
                         rel = str(file_path.relative_to(kb_path))
 
@@ -363,6 +388,11 @@ def index_external_kb(kb_dict: dict) -> str:
             for i in range(0, len(docs), batch_size):
                 collection.upsert(documents=docs[i:i+batch_size], metadatas=metadatas[i:i+batch_size], ids=ids[i:i+batch_size])
         
+        try:
+            from src.rag.keyword_index import clear_cache
+            clear_cache()
+        except Exception:
+            pass
         msg = f"Successfully indexed Knowledge Base '{kb_dict['name']}' ({len(docs)} chunks)."
         # For documentation-heavy KBs, MiniLM is weaker than a doc-tuned embedder.
         if embedding_provider != "ollama":
@@ -500,6 +530,11 @@ def update_file_index(file_path: str):
                 metadatas=metadatas,
                 ids=ids
             )
+            try:
+                from src.rag.keyword_index import clear_cache
+                clear_cache()
+            except Exception:
+                pass
     except Exception as e:
         print(f"[WARN] Failed to update RAG for {file_path}: {e}")
 
@@ -545,20 +580,14 @@ def semantic_search(query: str, n_results: int = 5) -> str:
                         rrf_scores[doc_id] = rrf_scores.get(doc_id, 0.0) + 1.0 / (60 + rank)
                         doc_map[doc_id] = (doc, meta)
                         
-                # 2. Keyword Search
+                # 2. Keyword Search via a cached BM25 index (built once per
+                # collection) instead of scanning the whole corpus each query.
                 if keywords:
-                    data = col.get(include=["documents", "metadatas"])
-                    if data and data.get("documents"):
-                        scored = []
-                        for doc, meta, doc_id in zip(data["documents"], data["metadatas"], data["ids"]):
-                            doc_lower = doc.lower()
-                            score = sum(doc_lower.count(kw) for kw in keywords)
-                            if score > 0:
-                                scored.append((score, doc, meta, doc_id))
-                        scored.sort(key=lambda x: x[0], reverse=True)
-                        for rank, (_, doc, meta, doc_id) in enumerate(scored[:n_results * 2]):
-                            rrf_scores[doc_id] = rrf_scores.get(doc_id, 0.0) + 1.0 / (60 + rank)
-                            doc_map[doc_id] = (doc, meta)
+                    from src.rag.keyword_index import get_index
+                    kidx = get_index(col)
+                    for rank, (doc_id, doc, meta) in enumerate(kidx.search(query, n_results * 2)):
+                        rrf_scores[doc_id] = rrf_scores.get(doc_id, 0.0) + 1.0 / (60 + rank)
+                        doc_map[doc_id] = (doc, meta)
             except Exception:
                 pass
             
