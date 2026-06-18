@@ -137,12 +137,40 @@ def build_bottom_toolbar(agent, ui_state):
     return _toolbar
 
 
+class _SafeFileHistory(FileHistory):
+    """FileHistory that can't take down the REPL.
+
+    Two problems it guards against:
+    - The path is absolute (resolved by the caller), so input history keeps
+      working after the user changes the working directory with /cd. A relative
+      path would be re-resolved against the new cwd on every append and crash
+      the prompt_toolkit event loop the moment that cwd has no .argent/ dir.
+    - Any disk error while loading or appending is swallowed instead of
+      bubbling up out of the key-press handler and killing the session.
+    """
+
+    def store_string(self, string: str) -> None:
+        try:
+            Path(self.filename).parent.mkdir(parents=True, exist_ok=True)
+            super().store_string(string)
+        except Exception:
+            pass
+
+    def load_history_strings(self):
+        try:
+            yield from super().load_history_strings()
+        except Exception:
+            return
+
+
 def build_prompt_session(get_commands, agent, ui_state, history_path=None) -> PromptSession:
     """Create the PromptSession used by the main REPL loop."""
     if history_path:
         try:
-            Path(history_path).parent.mkdir(parents=True, exist_ok=True)
-            history = FileHistory(str(history_path))
+            # Anchor to an absolute path now, so /cd later can't strand it.
+            hp = Path(history_path).expanduser().resolve()
+            hp.parent.mkdir(parents=True, exist_ok=True)
+            history = _SafeFileHistory(str(hp))
         except Exception:
             history = InMemoryHistory()
     else:
