@@ -27,6 +27,7 @@ from src.agent.trimmer import estimate_tokens
 from src.agent.healing import detect_tool_failure, build_healing_hint, HEALING_TOOLS
 from src.agent.constrained import build_step_schema, build_tool_catalog, StepStreamExtractor
 from src.agent.loop_guard import LoopGuard, build_loop_note
+from src.agent.context_limit import is_context_overflow, parse_context_limit
 
 log = get_logger("agent")
 
@@ -316,20 +317,29 @@ Example: {"tool": {"name": "read_file", "arguments": {"file_path": "main.py"}}}"
 
     def _trim_history(self):
         self.max_context_tokens = get_context_window()
-        
-        from config import get_strip_reasoning
+
+        from config import get_strip_reasoning, get_max_generation_tokens
         from src.agent.trimmer import clean_messages_for_llm
+        from src.agent.context_limit import effective_history_budget
         strip_enabled = get_strip_reasoning()
-        
+
         cleaned = clean_messages_for_llm(self.messages, strip_enabled)
+
+        # Trim history into the room left AFTER the system prompt, the tool
+        # schemas (sent alongside) and the model's response — not against the
+        # whole window — so the assembled request fits under a hard limit.
+        sys_tokens = self._estimate_tokens(str(self.messages[0])) if self.messages else 0
+        response_reserve = min(get_max_generation_tokens() or 1024, 2048)
+        budget = effective_history_budget(self.max_context_tokens, sys_tokens, response_reserve)
+
         history_tokens = sum(self._estimate_tokens(str(m)) for m in cleaned[1:])
         msg_count = len(cleaned) - 1
-        
-        if msg_count <= self.max_history_messages and history_tokens <= self.max_context_tokens:
+
+        if msg_count <= self.max_history_messages and history_tokens <= budget:
             return
 
         self.messages = self.strategy.trim_history(
-            self.messages, self.model_name, self.max_history_messages, self.max_context_tokens
+            self.messages, self.model_name, self.max_history_messages, budget
         )
 
     def _parse_raw_tool_call(self, content: str) -> dict | None:
@@ -423,6 +433,7 @@ Example: {"tool": {"name": "read_file", "arguments": {"file_path": "main.py"}}}"
         self._trim_history()
         self._truncate_continues = 0
         self._salvage_continues = 0
+        self._ctx_overflow_retries = 0
 
         # One provider instance per turn: tool-result formatting and retries
         # below reuse it instead of re-creating a provider on every call.
@@ -619,6 +630,31 @@ Example: {"tool": {"name": "read_file", "arguments": {"file_path": "main.py"}}}"
                     log.warning("Constrained decoding unsupported by provider, falling back: %s", e)
                     self._constrained_unsupported = True
                     step_schema = None
+                    continue
+                elif isinstance(e, ProviderError) and is_context_overflow(str(e)):
+                    # The assembled prompt overflowed the model's real context
+                    # window. Use the size it reports (if any) to right-size our
+                    # budget, re-trim hard and retry — instead of failing.
+                    self._ctx_overflow_retries = getattr(self, "_ctx_overflow_retries", 0) + 1
+                    if self._ctx_overflow_retries > 3:
+                        yield {"type": "error", "content": (
+                            f"{e}\n[Argent: the prompt still won't fit after shrinking the window "
+                            f"3×. Start a fresh chat with /clear, or lower it with /context.]"
+                        )}
+                        break
+                    real_ctx = parse_context_limit(str(e))
+                    from config import set_context_window
+                    if real_ctx:
+                        new_window = max(2048, int(real_ctx * 0.9))
+                    else:
+                        new_window = max(2048, int(self.max_context_tokens * 0.7))
+                    set_context_window(new_window)   # learn the real window for next turns
+                    self.max_context_tokens = new_window
+                    self._trim_history()
+                    yield {"type": "error", "content": (
+                        f"\n[Argent: prompt exceeded the model's context window — trimmed history "
+                        f"and retrying (window now ~{new_window} tokens)...]"
+                    )}
                     continue
                 elif isinstance(e, ProviderError):
                     yield {"type": "error", "content": str(e)}
