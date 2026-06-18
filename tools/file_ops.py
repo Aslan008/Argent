@@ -83,16 +83,38 @@ def write_file(file_path: str, content: str, overwrite: bool = False) -> str:
                 pass
                 
         path.parent.mkdir(parents=True, exist_ok=True)
-        if path.exists():
+        existed = path.exists()
+        prior_content = None
+        if existed:
             snapshot(str(path))
+            try:
+                prior_content = path.read_text(encoding="utf-8")
+            except Exception:
+                prior_content = None
         if '\\n' in content or '\\t' in content:
             content = content.replace('\\n', '\n').replace('\\t', '\t').replace('\\\\', '\\')
         with open(path, "w", encoding="utf-8") as f:
             f.write(content)
-            
+
         validation_error = _validate_code_syntax(str(path))
         if validation_error:
-            return f"File '{file_path}' written successfully, BUT COMPILATION FAILED:\n\n{validation_error}"
+            # Safety net: never leave a file that doesn't compile on disk.
+            # Restore the previous version, or remove a brand-new broken file.
+            if existed:
+                if prior_content is not None:
+                    path.write_text(prior_content, encoding="utf-8")
+                else:
+                    from file_tracker import undo
+                    undo(str(path))
+                reverted = "The file was restored to its previous version."
+            else:
+                try:
+                    path.unlink()
+                except Exception:
+                    pass
+                reverted = "The new file was not created."
+            return (f"Edit REJECTED: writing '{file_path}' would break compilation, so the change was "
+                    f"NOT applied. {reverted}\n\n{validation_error}")
             
         try:
             from rag_engine import update_file_index
@@ -227,7 +249,11 @@ def replace_python_function(file_path: str, function_name: str, new_code: str) -
 
         validation_error = _validate_code_syntax(str(path))
         if validation_error:
-            return f"Function replaced, BUT COMPILATION FAILED:\n\n{validation_error}\nHint: Check indentation (4 spaces per block). Use replace_python_function again to fix it."
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(source)
+            return (f"Edit REJECTED: replacing '{function_name}' would break compilation, so the change "
+                    f"was reverted.\n\n{validation_error}\nHint: check indentation (4 spaces per block), "
+                    f"then call replace_python_function again with corrected code.")
 
         _print_diff(source, new_source, file_path)
 
