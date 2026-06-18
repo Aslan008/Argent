@@ -27,7 +27,7 @@ from tools.misc_tools import (
     find_definition, find_references, git_checkpoint, git_rollback,
     call_mcp_tool, run_subagent, create_svg_image, ask_user_questions,
     wait_heartbeat, end_auto_mode, create_artifact, request_user_approval,
-    calculate,
+    calculate, set_goal,
 )
 from tools.swarm_tools import run_swarm_workers
 from tools.browser_tools import (
@@ -93,6 +93,7 @@ AVAILABLE_TOOLS = {
     "run_swarm_workers": run_swarm_workers,
     "create_svg_image": create_svg_image,
     "ask_user_questions": ask_user_questions,
+    "set_goal": set_goal,
     "calculate": calculate,
     "create_artifact": create_artifact,
     "request_user_approval": request_user_approval,
@@ -1166,6 +1167,27 @@ TOOL_SCHEMAS = [
                     }
                 },
                 "required": ["expression"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "set_goal",
+            "description": "Record the overall OBJECTIVE and/or the CURRENT TASK you are working on. Argent re-pins these at the end of the context as a goal reminder, so keep them accurate: set the objective once you understand what the user really wants, and update current_task when you move to a new sub-step. Does not modify any files.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "objective": {
+                        "type": "string",
+                        "description": "The high-level goal of the whole task, in one sentence."
+                    },
+                    "current_task": {
+                        "type": "string",
+                        "description": "The specific sub-task you are working on right now."
+                    }
+                },
+                "required": []
             }
         }
     },

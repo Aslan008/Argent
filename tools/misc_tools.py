@@ -88,6 +88,26 @@ def calculate(expression: str) -> str:
     log.info("calculate: %s = %s", expression, result)
     return f"{expression} = {result}"
 
+
+def set_goal(objective: str = None, current_task: str = None) -> str:
+    """Record the overall objective and/or the current sub-task as a persistent goal.
+
+    Argent re-pins these at the end of the context as a reminder, so the model
+    keeps sight of the goal on long runs. Does not touch any files.
+    """
+    changed = []
+    if objective and objective.strip():
+        memory.set_objective(objective.strip())
+        changed.append(f"OBJECTIVE = {objective.strip()[:120]}")
+    if current_task and current_task.strip():
+        memory.set_current_task(current_task.strip())
+        changed.append(f"CURRENT TASK = {current_task.strip()[:120]}")
+    if not changed:
+        return "Error: provide 'objective' and/or 'current_task' to set the goal."
+    log.info("set_goal: %s", "; ".join(changed))
+    return "Goal updated: " + "; ".join(changed)
+
+
 def ask_user_questions(questions: list) -> str:
     """Ask the user a series of structured questions."""
     from prompt_toolkit import prompt as ptk_prompt

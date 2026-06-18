@@ -143,7 +143,7 @@ def main():
         '/hooks', '/tools', '/save', '/project', '/work', '/commit',
         '/sessions', '/load', '/copy', '/logs', '/skills', '/skill import', '/auto', '/verbose', '/debug', '/browser', '/exit', '/quit',
         '/mcp', '/thinking', '/temp', '/temperature',
-        '/cd', '/undo', '/diff', '/changes', '/stats', '/aux', '/doctor', '/jobs', '/stop',
+        '/cd', '/undo', '/diff', '/changes', '/stats', '/aux', '/doctor', '/jobs', '/stop', '/goal',
         
         # Subcommands and parameter variations
         '/mcp list', '/mcp add', '/mcp remove', '/mcp test', '/mcp start', '/mcp stop',
@@ -423,6 +423,26 @@ def main():
                     for skill in skills:
                         tag = " [dim](bundle)[/dim]" if skill.get("kind") == "folder" else ""
                         print_system(f"- [bold yellow]{skill['name']}[/bold yellow]{tag}: {skill['description']}")
+                continue
+            elif user_input.startswith("/goal"):
+                from memory_manager import memory
+                arg = user_input[len("/goal"):].strip()
+                if not arg:
+                    obj = memory.data.get("objective") or "[not set]"
+                    task = memory.data.get("current_task") or "[not set]"
+                    done = memory.data.get("completed") or []
+                    files = memory.data.get("files_modified") or []
+                    print_system("[bold cyan]Goal[/bold cyan]")
+                    print_system(f"  OBJECTIVE: {obj}")
+                    print_system(f"  CURRENT TASK: {task}")
+                    print_system(f"  PROGRESS: {len(done)} step(s) done, {len(files)} file(s) touched")
+                    print_system("Set a goal with [bold]/goal <text>[/bold], or reset with [bold]/goal clear[/bold].")
+                elif arg.lower() in ("clear", "reset", "done"):
+                    memory.clear()
+                    print_system("Goal and working memory cleared.")
+                else:
+                    memory.set_objective(arg)
+                    print_system(f"Objective set: [bold yellow]{arg}[/bold yellow]")
                 continue
             elif user_input.startswith("/hooks"):
                 parts = user_input.split(" ")

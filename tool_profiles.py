@@ -25,7 +25,7 @@ CORE_CHAT_TOOLS = {
     "run_command", "start_background_command", "read_background_command",
     "stop_background_command", "list_background_commands",
     # interaction & utilities
-    "ask_user_questions", "calculate", "analyze_project",
+    "ask_user_questions", "calculate", "set_goal", "analyze_project",
 }
 
 # Categories that get the slim profile (they benefit most from a tight prompt).

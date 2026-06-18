@@ -70,6 +70,7 @@ from tools.system_ops import (
 from tools.misc_tools import (
     ask_user_questions,
     calculate,
+    set_goal,
     create_svg_image,
     find_definition,
     find_references,

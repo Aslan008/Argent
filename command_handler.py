@@ -206,6 +206,7 @@ def handle_slash_command(command: str, agent: ArgentAgent) -> bool:
             "- `/project [prompt]` - Force the AI to build a massive multi-step project from scratch\n"
             "- `/work [--auto] [task]` - Modify or fix an EXISTING codebase safely\n"
             "- `/commit` - Generate AI commit message and commit changes\n"
+            "- `/goal [text|clear]` - Show the current goal & progress, set a new objective, or reset it\n"
             "- `/cd [path]` - Change working directory (show current if no path given)\n"
             "- `/undo <file>` - Restore a file to its state before AI modified it\n"
             "- `/diff <file>` - Show diff between current file and its pre-modification snapshot\n"
