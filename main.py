@@ -143,7 +143,7 @@ def main():
         '/hooks', '/tools', '/save', '/project', '/work', '/commit',
         '/sessions', '/load', '/copy', '/logs', '/skills', '/skill import', '/auto', '/verbose', '/debug', '/browser', '/exit', '/quit',
         '/mcp', '/thinking', '/temp', '/temperature',
-        '/cd', '/undo', '/diff', '/changes', '/stats', '/aux', '/doctor', '/jobs', '/stop', '/goal',
+        '/cd', '/undo', '/diff', '/changes', '/stats', '/aux', '/doctor', '/jobs', '/stop', '/goal', '/critic',
         
         # Subcommands and parameter variations
         '/mcp list', '/mcp add', '/mcp remove', '/mcp test', '/mcp start', '/mcp stop',
@@ -443,6 +443,33 @@ def main():
                 else:
                     memory.set_objective(arg)
                     print_system(f"Objective set: [bold yellow]{arg}[/bold yellow]")
+                continue
+            elif user_input.startswith("/critic"):
+                from agent import ArgentSubAgent
+                from memory_manager import memory
+                from src.agent.critic import build_critique_task
+                target = user_input[len("/critic"):].strip()
+                what = "plan / idea"
+                if not target:
+                    # No text given: critique the AI's latest substantive message
+                    # (usually the plan it just proposed).
+                    target = next(
+                        (m.get("content") for m in reversed(agent.messages)
+                         if m.get("role") == "assistant" and (m.get("content") or "").strip()),
+                        "",
+                    ).strip()
+                    what = "assistant's latest plan / answer"
+                if not target:
+                    print_error("Usage: /critic <plan or idea to critique>  (or run it right after the AI proposes a plan)")
+                else:
+                    goal = memory.data.get("objective") or ""
+                    task = build_critique_task(target, goal=goal, what=what)
+                    print_system("[dim]Spawning an independent critic (cleared context, read-only)…[/dim]")
+                    try:
+                        verdict = ArgentSubAgent("Critic", task, tools_override=[]).execute()
+                        print_system(verdict or "[critic returned nothing]")
+                    except Exception as e:
+                        print_error(f"Critic failed: {e}")
                 continue
             elif user_input.startswith("/hooks"):
                 parts = user_input.split(" ")

@@ -1068,11 +1068,13 @@ class ArgentSubAgent(ArgentAgent):
         self.tools_override = tools_override
         
         # Override system prompt for specific role
+        from src.agent.critic import CRITIC_SYSTEM
         role_prompts = {
             "Coder": "You are a specialized Coder sub-agent. Your goal is to IMPLEMENT specific code as described. Be concise and follow the style guide.",
             "Researcher": "You are a specialized Research sub-agent. Your goal is to gather technical information and documentation. Synthesize your findings into a clear report.",
             "Reviewer": "You are a specialized Code Reviewer. Your goal is to find bugs, security vulnerabilities, and architectural flaws in the provided code.",
-            "DocWriter": "You are a specialized Documentation sub-agent. Your goal is to write clear, accurate markdown documentation for the project."
+            "DocWriter": "You are a specialized Documentation sub-agent. Your goal is to write clear, accurate markdown documentation for the project.",
+            "Critic": CRITIC_SYSTEM,
         }
         
         custom_system = role_prompts.get(role, f"You are a specialized {role} sub-agent.")
