@@ -262,56 +262,72 @@ def render_response_stream(
                 if not done and not is_tool_executing and type_ in (
                     "content_stream", "content", "content_replace",
                 ):
-                    streamed_text = ""
+                    # Append-only streaming (à la Claude Code): commit COMPLETE
+                    # markdown blocks to the terminal as they finalize — they
+                    # scroll naturally and are never redrawn — and keep only the
+                    # incomplete trailing block in a small, bounded live tail.
+                    # No whole-message redraw and no final re-render, so long
+                    # answers can't strand a partial copy in the scrollback.
+                    from src.cli.stream_markdown import MarkdownStreamSplitter
+                    from ui import _render_code_blocks
+                    splitter = MarkdownStreamSplitter()
+
+                    def _commit(live, md):
+                        md = md.strip("\n")
+                        if not md:
+                            return
+                        for el in _render_code_blocks(md):
+                            live.console.print(el)
+                        live.console.print("")
+
+                    def _tail():
+                        height = console.size.height or 24
+                        max_lines = max(3, height - 8)
+                        body = "\n".join(
+                            splitter.pending().splitlines()[-max_lines:]
+                        ).strip("\n")
+                        spinner = RichSpinner(
+                            "dots", text=Text(" Генерация...", style="dim cyan")
+                        )
+                        if not body:
+                            return spinner
+                        return Group(
+                            Text(body, style=c.get("assistant_text", "default")),
+                            spinner,
+                        )
+
                     with Live(
-                        create_content_panel(""),
+                        _tail(),
                         console=console,
                         refresh_per_second=10,
                         transient=True,
                     ) as live:
                         while True:
                             if type_ in ("content_stream", "content"):
-                                streamed_text += chunk["content"]
+                                committed = splitter.feed(chunk["content"])
                                 full_streamed_text += chunk["content"]
-                                live.update(create_content_panel(streamed_text))
+                                if committed:
+                                    _commit(live, committed)
                             elif type_ == "content_replace":
-                                streamed_text = chunk["content"]
+                                splitter.replace(chunk["content"])
                                 full_streamed_text = chunk["content"]
-                                live.update(create_content_panel(streamed_text))
                             elif type_ == "tool_generating":
                                 break
                             elif type_ not in ("thinking_stream",):
                                 break
 
-                            if streamed_text:
-                                live.update(
-                                    Group(
-                                        create_content_panel(streamed_text),
-                                        RichSpinner(
-                                            "dots",
-                                            text=Text(
-                                                " Генерация...",
-                                                style="dim cyan",
-                                            ),
-                                        ),
-                                    )
-                                )
+                            live.update(_tail())
 
                             try:
                                 chunk = next(chunk_iterator)
                                 type_ = chunk.get("type")
-                                if type_ in (
-                                    "content_stream", "content",
-                                    "content_replace",
-                                ):
-                                    pass
-                                elif streamed_text:
-                                    live.update(
-                                        create_content_panel(streamed_text)
-                                    )
                             except StopIteration:
                                 done = True
                                 break
+
+                        # Commit the final, complete block before the transient
+                        # tail is cleared on exit.
+                        _commit(live, splitter.finalize())
 
                     # Handle what caused Phase 2 to exit
                     if not done and not is_tool_executing:
@@ -391,11 +407,8 @@ def render_response_stream(
             print_error(f"Streaming error: {e}")
             break
 
-    # Final static render
-    if full_streamed_text:
-        for el in create_final_panel(full_streamed_text):
-            safe_print(el)
-            safe_print("")
+    # No final re-render: content was committed block-by-block during the
+    # stream (append-only), so re-printing it here would duplicate it.
 
     elapsed_time = time.time() - start_total_time
     usage_str = ""
