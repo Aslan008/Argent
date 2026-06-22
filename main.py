@@ -153,6 +153,7 @@ def main():
         '/temperature 0.2', '/temperature 0.7', '/temperature 1.0',
         '/work --auto',
         '/critic on', '/critic off', '/critic model', '/critic status',
+        '/guard', '/guard off', '/guard warn', '/guard block',
         '/logs clear', '/logs error'
     ]
     
@@ -497,6 +498,20 @@ def main():
                             print_system(run_plan_critique(target, goal=goal, what=what) or "[critic returned nothing]")
                         except Exception as e:
                             print_error(f"Critic failed: {e}")
+                continue
+            elif user_input.startswith("/guard"):
+                from config import get_command_guard, set_command_guard
+                arg = user_input[len("/guard"):].strip().lower()
+                if arg in ("off", "warn", "block"):
+                    set_command_guard(arg)
+                    print_system(f"Command risk-gate is now: [bold]{arg}[/bold]")
+                    if arg == "block":
+                        print_system("Catastrophic commands (rm -rf /, mkfs, fork bombs, curl|sh…) will be refused without prompting.")
+                    elif arg == "off":
+                        print_system("Only the legacy destructive-command confirmation remains.")
+                else:
+                    print_system(f"Command risk-gate: [bold]{get_command_guard()}[/bold]  (off | warn | block)")
+                    print_system("warn = confirm risky commands with the reason; block = refuse catastrophic ones; off = legacy. Set with [bold]/guard <level>[/bold].")
                 continue
             elif user_input.startswith("/hooks"):
                 parts = user_input.split(" ")

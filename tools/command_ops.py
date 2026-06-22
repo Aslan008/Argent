@@ -4,7 +4,7 @@ import queue
 import threading
 import ctypes
 import time
-from approval import request_approval, is_destructive_command, command_grant_key
+from approval import request_approval, is_destructive_command, command_grant_key, assess_command_risk
 from src.agent.shell import choose_shell, build_command_argv
 from src.agent.command_diagnostics import diagnose_command_error
 from memory_manager import memory
@@ -30,8 +30,30 @@ MAX_BACKGROUND_PROCESSES = 10
 
 def run_command(command: str) -> str:
     """Execute a console command and return its output. Requires user confirmation. Streams output to console."""
-    destructive = is_destructive_command(command)
-    label = "выполнить ДЕСТРУКТИВНУЮ команду" if destructive else "выполнить команду"
+    from config import get_command_guard
+    guard = get_command_guard()
+    level, reasons = assess_command_risk(command)
+    if guard == "off":
+        reasons = []
+
+    # Hard refusal of catastrophic commands when the gate is set to block.
+    if guard == "block" and level == "block":
+        why = "; ".join(reasons) or "catastrophic command"
+        log.warning("Risk-gate BLOCKED: %s (%s)", command, why)
+        return (
+            f"Command BLOCKED by the risk-gate (/guard block): '{command}'.\n"
+            f"Reason: {why}. It was refused without execution. Use a safer, scoped "
+            f"command, or lower the gate with /guard warn to allow it with confirmation."
+        )
+
+    destructive = level != "safe"
+    detail = f" [{'; '.join(reasons)}]" if reasons else ""
+    if level == "block":
+        label = f"выполнить ОПАСНУЮ команду{detail}"
+    elif destructive:
+        label = f"выполнить ДЕСТРУКТИВНУЮ команду{detail}"
+    else:
+        label = "выполнить команду"
     approved = request_approval(
         f"{label}: {command}",
         destructive=destructive,

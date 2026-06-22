@@ -42,6 +42,28 @@ _DESTRUCTIVE_PATTERNS = [
 ]
 _DESTRUCTIVE_RE = re.compile("|".join(_DESTRUCTIVE_PATTERNS), re.IGNORECASE)
 
+# Catastrophic / irreversible / system-wide commands. Each carries a human
+# reason. Broad on purpose: in "warn" mode a false positive is one confirmation;
+# in "block" mode it refuses outright, so the gate stays opt-in for that tier.
+_CATASTROPHIC_PATTERNS = [
+    (r"\brm\s+(?:-\S+\s+)*-\S*[rf]\S*[rf]\S*\s+(?:-\S+\s+)*['\"]?(?:/|~|/\*|\*|\$HOME)(?:\s|/|$|['\"])",
+     "recursive force-delete of a root, home, or wildcard path"),
+    (r":\s*\(\s*\)\s*\{\s*:\s*\|\s*:\s*&?\s*\}\s*;\s*:", "fork bomb"),
+    (r"\bmkfs(?:\.\w+)?\b", "filesystem format (mkfs)"),
+    (r"\bdd\b[^|&;]*\bof=/dev/", "raw write to a block device (dd of=/dev/…)"),
+    (r">\s*/dev/sd[a-z]", "overwrite of a block device"),
+    (r"\bformat(?:-volume)?\b[^|&;]*\b[a-zA-Z]:", "drive format"),
+    (r"\bdel\b[^|&;]*\s/[sq]\b[^|&;]*\b[a-zA-Z]:\\?(?:\s|$)", "recursive delete at a drive root (del /s /q)"),
+    (r"\bremove-item\b[^|&;]*-recurse[^|&;]*-force[^|&;]*\b[a-zA-Z]:\\?(?:\s|\"|$)",
+     "recursive force delete at a drive root"),
+    (r"\bdiskpart\b", "disk partitioning (diskpart)"),
+    (r"\bcipher\b\s+/w", "secure disk wipe (cipher /w)"),
+    (r"\b(?:curl|wget|iwr|invoke-webrequest)\b[^|]*\|\s*(?:sudo\s+)?(?:sh|bash|zsh|pwsh|powershell|python\d?|iex|invoke-expression)\b",
+     "piping downloaded content straight into a shell"),
+    (r"\bnetsh\s+advfirewall\s+set\s+\w+\s+state\s+off\b", "disabling the firewall"),
+]
+_CATASTROPHIC_RE = [(re.compile(p, re.IGNORECASE), why) for p, why in _CATASTROPHIC_PATTERNS]
+
 _ALWAYS_PREFIX = "✅ Да, и всегда разрешать"
 
 
@@ -67,11 +89,27 @@ def get_session_grants() -> set[str]:
     return set(_session_grants)
 
 
+def assess_command_risk(command: str):
+    """Grade a shell command's risk.
+
+    Returns (level, reasons) where level is 'safe' | 'warn' | 'block':
+    - 'block': catastrophic / irreversible / system-wide (with specific reasons).
+    - 'warn':  destructive but recoverable/scoped (deletes files, kills procs…).
+    - 'safe':  everything else.
+    """
+    if not command or not command.strip():
+        return "safe", []
+    reasons = [why for rx, why in _CATASTROPHIC_RE if rx.search(command)]
+    if reasons:
+        return "block", reasons
+    if _DESTRUCTIVE_RE.search(command):
+        return "warn", ["deletes/overwrites files or stops processes"]
+    return "safe", []
+
+
 def is_destructive_command(command: str) -> bool:
     """Heuristic check whether a shell command can destroy data or processes."""
-    if not command:
-        return False
-    return bool(_DESTRUCTIVE_RE.search(command))
+    return assess_command_risk(command)[0] != "safe"
 
 
 def command_grant_key(command: str) -> str | None:

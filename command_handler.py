@@ -210,6 +210,7 @@ def handle_slash_command(command: str, agent: ArgentAgent) -> bool:
             "- `/critic [text]` - Red-team a plan/idea (or the AI's last plan) with an independent critic\n"
             "- `/critic on|off` - Toggle auto-critique of the staged diff before /commit\n"
             "- `/critic model <name>|clear` - Choose the critic's model (e.g. openrouter:anthropic/claude-sonnet-4-6)\n"
+            "- `/guard [off|warn|block]` - Command risk-gate: confirm risky commands (warn) or refuse catastrophic ones (block)\n"
             "- `/cd [path]` - Change working directory (show current if no path given)\n"
             "- `/undo <file>` - Restore a file to its state before AI modified it\n"
             "- `/diff <file>` - Show diff between current file and its pre-modification snapshot\n"

@@ -154,6 +154,20 @@ def set_critic_provider(name: str):
     _set("critic_provider", name)
 
 
+def get_command_guard() -> str:
+    """Command risk-gate strictness: 'off' | 'warn' | 'block'. Default 'warn'.
+
+    off   = legacy destructive-command confirmation only.
+    warn  = confirm risky commands, showing the reason.
+    block = refuse catastrophic commands outright (no prompt).
+    """
+    return _get("command_guard", "warn")
+
+
+def set_command_guard(level: str):
+    _set("command_guard", level)
+
+
 def get_max_generation_tokens() -> int:
     """Max tokens for generation. Default 8192 to prevent truncation in local APIs."""
     return _get("max_generation_tokens", 8192)
