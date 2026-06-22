@@ -129,48 +129,45 @@ def run_admin_command(command: str) -> str:
     if not approved:
         return f"Execution aborted by user. The admin command '{command}' was NOT run."
         
+    import tempfile
+    from pathlib import Path
+    # Unique temp file in the user's temp dir — not a shared, hardcoded
+    # C:/Windows/Temp path that would collide across concurrent/repeat admin
+    # runs. Removed up front so its re-appearance signals the child finished.
+    fd, temp_path = tempfile.mkstemp(prefix="argent_admin_", suffix=".txt")
+    os.close(fd)
+    temp_out = Path(temp_path)
     try:
-        from pathlib import Path
-        temp_out = Path("C:/Windows/Temp/argent_admin_out.txt")
-        if temp_out.exists():
-            temp_out.unlink()
-            
+        temp_out.unlink()  # elevated child re-creates it on completion
+
         wrapped_command = f"{command} > '{temp_out}' 2>&1"
-        
         result = ctypes.windll.shell32.ShellExecuteW(
-            None, 
-            "runas", 
-            "powershell.exe", 
-            f"-Command \"{wrapped_command}\"", 
-            None, 
-            0
+            None, "runas", "powershell.exe",
+            f"-Command \"{wrapped_command}\"", None, 0,
         )
-        
         if result <= 32:
             return f"Error: UAC prompt was denied or execution failed. Error code: {result}"
-            
+
         timeout = 20
         start_time = time.time()
         while time.time() - start_time < timeout:
             if temp_out.exists():
                 try:
-                    with open(temp_out, "r", encoding="utf-8", errors="replace") as f:
-                        out = f.read().strip()
-                    temp_out.unlink()
+                    out = temp_out.read_text(encoding="utf-8", errors="replace").strip()
                     return f"Admin execution completed.\nOutput:\n{out}"
                 except PermissionError:
-                    pass
+                    pass  # still being written by the elevated process
             time.sleep(0.5)
-            
-        try:
-            if temp_out.exists():
-                temp_out.unlink()
-        except Exception:
-            pass
-        return "Admin execution started, but timed out waiting for output file. It may still be running in the background."
-        
+
+        return ("Admin execution started, but timed out waiting for output. "
+                "It may still be running in the background.")
     except Exception as e:
         return f"Error running admin command '{command}': {e}"
+    finally:
+        try:
+            temp_out.unlink(missing_ok=True)
+        except Exception:
+            pass
 
 def start_background_command(command: str) -> str:
     """Launch a command in the background and return its PID."""
