@@ -1,6 +1,5 @@
 import json
 import re
-import codecs
 import os
 from tools import get_available_tools
 
@@ -113,18 +112,51 @@ def extract_balanced_json(text: str, start_pos: int) -> str | None:
     return None
 
 def decode_json_escapes(s: str) -> str:
-    """Decode JSON escape sequences in a raw string extracted from malformed JSON."""
-    try:
-        return codecs.decode(s, 'unicode_escape')
-    except Exception:
-        pass
-    result = s
-    result = result.replace('\\n', '\n')
-    result = result.replace('\\t', '\t')
-    result = result.replace('\\r', '\r')
-    result = result.replace('\\"', '"')
-    result = result.replace('\\\\', '\\')
-    return result
+    r"""Decode JSON string escapes (\n \t \r \" \\ \/ \b \f \uXXXX) from a raw
+    string extracted from malformed JSON.
+
+    Deliberately does NOT use codecs 'unicode_escape': that codec is latin-1
+    based and mojibakes any non-ASCII content (e.g. Cyrillic), silently
+    corrupting recovered file content. This decodes char-by-char so real UTF-8
+    text passes through untouched."""
+    simple = {'n': '\n', 't': '\t', 'r': '\r', '"': '"',
+              '\\': '\\', '/': '/', 'b': '\b', 'f': '\f'}
+    out = []
+    i, n = 0, len(s)
+    while i < n:
+        ch = s[i]
+        if ch != '\\' or i + 1 >= n:
+            out.append(ch)
+            i += 1
+            continue
+        nxt = s[i + 1]
+        if nxt in simple:
+            out.append(simple[nxt])
+            i += 2
+            continue
+        if nxt == 'u' and i + 6 <= n:
+            try:
+                cp = int(s[i + 2:i + 6], 16)
+            except ValueError:
+                out.append(nxt)
+                i += 2
+                continue
+            # Combine a UTF-16 surrogate pair (😀) into one codepoint.
+            if 0xD800 <= cp <= 0xDBFF and s[i + 6:i + 8] == '\\u':
+                try:
+                    lo = int(s[i + 8:i + 12], 16)
+                    if 0xDC00 <= lo <= 0xDFFF:
+                        out.append(chr(0x10000 + ((cp - 0xD800) << 10) + (lo - 0xDC00)))
+                        i += 12
+                        continue
+                except ValueError:
+                    pass
+            out.append(chr(cp))
+            i += 6
+            continue
+        out.append(nxt)  # unknown escape — keep the char literally
+        i += 2
+    return ''.join(out)
 
 def parse_raw_tool_call(content: str) -> dict | None:
     """Parse a raw tool call from AI-generated content.

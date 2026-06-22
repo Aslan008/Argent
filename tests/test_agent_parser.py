@@ -9,7 +9,9 @@ from src.agent.parser import (
     extract_balanced_json,
     repair_json_strings,
     try_parse_json_tool,
-    parse_raw_tool_call
+    parse_raw_tool_call,
+    decode_json_escapes,
+    try_recover_malformed_tool,
 )
 
 class TestAgentParser(unittest.TestCase):
@@ -58,6 +60,45 @@ class TestAgentParser(unittest.TestCase):
         self.assertIsNotNone(parsed)
         self.assertEqual(parsed["parsed"]["name"], "write_file")
         self.assertEqual(parsed["parsed"]["arguments"]["file_path"], "hello.py")
+
+    def test_decode_escapes_preserves_cyrillic(self):
+        # Regression: codecs 'unicode_escape' mojibaked non-ASCII content,
+        # corrupting recovered files with Russian/Unicode text.
+        self.assertEqual(decode_json_escapes("Привет\\nмир"), "Привет\nмир")
+        self.assertEqual(decode_json_escapes("café\\ttab"), "café\ttab")
+        self.assertNotIn("Ð", decode_json_escapes("Документ"))
+
+    def test_decode_escapes_unicode_and_backslash(self):
+        self.assertEqual(decode_json_escapes("\\u0041\\u0042"), "AB")
+        self.assertEqual(decode_json_escapes("a\\\\b"), "a\\b")  # \\ -> one backslash
+
+    def test_shorthand_tool_format(self):
+        parsed = try_parse_json_tool('{"read_file": {"file_path": "a.txt"}}')
+        self.assertEqual(parsed["parsed"]["name"], "read_file")
+        self.assertEqual(parsed["parsed"]["arguments"]["file_path"], "a.txt")
+
+    def test_param_alias_normalization(self):
+        parsed = try_parse_json_tool('{"name":"read_file","arguments":{"filename":"a.txt"}}')
+        self.assertEqual(parsed["parsed"]["arguments"]["file_path"], "a.txt")
+        self.assertNotIn("filename", parsed["parsed"]["arguments"])
+
+    def test_trailing_comma_recovered(self):
+        parsed = try_parse_json_tool('{"name":"read_file","arguments":{"file_path":"a.txt",}}')
+        self.assertIsNotNone(parsed)
+        self.assertEqual(parsed["parsed"]["arguments"]["file_path"], "a.txt")
+
+    def test_json_embedded_in_prose(self):
+        text = 'Sure! {"name": "read_file", "arguments": {"file_path": "x.py"}} done.'
+        parsed = parse_raw_tool_call(text)
+        self.assertEqual(parsed["parsed"]["name"], "read_file")
+
+    def test_recover_malformed_write_keeps_cyrillic(self):
+        raw = '{"name": "write_file", "arguments": {"file_path": "z.txt", "content": "Привет\\nмир"}}'
+        result = try_recover_malformed_tool(raw, "write_file")
+        self.assertIsNotNone(result)
+        content = result["parsed"]["arguments"]["content"]
+        self.assertIn("Привет", content)
+        self.assertNotIn("Ð", content)  # no mojibake
 
 if __name__ == "__main__":
     unittest.main()
