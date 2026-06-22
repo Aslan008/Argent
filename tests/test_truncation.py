@@ -48,7 +48,7 @@ def make_agent(monkeypatch):
         fake_memory.data = {}
         monkeypatch.setattr(agent_module, "memory", fake_memory)
         monkeypatch.setattr(agent_module, "get_mcp_servers", lambda: [])
-        monkeypatch.setattr(agent_module, "create_provider", lambda: provider)
+        monkeypatch.setattr(agent_module, "create_provider", lambda *a, **k: provider)
         # Hermetic token estimation: no HTTP to a live provider from unit tests.
         monkeypatch.setattr(agent_module, "estimate_tokens",
                             lambda text, model, prov: len(text) // 4)

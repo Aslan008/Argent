@@ -152,6 +152,7 @@ def main():
         '/temp 0.2', '/temp 0.7', '/temp 1.0',
         '/temperature 0.2', '/temperature 0.7', '/temperature 1.0',
         '/work --auto',
+        '/critic on', '/critic off', '/critic model', '/critic status',
         '/logs clear', '/logs error'
     ]
     
@@ -445,31 +446,57 @@ def main():
                     print_system(f"Objective set: [bold yellow]{arg}[/bold yellow]")
                 continue
             elif user_input.startswith("/critic"):
-                from agent import ArgentSubAgent
                 from memory_manager import memory
-                from src.agent.critic import build_critique_task
-                target = user_input[len("/critic"):].strip()
-                what = "plan / idea"
-                if not target:
-                    # No text given: critique the AI's latest substantive message
-                    # (usually the plan it just proposed).
-                    target = next(
-                        (m.get("content") for m in reversed(agent.messages)
-                         if m.get("role") == "assistant" and (m.get("content") or "").strip()),
-                        "",
-                    ).strip()
-                    what = "assistant's latest plan / answer"
-                if not target:
-                    print_error("Usage: /critic <plan or idea to critique>  (or run it right after the AI proposes a plan)")
+                from src.agent.critic import parse_critic_model
+                from config import (
+                    get_critic_auto, set_critic_auto, get_critic_model,
+                    set_critic_model, get_critic_provider, set_critic_provider,
+                )
+                arg = user_input[len("/critic"):].strip()
+                low = arg.lower()
+                if low in ("on", "off"):
+                    set_critic_auto(low == "on")
+                    print_system(f"Auto-critic before /commit is now: [bold]{'ON' if low == 'on' else 'OFF'}[/bold]")
+                elif low == "status":
+                    m = get_critic_model() or "(current model)"
+                    p = get_critic_provider() or "(current provider)"
+                    print_system(f"Auto-critic: [bold]{'ON' if get_critic_auto() else 'OFF'}[/bold] | model: {m} | provider: {p}")
+                elif low == "model" or low.startswith("model "):
+                    spec = arg[len("model"):].strip()
+                    if not spec:
+                        m = get_critic_model() or "(current model)"
+                        p = get_critic_provider() or "(current provider)"
+                        print_system(f"Critic model: [bold]{m}[/bold] | provider: {p}")
+                        print_system("Set with [bold]/critic model <name>[/bold] or [bold]/critic model <provider>:<model>[/bold]; reset with [bold]/critic model clear[/bold].")
+                    elif spec.lower() == "clear":
+                        set_critic_model("")
+                        set_critic_provider("")
+                        print_system("Critic model reset to the current model.")
+                    else:
+                        prov, mdl = parse_critic_model(spec)
+                        set_critic_model(mdl)
+                        set_critic_provider(prov)
+                        print_system(f"Critic model set to: [bold yellow]{mdl}[/bold yellow]" + (f" (provider: {prov})" if prov else ""))
                 else:
-                    goal = memory.data.get("objective") or ""
-                    task = build_critique_task(target, goal=goal, what=what)
-                    print_system("[dim]Spawning an independent critic (cleared context, read-only)…[/dim]")
-                    try:
-                        verdict = ArgentSubAgent("Critic", task, tools_override=[]).execute()
-                        print_system(verdict or "[critic returned nothing]")
-                    except Exception as e:
-                        print_error(f"Critic failed: {e}")
+                    target = arg
+                    what = "plan / idea"
+                    if not target:
+                        target = next(
+                            (m.get("content") for m in reversed(agent.messages)
+                             if m.get("role") == "assistant" and (m.get("content") or "").strip()),
+                            "",
+                        ).strip()
+                        what = "assistant's latest plan / answer"
+                    if not target:
+                        print_error("Usage: /critic <plan/idea> | /critic on|off | /critic model <name> | /critic status")
+                    else:
+                        from agent import run_plan_critique
+                        goal = memory.data.get("objective") or ""
+                        print_system("[dim]Spawning an independent critic (cleared context, read-only)…[/dim]")
+                        try:
+                            print_system(run_plan_critique(target, goal=goal, what=what) or "[critic returned nothing]")
+                        except Exception as e:
+                            print_error(f"Critic failed: {e}")
                 continue
             elif user_input.startswith("/hooks"):
                 parts = user_input.split(" ")
@@ -827,7 +854,22 @@ def main():
                     if not staged_diff.strip():
                         print_error("No staged changes found. Use 'git add' first.")
                         continue
-                        
+
+                    from config import get_critic_auto
+                    if get_critic_auto():
+                        from agent import run_plan_critique
+                        from memory_manager import memory
+                        print_system("[dim]Critic reviewing the staged diff before commit…[/dim]")
+                        try:
+                            review = run_plan_critique(
+                                staged_diff, goal=memory.data.get("objective") or "",
+                                what="staged git diff (about to be committed)",
+                            )
+                            print_system("[bold magenta]── Critic ──[/bold magenta]")
+                            print_system(review or "[critic returned nothing]")
+                        except Exception as e:
+                            print_error(f"Critic failed (continuing to commit): {e}")
+
                     print_system("Generating commit message based on staged changes...")
                     
                     commit_prompt = (

@@ -95,7 +95,7 @@ class TestSalvageIntegration:
         mem.data = {}
         monkeypatch.setattr(agent_module, "memory", mem)
         monkeypatch.setattr(agent_module, "get_mcp_servers", lambda: [])
-        monkeypatch.setattr(agent_module, "create_provider", lambda: provider)
+        monkeypatch.setattr(agent_module, "create_provider", lambda *a, **k: provider)
         monkeypatch.setattr(agent_module, "estimate_tokens", lambda t, m, p: len(t) // 4)
         return ArgentAgent()
 

@@ -438,7 +438,7 @@ Example: {"tool": {"name": "read_file", "arguments": {"file_path": "main.py"}}}"
         # One provider instance per turn: tool-result formatting and retries
         # below reuse it instead of re-creating a provider on every call.
         try:
-            provider = create_provider()
+            provider = create_provider(self.provider)
             validation_error = provider.validate_config()
             if validation_error:
                 yield {"type": "error", "content": validation_error}
@@ -1061,8 +1061,18 @@ class ArgentSubAgent(ArgentAgent):
     Unlike the main agent, it doesn't maintain long-term chat history and 
     operates under strict tool restrictions.
     """
-    def __init__(self, role: str, task: str, tools_override: List[str] = None):
+    def __init__(self, role: str, task: str, tools_override: List[str] = None,
+                 model_override: str = None, provider_override: str = None):
         super().__init__()
+        # Optionally run this sub-agent on a different model/provider than the
+        # main agent (e.g. a stronger/independent critic). Refresh the tier so
+        # strategy, context window and history limits match the chosen model.
+        if provider_override:
+            self.provider = provider_override
+        if model_override:
+            self.model_name = model_override
+        if model_override or provider_override:
+            self.refresh_tier()
         self.role = role
         self.task = task
         self.tools_override = tools_override
@@ -1095,5 +1105,32 @@ class ArgentSubAgent(ArgentAgent):
                 final_answer += chunk["content"]
             elif chunk["type"] == "error":
                 return f"Sub-Agent Error: {chunk['content']}"
-                
+
         return final_answer
+
+
+def run_plan_critique(target: str, goal: str = None, what: str = "plan / idea") -> str:
+    """Spawn an independent Critic sub-agent (cleared context, no tools) on the
+    given material and return its findings.
+
+    Uses the configured critic model/provider when set, else the current one. If
+    the chosen critic model/provider fails to run, falls back to the current
+    model so a misconfiguration never blocks the user.
+    """
+    from src.agent.critic import build_critique_task
+    from config import get_critic_model, get_critic_provider
+
+    task = build_critique_task(target, goal=goal, what=what)
+    model = get_critic_model() or None
+    provider = get_critic_provider() or None
+    try:
+        return ArgentSubAgent(
+            "Critic", task, tools_override=[],
+            model_override=model, provider_override=provider,
+        ).execute()
+    except Exception as e:
+        if model or provider:
+            log.warning("Critic on %s/%s failed (%s); falling back to current model",
+                        provider, model, e)
+            return ArgentSubAgent("Critic", task, tools_override=[]).execute()
+        raise

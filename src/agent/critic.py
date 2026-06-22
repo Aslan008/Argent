@@ -36,3 +36,22 @@ def build_critique_task(target: str, goal: str = None, what: str = "plan / idea"
         f"Independently critique the {what} below. You did not write it.\n"
         f"--- BEGIN ---\n{(target or '').strip()}\n--- END ---"
     )
+
+
+_KNOWN_PROVIDERS = ("ollama", "zai", "koboldcpp", "openrouter")
+
+
+def parse_critic_model(spec: str):
+    """Parse a critic-model spec into (provider, model).
+
+    'provider:model' splits when the prefix is a known provider — so
+    'openrouter:anthropic/claude-sonnet-4-6' → ('openrouter', 'anthropic/...').
+    Otherwise provider is '' (use the current one), which keeps Ollama tags like
+    'qwen2.5:3b' intact instead of mistaking 'qwen2.5' for a provider.
+    """
+    spec = (spec or "").strip()
+    if ":" in spec:
+        head, rest = spec.split(":", 1)
+        if head.strip().lower() in _KNOWN_PROVIDERS and rest.strip():
+            return head.strip().lower(), rest.strip()
+    return "", spec

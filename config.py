@@ -127,6 +127,33 @@ def set_context_window(size: int):
     _set("context_window", size)
 
 
+def get_critic_auto() -> bool:
+    """Whether an independent critic reviews the staged diff before /commit."""
+    return _get("critic_auto", False)
+
+
+def set_critic_auto(val: bool):
+    _set("critic_auto", val)
+
+
+def get_critic_model() -> str:
+    """Model the critic runs on. Empty = the current main model."""
+    return _get("critic_model", "")
+
+
+def set_critic_model(name: str):
+    _set("critic_model", name)
+
+
+def get_critic_provider() -> str:
+    """Provider for the critic model. Empty = the current main provider."""
+    return _get("critic_provider", "")
+
+
+def set_critic_provider(name: str):
+    _set("critic_provider", name)
+
+
 def get_max_generation_tokens() -> int:
     """Max tokens for generation. Default 8192 to prevent truncation in local APIs."""
     return _get("max_generation_tokens", 8192)
