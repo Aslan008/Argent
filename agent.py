@@ -41,6 +41,11 @@ MAX_TRUNCATE_CONTINUES = 2
 # many chunks, but still bounded so a stuck model can't append forever.
 MAX_SALVAGE_CONTINUES = 12
 
+# How many times to nudge a model that ended its turn with neither an answer
+# nor a tool call (common with reasoning models that "think" then stop) before
+# giving up — instead of silently dead-ending the turn.
+MAX_NO_ACTION_CONTINUES = 2
+
 class ArgentAgent:
     def build_system_prompt(self) -> str:
         category = get_model_size_category(self.model_name)
@@ -434,6 +439,7 @@ Example: {"tool": {"name": "read_file", "arguments": {"file_path": "main.py"}}}"
         self._truncate_continues = 0
         self._salvage_continues = 0
         self._ctx_overflow_retries = 0
+        self._no_action_continues = 0
 
         # One provider instance per turn: tool-result formatting and retries
         # below reuse it instead of re-creating a provider on every call.
@@ -909,7 +915,33 @@ Example: {"tool": {"name": "read_file", "arguments": {"file_path": "main.py"}}}"
                     break
                 # Loop continues to let the model react to tool results
             else:
-                break
+                # No tool call this turn.
+                if full_content and full_content.strip():
+                    break  # the model gave a final answer — turn is genuinely done.
+
+                # Otherwise it produced only reasoning (or nothing) and neither
+                # acted nor answered — a premature stop, common with reasoning
+                # models. Nudge it to continue, bounded, instead of dead-ending.
+                self._no_action_continues = getattr(self, "_no_action_continues", 0) + 1
+                if self._no_action_continues > MAX_NO_ACTION_CONTINUES:
+                    yield {"type": "error", "content": (
+                        f"\n[System: the model produced no answer and no action after "
+                        f"{MAX_NO_ACTION_CONTINUES} nudges — stopping.]"
+                    )}
+                    break
+                yield {"type": "error", "content": (
+                    "\n[System: no answer or action produced — nudging the model to continue...]"
+                )}
+                self.messages.append({
+                    "role": "user",
+                    "content": (
+                        "You stopped after thinking, without producing anything. Either CALL A "
+                        "TOOL to take the next concrete action, or WRITE your final answer to the "
+                        "user now. Do not stop again without doing one of these."
+                    ),
+                })
+                self._trim_history()
+                # loop continues — give the model another turn to act or answer.
     
     def _flatten_tool_messages(self):
         """Convert structured tool_calls in message history to plain-text format.
