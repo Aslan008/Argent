@@ -36,9 +36,15 @@ class _ThinkingDisplay:
             f"\n[{self._label_style}]Анализ:[/{self._label_style}]\n"
         )
 
-        display = self.thinking_text
-        if len(display) > 3000:
-            display = "...\n" + display[-3000:]
+        # Bound the live preview to the terminal height so this transient Live
+        # never scrolls off-screen — otherwise Rich can't erase the scrolled
+        # part on exit and it gets stranded in the scrollback (the full reasoning
+        # is committed once afterwards via print_reasoning). Cap by chars first
+        # (covers a single very long, wrapping line), then by visible lines.
+        max_lines = max(3, (console.size.height or 24) - 6)
+        width = console.size.width or 80
+        display = self.thinking_text[-(max_lines * width):]
+        display = "\n".join(display.splitlines()[-max_lines:]) or "..."
         yield Text(display, style=self._text_style)
 
         yield Text("")
