@@ -361,8 +361,8 @@ def index_external_kb(kb_dict: dict) -> str:
                                             ids.append(f"kb_{chunk_id}_{doc_id_counter}")
                                             doc_id_counter += 1
                                         continue  # done with this file
-                            except Exception:
-                                pass
+                            except Exception as e:
+                                log.debug("Unity-doc chunking failed for %s; falling back: %s", rel, e)
                             try:
                                 from bs4 import BeautifulSoup
                                 soup = BeautifulSoup(source, "html.parser")
@@ -379,8 +379,8 @@ def index_external_kb(kb_dict: dict) -> str:
                             chunk_id = hashlib.md5(f"{rel}_{m.get('start_line', doc_id_counter)}".encode()).hexdigest()
                             ids.append(f"kb_{chunk_id}_{doc_id_counter}")
                             doc_id_counter += 1
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        log.warning("Skipping KB file %s: %s", file_path, e)
                         
         if docs:
             print(f"[INFO] Uploading {len(docs)} chunks to ChromaDB...")
@@ -476,8 +476,8 @@ def _index_codebase(project_path: Path, collection):
                         chunk_id = hashlib.md5(f"{rel}_{m.get('start_line', doc_id_counter)}".encode()).hexdigest()
                         ids.append(f"doc_{chunk_id}")
                         doc_id_counter += 1
-                except Exception:
-                    pass
+                except Exception as e:
+                    log.warning("Skipping file %s during indexing: %s", rel, e)
                     
     if docs:
         print(f"[INFO] Uploading {len(docs)} chunks to ChromaDB...")
@@ -588,8 +588,8 @@ def semantic_search(query: str, n_results: int = 5) -> str:
                     for rank, (doc_id, doc, meta) in enumerate(kidx.search(query, n_results * 2)):
                         rrf_scores[doc_id] = rrf_scores.get(doc_id, 0.0) + 1.0 / (60 + rank)
                         doc_map[doc_id] = (doc, meta)
-            except Exception:
-                pass
+            except Exception as e:
+                log.debug("Keyword search fusion skipped (vector results still returned): %s", e)
             
         if not rrf_scores:
             return f"No relevant code found for query: '{query}'"
