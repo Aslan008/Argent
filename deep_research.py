@@ -23,21 +23,10 @@ USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36 Edg/121.0.0.0"
 ]
 
-# New imports for advanced pipeline
-try:
-    from crawl4ai import AsyncWebCrawler
-except ImportError:
-    pass
-
-try:
-    from sentence_transformers import SentenceTransformer
-except ImportError:
-    pass
-
-try:
-    import numpy as np
-except ImportError:
-    pass
+# NOTE: sentence-transformers / numpy are imported LAZILY inside _rerank_chunks.
+# Importing them at module top pulled torch+transformers (~18s) into every
+# Argent startup, even when deep research is never used. deep_research is
+# imported eagerly via tools/, so that cost hit the cold-start of the whole app.
 
 def _call_llm_sync(prompt: str, json_format: bool = False, temperature: float = 0.3) -> str:
     """Synchronous internal call to the configured LLM provider."""
@@ -147,6 +136,9 @@ def _rerank_chunks(objective: str, all_chunks: List[str], top_n: int = 10) -> Li
         return []
         
     try:
+        # Lazy import: keeps torch/transformers out of Argent's startup path.
+        from sentence_transformers import SentenceTransformer
+        import numpy as np
         console.print(f"  [dim cyan]Reranking {len(all_chunks)} chunks using SentenceTransformer...[/dim cyan]")
         model = SentenceTransformer('all-MiniLM-L6-v2') # Light and fast
         
