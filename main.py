@@ -168,6 +168,22 @@ def main():
         history_path=Path(".argent") / "input_history",
     )
     
+    # First-run onboarding: if Argent has never been configured, walk the user
+    # through provider + model setup (reuses the /provider and /model flows).
+    from config import CONFIG_FILE
+    if not Path(CONFIG_FILE).exists():
+        console.rule("[bold cyan]Первый запуск[/bold cyan]")
+        print_system("Похоже, это первый запуск Argent. Настроим провайдера и модель — это займёт минуту.")
+        try:
+            if questionary.confirm("Настроить сейчас?", default=True).ask():
+                handle_slash_command("/provider", agent)
+                handle_slash_command("/model", agent)
+                print_system("[green]Готово. Изменить в любой момент: /provider, /model.[/green]")
+            else:
+                print_system("Пропущено. Настроить позже можно командами /provider и /model.")
+        except (KeyboardInterrupt, EOFError):
+            print_system("Настройка пропущена. Позже: /provider и /model.")
+
     print_system(f"Active Provider: {get_provider().upper()}")
     print_system(f"Active Model: {get_current_model()}")
     print_system(f"Working Directory: {os.getcwd()}")
