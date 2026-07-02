@@ -308,6 +308,10 @@ Example: {"tool": {"name": "read_file", "arguments": {"file_path": "main.py"}}}"
         self.max_context_tokens = get_context_window()
         # A new model/provider may support what the previous one didn't.
         self._constrained_unsupported = False
+        # Set when a provider rejects native tool calls (e.g. an OpenRouter
+        # free model with no tool-use endpoint) — then we fall back to prompted
+        # tool-calling (in-context catalog + raw-JSON parsing) for this model.
+        self._native_tools_unsupported = False
 
     def set_model(self, model_name: str):
         self.model_name = model_name
@@ -494,11 +498,13 @@ Example: {"tool": {"name": "read_file", "arguments": {"file_path": "main.py"}}}"
                 _slim_names = set(slim_tools_for_category([t["function"]["name"] for t in active_tools], category))
                 active_tools = [t for t in active_tools if t["function"]["name"] in _slim_names]
 
-                # Check if the strategy supports native tools
-                if not self.strategy.supports_native_tools():
-                    if constrained_extractor is not None and active_tools:
-                        # No native tool channel: give the model a compact
-                        # in-context catalog near the end of the prompt instead.
+                # No native tool channel — either the strategy never had one
+                # (tiny/local) or a cloud model rejected native tools at runtime
+                # (e.g. an OpenRouter free model). Give the model an in-context
+                # tool catalog and rely on raw-JSON tool-call parsing instead of
+                # sending native tool schemas.
+                if not self.strategy.supports_native_tools() or self._native_tools_unsupported:
+                    if active_tools:
                         cleaned_messages = cleaned_messages + [
                             {"role": "system", "content": build_tool_catalog(active_tools)}
                         ]
@@ -610,7 +616,24 @@ Example: {"tool": {"name": "read_file", "arguments": {"file_path": "main.py"}}}"
                             
             except Exception as e:
                 error_str = str(e).lower()
-                if "does not support tools" in error_str or "element type" in error_str:
+                if any(s in error_str for s in (
+                    "does not support tools", "element type",
+                    "support tool use", "tool use is not supported",
+                    "no endpoints found that support tool",
+                )):
+                    if not self._native_tools_unsupported:
+                        # Persistently switch this model to prompted tool-calling
+                        # (in-context catalog + raw-JSON parsing) so it can still
+                        # USE tools, not just answer in prose. Retry the turn.
+                        log.warning("No native tool channel (%s); switching to prompted tool-calling", e)
+                        self._native_tools_unsupported = True
+                        yield {"type": "error", "content": (
+                            "\n[Argent: this model has no native tool support — "
+                            "switching to in-prompt tool calling and retrying...]"
+                        )}
+                        continue
+                    # Already prompted but tools still rejected — answer without
+                    # tools so the turn doesn't crash.
                     try:
                         fallback_stream = provider.stream_chat(
                             model=self.model_name,
