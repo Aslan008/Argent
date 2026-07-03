@@ -253,9 +253,11 @@ def main():
             if is_auto_mode:
                 if auto_sleep_time > 0:
                     print_system(f"*[Heartbeat] Переход в сон на {auto_sleep_time} сек. (Ctrl+C для прерывания)*")
-                    import time
+                    from src.cli.interruptible import interruptible_sleep
                     try:
-                        time.sleep(auto_sleep_time)
+                        # Chunked sleep so Ctrl+C aborts within a tick, not after
+                        # the full (possibly very long) heartbeat delay.
+                        interruptible_sleep(auto_sleep_time)
                     except KeyboardInterrupt:
                         print_system("Состояние Heartbeat прервано. Выход из автоматического режима.")
                         is_auto_mode = False
