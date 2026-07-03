@@ -1,6 +1,6 @@
 # Argent: The Elite AI Coding Assistant
 
-[![CI](https://github.com/Aslan008/Argent/actions/workflows/ci.yml/badge.svg)](https://github.com/Aslan008/Argent/actions/workflows/ci.yml)
+[![CI](https://github.com/Aslan008/Argent/actions/workflows/ci.yml/badge.svg)](https://github.com/Aslan008/Argent/actions/workflows/ci.yml) [![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)](pyproject.toml) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](pyproject.toml)
 
 Argent is a high-performance, professional AI pair programmer designed to live in your terminal. It supports local **Ollama** models, **Z.ai**, **OpenRouter**, and **KoboldCPP** API providers, leveraging advanced architectural patterns to provide an autonomous, efficient, and secure development environment.
 
@@ -8,6 +8,35 @@ Argent is a high-performance, professional AI pair programmer designed to live i
 > Argent is a **personal experiment** in building high-autonomy AI agents for terminal-based development.
 > [!CAUTION]
 > **Warning**: This project is in active development and is considered experimental. Things may not work as expected, logic might fail, or code could potentially break. Use with caution.
+
+---
+
+## 🏗 Architecture
+
+A single turn flows from your prompt through a tier-adaptive strategy, a provider,
+and a safety gate before any tool touches your machine — while working memory,
+context management and resilience wrap the whole loop.
+
+```mermaid
+flowchart TD
+    User(["You — terminal"]) -->|"prompt / slash-command"| REPL["main.py — REPL"]
+    REPL --> Agent["ArgentAgent — turn loop<br/>agent.py"]
+
+    Agent --> Strategy{"Model tier<br/>tiny · small · medium · cloud"}
+    Strategy -->|"schemas · catalog · anchors"| Provider["Provider<br/>Ollama · Z.ai · OpenRouter · KoboldCPP"]
+    Provider -->|"stream"| Parse["Tool-call parse<br/>native or constrained JSON"]
+
+    Parse -->|"final answer"| User
+    Parse -->|"tool call"| Guard{"Approval + risk-gate<br/>approval.py"}
+    Guard -->|"catastrophic"| Refuse["Refused"]
+    Guard -->|"safe / approved"| Tools["Tools<br/>files · shell · search · browser · git"]
+    Tools -->|"result"| Compress["compress_tool_result<br/>line + char budget"]
+    Compress --> Agent
+
+    Memory["Working memory<br/>goal · done · failures"] -.->|"objective anchor"| Agent
+    Agent -.-> Resilience["Context trimmer<br/>+ salvage · loop-guard · critic"]
+    Tools -.-> Knowledge["RAG · Skills · Hooks · MCP"]
+```
 
 ---
 
