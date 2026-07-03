@@ -1086,12 +1086,18 @@ Example: {"tool": {"name": "read_file", "arguments": {"file_path": "main.py"}}}"
         history_tokens = sum(self._estimate_tokens(str(m)) for m in self.messages)
         max_tokens = get_context_window()
         percent = (history_tokens / max_tokens) * 100 if max_tokens > 0 else 0
-        return {
+        result = {
             "tokens": history_tokens,
             "max": max_tokens,
             "percent": min(percent, 100),
             "messages": len(self.messages)
         }
+        # Cache for the live bottom-toolbar context meter: it must read this on
+        # every keystroke, so it reads this cached dict instead of recomputing
+        # the O(history) token sum each time. Refreshed here, which already runs
+        # once per turn.
+        self._last_context_usage = result
+        return result
 
     def get_context_breakdown(self) -> Dict[str, Any]:
         """Token breakdown of what the next request will carry: the system

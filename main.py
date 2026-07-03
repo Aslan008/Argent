@@ -167,6 +167,12 @@ def main():
         get_all_commands, agent, ui_state,
         history_path=Path(".argent") / "input_history",
     )
+    # Prime the context-meter cache so the bottom toolbar shows a real figure
+    # from the very first keystroke, not only after the first turn.
+    try:
+        agent.get_context_usage()
+    except Exception:
+        pass
     
     # First-run onboarding: if Argent has never been configured, walk the user
     # through provider + model setup (reuses the /provider and /model flows).

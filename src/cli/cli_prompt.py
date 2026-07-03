@@ -105,11 +105,41 @@ def _tier_label(agent) -> str:
     return _STRATEGY_TIER.get(type(getattr(agent, "strategy", None)).__name__, "?")
 
 
+def _fmt_tokens(n: int) -> str:
+    """Compact token count: 8600 -> '8.6k', 900 -> '900'."""
+    try:
+        n = int(n)
+    except (TypeError, ValueError):
+        return "?"
+    return f"{n / 1000:.1f}k" if n >= 1000 else str(n)
+
+
+def _context_segment(usage) -> str:
+    """HTML fragment for the live context-window meter, or '' when unknown.
+
+    `usage` is the agent's cached get_context_usage() dict. The percentage is
+    colour-coded so a filling window is visible at a glance: green < 50,
+    amber < 80, red beyond. No computation here — the value is pre-cached.
+    """
+    if not usage:
+        return ""
+    try:
+        pct = int(round(usage.get("percent", 0)))
+        tokens = usage.get("tokens", 0)
+        max_tokens = usage.get("max", 0)
+    except (AttributeError, TypeError, ValueError):
+        return ""
+    color = "#4caf50" if pct < 50 else ("#ffb300" if pct < 80 else "#e53935")
+    used = f" {_fmt_tokens(tokens)}/{_fmt_tokens(max_tokens)}" if max_tokens else ""
+    return f"ctx:<style fg='{color}'>{pct}%</style>{used}"
+
+
 def build_bottom_toolbar(agent, ui_state):
     """Return a callable rendering the live status bar.
 
-    Reads current state on every keystroke (cheap fields only — no token
-    counting), so it always reflects the active model/provider/mode.
+    Reads current state on every keystroke. All fields are cheap: the context
+    meter reads the agent's pre-cached usage dict (refreshed once per turn), so
+    no O(history) token counting happens on the keystroke path.
     """
     def _toolbar():
         try:
@@ -118,6 +148,9 @@ def build_bottom_toolbar(agent, ui_state):
             tier = _tier_label(agent)
             mode = ui_state.get("mode", "CHAT")
             cwd = os.path.basename(os.getcwd()) or os.getcwd()
+            # Live context-window meter (cached; see _context_segment).
+            ctx = _context_segment(getattr(agent, "_last_context_usage", None))
+            ctx_str = f"| {ctx} " if ctx else ""
             # Running session token/cost total, once anything has been spent.
             usage_str = ""
             try:
@@ -130,7 +163,7 @@ def build_bottom_toolbar(agent, ui_state):
             # box-drawing chars and emoji.
             return HTML(
                 f" <b>{mode}</b> | {provider}:{model} | tier:{tier} | cwd:{cwd} "
-                f"{usage_str}| <style fg='#888888'>/help</style> "
+                f"{ctx_str}{usage_str}| <style fg='#888888'>/help</style> "
             )
         except Exception:
             return ""

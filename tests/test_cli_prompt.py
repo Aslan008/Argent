@@ -5,6 +5,7 @@ from prompt_toolkit.document import Document
 from src.agent.strategy import TinyLocalStrategy, CloudStrategy
 from src.cli.cli_prompt import (
     ArgentCommandCompleter, _describe, _tier_label, build_bottom_toolbar,
+    _fmt_tokens, _context_segment,
 )
 
 
@@ -82,3 +83,51 @@ class TestBottomToolbar:
         # Must not raise even if agent has no attributes / mode missing.
         result = toolbar()
         assert result is not None
+
+    def test_context_meter_shown_when_cached(self):
+        agent = SimpleNamespace(
+            provider="ollama", model_name="qwen2.5-coder", strategy=CloudStrategy(),
+            _last_context_usage={"percent": 30, "tokens": 6000, "max": 20000},
+        )
+        text = build_bottom_toolbar(agent, {"mode": "CHAT"})().value
+        assert "ctx:" in text and "30%" in text and "6.0k/20.0k" in text
+
+    def test_context_meter_absent_without_cache(self):
+        agent = SimpleNamespace(provider="ollama", model_name="m", strategy=CloudStrategy())
+        text = build_bottom_toolbar(agent, {"mode": "CHAT"})().value
+        assert "ctx:" not in text  # nothing cached yet -> no meter
+
+
+class TestFormatTokens:
+    def test_thousands_suffix(self):
+        assert _fmt_tokens(8600) == "8.6k"
+        assert _fmt_tokens(20000) == "20.0k"
+
+    def test_below_thousand_plain(self):
+        assert _fmt_tokens(900) == "900"
+        assert _fmt_tokens(0) == "0"
+
+    def test_non_numeric_safe(self):
+        assert _fmt_tokens(None) == "?"
+
+
+class TestContextSegment:
+    def test_empty_when_no_usage(self):
+        assert _context_segment(None) == ""
+        assert _context_segment({}) == ""
+
+    def test_green_below_50(self):
+        seg = _context_segment({"percent": 42, "tokens": 8600, "max": 20000})
+        assert "42%" in seg and "#4caf50" in seg and "8.6k/20.0k" in seg
+
+    def test_amber_between_50_and_80(self):
+        assert "#ffb300" in _context_segment({"percent": 65, "tokens": 1, "max": 2})
+
+    def test_red_at_or_above_80(self):
+        assert "#e53935" in _context_segment({"percent": 90, "tokens": 1, "max": 2})
+
+    def test_no_token_ratio_when_max_unknown(self):
+        seg = _context_segment({"percent": 10, "tokens": 5, "max": 0})
+        # No "tokens/max" ratio when the window size is unknown: the fragment
+        # ends right after the percentage (the closing </style> tag).
+        assert "ctx:" in seg and "10%" in seg and seg.endswith("</style>")
