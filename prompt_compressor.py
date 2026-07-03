@@ -59,30 +59,53 @@ def compress_system_prompt(full_prompt: str, model_name: str) -> str:
     return prompt
 
 
-def compress_tool_result(result: str, model_name: str, max_lines: int = None) -> str:
+def compress_tool_result(result: str, model_name: str,
+                         max_lines: int = None, max_chars: int = None) -> str:
     """Compress tool output to prevent context window explosion.
-    Truncates long outputs, keeping the beginning and the end.
-    Applies to all models, but thresholds vary by model size.
+
+    Two independent budgets, because a line count alone is blind to line width:
+      * a **line budget** catches the many-normal-lines case (head/tail by line);
+      * a **character budget** catches the few-but-enormous-lines case — minified
+        bundles, single-line JSON, base64 blobs, no-newline command output —
+        which slip past the line count entirely (1 line ≤ 40) yet can be
+        hundreds of KB and blow the whole window on their own.
+    Both keep the beginning and the end. Applies to all models; thresholds
+    scale with model size.
     """
+    if not isinstance(result, str):
+        result = str(result)
+
     category = get_model_size_category(model_name)
-    
+
     if max_lines is None:
         if category == "tiny": max_lines = 40
         elif category == "small": max_lines = 100
         elif category == "medium": max_lines = 500
         else: max_lines = 2000 # cloud and large
-    
+    if max_chars is None:
+        # A generous per-line width, so output that already fits the line budget
+        # with normal-width lines also fits here — the char budget is a safety
+        # net for pathologically wide lines, not a second, tighter limit.
+        max_chars = max_lines * 120
+
     lines = result.splitlines()
-    if len(lines) <= max_lines:
-        return result
-    
-    half = max_lines // 2
-    head = lines[:half]
-    tail = lines[-half:]
-    
-    separator = f"\n... [{len(lines) - max_lines} lines truncated to protect context window] ...\n"
-    
-    return "\n".join(head) + separator + "\n".join(tail)
+    if len(lines) > max_lines:
+        half = max_lines // 2
+        head = lines[:half]
+        tail = lines[-half:]
+        separator = f"\n... [{len(lines) - max_lines} lines truncated to protect context window] ...\n"
+        result = "\n".join(head) + separator + "\n".join(tail)
+
+    # Second pass: even within the line budget, a handful of huge lines (or the
+    # wide head/tail we just kept) can still overflow. Trim by characters.
+    # str slicing is per code point, so this never splits a multi-byte char.
+    if len(result) > max_chars:
+        half = max_chars // 2
+        removed = len(result) - max_chars
+        separator = f"\n... [{removed} characters truncated to protect context window] ...\n"
+        result = result[:half] + separator + result[-half:]
+
+    return result
 
 
 def get_adaptive_context_window(model_name: str, base_window: int) -> int:

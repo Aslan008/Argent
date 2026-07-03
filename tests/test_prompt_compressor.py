@@ -65,3 +65,31 @@ class TestCompressToolResult:
             out = compress_tool_result(text, "m")
         assert "truncated" in out
         assert len(out.splitlines()) < 200
+
+    def test_wide_single_line_truncated_by_chars(self):
+        # One enormous line slips past the 40-line budget entirely, but must
+        # still be trimmed by the character budget or it blows the window.
+        text = "x" * 50000
+        with patch("prompt_compressor.get_model_size_category", return_value="tiny"):
+            out = compress_tool_result(text, "m")
+        assert "characters truncated" in out
+        assert len(out) < 6000            # tiny char budget (~4800) + separator
+        assert out.startswith("x") and out.endswith("x")  # head and tail kept
+
+    def test_wide_line_kept_for_cloud(self):
+        # The char budget scales with model size: 50k chars is well within a
+        # cloud model's budget, so it is left untouched.
+        text = "x" * 50000
+        with patch("prompt_compressor.get_model_size_category", return_value="cloud"):
+            assert compress_tool_result(text, "m") == text
+
+    def test_normal_width_within_budget_untouched(self):
+        # 30 normal-width lines fit both budgets — the char net must not fire on
+        # ordinary output (regression against an over-tight char limit).
+        text = "\n".join("y" * 100 for _ in range(30))
+        with patch("prompt_compressor.get_model_size_category", return_value="tiny"):
+            assert compress_tool_result(text, "m") == text
+
+    def test_non_string_result_coerced(self):
+        with patch("prompt_compressor.get_model_size_category", return_value="tiny"):
+            assert compress_tool_result(12345, "m") == "12345"
