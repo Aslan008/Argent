@@ -3,9 +3,10 @@ from itertools import islice
 from unittest.mock import MagicMock
 
 import agent as agent_module
-from agent import ArgentAgent
+from agent import ArgentAgent, MAX_SALVAGE_CONTINUES
 from src.agent.salvage import (
     extract_partial_write, trim_to_last_line, last_lines, SALVAGEABLE_TOOLS,
+    verify_salvaged_file,
 )
 
 
@@ -69,6 +70,43 @@ class TestSalvageableTools:
         assert "append_to_file" in SALVAGEABLE_TOOLS
 
 
+class TestVerifySalvagedFile:
+    def test_broken_python_flagged(self, tmp_path):
+        p = tmp_path / "a.py"
+        p.write_text("def foo():\n", encoding="utf-8")  # header, no body
+        ok, detail = verify_salvaged_file(str(p))
+        assert not ok
+        assert "syntax error" in detail.lower()
+
+    def test_valid_python_ok(self, tmp_path):
+        p = tmp_path / "a.py"
+        p.write_text("def foo():\n    return 1\n", encoding="utf-8")
+        assert verify_salvaged_file(str(p)) == (True, "")
+
+    def test_broken_json_flagged(self, tmp_path):
+        p = tmp_path / "a.json"
+        p.write_text('{"a": 1, "b":', encoding="utf-8")  # cut off
+        ok, detail = verify_salvaged_file(str(p))
+        assert not ok
+        assert "json" in detail.lower()
+
+    def test_valid_json_ok(self, tmp_path):
+        p = tmp_path / "a.json"
+        p.write_text('{"a": 1}', encoding="utf-8")
+        assert verify_salvaged_file(str(p)) == (True, "")
+
+    def test_unknown_extension_not_flagged(self, tmp_path):
+        # A half-written .md/.txt has no cheap, reliable check — never cry wolf.
+        p = tmp_path / "a.md"
+        p.write_text("# Title\nhalf sen", encoding="utf-8")
+        assert verify_salvaged_file(str(p)) == (True, "")
+
+    def test_missing_file_flagged(self, tmp_path):
+        ok, detail = verify_salvaged_file(str(tmp_path / "nope.py"))
+        assert not ok
+        assert "read back" in detail
+
+
 class FakeProvider:
     def __init__(self, scripts):
         self.scripts = scripts
@@ -123,3 +161,30 @@ class TestSalvageIntegration:
         # The model was asked to continue via append, not to start over.
         user_msgs = [m["content"] for m in agent.messages if m.get("role") == "user"]
         assert any("append_to_file" in m and "INCOMPLETE" in m for m in user_msgs)
+
+    def test_cap_reached_reports_broken_python(self, tmp_path, monkeypatch):
+        # A .py write that never completes: after the continuation cap, the file
+        # on disk is a syntactically broken stub. The stop message must say so
+        # rather than reporting a clean "saved".
+        target = str(tmp_path / "broken.py")
+        json_path = target.replace("\\", "\\\\")
+        # trim_to_last_line keeps "def foo():\n" (header, no body) → won't parse.
+        truncated = [{
+            "tool_call_deltas": [{
+                "index": 0, "id": "x",
+                "function_name_delta": "write_file",
+                "function_arguments_delta": f'{{"file_path": "{json_path}", "content": "def foo():\\n    x = ',
+            }],
+            "truncated": True,
+        }]
+        provider = FakeProvider([truncated])  # always truncates → hits the cap
+        agent = self._agent(monkeypatch, provider)
+
+        chunks = list(islice(agent.process_user_input("создай питон файл"), 500))
+        errors = [c["content"] for c in chunks if c.get("type") == "error"]
+        stop = [e for e in errors if "kept hitting the length limit" in e]
+        assert stop, "expected a cap-reached stop message"
+        assert "INCOMPLETE" in stop[-1]
+        assert "syntax error" in stop[-1].lower()
+        # Sanity: the salvage loop was actually bounded by the cap.
+        assert agent._salvage_continues > MAX_SALVAGE_CONTINUES

@@ -10,6 +10,9 @@ append_to_file. Repeated truncation then becomes incremental progress, so a
 file of any size can be produced even on a small context window.
 """
 
+import ast
+import json
+import os
 import re
 
 # Tool calls whose content can be salvaged and continued via append.
@@ -69,3 +72,38 @@ def last_lines(content: str, n: int = 2) -> str:
     """The final n non-empty lines, to orient the model on where to continue."""
     lines = [ln for ln in content.splitlines() if ln.strip()]
     return "\n".join(lines[-n:])
+
+
+def verify_salvaged_file(file_path: str) -> tuple[bool, str]:
+    """Best-effort syntax check of a file left behind by salvage.
+
+    ``trim_to_last_line`` only guarantees the file ends on a COMPLETE line, not
+    that it is a COMPLETE FILE — a Python write cut off after ``def foo():`` ends
+    cleanly yet won't parse. When salvage gives up (continuation cap reached) the
+    partial file stays on disk, so we check whether it is actually usable instead
+    of silently reporting "saved".
+
+    Returns ``(ok, detail)``: ``ok`` is True when the file parses, or when its
+    type has no cheap, reliable check (so we never cry wolf on a plain .txt/.md).
+    ``detail`` is a short human-readable reason when ``ok`` is False. No code is
+    executed — parsing only.
+    """
+    try:
+        with open(file_path, "r", encoding="utf-8") as f:
+            source = f.read()
+    except OSError as e:
+        return False, f"could not be read back ({e})"
+
+    ext = os.path.splitext(file_path)[1].lower()
+    if ext in (".py", ".pyw"):
+        try:
+            ast.parse(source)
+        except SyntaxError as e:
+            return False, f"Python syntax error at line {e.lineno or '?'}: {e.msg}"
+    elif ext == ".json":
+        try:
+            json.loads(source)
+        except ValueError as e:  # JSONDecodeError is a ValueError subclass
+            return False, f"invalid JSON: {e}"
+    # Other types: nothing cheap and reliable to validate — assume ok.
+    return True, ""

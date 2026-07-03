@@ -756,10 +756,17 @@ Example: {"tool": {"name": "read_file", "arguments": {"file_path": "main.py"}}}"
                     self._salvage_continues += 1
                     file_path, written_lines, tail = salvaged
                     if self._salvage_continues > MAX_SALVAGE_CONTINUES:
+                        # Final compile check: the file was cut off mid-generation,
+                        # so tell the user whether what's on disk is actually usable
+                        # instead of a syntactically broken stub.
+                        from src.agent.salvage import verify_salvaged_file
+                        ok, detail = verify_salvaged_file(file_path)
+                        status = ("The saved file parses cleanly."
+                                  if ok else f"WARNING — the saved file is INCOMPLETE: {detail}")
                         yield {"type": "error", "content": (
                             f"\n[System: '{file_path}' kept hitting the length limit after "
                             f"{MAX_SALVAGE_CONTINUES} continuations — stopping. The content "
-                            f"generated so far is saved to the file.]"
+                            f"generated so far is saved to the file. {status}]"
                         )}
                         break
                     yield {"type": "error", "content": f"\n[System: Saved {written_lines} line(s) to {file_path}; asking the model to continue the file...]"}
