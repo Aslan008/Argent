@@ -412,16 +412,32 @@ Example: {"tool": {"name": "read_file", "arguments": {"file_path": "main.py"}}}"
             log.warning("auto-retrieve failed: %s", e)
 
     def _build_objective_anchor(self) -> str | None:
-        """Trailing reminder of the goal for long contexts (local models)."""
-        obj = memory.data.get("objective")
-        task = memory.data.get("current_task")
-        if not obj and not task:
+        """Compact trailing reminder for long contexts (local models).
+
+        Beyond the goal, it re-pins a small working-memory slice — what's
+        already been done and what has already failed — because the full
+        working memory (memory.build_context_note) is only injected on a hard
+        context reset, so on a long-but-not-overflowing conversation a weak
+        model otherwise never sees it and redoes finished work or retries a
+        known-bad approach. Kept deliberately short: it's re-injected on every
+        long turn, so only the two highest-signal lists (recent completions,
+        recent failures) are included, tightly bounded."""
+        d = memory.data
+        obj = d.get("objective")
+        task = d.get("current_task")
+        completed = d.get("completed") or []
+        errors = d.get("errors_encountered") or []
+        if not (obj or task or completed or errors):
             return None
         parts = ["[REMINDER — do not lose the goal]"]
         if obj:
             parts.append(f"OBJECTIVE: {obj}")
         if task and task != obj:
             parts.append(f"CURRENT TASK: {task}")
+        if completed:
+            parts.append("ALREADY DONE (do not redo): " + "; ".join(completed[-3:]))
+        if errors:
+            parts.append("KNOWN FAILURES (do not retry these): " + "; ".join(errors[-2:]))
         return "\n".join(parts)
 
     def process_user_input(self, user_text: str, allowed_tools: List[str] = None) -> Generator[Dict[str, Any], None, None]:
