@@ -197,6 +197,7 @@ def handle_slash_command(command: str, agent: ArgentAgent) -> bool:
             "\n**Build & edit code**\n"
             "- `/work [--auto] [task]` - Modify or fix an EXISTING codebase safely\n"
             "- `/project [prompt]` - Build a large multi-step project from scratch\n"
+            "- `/rooms <task>` - Experimental \"rooms and rails\" engine (declarative graph + triage)\n"
             "- `/init` - Analyze the project and generate .argent/AGENTS.md (project memory)\n"
             "- `/commit` - Generate an AI commit message and commit staged changes\n"
             "\n**Files & changes**\n"

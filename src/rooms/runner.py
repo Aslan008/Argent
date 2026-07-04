@@ -58,6 +58,67 @@ class NodeRunner:
             # keys outside the whitelist are silently dropped — bounded influence
 
 
+def _extract_json_object(raw: str):
+    """Pull the last balanced JSON object out of an agent's free-text answer.
+    Returns a dict or None. Reuses Argent's balanced-brace extractor."""
+    if not raw:
+        return None
+    import json
+    from src.agent.parser import extract_balanced_json
+    for start in reversed([i for i, ch in enumerate(raw) if ch == "{"]):
+        blob = extract_balanced_json(raw, start)
+        if not blob:
+            continue
+        try:
+            obj = json.loads(blob)
+        except Exception:
+            continue
+        if isinstance(obj, dict):
+            return obj
+    return None
+
+
+class AgentExecutor:
+    """Runs an agent node's bounded worker and returns the state fields it
+    reported. The LLM call is injected (`run_agent(prompt) -> final_text`) so the
+    prompt building and write parsing are testable without a model. The runner
+    still enforces the node's `writes` whitelist on whatever comes back."""
+
+    def __init__(self, run_agent):
+        self._run_agent = run_agent
+
+    def __call__(self, node: Node, context: dict) -> dict:
+        raw = self._run_agent(self._build_prompt(node, context))
+        return _extract_json_object(raw) or {}
+
+    @staticmethod
+    def _build_prompt(node: Node, context: dict) -> str:
+        parts = [node.instruction or "Complete your assigned task."]
+        if context:
+            parts.append("\nCONTEXT:")
+            for key, value in context.items():
+                parts.append(f"- {key}: {value}")
+        if node.writes:
+            example = "{" + ", ".join(f'"{w}": ...' for w in node.writes) + "}"
+            parts.append(
+                "\nWhen finished, output a single JSON object on its own line with "
+                f"exactly these fields (and no others): {node.writes}. "
+                f"Example: {example}"
+            )
+        return "\n".join(parts)
+
+
+def argent_run_agent(instruction: str, tools_override=None) -> str:
+    """Production adapter: run an ArgentSubAgent worker and return its final text.
+
+    Note: the node budget is best-effort here — the sub-agent has its own loop
+    guard and limits; wiring the node's max_iterations directly onto the
+    sub-agent loop is a later refinement.
+    """
+    from agent import ArgentSubAgent
+    return ArgentSubAgent("Coder", instruction, tools_override=tools_override).execute()
+
+
 def argent_tool_executor(node: Node, state: State):
     """Production adapter: run a real Argent tool for a tool node.
 

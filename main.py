@@ -144,7 +144,7 @@ def main():
         '/hooks', '/tools', '/save', '/project', '/work', '/commit',
         '/sessions', '/load', '/copy', '/logs', '/skills', '/skill import', '/auto', '/verbose', '/debug', '/browser', '/exit', '/quit',
         '/mcp', '/thinking', '/temp', '/temperature',
-        '/cd', '/undo', '/diff', '/changes', '/stats', '/aux', '/doctor', '/jobs', '/stop', '/goal', '/critic',
+        '/cd', '/undo', '/diff', '/changes', '/stats', '/aux', '/doctor', '/jobs', '/stop', '/goal', '/critic', '/rooms',
         
         # Subcommands and parameter variations
         '/mcp list', '/mcp add', '/mcp remove', '/mcp test', '/mcp start', '/mcp stop',
@@ -470,6 +470,39 @@ def main():
                 else:
                     memory.set_objective(arg)
                     print_system(f"Objective set: [bold yellow]{arg}[/bold yellow]")
+                continue
+
+            elif user_input.startswith("/rooms"):
+                arg = user_input[len("/rooms"):].strip()
+                if not arg:
+                    print_system("Использование: /rooms <задача> — экспериментальный движок «комнаты и рельсы».")
+                    print_system("Пример: /rooms почини падающие тесты")
+                    continue
+                from src.rooms.session import build_library, run_rooms
+                lib = build_library()
+                if lib.load_errors:
+                    print_error(f"Комнаты не прошли валидацию: {lib.load_errors}")
+                    continue
+                print_system(f"[bold cyan]Rooms[/bold cyan]: {arg}")
+                print_system(f"Комнаты: {', '.join(lib.names())}")
+                if not questionary.confirm(
+                    "Автономный прогон (реальные инструменты + суб-агенты). Продолжить?",
+                    default=False,
+                ).ask():
+                    print_system("Отменено.")
+                    continue
+
+                def _human(node, state):
+                    ans = questionary.text(f"[human_pause: {node.id}] {node.prompt or 'Ваш ввод:'}").ask()
+                    if ans:
+                        state.data[f"{node.id}.output"] = ans
+
+                try:
+                    result = run_rooms(arg, library=lib, human_prompt=_human)
+                    print_system(f"[bold]Итог:[/bold] {result.outcome}")
+                    print_system("Маршрут: " + " -> ".join(f"{r}:{e}" for r, e in result.history))
+                except Exception as e:
+                    print_error(f"Rooms run failed: {e}")
                 continue
             elif user_input.startswith("/critic"):
                 from memory_manager import memory
