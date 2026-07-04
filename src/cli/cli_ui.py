@@ -12,6 +12,23 @@ from ui import (
 )
 
 
+# System recovery/status messages travel on the same "error" stream channel as
+# genuine failures, but they are NOT errors — they are Argent narrating its own
+# self-healing (auto-continue, salvage, loop-guard, no-action nudge, context
+# trim). They are tagged with a bracketed source. Render those as muted system
+# notices instead of a red "Error:", which alarms and confuses the user.
+_NOTICE_PREFIXES = ("[System:", "[Loop Guard]", "[Argent:")
+
+
+def _render_stream_error(content: str) -> None:
+    """Route an 'error' stream chunk: system notices to print_system, genuine
+    failures to print_error."""
+    if content.lstrip().startswith(_NOTICE_PREFIXES):
+        print_system(content.strip())
+    else:
+        print_error(content)
+
+
 # ── Dynamic renderables ─────────────────────────────────────────────
 # These classes implement __rich_console__, which Rich calls on EVERY
 # Live refresh frame.  This means the elapsed timer updates
@@ -260,7 +277,7 @@ def render_response_stream(
                         )
                     )
                 elif type_ == "error":
-                    print_error(chunk["content"])
+                    _render_stream_error(chunk["content"])
 
                 # ====================================================
                 # PHASE 2: Main content stream
@@ -355,7 +372,7 @@ def render_response_stream(
                                 auto_sleep_time, auto_wake_context,
                             )
                         elif type_ == "error":
-                            print_error(chunk["content"])
+                            _render_stream_error(chunk["content"])
 
             else:
                 # ====================================================
@@ -402,7 +419,7 @@ def render_response_stream(
                         )
                         current_tool_name = chunk["name"]
                     elif type_ == "error":
-                        print_error(chunk["content"])
+                        _render_stream_error(chunk["content"])
 
             if done:
                 break
