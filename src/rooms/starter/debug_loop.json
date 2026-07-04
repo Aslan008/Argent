@@ -1,0 +1,28 @@
+{
+  "room": "debug_loop",
+  "description": "Run the tests; on failure, search the error and apply a fix, then re-verify. Loop bounded by a fix-attempt counter. Green tests -> commit; give up -> escalate.",
+  "budget": {"max_iterations": 20, "max_tokens": 60000},
+  "entry": "run_tests",
+  "nodes": [
+    {"id": "run_tests", "type": "tool", "tool": "run_command",
+     "instruction": "Run the test suite and record whether it passed."},
+    {"id": "web_search", "type": "tool", "tool": "search_web",
+     "input_from": "state.error_summary",
+     "instruction": "Search the failing test error plus the library versions."},
+    {"id": "apply_fix", "type": "agent",
+     "budget": {"max_iterations": 5, "max_tokens": 20000},
+     "context": ["web_search.output"],
+     "writes": ["error_summary"],
+     "instruction": "Apply a fix based on the search findings. Do NOT claim tests pass — run_tests is the verifier."},
+    {"id": "commit", "type": "tool", "tool": "run_command",
+     "instruction": "git commit the green state."}
+  ],
+  "edges": [
+    {"from": "run_tests", "if": "state.tests_passed", "to": "commit"},
+    {"from": "run_tests", "else": true, "to": "web_search"},
+    {"from": "web_search", "to": "apply_fix"},
+    {"from": "apply_fix", "while": "not state.tests_passed", "max": 3, "id": "fix_attempts", "to": "run_tests"},
+    {"from": "apply_fix", "else": true, "to": "EXIT:escalate"},
+    {"from": "commit", "to": "EXIT:success"}
+  ]
+}

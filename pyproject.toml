@@ -53,6 +53,10 @@ py-modules = [
 [tool.setuptools.packages.find]
 include = ["src*", "tools*"]
 
+[tool.setuptools.package-data]
+# Ship the declarative starter rooms with the package.
+"src.rooms" = ["starter/*.json"]
+
 [tool.setuptools.dynamic]
 version = { attr = "version.__version__" }
 

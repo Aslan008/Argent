@@ -1,0 +1,16 @@
+{
+  "room": "analyze",
+  "description": "Investigate the codebase and produce a plan before any changes are made.",
+  "budget": {"max_iterations": 10, "max_tokens": 40000},
+  "entry": "investigate",
+  "nodes": [
+    {"id": "investigate", "type": "agent",
+     "budget": {"max_iterations": 8, "max_tokens": 30000},
+     "writes": ["plan_ready"],
+     "instruction": "Read the relevant files and write a concrete change plan. Set plan_ready when the plan is complete."}
+  ],
+  "edges": [
+    {"from": "investigate", "if": "state.plan_ready", "to": "EXIT:planned"},
+    {"from": "investigate", "else": true, "to": "EXIT:incomplete"}
+  ]
+}

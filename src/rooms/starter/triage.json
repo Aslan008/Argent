@@ -1,0 +1,19 @@
+{
+  "room": "triage",
+  "description": "The only meta-level entry. Route a failure to an existing room, or propose a new one. Rooms are data; triage never builds executable code.",
+  "budget": {"max_iterations": 5, "max_tokens": 20000},
+  "entry": "route",
+  "nodes": [
+    {"id": "route", "type": "agent",
+     "budget": {"max_iterations": 3, "max_tokens": 15000},
+     "writes": ["route_to"],
+     "instruction": "Given the failure and the list of existing rooms, set route_to to the best-matching room name. If none fits, leave it unset to propose a new room."},
+    {"id": "propose", "type": "spawn_room",
+     "instruction": "Propose a new room as declarative data; it must pass the validator and human approval before use."}
+  ],
+  "edges": [
+    {"from": "route", "if": "state.route_to", "to": "EXIT:routed"},
+    {"from": "route", "else": true, "to": "propose"},
+    {"from": "propose", "to": "EXIT:proposed"}
+  ]
+}
