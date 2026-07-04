@@ -4,13 +4,11 @@ from config import get_current_model
 from providers import create_provider, ProviderError
 from ui import console
 from logger import get_logger
+from src.research.chunking import chunk_document
+from src.research.rerank import rerank
 
 log = get_logger("research")
 
-# NOTE: sentence-transformers / numpy are imported LAZILY inside _rerank_chunks.
-# Importing them at module top pulled torch+transformers (~18s) into every
-# Argent startup, even when deep research is never used. deep_research is
-# imported eagerly via tools/, so that cost hit the cold-start of the whole app.
 
 def _call_llm_sync(prompt: str, json_format: bool = False, temperature: float = 0.3) -> str:
     """Synchronous internal call to the configured LLM provider."""
@@ -62,47 +60,6 @@ Example: ["query 1", "query 2", "query 3", "query 4", "query 5"]
         pass
         
     return [objective]
-
-def _chunk_text(text: str, chunk_size: int = 800, overlap: int = 150) -> List[str]:
-    """Split text into overlapping chunks."""
-    if not text:
-        return []
-    
-    # Simple character-based chunking for performance
-    chunks = []
-    start = 0
-    while start < len(text):
-        end = start + chunk_size
-        chunks.append(text[start:end])
-        start += (chunk_size - overlap)
-        
-    return chunks
-
-def _rerank_chunks(objective: str, all_chunks: List[str], top_n: int = 10) -> List[str]:
-    """Use sentence-transformers to find the most relevant chunks."""
-    if not all_chunks:
-        return []
-        
-    try:
-        # Lazy import: keeps torch/transformers out of Argent's startup path.
-        from sentence_transformers import SentenceTransformer
-        import numpy as np
-        console.print(f"  [dim cyan]Reranking {len(all_chunks)} chunks using SentenceTransformer...[/dim cyan]")
-        model = SentenceTransformer('all-MiniLM-L6-v2') # Light and fast
-        
-        obj_embedding = model.encode([objective])
-        chunk_embeddings = model.encode(all_chunks)
-        
-        # Compute cosine similarity
-        similarities = np.dot(chunk_embeddings, obj_embedding.T).flatten()
-        
-        # Get top-N indices
-        top_indices = np.argsort(similarities)[-top_n:][::-1]
-        
-        return [all_chunks[i] for i in top_indices]
-    except Exception as e:
-        console.print(f"  [dim yellow]Reranking failed: {e}. Using first chunks instead.[/dim yellow]")
-        return all_chunks[:top_n]
 
 def _extract_info(objective: str, chunks: List[str]) -> str:
     """Ask Ollama to synthesize information from multiple chunks."""
@@ -173,16 +130,17 @@ def run_deep_research(objective: str) -> str:
         if len(content) < 200:
             continue
             
-        chunks = _chunk_text(content)
+        chunks = chunk_document(content)
         for c in chunks:
             all_chunks.append(c)
             source_map[c] = url
 
     if not all_chunks:
         return f"Deep Research failed to find any text content for: '{objective}'."
-        
-    # 3. Rerank
-    relevant_chunks = _rerank_chunks(objective, all_chunks, top_n=15)
+
+    # 3. Rerank — cross-encoder (falls back to bi-encoder, then input order)
+    console.print(f"  [dim cyan]Reranking {len(all_chunks)} chunks...[/dim cyan]")
+    relevant_chunks = rerank(objective, all_chunks, top_n=15)
     
     # 4. Extract & Synthesize Finding per Chunk Group (batching to Ollama)
     console.print("  [dim]Synthesizing extracted knowledge via LLM...[/dim]")
