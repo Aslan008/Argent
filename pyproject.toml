@@ -14,6 +14,8 @@ keywords = ["ai", "agent", "cli", "coding-assistant", "rag", "ollama", "llm"]
 dependencies = [
     "requests>=2.31.0",
     "beautifulsoup4>=4.12.0",
+    "trafilatura>=1.8.0",
+    "markdownify",
     "ddgs",
     "prompt-toolkit",
     "questionary",
