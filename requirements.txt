@@ -17,3 +17,4 @@ jedi
 pyyaml
 json5
 pypdf
+pydantic>=2.0

@@ -26,6 +26,7 @@ dependencies = [
     "pyyaml",
     "json5",
     "numpy",
+    "pydantic>=2.0",
 ]
 
 [project.optional-dependencies]
