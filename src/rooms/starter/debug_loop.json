@@ -5,6 +5,7 @@
   "entry": "run_tests",
   "nodes": [
     {"id": "run_tests", "type": "tool", "tool": "run_command",
+     "writes": ["tests_passed", "error_summary"],
      "instruction": "Run the test suite and record whether it passed."},
     {"id": "web_search", "type": "tool", "tool": "search_web",
      "input_from": "state.error_summary",
