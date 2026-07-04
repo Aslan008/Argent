@@ -41,6 +41,7 @@ from prompts import (
 )
 from src.cli.cli_ui import render_response_stream
 from src.project.orchestrator import ProjectOrchestrator
+from src.agent.shell import run_text
 
 # Default tools allowed in regular chat (excludes Project Brain tools and bloat OS tools)
 CHAT_ALLOWED_TOOLS = [
@@ -65,12 +66,12 @@ def offer_safety_checkpoint(task: str) -> None:
     dirty. A clean tree needs no insurance; outside git there is nothing to do.
     Rollback path: git_rollback (only ever touches 'Argent Checkpoint' commits)."""
     try:
-        is_git = subprocess.run("git rev-parse --is-inside-work-tree",
-                                shell=True, capture_output=True, text=True)
+        is_git = run_text("git rev-parse --is-inside-work-tree",
+                          shell=True, capture_output=True)
         if is_git.returncode != 0:
             return
-        dirty = subprocess.run("git status --porcelain",
-                               shell=True, capture_output=True, text=True).stdout.strip()
+        dirty = run_text("git status --porcelain",
+                        shell=True, capture_output=True).stdout.strip()
         if not dirty:
             return
         approved = questionary.confirm(
@@ -884,12 +885,12 @@ def main():
 
             elif user_input.startswith("/commit"):
                 try:
-                    git_check = subprocess.run("git rev-parse --git-dir", capture_output=True, text=True)
+                    git_check = run_text("git rev-parse --git-dir", capture_output=True)
                     if git_check.returncode != 0:
                         print_error("Not a git repository. Navigate to a git project first.")
                         continue
-                    
-                    staged_diff = subprocess.run(["git", "diff", "--cached"], capture_output=True, text=True).stdout
+
+                    staged_diff = run_text(["git", "diff", "--cached"], capture_output=True).stdout
                     if not staged_diff.strip():
                         print_error("No staged changes found. Use 'git add' first.")
                         continue
@@ -969,11 +970,10 @@ def main():
                         cmd_parts = shlex.split(cmd, posix=(os.name != 'nt'))
                     except ValueError:
                         cmd_parts = cmd.split()
-                    result = subprocess.run(
+                    result = run_text(
                         cmd_parts,
                         shell=False,
                         capture_output=True,
-                        text=True
                     )
                     out = result.stdout.strip()
                     err = result.stderr.strip()

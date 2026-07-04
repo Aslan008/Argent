@@ -9,9 +9,10 @@ Each check returns (status, detail) where status is "ok" / "warn" / "fail".
 
 import importlib.util
 import platform
-import subprocess
 import sys
 from pathlib import Path
+
+from src.agent.shell import run_text
 
 from rich.table import Table
 
@@ -161,15 +162,15 @@ def _check_mcp():
 
 def _check_git():
     try:
-        res = subprocess.run(
+        res = run_text(
             ["git", "rev-parse", "--is-inside-work-tree"],
-            capture_output=True, text=True, timeout=5,
+            capture_output=True, timeout=5,
         )
         if res.returncode != 0:
             return (WARN, "not a git repository — /commit, checkpoints and rollback unavailable")
-        dirty = subprocess.run(
+        dirty = run_text(
             ["git", "status", "--porcelain"],
-            capture_output=True, text=True, timeout=5,
+            capture_output=True, timeout=5,
         ).stdout.strip()
         return (OK, "repository detected" + (f", {len(dirty.splitlines())} uncommitted change(s)" if dirty else ", clean"))
     except FileNotFoundError:

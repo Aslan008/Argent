@@ -5,6 +5,7 @@ import py_compile
 import subprocess
 from pathlib import Path
 
+from src.agent.shell import run_text
 from rich.syntax import Syntax
 from rich.panel import Panel
 from ui import console
@@ -68,7 +69,7 @@ def _validate_code_syntax(file_path: str) -> str | None:
             py_compile.compile(file_path, doraise=True)
             try:
                 import sys
-                result = subprocess.run([sys.executable, "-m", "flake8", "--select=F821,E999,F822,F831", file_path], capture_output=True, text=True, timeout=5)
+                result = run_text([sys.executable, "-m", "flake8", "--select=F821,E999,F822,F831", file_path], capture_output=True, timeout=5)
                 if result.returncode != 0 and result.stdout.strip():
                     return f"Syntax is correct, but LINTER DETECTED ERRORS:\n{result.stdout.strip()}\n\nPlease fix these errors using the `multi_replace_in_file_chunk` tool."
             except Exception:
@@ -98,7 +99,7 @@ def _validate_code_syntax(file_path: str) -> str | None:
                 
         if csproj_file:
             try:
-                result = subprocess.run(["dotnet", "build", str(csproj_file), "-v", "q", "/nologo"], capture_output=True, text=True, timeout=15)
+                result = run_text(["dotnet", "build", str(csproj_file), "-v", "q", "/nologo"], capture_output=True, timeout=15)
                 if result.returncode != 0:
                     return f"C# Compiler Error:\n{result.stdout}\n\nPlease fix this compiler error using the `multi_replace_in_file_chunk` tool."
             except subprocess.TimeoutExpired:
@@ -117,7 +118,7 @@ def _validate_code_syntax(file_path: str) -> str | None:
 
     if file_path.endswith(('.js', '.jsx')):
         try:
-            result = subprocess.run(["node", "--check", file_path], capture_output=True, text=True, timeout=5, shell=(os.name == 'nt'))
+            result = run_text(["node", "--check", file_path], capture_output=True, timeout=5, shell=(os.name == 'nt'))
             if result.returncode != 0:
                 return f"JavaScript Syntax Error:\n{result.stderr or result.stdout}\n\nPlease fix this syntax error using the `multi_replace_in_file_chunk` tool."
         except Exception as e:
@@ -125,7 +126,7 @@ def _validate_code_syntax(file_path: str) -> str | None:
 
     if file_path.endswith(('.ts', '.tsx')):
         try:
-            result = subprocess.run(["npx", "tsc", "--noEmit", "--skipLibCheck", file_path], capture_output=True, text=True, timeout=10, shell=(os.name == 'nt'))
+            result = run_text(["npx", "tsc", "--noEmit", "--skipLibCheck", file_path], capture_output=True, timeout=10, shell=(os.name == 'nt'))
             if result.returncode != 0:
                 err_out = result.stderr or result.stdout
                 if "error TS" in err_out or file_path in err_out:

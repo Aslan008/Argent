@@ -566,11 +566,11 @@ class BrowserEngine:
     @staticmethod
     def _is_browser_running(exe_name: str) -> bool:
         """Check if a browser process is already running (Windows)."""
-        import subprocess
+        from src.agent.shell import run_text
         try:
-            result = subprocess.run(
+            result = run_text(
                 ["tasklist", "/FI", f"IMAGENAME eq {exe_name}", "/NH"],
-                capture_output=True, text=True, timeout=5,
+                capture_output=True, timeout=5,
             )
             # tasklist returns the process name if found, otherwise "INFO: No tasks..."
             return exe_name.lower() in result.stdout.lower()

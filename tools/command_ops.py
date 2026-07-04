@@ -5,7 +5,7 @@ import threading
 import ctypes
 import time
 from approval import request_approval, is_destructive_command, command_grant_key, assess_command_risk
-from src.agent.shell import choose_shell, build_command_argv
+from src.agent.shell import choose_shell, build_command_argv, run_text
 from src.agent.command_diagnostics import diagnose_command_error
 from memory_manager import memory
 from ui import console
@@ -335,12 +335,12 @@ def list_background_commands() -> str:
 def read_git_diff() -> str:
     """Read the current unstaged and staged git diff of the project."""
     try:
-        is_git = subprocess.run("git rev-parse --is-inside-work-tree", shell=True, capture_output=True, text=True)
+        is_git = run_text("git rev-parse --is-inside-work-tree", shell=True, capture_output=True)
         if is_git.returncode != 0:
             return "Error: This directory is not a Git repository."
-            
-        unstaged = subprocess.run("git diff", shell=True, capture_output=True, text=True).stdout
-        staged = subprocess.run("git diff --cached", shell=True, capture_output=True, text=True).stdout
+
+        unstaged = run_text("git diff", shell=True, capture_output=True).stdout
+        staged = run_text("git diff --cached", shell=True, capture_output=True).stdout
         
         res = ""
         if staged:

@@ -16,6 +16,24 @@ explicit-signal routing"; the command-diagnostics layer covers the rest.
 """
 
 import re
+import subprocess
+
+
+def run_text(*args, **kwargs) -> "subprocess.CompletedProcess":
+    """``subprocess.run`` in text mode with crash-proof decoding.
+
+    Many Windows tools (tasklist, git, MSBuild/dotnet, node, ...) emit output in
+    the OEM/locale code page, not UTF-8. Under Python's UTF-8 mode a plain
+    ``text=True`` capture decodes stdout/stderr as strict UTF-8, so the first
+    stray byte (e.g. 0xFF) raises UnicodeDecodeError *inside subprocess's reader
+    thread* and crashes it. Forcing ``errors='replace'`` degrades a bad byte to
+    a replacement char instead of throwing. Use this instead of
+    ``subprocess.run(..., text=True)`` anywhere the output is captured.
+    """
+    kwargs.setdefault("encoding", "utf-8")
+    kwargs.setdefault("errors", "replace")
+    kwargs["text"] = True
+    return subprocess.run(*args, **kwargs)
 
 # PowerShell cmdlets (Verb-Noun) and syntax that only work in PowerShell.
 _POWERSHELL_HINTS = re.compile(
