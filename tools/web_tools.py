@@ -1,43 +1,35 @@
-import time
-from ddgs import DDGS
 from logger import get_logger
 
 log = get_logger("tools")
 
 
 def search_web(query: str, max_results: int = 5) -> str:
-    """Search the web using DuckDuckGo with retry logic for rate limits."""
-    max_retries = 3
-    base_delay = 2
+    """Search the web across several keyless sources (DuckDuckGo, Wikipedia,
+    StackOverflow) and return merged snippets.
 
-    for attempt in range(max_retries):
-        try:
-            with DDGS() as ddgs:
-                results = list(ddgs.text(query, max_results=max_results))
+    Federated so one engine rate-limiting no longer stalls the whole search —
+    the others still deliver. Only returns short snippets; call read_webpage on
+    the most relevant URL to get the actual content.
+    """
+    from src.research.search import meta_search
+    try:
+        results = meta_search(query, max_results=max_results)
+    except Exception as e:
+        log.error(f"Web search failed: {e}")
+        return f"Error searching the web: {e}"
 
-            if not results:
-                return f"No results found for query: '{query}'"
+    if not results:
+        return f"No results found for query: '{query}'"
 
-            formatted_results = [f"Search results for: '{query}'\n"]
-            for i, res in enumerate(results, 1):
-                formatted_results.append(f"{i}. {res.get('title', 'No Title')}")
-                formatted_results.append(f"   URL: {res.get('href', 'No URL')}")
-                formatted_results.append(f"   Snippet: {res.get('body', 'No Snippet')}\n")
+    lines = [f"Search results for: '{query}'\n"]
+    for i, r in enumerate(results, 1):
+        lines.append(f"{i}. {r.get('title', '(no title)')}  [{r.get('source', '?')}]")
+        lines.append(f"   URL: {r.get('url', '')}")
+        if r.get("snippet"):
+            lines.append(f"   Snippet: {r['snippet']}\n")
 
-            formatted_results.append("\n[SYSTEM REMINDER: These are only short snippets. To get the actual answer, you MUST call `read_webpage(url)` on the most relevant URL above! Do not just search again.]")
-            return "\n".join(formatted_results)
-
-        except Exception as e:
-            error_msg = str(e).lower()
-            if "ratelimit" in error_msg or "202" in error_msg or attempt < max_retries - 1:
-                log.warning(f"DDGS search failed (attempt {attempt+1}/{max_retries}): {e}. Retrying in {base_delay}s...")
-                time.sleep(base_delay)
-                base_delay *= 2  # Exponential backoff
-            else:
-                log.error(f"Error searching the web after {max_retries} attempts: {e}")
-                return f"Error searching the web: {e}"
-
-    return f"Error: Could not fetch results for '{query}' due to rate limits."
+    lines.append("\n[SYSTEM REMINDER: These are only short snippets. To get the actual answer, you MUST call `read_webpage(url)` on the most relevant URL above! Do not just search again.]")
+    return "\n".join(lines)
 
 
 def read_webpage(url: str, timeout: int = 15, raw_mode: bool = False) -> str:
