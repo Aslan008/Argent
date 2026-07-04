@@ -46,6 +46,56 @@ MAX_SALVAGE_CONTINUES = 12
 # giving up — instead of silently dead-ending the turn.
 MAX_NO_ACTION_CONTINUES = 2
 
+
+def build_agents_memory(limit: int) -> List[str]:
+    """Persistent-memory sections for the system prompt.
+
+    Loads the GLOBAL file (~/.argent/AGENTS.md — standing preferences across
+    every project) first, then the PROJECT file (.argent/AGENTS.md, or AGENTS.md
+    in the project root). The two share a single `limit`-char budget (global
+    first) so a small model's context isn't drowned. Returns a list of formatted
+    prompt sections (empty when neither file exists)."""
+    sources = []
+    global_path = Path.home() / ".argent" / "AGENTS.md"
+    if global_path.exists():
+        sources.append((global_path, False))
+    for p in (Path(".argent/AGENTS.md"), Path("AGENTS.md")):
+        if p.exists():
+            sources.append((p, True))
+            break
+
+    sections, remaining = [], limit
+    for p, is_project in sources:
+        if remaining <= 0:
+            break
+        try:
+            content = p.read_text(encoding="utf-8").strip()
+        except Exception:
+            continue
+        if not content:
+            continue
+        note = ""
+        if len(content) > remaining:
+            content = content[:remaining]
+            note = f"\n\n[...truncated — keep {p} dense and under the tier limit.]"
+        remaining -= len(content)
+        if is_project:
+            header = (
+                f"## PROJECT INSTRUCTIONS (from {p})\n"
+                f"This is your persistent project memory. Keep it accurate: when you learn "
+                f"something durable about this codebase (architecture, conventions, commands), "
+                f"update {p} with replace_in_file/write_file.\n\n"
+            )
+        else:
+            header = (
+                f"## GLOBAL INSTRUCTIONS (from {p})\n"
+                f"Your user's standing preferences and instructions across ALL projects. "
+                f"Honour them unless a project instruction overrides them.\n\n"
+            )
+        sections.append(f"{header}{content}{note}")
+    return sections
+
+
 class ArgentAgent:
     def build_system_prompt(self) -> str:
         category = get_model_size_category(self.model_name)
@@ -172,36 +222,12 @@ Example: {"tool": {"name": "read_file", "arguments": {"file_path": "main.py"}}}"
 
 
 
-        # AGENTS.md is the project's persistent memory: loaded into context
-        # every turn, editable by the user, and maintainable by the agent.
-        # The cap scales with the tier so a small model isn't drowned by it.
+        # Persistent memory injected every turn: the global ~/.argent/AGENTS.md
+        # (standing preferences across all projects) then the project's
+        # .argent/AGENTS.md (or AGENTS.md), sharing a tier-scaled budget so a
+        # small model isn't drowned.
         AGENTS_MD_LIMIT = {"tiny": 2000, "small": 4000}.get(category, 12000)
-        agents_md_paths = [
-            Path(".argent/AGENTS.md"),
-            Path("AGENTS.md"),
-        ]
-        for p in agents_md_paths:
-            if p.exists():
-                try:
-                    agents_content = p.read_text(encoding="utf-8").strip()
-                    if agents_content:
-                        truncated_note = ""
-                        if len(agents_content) > AGENTS_MD_LIMIT:
-                            agents_content = agents_content[:AGENTS_MD_LIMIT]
-                            truncated_note = (
-                                f"\n\n[...truncated at {AGENTS_MD_LIMIT} chars — this file is too long; "
-                                f"trim it to keep it dense.]"
-                            )
-                        prompt_parts.append(
-                            f"## PROJECT INSTRUCTIONS (from {p})\n"
-                            f"This is your persistent project memory. Keep it accurate: when you learn "
-                            f"something durable about this codebase (architecture, conventions, commands), "
-                            f"update {p} with replace_in_file/write_file.\n\n"
-                            f"{agents_content}{truncated_note}"
-                        )
-                    break
-                except Exception:
-                    pass
+        prompt_parts.extend(build_agents_memory(AGENTS_MD_LIMIT))
 
         try:
             from mcp_client import mcp_client
