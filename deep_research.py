@@ -1,4 +1,3 @@
-import json
 from typing import List
 from config import get_current_model
 from providers import create_provider, ProviderError
@@ -6,6 +5,7 @@ from ui import console
 from logger import get_logger
 from src.research.chunking import chunk_document
 from src.research.rerank import rerank
+from src.research.synthesis import parse_query_list, number_sources
 
 log = get_logger("research")
 
@@ -41,42 +41,78 @@ Return ONLY a valid JSON array of strings. No markup, no explanations.
 Example: ["query 1", "query 2", "query 3", "query 4", "query 5"]
 """
     result = _call_llm_sync(prompt, json_format=True, temperature=0.7)
-    if not result:
-        return [objective]
-        
-    try:
-        queries = json.loads(result)
-        if isinstance(queries, list) and len(queries) > 0:
-            return [str(q) for q in queries][:5]
-    except Exception:
-        pass
-        
-    cleaned = result.replace('```json', '').replace('```', '').strip()
-    try:
-        queries = json.loads(cleaned)
-        if isinstance(queries, list) and len(queries) > 0:
-            return [str(q) for q in queries][:5]
-    except Exception:
-        pass
-        
-    return [objective]
+    return parse_query_list(result, limit=5) or [objective]
 
-def _extract_info(objective: str, chunks: List[str]) -> str:
-    """Ask Ollama to synthesize information from multiple chunks."""
-    combined_text = "\n---\n".join(chunks)
-    prompt = f"""You are a research data extractor. 
+
+def _find_gaps(objective: str, notes: str) -> List[str]:
+    """Ask the model which important aspects are still missing, as follow-up
+    search queries. Returns [] when coverage already looks sufficient."""
+    prompt = f"""You are a meticulous research auditor.
+Objective: '{objective}'
+
+Notes gathered so far:
+{notes[:6000]}
+
+List up to 3 follow-up web search queries targeting IMPORTANT aspects of the
+objective that are still MISSING or thin in the notes above. If coverage is
+already sufficient, return an empty array.
+Return ONLY a JSON array of strings (it may be empty)."""
+    return parse_query_list(_call_llm_sync(prompt, json_format=True, temperature=0.5), limit=3)
+
+
+def _gather(queries: List[str], visited_urls: set, all_chunks: list,
+            source_map: dict, max_new_sources: int = 10) -> int:
+    """Search the queries, fetch new pages and chunk them into all_chunks
+    (mapping each chunk back to its URL). Mutates the passed collections and
+    returns the number of new sources read."""
+    from src.research.search import meta_search
+    from src.research.fetch import fetch_page
+
+    new_urls = []
+    for q in queries:
+        try:
+            for r in meta_search(q, max_results=5):
+                url = r.get("url")
+                if (url and url not in visited_urls
+                        and "youtube.com" not in url and "youtu.be" not in url):
+                    visited_urls.add(url)
+                    new_urls.append(url)
+        except Exception as e:
+            console.print(f"[dim yellow]Search failed for '{q}': {e}[/dim yellow]")
+
+    read = 0
+    for url in new_urls[:max_new_sources]:
+        console.print(f"Reading: {url}")
+        res = fetch_page(url)
+        content = res["text"] if res.get("ok") else ""
+        if len(content) < 200:
+            continue
+        for c in chunk_document(content):
+            all_chunks.append(c)
+            source_map[c] = url
+        read += 1
+    return read
+
+def _extract_info(objective: str, combined_text: str) -> str:
+    """Extract useful, source-tagged notes from the annotated fragments.
+
+    ``combined_text`` is the chunks already prefixed with [n] source markers
+    (see number_sources); the model is told to keep those markers so facts stay
+    traceable through to the final report."""
+    prompt = f"""You are a research data extractor.
 Your overarching objective is: '{objective}'
 
-Below are some fragments of text found on the internet. 
-Extract and summarize any useful facts, code snippets, optimizations, or relevant details that help achieve the objective.
-Synthesize the information into a cohesive set of notes. Omit irrelevant parts.
+Below are fragments found on the internet, each prefixed with a [n] source marker.
+Extract useful facts, code snippets, optimizations, or relevant details that help
+achieve the objective. Keep the [n] marker on each fact you retain, so it stays
+traceable to its source. Omit irrelevant parts.
 If NOTHING useful is found, reply with "NOTHING".
 
 TEXT FRAGMENTS:
 {combined_text[:12000]}
 """
     result = _call_llm_sync(prompt, temperature=0.2).strip()
-    if result.upper() == "NOTHING" or result.upper() == '"NOTHING"':
+    if result.upper().strip('"') == "NOTHING":
         return ""
     return result
 
@@ -98,81 +134,61 @@ def run_deep_research(objective: str) -> str:
     for i, q in enumerate(queries, 1):
         console.print(f"  {i}. {q}")
     
-    visited_urls = set()
-    all_links = []
+    visited_urls, all_chunks, source_map = set(), [], {}
 
-    # 1. Search — federated meta-search (DuckDuckGo + Wikipedia + StackOverflow),
-    # resilient to any single engine rate-limiting.
-    from src.research.search import meta_search
+    # Round 1 — gather from the initial queries (federated meta-search + fetch).
     console.print("Searching the web (federated)...")
-    for q in queries:
-        try:
-            for r in meta_search(q, max_results=5):
-                url = r.get("url")
-                if (url and url not in visited_urls
-                        and "youtube.com" not in url and "youtu.be" not in url):
-                    visited_urls.add(url)
-                    all_links.append(url)
-        except Exception as e:
-            console.print(f"[dim yellow]Search failed for '{q}': {e}[/dim yellow]")
-
-    console.print(f"Found {len(all_links)} unique sources to analyze.")
-    
-    # 2. Scrape and Chunk
-    all_chunks = []
-    source_map = {} # Map chunks back to sources
-    
-    from src.research.fetch import fetch_page
-    for url in all_links[:10]:  # Analyze up to 10 sources
-        console.print(f"Reading: {url}")
-        res = fetch_page(url)
-        content = res["text"] if res.get("ok") else ""
-        if len(content) < 200:
-            continue
-            
-        chunks = chunk_document(content)
-        for c in chunks:
-            all_chunks.append(c)
-            source_map[c] = url
+    _gather(queries, visited_urls, all_chunks, source_map)
 
     if not all_chunks:
         return f"Deep Research failed to find any text content for: '{objective}'."
 
-    # 3. Rerank — cross-encoder (falls back to bi-encoder, then input order)
-    console.print(f"  [dim cyan]Reranking {len(all_chunks)} chunks...[/dim cyan]")
-    relevant_chunks = rerank(objective, all_chunks, top_n=15)
-    
-    # 4. Extract & Synthesize Finding per Chunk Group (batching to Ollama)
-    console.print("  [dim]Synthesizing extracted knowledge via LLM...[/dim]")
-    extracted_notes = _extract_info(objective, relevant_chunks)
-    
+    def _rerank_and_extract():
+        # Cross-encoder rerank (falls back to bi-encoder, then input order),
+        # then extract source-tagged notes from the best fragments.
+        console.print(f"  [dim cyan]Reranking {len(all_chunks)} chunks...[/dim cyan]")
+        relevant = rerank(objective, all_chunks, top_n=15)
+        annotated, sources = number_sources(relevant, source_map)
+        console.print("  [dim]Synthesizing extracted knowledge via LLM...[/dim]")
+        return _extract_info(objective, annotated), sources
+
+    extracted_notes, sources = _rerank_and_extract()
+
+    # Round 2 — one bounded gap-filling pass: find important missing aspects,
+    # gather more sources for them, then re-rank and re-extract over the larger
+    # corpus. Bounded to a single extra round so a model can't loop forever.
+    gap_queries = _find_gaps(objective, extracted_notes) if extracted_notes else []
+    if gap_queries:
+        console.print("Filling coverage gaps with follow-up searches...")
+        for i, q in enumerate(gap_queries, 1):
+            console.print(f"  +{i}. {q}")
+        if _gather(gap_queries, visited_urls, all_chunks, source_map):
+            extracted_notes, sources = _rerank_and_extract()
+
     if not extracted_notes:
-        return f"Research completed, but no relevant technical info was found in the {len(all_links)} sources."
-        
-    # 5. Final Synthesis
+        return f"Research completed, but no relevant technical info was found in the {len(source_map)} fragments."
+
+    # Final synthesis with numbered, inline-citable sources.
     console.print("[bold cyan]Building Final Report...[/bold cyan]")
-    
-    # Collect sources used in final chunks
-    used_sources = sorted(list(set(source_map[c] for c in relevant_chunks if c in source_map)))
-    sources_text = "\n".join([f"- {s}" for s in used_sources])
-    
+    sources_text = "\n".join(sources)
     synthesis_prompt = f"""You are an elite expert researcher.
 Your overarching research objective was: '{objective}'
 
-Here are the extracted findings from the most relevant web fragments:
+Here are the extracted findings. Each fact carries a [n] marker identifying its source:
 {extracted_notes}
 
-Synthesize this information into a MASSIVE, highly structured, cohesive, and deeply technical Markdown report.
-Group similar concepts together. Include code blocks where applicable. Ensure no valuable technical details are lost. Use clear headers and bullet points.
-Include a section 'SOURCES' at the bottom listing these URLs:
+Synthesize this into a structured, cohesive, deeply technical Markdown report.
+Group similar concepts together. Include code blocks where applicable. Preserve
+the [n] inline citations next to the claims they support, so every claim stays
+traceable. End with a 'SOURCES' section listing exactly:
 {sources_text}
 
 Do not add conversational fluff. Output ONLY the markdown report.
 """
     final_report = _call_llm_sync(synthesis_prompt, temperature=0.3)
-    
+
     if not final_report:
         return f"Research completed, but failed to synthesize final report.\nRaw findings:\n{extracted_notes}"
-    
+
     console.print("[bold green]Deep Research Complete![/bold green]")
     return final_report
