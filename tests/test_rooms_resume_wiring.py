@@ -20,16 +20,18 @@ class FakeRunner:
         self.commits = 0
 
         def tool(node, state):
-            if node.id == "run_tests":
-                self.test_runs += 1
-                passed = self.test_runs >= self.pass_on
-                return {"tests_passed": passed,
-                        "error_summary": None if passed else "boom", "output": "ran"}
             if node.id == "commit":
                 self.commits += 1
             return {"output": "ok"}
 
-        self._nr = NodeRunner(tool_executor=tool, agent_executor=lambda n, c: {"error_summary": "applied"})
+        def agent(node, context):
+            if node.id == "run_tests":   # verifier agent
+                self.test_runs += 1
+                passed = self.test_runs >= self.pass_on
+                return {"tests_passed": passed, "error_summary": None if passed else "boom"}
+            return {"error_summary": "applied"}
+
+        self._nr = NodeRunner(tool_executor=tool, agent_executor=agent)
 
     def run_node(self, node, state):
         return self._nr.run_node(node, state)

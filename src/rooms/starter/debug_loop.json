@@ -4,9 +4,10 @@
   "budget": {"max_iterations": 20, "max_tokens": 60000},
   "entry": "run_tests",
   "nodes": [
-    {"id": "run_tests", "type": "tool", "tool": "run_command",
+    {"id": "run_tests", "type": "agent",
+     "budget": {"max_iterations": 4, "max_tokens": 20000},
      "writes": ["tests_passed", "error_summary"],
-     "instruction": "Run the test suite and record whether it passed."},
+     "instruction": "Run the test suite with run_command (`python -m pytest -q`). Then output a single JSON object: {\"tests_passed\": true or false, \"error_summary\": \"<short reason if failed, empty if passed>\"}. Base tests_passed STRICTLY on the actual pytest result, never on your own opinion."},
     {"id": "web_search", "type": "tool", "tool": "search_web",
      "input_from": "state.error_summary",
      "instruction": "Search the failing test error plus the library versions."},
@@ -16,7 +17,8 @@
      "writes": ["error_summary"],
      "instruction": "Apply a fix based on the search findings. Do NOT claim tests pass — run_tests is the verifier."},
     {"id": "commit", "type": "tool", "tool": "run_command",
-     "instruction": "git commit the green state."}
+     "args": {"command": "git commit -am \"rooms: tests green\""},
+     "instruction": "Commit the green state."}
   ],
   "edges": [
     {"from": "run_tests", "if": "state.tests_passed", "to": "commit"},

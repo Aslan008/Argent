@@ -156,7 +156,7 @@ def argent_tool_executor(node: Node, state: State):
     if fn is None:
         return f"Error: tool '{node.tool}' is not available"
 
-    kwargs = {}
+    kwargs = dict(node.args) if node.args else {}
     if node.input_from:
         key = node.input_from[len("state."):] if node.input_from.startswith("state.") else node.input_from
         value = state.data.get(key)
@@ -165,6 +165,7 @@ def argent_tool_executor(node: Node, state: State):
                 p for p in inspect.signature(fn).parameters.values()
                 if p.default is inspect.Parameter.empty
                 and p.kind in (p.POSITIONAL_OR_KEYWORD, p.KEYWORD_ONLY)
+                and p.name not in kwargs
             ]
             if required:
                 kwargs[required[0].name] = value

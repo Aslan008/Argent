@@ -78,6 +78,17 @@ class TestArgentToolExecutor:
         node = Node(id="n", type="tool", tool="boom")
         assert "Error running tool" in argent_tool_executor(node, State())
 
+    def test_literal_args_passed(self, monkeypatch):
+        monkeypatch.setattr(schemas, "AVAILABLE_TOOLS", {"cmd": lambda command: f"ran:{command}"})
+        node = Node(id="n", type="tool", tool="cmd", args={"command": "pytest -q"})
+        assert argent_tool_executor(node, State()) == "ran:pytest -q"
+
+    def test_args_and_input_from_combine(self, monkeypatch):
+        monkeypatch.setattr(schemas, "AVAILABLE_TOOLS", {"f": lambda a, b: f"{a}:{b}"})
+        # args gives `a`; input_from fills the first required param not already set (`b`).
+        node = Node(id="n", type="tool", tool="f", args={"a": "X"}, input_from="state.q")
+        assert argent_tool_executor(node, State(data={"q": "Y"})) == "X:Y"
+
 
 class Fakes:
     def __init__(self, pass_on):
@@ -85,12 +96,6 @@ class Fakes:
         self.test_runs = self.searches = self.fixes = self.commits = 0
 
     def tool(self, node, state):
-        if node.id == "run_tests":
-            self.test_runs += 1
-            passed = self.test_runs >= self.pass_on
-            return {"tests_passed": passed,
-                    "error_summary": None if passed else f"fail{self.test_runs}",
-                    "output": "ran"}
         if node.id == "web_search":
             self.searches += 1
             return {"output": "found"}
@@ -100,6 +105,11 @@ class Fakes:
         return {}
 
     def agent(self, node, context):
+        if node.id == "run_tests":   # the verifier agent — owns tests_passed
+            self.test_runs += 1
+            passed = self.test_runs >= self.pass_on
+            return {"tests_passed": passed,
+                    "error_summary": None if passed else f"fail{self.test_runs}"}
         if node.id == "apply_fix":
             self.fixes += 1
             # The agent LIES: claims the tests pass. writes=["error_summary"]

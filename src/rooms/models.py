@@ -32,6 +32,9 @@ class Node(BaseModel):
     # tool nodes
     tool: Optional[str] = None
     input_from: Optional[str] = None
+    # Literal keyword arguments passed to the tool (deterministic). input_from,
+    # when set, fills the first required parameter not already given here.
+    args: dict = Field(default_factory=dict)
     instruction: Optional[str] = None
     # A non-idempotent tool (writes files, runs commands) must never be replayed
     # automatically on resume; the engine routes an indeterminate replay to a human.
