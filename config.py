@@ -136,6 +136,17 @@ def set_critic_auto(val: bool):
     _set("critic_auto", val)
 
 
+def get_rooms_spawn() -> bool:
+    """Whether the rooms triage may author NEW rooms (spawn_room). Off by
+    default: an AI-proposed room still passes the validator + human approval
+    before it can run, but the whole capability is opt-in."""
+    return _get("rooms_spawn", False)
+
+
+def set_rooms_spawn(val: bool):
+    _set("rooms_spawn", val)
+
+
 def get_critic_model() -> str:
     """Model the critic runs on. Empty = the current main model."""
     return _get("critic_model", "")

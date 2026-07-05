@@ -17,10 +17,12 @@ from src.rooms.models import Node, State
 
 
 class NodeRunner:
-    def __init__(self, tool_executor=None, agent_executor=None, human_prompt=None):
+    def __init__(self, tool_executor=None, agent_executor=None, human_prompt=None,
+                 spawn_handler=None):
         self._tool = tool_executor        # (node, state) -> dict | str
         self._agent = agent_executor      # (node, context: dict) -> dict
         self._human = human_prompt        # (node, state) -> None
+        self._spawn = spawn_handler       # (node, state) -> None; may set state.route_to
 
     def run_node(self, node: Node, state: State) -> None:
         if node.type == "tool":
@@ -33,7 +35,10 @@ class NodeRunner:
         elif node.type == "human_pause":
             if self._human:
                 self._human(node, state)
-        # condition / spawn_room: no side effect at this layer
+        elif node.type == "spawn_room":
+            if self._spawn:
+                self._spawn(node, state)
+        # condition: no side effect at this layer
 
     @staticmethod
     def _resolve(ref: str, state: State):

@@ -54,11 +54,19 @@ def build_library(available_tools=None) -> RoomLibrary:
     return lib
 
 
-def build_runner(human_prompt=None) -> NodeRunner:
+def build_runner(human_prompt=None, library=None) -> NodeRunner:
+    spawn_handler = None
+    from config import get_rooms_spawn
+    if library is not None and get_rooms_spawn():
+        from src.rooms.spawn import RoomProposer, SpawnHandler, questionary_approve
+        tools = available_tool_names()
+        spawn_handler = SpawnHandler(
+            library, tools, RoomProposer(argent_run_agent, library), questionary_approve)
     return NodeRunner(
         tool_executor=argent_tool_executor,
         agent_executor=AgentExecutor(argent_run_agent),
         human_prompt=human_prompt,
+        spawn_handler=spawn_handler,
     )
 
 
@@ -73,7 +81,7 @@ def run_rooms(task: str, start: str = "analyze", *, library=None, runner=None,
     an interrupted run from that journal instead of starting `task` fresh.
     """
     library = library if library is not None else build_library()
-    runner = runner if runner is not None else build_runner(human_prompt)
+    runner = runner if runner is not None else build_runner(human_prompt, library=library)
     supervisor = build_supervisor(
         library, runner, routes=routes if routes is not None else default_routes(),
         max_rooms=max_rooms, journal=journal,

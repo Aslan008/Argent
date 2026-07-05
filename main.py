@@ -155,7 +155,7 @@ def main():
         '/work --auto',
         '/critic on', '/critic off', '/critic model', '/critic status',
         '/guard', '/guard off', '/guard warn', '/guard block',
-        '/rooms resume', '/rooms list', '/rooms show',
+        '/rooms resume', '/rooms list', '/rooms show', '/rooms spawn on', '/rooms spawn off',
         '/logs clear', '/logs error'
     ]
     
@@ -502,6 +502,15 @@ def main():
                     else:
                         from src.rooms.library import describe_room
                         print_system(describe_room(room))
+                    continue
+                if low.startswith("spawn"):
+                    from config import get_rooms_spawn, set_rooms_spawn
+                    sub = arg[5:].strip().lower()
+                    if sub in ("on", "off"):
+                        set_rooms_spawn(sub == "on")
+                        print_system(f"spawn_room (ИИ пишет новые комнаты): [bold]{'ON' if sub == 'on' else 'OFF'}[/bold]")
+                    else:
+                        print_system(f"spawn_room: [bold]{'ON' if get_rooms_spawn() else 'OFF'}[/bold] — ИИ может предлагать новые комнаты (через валидатор + твоё одобрение). Вкл: /rooms spawn on")
                     continue
 
                 journal = default_journal()
