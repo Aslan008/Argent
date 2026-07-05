@@ -155,6 +155,7 @@ def main():
         '/work --auto',
         '/critic on', '/critic off', '/critic model', '/critic status',
         '/guard', '/guard off', '/guard warn', '/guard block',
+        '/rooms resume',
         '/logs clear', '/logs error'
     ]
     
@@ -476,14 +477,20 @@ def main():
                 arg = user_input[len("/rooms"):].strip()
                 if not arg:
                     print_system("Использование: /rooms <задача> — экспериментальный движок «комнаты и рельсы».")
+                    print_system("           /rooms resume — продолжить прерванный прогон.")
                     print_system("Пример: /rooms почини падающие тесты")
                     continue
-                from src.rooms.session import build_library, run_rooms
+                from src.rooms.session import build_library, default_journal, run_rooms
                 lib = build_library()
                 if lib.load_errors:
                     print_error(f"Комнаты не прошли валидацию: {lib.load_errors}")
                     continue
-                print_system(f"[bold cyan]Rooms[/bold cyan]: {arg}")
+                journal = default_journal()
+                is_resume = arg.lower() == "resume"
+                if is_resume and journal.last() is None:
+                    print_system("Нет прерванного прогона для возобновления.")
+                    continue
+                print_system(f"[bold cyan]Rooms[/bold cyan]: {'возобновление' if is_resume else arg}")
                 print_system(f"Комнаты: {', '.join(lib.names())}")
                 if not questionary.confirm(
                     "Автономный прогон (реальные инструменты + суб-агенты). Продолжить?",
@@ -498,9 +505,14 @@ def main():
                         state.data[f"{node.id}.output"] = ans
 
                 try:
-                    result = run_rooms(arg, library=lib, human_prompt=_human)
+                    result = run_rooms(
+                        "" if is_resume else arg, library=lib, human_prompt=_human,
+                        journal=journal, resume=is_resume,
+                    )
                     print_system(f"[bold]Итог:[/bold] {result.outcome}")
                     print_system("Маршрут: " + " -> ".join(f"{r}:{e}" for r, e in result.history))
+                    if result.outcome == "escalated":
+                        print_system("Прогон эскалирован к человеку. При необходимости продолжите: /rooms resume")
                 except Exception as e:
                     print_error(f"Rooms run failed: {e}")
                 continue

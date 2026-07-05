@@ -112,11 +112,55 @@ class Supervisor:
         return None   # a success-like exit with no explicit route ends the run
 
 
-def build_supervisor(library, runner, routes=None, **kwargs) -> Supervisor:
-    """Production wiring: rooms are executed by the Engine driving a NodeRunner."""
+def build_supervisor(library, runner, routes=None, journal=None, **kwargs) -> Supervisor:
+    """Production wiring: rooms are executed by the Engine driving a NodeRunner.
+    When `journal` is given, each room's node steps are journaled for crash-safe
+    resume (see resume_run)."""
     engine = Engine()
 
     def run_room(room, state):
-        return engine.run(room, state, runner.run_node)
+        return engine.run(room, state, runner.run_node, journal=journal)
 
     return Supervisor(library, run_room, routes=routes, **kwargs)
+
+
+def resume_run(supervisor, library, journal, runner) -> "RunResult":
+    """Resume an interrupted run from `journal`, then hand back to the supervisor.
+
+    Reads where the last room was, recovers its node-level position via
+    plan_resume, and continues the meta-loop from that room's exit. Meta-counters
+    (history, triage passes) start fresh on resume — the guarantee is "don't redo
+    completed work and don't double-apply a side effect", not a byte-perfect
+    replay. Returns None when there is nothing to resume.
+    """
+    from src.rooms.engine import Engine, Outcome, plan_resume
+
+    last = journal.last()
+    if not last:
+        return None
+    room = library.get(last.get("room"))
+    if room is None:
+        return None
+
+    start_node, state, status = plan_resume(room, journal)
+    if status == "indeterminate":
+        return RunResult("escalated", [(room.room, "indeterminate")], state)
+
+    history = []
+    if status == "finished":
+        exit_name = last.get("exit")
+    else:  # "resume" — finish the interrupted room first
+        outcome = Engine().run(room, state, runner.run_node,
+                               journal=journal, start_node=start_node)
+        exit_name = outcome.exit
+        history.append((room.room, exit_name))
+
+    nxt = supervisor._route(room.room, Outcome(exit_name, state, 0), state)
+    if nxt is None:
+        return RunResult("done", history, state)
+    if nxt == "__ESCALATE__":
+        return RunResult("escalated", history, state)
+
+    result = supervisor.run(nxt, state)
+    result.history = history + result.history
+    return result
