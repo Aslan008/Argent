@@ -23,13 +23,16 @@ def default_starter_dir() -> Path:
 
 
 class RoomLibrary:
-    def __init__(self, spawn_rooms=("triage",)):
+    def __init__(self, spawn_rooms=("triage",), user_dir=None):
         self.rooms: dict = {}         # name -> Room
         self.stats: dict = {}         # name -> {successes, failures, quarantined}
         self.load_errors: dict = {}   # name/stem -> [error strings]
+        self.sources: dict = {}       # name -> "starter" | "user"
         self._spawn_rooms = set(spawn_rooms)
+        # Writable directory for user/AI-authored rooms (add_room persists here).
+        self.user_dir = Path(user_dir) if user_dir else None
 
-    def load_dir(self, directory, available_tools) -> "RoomLibrary":
+    def load_dir(self, directory, available_tools, origin: str = "starter") -> "RoomLibrary":
         for path in sorted(Path(directory).glob("*.json")):
             try:
                 data = json.loads(path.read_text(encoding="utf-8"))
@@ -45,8 +48,44 @@ class RoomLibrary:
                 self.load_errors[room.room] = errs
                 continue
             self.rooms[room.room] = room
+            self.sources[room.room] = origin
             self.stats.setdefault(room.room, {"successes": 0, "failures": 0, "quarantined": False})
         return self
+
+    def add_room(self, room: Room, available_tools) -> list:
+        """Validate and add a room, persisting it to the user directory. Returns
+        the validation errors (empty list == added). This is the single gate for
+        both user- and AI-authored rooms — nothing enters the graph unvalidated."""
+        errors = validate_room(
+            room, set(available_tools),
+            allow_spawn=(room.room in self._spawn_rooms),
+        )
+        if errors:
+            return errors
+        self.rooms[room.room] = room
+        self.sources[room.room] = "user"
+        self.stats.setdefault(room.room, {"successes": 0, "failures": 0, "quarantined": False})
+        if self.user_dir:
+            self.user_dir.mkdir(parents=True, exist_ok=True)
+            (self.user_dir / f"{room.room}.json").write_text(
+                room.model_dump_json(indent=2, by_alias=True, exclude_none=True),
+                encoding="utf-8",
+            )
+        return []
+
+    def remove_room(self, name: str) -> bool:
+        """Remove a room from the library; delete its user-dir file if present.
+        Returns False if there was no such room."""
+        if name not in self.rooms:
+            return False
+        self.rooms.pop(name)
+        self.stats.pop(name, None)
+        self.sources.pop(name, None)
+        if self.user_dir:
+            f = self.user_dir / f"{name}.json"
+            if f.exists():
+                f.unlink()
+        return True
 
     def get(self, name):
         return self.rooms.get(name)
@@ -77,3 +116,31 @@ class RoomLibrary:
         if runs >= min_runs and (st["successes"] / runs) < threshold:
             st["quarantined"] = True
         return st
+
+
+def describe_room(room: Room) -> str:
+    """A readable summary of a room's graph — for `/rooms show`."""
+    lines = [
+        f"Room: {room.room}  ({room.description})",
+        f"  budget: {room.budget.max_iterations} iters / {room.budget.max_tokens} tok   entry: {room.entry}",
+        "  nodes:",
+    ]
+    for n in room.nodes:
+        detail = ""
+        if n.type == "tool":
+            detail = f" tool={n.tool}" + (f" args={n.args}" if n.args else "")
+        elif n.type == "agent":
+            detail = f" writes={n.writes}" + (f" ctx={n.context}" if n.context else "")
+        lines.append(f"    - {n.id} [{n.type}]{detail}")
+    lines.append("  edges:")
+    for e in room.edges:
+        if e.kind == "if":
+            label = f" if({e.if_})"
+        elif e.kind == "while":
+            label = f" while({e.while_}) x{e.max}"
+        elif e.kind == "else":
+            label = " else"
+        else:
+            label = ""
+        lines.append(f"    {e.from_} ->{label} {e.to}")
+    return "\n".join(lines)

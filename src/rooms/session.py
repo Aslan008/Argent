@@ -38,9 +38,20 @@ def available_tool_names() -> set:
     return set(AVAILABLE_TOOLS)
 
 
+def user_rooms_dir() -> Path:
+    return Path(".argent") / "rooms"
+
+
 def build_library(available_tools=None) -> RoomLibrary:
+    """Starter rooms (packaged, read-only) plus any user/AI-authored rooms in
+    .argent/rooms/ (writable)."""
     tools = available_tool_names() if available_tools is None else set(available_tools)
-    return RoomLibrary().load_dir(default_starter_dir(), tools)
+    udir = user_rooms_dir()
+    lib = RoomLibrary(user_dir=udir)
+    lib.load_dir(default_starter_dir(), tools, origin="starter")
+    if udir.exists():
+        lib.load_dir(udir, tools, origin="user")
+    return lib
 
 
 def build_runner(human_prompt=None) -> NodeRunner:

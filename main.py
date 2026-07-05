@@ -155,7 +155,7 @@ def main():
         '/work --auto',
         '/critic on', '/critic off', '/critic model', '/critic status',
         '/guard', '/guard off', '/guard warn', '/guard block',
-        '/rooms resume',
+        '/rooms resume', '/rooms list', '/rooms show',
         '/logs clear', '/logs error'
     ]
     
@@ -477,7 +477,7 @@ def main():
                 arg = user_input[len("/rooms"):].strip()
                 if not arg:
                     print_system("Использование: /rooms <задача> — экспериментальный движок «комнаты и рельсы».")
-                    print_system("           /rooms resume — продолжить прерванный прогон.")
+                    print_system("           /rooms list — список комнат;  /rooms show <имя> — граф комнаты;  /rooms resume — продолжить прерванный прогон.")
                     print_system("Пример: /rooms почини падающие тесты")
                     continue
                 from src.rooms.session import build_library, default_journal, run_rooms
@@ -485,6 +485,25 @@ def main():
                 if lib.load_errors:
                     print_error(f"Комнаты не прошли валидацию: {lib.load_errors}")
                     continue
+
+                low = arg.lower()
+                if low == "list":
+                    for name in lib.names():
+                        st = lib.stats.get(name, {})
+                        src = lib.sources.get(name, "?")
+                        q = " [КАРАНТИН]" if st.get("quarantined") else ""
+                        print_system(f"  {name} [{src}] — {st.get('successes', 0)}✓/{st.get('failures', 0)}✗{q}")
+                    continue
+                if low.startswith("show"):
+                    name = arg[4:].strip()
+                    room = lib.get(name)
+                    if not room:
+                        print_error(f"Нет комнаты '{name}'. /rooms list — список.")
+                    else:
+                        from src.rooms.library import describe_room
+                        print_system(describe_room(room))
+                    continue
+
                 journal = default_journal()
                 is_resume = arg.lower() == "resume"
                 if is_resume and journal.last() is None:
