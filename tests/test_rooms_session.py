@@ -6,7 +6,7 @@ driven with a fake NodeRunner over the real starter library.
 
 from src.rooms.library import RoomLibrary, default_starter_dir
 from src.rooms.models import Node
-from src.rooms.runner import AgentExecutor, NodeRunner, _extract_json_object
+from src.rooms.runner import AgentExecutor, NodeRunner, _consume_bounded, _extract_json_object
 from src.rooms.session import default_routes, run_rooms
 
 
@@ -41,13 +41,48 @@ class TestAgentExecutor:
                     writes=["error_summary"])
         # The model reports two fields; AgentExecutor returns them as-is, the
         # NodeRunner is what enforces the whitelist downstream.
-        ex = AgentExecutor(lambda prompt: 'ok {"error_summary": "fixed", "tests_passed": true}')
+        ex = AgentExecutor(lambda prompt, max_iterations=None: 'ok {"error_summary": "fixed", "tests_passed": true}')
         assert ex(node, {}) == {"error_summary": "fixed", "tests_passed": True}
 
     def test_call_empty_on_no_json(self):
-        ex = AgentExecutor(lambda prompt: "I could not produce structured output")
+        ex = AgentExecutor(lambda prompt, max_iterations=None: "I could not produce structured output")
         assert ex(Node(id="a", type="agent",
                        budget={"max_iterations": 1, "max_tokens": 10}, writes=[]), {}) == {}
+
+    def test_passes_node_iteration_budget(self):
+        seen = {}
+
+        def run_agent(prompt, max_iterations=None):
+            seen["max"] = max_iterations
+            return "{}"
+        node = Node(id="a", type="agent",
+                    budget={"max_iterations": 5, "max_tokens": 100}, writes=[])
+        AgentExecutor(run_agent)(node, {})
+        assert seen["max"] == 5
+
+
+def _agent_chunks(n_tool_rounds):
+    for i in range(n_tool_rounds):
+        yield {"type": "content_stream", "content": f"c{i}"}
+        yield {"type": "tool_start", "name": "t"}
+        yield {"type": "tool_end", "name": "t", "result": "r"}
+    yield {"type": "content_stream", "content": "final"}
+
+
+class TestConsumeBounded:
+    def test_no_cap_consumes_all(self):
+        out = _consume_bounded(_agent_chunks(3), max_iterations=None)
+        assert out == "c0c1c2final"
+
+    def test_stops_after_iteration_budget(self):
+        out = _consume_bounded(_agent_chunks(5), max_iterations=2)
+        assert "c0" in out and "c1" in out
+        assert "c2" not in out and "final" not in out   # nothing after the cap
+        assert "budget (2)" in out
+
+    def test_natural_finish_before_cap(self):
+        out = _consume_bounded(_agent_chunks(1), max_iterations=5)
+        assert out == "c0final"   # finished on its own, no budget note
 
 
 class _FakeRunner:

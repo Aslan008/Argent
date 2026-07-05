@@ -88,7 +88,8 @@ class AgentExecutor:
         self._run_agent = run_agent
 
     def __call__(self, node: Node, context: dict) -> dict:
-        raw = self._run_agent(self._build_prompt(node, context))
+        max_iter = node.budget.max_iterations if node.budget else None
+        raw = self._run_agent(self._build_prompt(node, context), max_iterations=max_iter)
         return _extract_json_object(raw) or {}
 
     @staticmethod
@@ -108,15 +109,36 @@ class AgentExecutor:
         return "\n".join(parts)
 
 
-def argent_run_agent(instruction: str, tools_override=None) -> str:
-    """Production adapter: run an ArgentSubAgent worker and return its final text.
+def _consume_bounded(chunks, max_iterations=None) -> str:
+    """Drain a sub-agent's chunk stream into its final text, stopping after
+    ``max_iterations`` tool-execution rounds. This turns an agent node's budget
+    into a real bound on the ReAct loop rather than a hope — without it a node
+    could act far more than its declared max_iterations. Content produced after
+    the cap is not included. Isolated from ArgentSubAgent so it's testable
+    without an LLM."""
+    final = ""
+    tool_rounds = 0
+    for chunk in chunks:
+        kind = chunk.get("type")
+        if kind in ("content_stream", "content"):
+            final += chunk.get("content", "")
+        elif kind == "tool_end":
+            tool_rounds += 1
+            if max_iterations and tool_rounds >= max_iterations:
+                final += f"\n[Rooms: node iteration budget ({max_iterations}) reached — stopping.]"
+                break
+    return final
 
-    Note: the node budget is best-effort here — the sub-agent has its own loop
-    guard and limits; wiring the node's max_iterations directly onto the
-    sub-agent loop is a later refinement.
-    """
+
+def argent_run_agent(instruction: str, tools_override=None, max_iterations=None) -> str:
+    """Production adapter: run an ArgentSubAgent worker bounded by the node's
+    iteration budget, and return its final text."""
     from agent import ArgentSubAgent
-    return ArgentSubAgent("Coder", instruction, tools_override=tools_override).execute()
+    sub = ArgentSubAgent("Coder", instruction, tools_override=tools_override)
+    return _consume_bounded(
+        sub.process_user_input(f"Start task: {instruction}", allowed_tools=tools_override),
+        max_iterations,
+    )
 
 
 def argent_tool_executor(node: Node, state: State):
