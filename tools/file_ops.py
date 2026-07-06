@@ -3,7 +3,7 @@ import shutil
 from pathlib import Path
 from file_tracker import snapshot
 from memory_manager import memory
-from tools._helpers import _resolve_path, _is_plugin_path_restricted, _validate_code_syntax, _print_diff, _shift_indent
+from tools._helpers import _resolve_path, _is_plugin_path_restricted, _is_unity_meta_restricted, _validate_code_syntax, _print_diff, _shift_indent
 from logger import get_logger
 
 log = get_logger("tools")
@@ -65,7 +65,7 @@ def delete_file(file_path: str) -> str:
 
 def write_file(file_path: str, content: str, overwrite: bool = False) -> str:
     """Write or overwrite content to a file. Creates directories if needed."""
-    restriction_error = _is_plugin_path_restricted(file_path)
+    restriction_error = _is_plugin_path_restricted(file_path) or _is_unity_meta_restricted(file_path)
     if restriction_error:
         return restriction_error
         
@@ -132,7 +132,7 @@ def write_file(file_path: str, content: str, overwrite: bool = False) -> str:
 
 def append_to_file(file_path: str, content: str) -> str:
     """Append content to an existing file or create a new one. Ideal for taking notes."""
-    restriction_error = _is_plugin_path_restricted(file_path)
+    restriction_error = _is_plugin_path_restricted(file_path) or _is_unity_meta_restricted(file_path)
     if restriction_error:
         return restriction_error
         
@@ -274,7 +274,7 @@ def replace_python_function(file_path: str, function_name: str, new_code: str) -
 
 def replace_in_file(file_path: str, target_text: str, replacement_text: str) -> str:
     """Replace exactly matching text in a file with new text."""
-    restriction_error = _is_plugin_path_restricted(file_path)
+    restriction_error = _is_plugin_path_restricted(file_path) or _is_unity_meta_restricted(file_path)
     if restriction_error:
         return restriction_error
         
@@ -330,7 +330,18 @@ def replace_in_file(file_path: str, target_text: str, replacement_text: str) -> 
                         matches.append((match_start, c_idx))
 
             if len(matches) > 1:
-                return f"Error: The target text is ambiguous (found {len(matches)} fuzzy matches). Provide more context."
+                locs = []
+                for (s, e) in matches[:5]:
+                    first = next((content_lines[k].strip() for k in range(s, min(e, len(content_lines)))
+                                  if content_lines[k].strip()), "")
+                    locs.append(f"lines {s + 1}-{e} (starts: \"{first[:50]}\")")
+                return (
+                    f"Error: The target text matches {len(matches)} places: {'; '.join(locs)}. "
+                    f"They differ only in surrounding context, so pick ONE and add a distinctive "
+                    f"nearby line (a unique comment, the method signature, or a preceding statement) "
+                    f"to your target_text so it's unique — or, for a small file, use write_file to "
+                    f"rewrite it whole."
+                )
             if not matches:
                 hint = _build_match_hint(target_text_processed, content)
                 return f"Error: The target text was not found in '{file_path}'. Make sure it matches exactly, including whitespace and indentation.{hint}"
@@ -378,7 +389,7 @@ def replace_in_file(file_path: str, target_text: str, replacement_text: str) -> 
 def multi_replace_in_file_chunk(file_path: str, changes_json: str) -> str:
     """Surgically replace multiple chunks of text in a single file by specifying line ranges."""
     import json
-    restriction_error = _is_plugin_path_restricted(file_path)
+    restriction_error = _is_plugin_path_restricted(file_path) or _is_unity_meta_restricted(file_path)
     if restriction_error:
         return restriction_error
         

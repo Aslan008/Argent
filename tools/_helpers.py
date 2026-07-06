@@ -57,6 +57,33 @@ def _is_plugin_path_restricted(file_path: str) -> str | None:
         pass
     return None
 
+
+def _is_unity_meta_restricted(file_path: str) -> str | None:
+    """Refuse edits to Unity .meta files — Unity generates and manages them, and
+    hand-editing corrupts asset GUIDs/import settings."""
+    if str(file_path).strip().lower().endswith(".meta"):
+        return (
+            "Error: Refusing to modify a Unity .meta file. Unity generates and manages "
+            ".meta files automatically; editing them by hand corrupts asset GUIDs and "
+            "import settings. Edit the asset itself (the .cs/.prefab/.asset), not its .meta — "
+            "Unity will regenerate the .meta on its own."
+        )
+    return None
+
+
+def _is_unity_project_file(file_path: str) -> bool:
+    """True when a file lives inside a Unity project. Unity generates a .meta for
+    every asset and keeps scripts under an Assets/ folder — either is a reliable,
+    cheap signal."""
+    try:
+        if os.path.exists(str(file_path) + ".meta"):
+            return True
+        parts = {p.lower() for p in Path(file_path).resolve().parts}
+        return "assets" in parts
+    except Exception:
+        return False
+
+
 def _validate_code_syntax(file_path: str) -> str | None:
     """Quietly checks if the written Python or C# file has syntax errors.
     Returns the error string if failed, or None if passed."""
@@ -81,6 +108,12 @@ def _validate_code_syntax(file_path: str) -> str | None:
             return f"Validation Error: {e}"
             
     if file_path.endswith('.cs'):
+        # Unity compiles via its own pipeline; a plain `dotnet build` on a
+        # Unity-generated .csproj is slow AND resolves Unity assemblies wrongly,
+        # producing false compiler errors that would revert a valid edit. Skip
+        # the build for anything inside a Unity project (fast + no false revert).
+        if _is_unity_project_file(file_path):
+            return None
         try:
             with open(file_path, "r", encoding="utf-8") as f:
                 content = f.read()
