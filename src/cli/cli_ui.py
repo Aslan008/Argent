@@ -29,6 +29,24 @@ def _render_stream_error(content: str) -> None:
         print_error(content)
 
 
+def _time_observe(source, timing: dict, start_time: float):
+    """Pass chunks through unchanged while measuring the turn: first-chunk time
+    (≈ prompt prefill/TTFT) and total tool time (the span between each tool_start
+    and its tool_end — the agent blocks producing tool_end until the tool
+    finishes). Everything else is model generation. Kept a pure generator so the
+    accounting is testable without the renderer."""
+    for ch in source:
+        if timing["first"] is None:
+            timing["first"] = time.time() - start_time
+        kind = ch.get("type")
+        if kind == "tool_start":
+            timing["_ts"] = time.time()
+        elif kind == "tool_end" and timing["_ts"] is not None:
+            timing["tools"] += time.time() - timing["_ts"]
+            timing["_ts"] = None
+        yield ch
+
+
 # ── Dynamic renderables ─────────────────────────────────────────────
 # These classes implement __rich_console__, which Rich calls on EVERY
 # Live refresh frame.  This means the elapsed timer updates
@@ -178,8 +196,10 @@ def render_response_stream(
                 continue
             yield ch
 
-    chunk_iterator = _capture_usage(iter(response_chunks))
+    # Per-turn timing, observed on the chunk stream (outside the state machine).
     start_total_time = time.time()
+    _timing = {"first": None, "tools": 0.0, "_ts": None}
+    chunk_iterator = _time_observe(_capture_usage(iter(response_chunks)), _timing, start_total_time)
     streamed_text = ""
     full_streamed_text = ""
     is_tool_executing = False
@@ -442,7 +462,14 @@ def render_response_stream(
             usage_str = " · " + session_usage.format_last(captured_usage)
         except Exception:
             usage_str = ""
-    safe_print(f"[dim](Время ответа: {elapsed_time:.1f}s{usage_str})[/dim]")
+
+    tools_t = _timing["tools"]
+    model_t = max(0.0, elapsed_time - tools_t)
+    prefill_t = _timing["first"] or 0.0
+    safe_print(
+        f"[dim](⏱ всего {elapsed_time:.1f}s · модель {model_t:.1f}s "
+        f"[prefill≈{prefill_t:.1f}s] · инструменты {tools_t:.1f}s{usage_str})[/dim]"
+    )
     safe_print("")
 
     return full_streamed_text, final_is_auto_mode, auto_sleep_time, auto_wake_context
