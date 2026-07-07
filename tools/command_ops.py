@@ -219,7 +219,8 @@ def start_background_command(command: str) -> str:
                 "process": process,
                 "out_queue": out_queue,
                 "err_queue": err_queue,
-                "command": command
+                "command": command,
+                "started": time.time(),
         }
         
         return f"Started background process with PID: {pid}"
@@ -264,7 +265,12 @@ def read_background_command(pid: str) -> str:
             if pid in ACTIVE_PROCESSES:
                 del ACTIVE_PROCESSES[pid]
     else:
-        status = f"Process {pid} is RUNNING."
+        # Include elapsed runtime so repeated polls of a still-running process
+        # produce DISTINCT results — otherwise the loop guard sees identical
+        # "RUNNING / no new output" and force-stops a legitimate wait.
+        started = proc_info.get("started")
+        elapsed = int(time.time() - started) if started is not None else 0
+        status = f"Process {pid} is RUNNING for {elapsed}s."
         
     res = f"--- {status} ---\n"
     if stdout:
@@ -321,7 +327,12 @@ def list_background_commands() -> str:
     lines = []
     for pid, info in items:
         ret = info["process"].poll()
-        status = "RUNNING" if ret is None else f"EXITED (code {ret})"
+        if ret is None:
+            started = info.get("started")
+            elapsed = int(time.time() - started) if started is not None else 0
+            status = f"RUNNING {elapsed}s"
+        else:
+            status = f"EXITED (code {ret})"
         lines.append(f"- PID {pid}: [{status}] {info['command']}")
 
     return (
