@@ -3,7 +3,7 @@ import shutil
 from pathlib import Path
 from file_tracker import snapshot
 from memory_manager import memory
-from tools._helpers import _resolve_path, _is_plugin_path_restricted, _is_unity_meta_restricted, _validate_code_syntax, _print_diff, _shift_indent
+from tools._helpers import _resolve_path, _is_plugin_path_restricted, _is_unity_meta_restricted, _validate_code_syntax, _print_diff, _shift_indent, _maybe_unescape_content, _changed_region_preview
 from logger import get_logger
 
 log = get_logger("tools")
@@ -91,8 +91,7 @@ def write_file(file_path: str, content: str, overwrite: bool = False) -> str:
                 prior_content = path.read_text(encoding="utf-8")
             except Exception:
                 prior_content = None
-        if '\\n' in content or '\\t' in content:
-            content = content.replace('\\n', '\n').replace('\\t', '\t').replace('\\\\', '\\')
+        content = _maybe_unescape_content(content)
         with open(path, "w", encoding="utf-8") as f:
             f.write(content)
 
@@ -142,9 +141,8 @@ def append_to_file(file_path: str, content: str) -> str:
         if path.exists():
             snapshot(str(path))
             
-        if '\\n' in content or '\\t' in content:
-            content = content.replace('\\n', '\n').replace('\\t', '\t').replace('\\\\', '\\')
-            
+        content = _maybe_unescape_content(content)
+
         with open(path, "a", encoding="utf-8") as f:
             if not content.startswith('\n'):
                 f.write('\n')
@@ -168,13 +166,17 @@ def replace_python_function(file_path: str, function_name: str, new_code: str) -
     """Surgically replace a top-level function or class method in a Python file. 
     function_name can be 'my_func' or 'MyClass.my_method'.
     """
+    restriction_error = _is_plugin_path_restricted(file_path)
+    if restriction_error:
+        return restriction_error
+
     try:
         path = _resolve_path(file_path)
         if not path.exists():
             return f"Error: File '{file_path}' does not exist."
         if not path.is_file():
             return f"Error: '{file_path}' is not a file."
-        
+
         snapshot(str(path))
         
         with open(path, "r", encoding="utf-8") as f:
@@ -266,7 +268,9 @@ def replace_python_function(file_path: str, function_name: str, new_code: str) -
         log.info("replace_python_function: %s (%s)", file_path, function_name)
         memory.add_file_modified(file_path)
         memory.add_completed(f"Replaced {function_name} in {file_path}")
-        return f"Successfully replaced '{function_name}' in '{file_path}'."
+        preview = _changed_region_preview(new_source, start_line, len(new_lines))
+        preview_block = f"\n\nUpdated region:\n{preview}" if preview else ""
+        return f"Successfully replaced '{function_name}' in '{file_path}'.{preview_block}"
         
     except Exception as e:
         import traceback
@@ -289,19 +293,32 @@ def replace_in_file(file_path: str, target_text: str, replacement_text: str) -> 
         with open(path, "r", encoding="utf-8") as f:
             content = f.read()
 
-        target_text_processed = target_text
-        if '\\n' in target_text_processed or '\\t' in target_text_processed:
-            target_text_processed = target_text_processed.replace('\\n', '\n').replace('\\t', '\t').replace('\\\\', '\\')
-            
-        replacement_text_processed = replacement_text
-        if '\\n' in replacement_text_processed or '\\t' in replacement_text_processed:
-            replacement_text_processed = replacement_text_processed.replace('\\n', '\n').replace('\\t', '\t').replace('\\\\', '\\')
+        target_text_processed = _maybe_unescape_content(target_text)
+        replacement_text_processed = _maybe_unescape_content(replacement_text)
 
         fuzzy_note = ""
+        anchor_line = 0            # 0-indexed start of the changed region
+        new_line_count = 1         # lines the replacement spans, for the preview
         if target_text_processed in content:
             count = content.count(target_text_processed)
             if count > 1:
-                return f"Error: The target text appears {count} times in '{file_path}'. Please provide a more specific, unique block of text to replace."
+                locs = []
+                search_from = 0
+                for _ in range(count):
+                    idx = content.find(target_text_processed, search_from)
+                    if idx == -1:
+                        break
+                    locs.append(f"line {content.count(chr(10), 0, idx) + 1}")
+                    search_from = idx + 1
+                return (
+                    f"Error: The target text appears {count} times in '{file_path}' "
+                    f"(at {', '.join(locs[:5])}). Add a distinctive nearby line (a unique "
+                    f"comment, the method signature, or a preceding statement) so target_text "
+                    f"is unique — or, for a small file, use write_file to rewrite it whole."
+                )
+            pos = content.index(target_text_processed)
+            anchor_line = content.count("\n", 0, pos)
+            new_line_count = replacement_text_processed.count("\n") + 1
             new_content = content.replace(target_text_processed, replacement_text_processed)
         else:
             # --- SMART EDIT: FUZZY FALLBACK ---
@@ -353,11 +370,14 @@ def replace_in_file(file_path: str, target_text: str, replacement_text: str) -> 
             model_first = next((l for l in target_text_processed.splitlines() if l.strip()), "")
             model_indent = model_first[:len(model_first) - len(model_first.lstrip())]
             adjusted_replacement = _shift_indent(replacement_text_processed, model_indent, file_indent)
+            adjusted_lines = adjusted_replacement.splitlines()
             new_content = "\n".join(
-                content_lines[:start_line] + adjusted_replacement.splitlines() + content_lines[end_line:]
+                content_lines[:start_line] + adjusted_lines + content_lines[end_line:]
             )
             if content.endswith("\n") and not new_content.endswith("\n"):
                 new_content += "\n"
+            anchor_line = start_line
+            new_line_count = len(adjusted_lines) or 1
             fuzzy_note = " (fuzzy match: whitespace/indentation differences in target_text were corrected automatically)"
 
         snapshot(str(path))
@@ -381,7 +401,9 @@ def replace_in_file(file_path: str, target_text: str, replacement_text: str) -> 
         log.info("replace_in_file: %s (replaced %d chars)%s", file_path, len(target_text_processed), fuzzy_note)
         memory.add_file_modified(file_path)
         memory.add_completed(f"Edited {file_path}")
-        return f"Successfully replaced text in '{file_path}'.{fuzzy_note}"
+        preview = _changed_region_preview(new_content, anchor_line, new_line_count)
+        preview_block = f"\n\nUpdated region:\n{preview}" if preview else ""
+        return f"Successfully replaced text in '{file_path}'.{fuzzy_note}{preview_block}"
     except Exception as e:
         log.error("replace_in_file error %s: %s", file_path, e)
         return f"Error replacing text in '{file_path}': {e}"
@@ -445,10 +467,8 @@ def multi_replace_in_file_chunk(file_path: str, changes_json: str) -> str:
             if norm_target and norm_target != norm_actual:
                 return f"Error: The target_content for lines {start_line}-{end_line} does not match the actual file content.\nExpected:\n{norm_target}\n\nActual:\n{norm_actual}"
                 
-            repl_processed = repl
-            if '\\n' in repl_processed or '\\t' in repl_processed:
-                repl_processed = repl_processed.replace('\\n', '\n').replace('\\t', '\t').replace('\\\\', '\\')
-            
+            repl_processed = _maybe_unescape_content(repl)
+
             if repl_processed and not repl_processed.endswith('\n'):
                 repl_processed += '\n'
                 
@@ -515,9 +535,19 @@ def get_file_outline(file_path: str) -> str:
             return f"Error: File '{file_path}' does not exist."
         if not path.is_file():
             return f"Error: '{file_path}' is not a file."
-        
+
         with open(path, "r", encoding="utf-8") as f:
             source = f.read()
+
+        if path.suffix.lower() == ".cs":
+            from tools._helpers import _csharp_outline
+            cs_outline = _csharp_outline(source)
+            if not cs_outline:
+                return f"No classes or methods found in '{file_path}'."
+            return f"Outline of '{file_path}':\n" + "\n".join(cs_outline)
+
+        if path.suffix.lower() != ".py":
+            return f"Error: Outline is only available for Python (.py) and C# (.cs) files, not '{path.suffix}'."
 
         try:
             tree = ast.parse(source)

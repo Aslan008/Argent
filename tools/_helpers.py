@@ -169,6 +169,94 @@ def _validate_code_syntax(file_path: str) -> str | None:
 
     return None
 
+_CS_TYPE_RE = None
+_CS_METHOD_RE = None
+_CS_METHOD_SKIP = {
+    "return", "if", "for", "while", "switch", "using", "new", "throw", "else",
+    "catch", "lock", "fixed", "foreach", "do", "yield", "await", "in", "is", "as",
+}
+
+
+def _csharp_outline(source: str) -> list:
+    """Best-effort structural outline for a C# file (regex, no compiler).
+
+    Unity scripts are routinely >500 lines; without this the model must read the
+    whole file just to locate a method. Catches class/struct/interface/enum and
+    method declarations with line numbers — conservative, so it may miss exotic
+    forms but avoids flooding the outline with false positives.
+    """
+    import re
+    global _CS_TYPE_RE, _CS_METHOD_RE
+    if _CS_TYPE_RE is None:
+        _CS_TYPE_RE = re.compile(
+            r"^\s*(?:\[[^\]]*\]\s*)*"
+            r"(?:(?:public|private|protected|internal|static|sealed|abstract|partial|readonly)\s+)*"
+            r"\b(class|struct|interface|enum)\s+([A-Za-z_]\w*)"
+        )
+        # <returnType> <name>( ... ) then a body opener ({, =>) or line end.
+        _CS_METHOD_RE = re.compile(
+            r"^\s*(?:\[[^\]]*\]\s*)*"
+            r"(?:(?:public|private|protected|internal|static|virtual|override|async|"
+            r"sealed|abstract|extern|unsafe|new|partial)\s+)*"
+            r"([\w<>\[\],\.\?]+)\s+([A-Za-z_]\w*)\s*\([^;{}]*\)\s*(?:\{|=>|$)"
+        )
+    out = []
+    for i, line in enumerate(source.splitlines(), 1):
+        m = _CS_TYPE_RE.match(line)
+        if m:
+            out.append(f"{m.group(1)} {m.group(2)} (line {i})")
+            continue
+        mm = _CS_METHOD_RE.match(line)
+        if mm and mm.group(1) not in _CS_METHOD_SKIP:
+            out.append(f"    {mm.group(1)} {mm.group(2)}(...) (line {i})")
+    return out
+
+
+def _maybe_unescape_content(text: str) -> str:
+    r"""Undo leaked JSON double-escaping (\n, \t, \\) — but ONLY when unambiguous.
+
+    A small model sometimes emits file content with the escaping still literal,
+    so the whole payload arrives as one physical line: "line1\nline2". But real
+    source code legitimately contains a literal \n inside a string
+    (Debug.Log("a\nb"), a regex like "\d+"), and rewriting THAT corrupts the
+    file — which the C# validator does NOT catch, so the corruption reaches disk.
+    The reliable fingerprint of a leaked-escaping payload is: NO real line breaks
+    yet literal \n / \t markers present. If real newlines already exist the
+    content is decoded — leave every literal \n untouched.
+    """
+    if not text or "\n" in text or "\r" in text:
+        return text
+    if "\\n" in text or "\\t" in text:
+        return text.replace("\\n", "\n").replace("\\t", "\t").replace("\\\\", "\\")
+    return text
+
+
+def _changed_region_preview(new_content: str, start_line: int, new_line_count: int,
+                            context: int = 3, max_lines: int = 30) -> str:
+    """Numbered excerpt of the just-edited region so the model can verify the
+    result WITHOUT a follow-up read_file. start_line is 0-indexed; the changed
+    span is marked with an arrow."""
+    lines = new_content.splitlines()
+    if not lines:
+        return ""
+    span = max(1, new_line_count)
+    start_line = max(0, min(start_line, len(lines) - 1))
+    lo = max(0, start_line - context)
+    hi = min(len(lines), start_line + span + context)
+    truncated = False
+    if hi - lo > max_lines:
+        hi = lo + max_lines
+        truncated = True
+    width = len(str(hi))
+    out = []
+    for i in range(lo, hi):
+        marker = "→" if start_line <= i < start_line + span else " "
+        out.append(f"{marker} {str(i + 1).rjust(width)} | {lines[i]}")
+    if truncated:
+        out.append("    … (region truncated)")
+    return "\n".join(out)
+
+
 def _print_diff(old_text, new_text, filename):
     """Show a beautiful unified diff in the console."""
     diff = list(difflib.unified_diff(
