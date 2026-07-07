@@ -29,7 +29,8 @@ def read_file(file_path: str, start_line: int = None, end_line: int = None) -> s
                 lines = []
                 for i, line in enumerate(f):
                     if i >= 500:
-                        return f"[File exceeds 500 lines. Showing first 500. Use start_line/end_line to read specific sections.]\n" + "".join(lines)
+                        nav = " or get_file_outline to jump straight to a symbol" if path.suffix.lower() in (".py", ".cs") else ""
+                        return f"[File exceeds 500 lines. Showing first 500. Use start_line/end_line to read specific sections{nav}.]\n" + "".join(lines)
                     lines.append(line)
                 return "".join(lines)
     except Exception as e:
