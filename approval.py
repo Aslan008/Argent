@@ -14,6 +14,7 @@ Destructive actions are never auto-approved and never covered by grants.
 """
 
 import re
+import threading
 
 import questionary
 
@@ -119,24 +120,30 @@ def command_grant_key(command: str) -> str | None:
     return command.strip().split()[0].lower()
 
 
-def request_approval(action: str, *, destructive: bool = False,
-                     grant_key: str | None = None) -> bool:
-    """Single decision point for every gated tool action.
+# The interactive decision is pluggable so a non-TTY transport (the GUI's
+# WebSocket) can answer approvals without deadlocking on questionary. A backend
+# takes (action, destructive, grant_key) and returns one of: 'deny' | 'once' |
+# 'always'. It is stored per-thread, so the terminal thread and a server worker
+# thread never interfere; unset -> the terminal prompt below.
+_local = threading.local()
 
-    Returns True when the action may proceed. Ctrl+C / closed stdin during
-    the prompt counts as denial.
-    """
+
+def set_approval_backend(fn) -> None:
+    """Install the interactive-decision backend for the CURRENT thread."""
+    _local.backend = fn
+
+
+def reset_approval_backend() -> None:
+    _local.backend = None
+
+
+def _active_backend():
+    return getattr(_local, "backend", None) or _terminal_decision
+
+
+def _terminal_decision(action: str, destructive: bool, grant_key: str | None) -> str:
+    """Interactive TTY prompt. Returns 'deny' | 'once' | 'always'."""
     from ui import console
-
-    if not destructive:
-        if grant_key and grant_key in _session_grants:
-            console.print(f"[dim]✓ Авто-одобрено (сессионное разрешение '{grant_key}'): {action}[/dim]")
-            log.info("Approved via session grant '%s': %s", grant_key, action)
-            return True
-        if _policy == POLICY_AUTO:
-            console.print(f"[dim]✓ Авто-одобрено (автономный режим): {action}[/dim]")
-            log.info("Approved via AUTO policy: %s", action)
-            return True
 
     style = "bold red" if destructive else "bold yellow"
     icon = "⚠️ " if destructive else ""
@@ -150,17 +157,41 @@ def request_approval(action: str, *, destructive: bool = False,
                 choices=["✅ Да (однократно)", always_label, "❌ Нет"],
             ).ask()
             if choice is None or choice.startswith("❌"):
-                log.info("Denied by user: %s", action)
-                return False
-            if choice.startswith(_ALWAYS_PREFIX):
-                _session_grants.add(grant_key)
-                log.info("Session grant added: '%s'", grant_key)
-            return True
+                return "deny"
+            return "always" if choice.startswith(_ALWAYS_PREFIX) else "once"
 
         approved = questionary.confirm("Разрешить это действие?").ask()
-        if not approved:
-            log.info("Denied by user: %s", action)
-        return bool(approved)
+        return "once" if approved else "deny"
     except (KeyboardInterrupt, EOFError):
-        log.info("Approval prompt interrupted — treating as denial: %s", action)
-        return False
+        return "deny"
+
+
+def request_approval(action: str, *, destructive: bool = False,
+                     grant_key: str | None = None) -> bool:
+    """Single decision point for every gated tool action.
+
+    Returns True when the action may proceed. Ctrl+C / closed stdin / a client
+    denial counts as denial.
+    """
+    from ui import console
+
+    if not destructive:
+        if grant_key and grant_key in _session_grants:
+            console.print(f"[dim]✓ Авто-одобрено (сессионное разрешение '{grant_key}'): {action}[/dim]")
+            log.info("Approved via session grant '%s': %s", grant_key, action)
+            return True
+        if _policy == POLICY_AUTO:
+            console.print(f"[dim]✓ Авто-одобрено (автономный режим): {action}[/dim]")
+            log.info("Approved via AUTO policy: %s", action)
+            return True
+
+    decision = _active_backend()(action, destructive, grant_key)
+
+    if decision == "always" and grant_key and not destructive:
+        _session_grants.add(grant_key)
+        log.info("Session grant added: '%s'", grant_key)
+        return True
+    if decision == "once":
+        return True
+    log.info("Denied by user: %s", action)
+    return False

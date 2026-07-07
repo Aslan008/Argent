@@ -3,6 +3,7 @@ import "./App.css";
 
 type Role = "user" | "assistant" | "tool" | "notice" | "error";
 type Msg = { role: Role; text: string };
+type Approval = { id: number; action: string; destructive: boolean; grant_key: string | null };
 
 const WS_URL = "ws://127.0.0.1:8756/ws";
 
@@ -11,6 +12,7 @@ function App() {
   const [input, setInput] = useState("");
   const [connected, setConnected] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [pending, setPending] = useState<Approval | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const streamRef = useRef<HTMLDivElement | null>(null);
 
@@ -41,6 +43,15 @@ function App() {
   }, [messages, busy]);
 
   const handleEvent = (ev: any) => {
+    if (ev.type === "approval_request") {
+      setPending({
+        id: ev.id,
+        action: ev.action,
+        destructive: !!ev.destructive,
+        grant_key: ev.grant_key ?? null,
+      });
+      return;
+    }
     setMessages((prev) => {
       const next = prev.slice();
       const last = next[next.length - 1];
@@ -83,6 +94,14 @@ function App() {
     setInput("");
     setBusy(true);
     wsRef.current?.send(JSON.stringify({ type: "message", text }));
+  };
+
+  const respond = (decision: "deny" | "once" | "always") => {
+    if (!pending) return;
+    wsRef.current?.send(JSON.stringify({ type: "approval_reply", id: pending.id, decision }));
+    const verb = decision === "deny" ? "denied" : decision === "always" ? "always allowed" : "approved";
+    setMessages((p) => [...p, { role: "notice", text: `Approval — ${pending.action}: ${verb}` }]);
+    setPending(null);
   };
 
   return (
@@ -132,6 +151,30 @@ function App() {
           Send
         </button>
       </div>
+
+      {pending && (
+        <div className="approval-overlay">
+          <div className={`approval-card ${pending.destructive ? "danger" : ""}`}>
+            <div className="approval-title">
+              {pending.destructive ? "⚠️ Destructive action" : "Permission required"}
+            </div>
+            <div className="approval-action">{pending.action}</div>
+            <div className="approval-actions">
+              <button className="deny" onClick={() => respond("deny")}>
+                Deny
+              </button>
+              {pending.grant_key && !pending.destructive && (
+                <button className="always" onClick={() => respond("always")}>
+                  Always allow ‘{pending.grant_key}’
+                </button>
+              )}
+              <button className="approve" onClick={() => respond("once")}>
+                Approve
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
