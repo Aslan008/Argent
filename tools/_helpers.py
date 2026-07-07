@@ -84,6 +84,53 @@ def _is_unity_project_file(file_path: str) -> bool:
         return False
 
 
+def _unity_project_root(file_path) -> Path | None:
+    """Nearest ancestor that looks like a Unity project root — one holding BOTH
+    an Assets/ and a ProjectSettings/ folder. Returns the root Path or None."""
+    try:
+        for anc in Path(str(file_path)).resolve().parents:
+            if (anc / "Assets").is_dir() and (anc / "ProjectSettings").is_dir():
+                return anc
+    except Exception:
+        pass
+    return None
+
+
+# Unity only imports assets living under <project>/Assets or <project>/Packages.
+_UNITY_IMPORTED_EXTS = (".cs", ".shader", ".asmdef", ".compute")
+
+
+def _unity_script_placement_error(file_path) -> str | None:
+    """Refuse to CREATE a Unity script where the editor will never see it.
+
+    A .cs (or .shader/.asmdef) written anywhere inside a Unity project but
+    OUTSIDE Assets/ (and Packages/) exists on disk yet is invisible in Unity —
+    even after Reimport All — because Unity's importer only scans those roots.
+    That is exactly the "file is there in Explorer but not in Unity" trap.
+    """
+    fp = str(file_path)
+    if not fp.lower().endswith(_UNITY_IMPORTED_EXTS):
+        return None
+    root = _unity_project_root(fp)
+    if root is None:
+        return None
+    try:
+        resolved = Path(fp).resolve()
+        if (resolved.is_relative_to((root / "Assets").resolve())
+                or resolved.is_relative_to((root / "Packages").resolve())):
+            return None
+    except Exception:
+        return None
+    suggested = root / "Assets" / "Scripts" / Path(fp).name
+    return (
+        f"Error: '{fp}' is inside a Unity project ({root}) but OUTSIDE the Assets/ "
+        f"folder, so Unity will NEVER import or show this script — even after "
+        f"Reimport All. Unity only compiles C# under <project>/Assets or "
+        f"<project>/Packages. Write it under Assets/ instead, for example "
+        f"'{suggested}'."
+    )
+
+
 def _validate_code_syntax(file_path: str) -> str | None:
     """Quietly checks if the written Python or C# file has syntax errors.
     Returns the error string if failed, or None if passed."""

@@ -3,7 +3,7 @@ import shutil
 from pathlib import Path
 from file_tracker import snapshot
 from memory_manager import memory
-from tools._helpers import _resolve_path, _is_plugin_path_restricted, _is_unity_meta_restricted, _validate_code_syntax, _print_diff, _shift_indent, _maybe_unescape_content, _changed_region_preview
+from tools._helpers import _resolve_path, _is_plugin_path_restricted, _is_unity_meta_restricted, _validate_code_syntax, _print_diff, _shift_indent, _maybe_unescape_content, _changed_region_preview, _unity_script_placement_error
 from logger import get_logger
 
 log = get_logger("tools")
@@ -71,7 +71,14 @@ def write_file(file_path: str, content: str, overwrite: bool = False) -> str:
         
     try:
         path = _resolve_path(file_path)
-        
+
+        # Only when CREATING a new file: refuse a Unity script placed where the
+        # editor would never see it (inside the project but outside Assets/).
+        if not path.exists():
+            placement_error = _unity_script_placement_error(path)
+            if placement_error:
+                return placement_error
+
         if path.exists() and path.is_file() and not overwrite:
             try:
                 file_size_bytes = path.stat().st_size
