@@ -158,9 +158,47 @@ def decode_json_escapes(s: str) -> str:
         i += 2
     return ''.join(out)
 
+_FENCED_WRITE_RE = re.compile(
+    r"```write_file[ \t]+(?P<path>[^\n`]+?)[ \t]*\n(?P<body>.*?)\n?```",
+    re.DOTALL,
+)
+
+
+def parse_fenced_write(content: str) -> dict | None:
+    r"""Detect a verbatim write_file block that avoids ALL JSON escaping:
+
+        ```write_file <path>
+        <raw file content — any newlines/quotes/backslashes, written as-is>
+        ```
+
+    The content is taken verbatim, so the model never has to escape \n, \\ or
+    quotes (the token-wasting, error-prone part of JSON tool args). The info
+    string must be exactly ``write_file <path>``, so it can't misfire on ordinary
+    ```code``` blocks. Returns {"parsed": {...}, "match_str": <block>} or None.
+    """
+    if not content or "```write_file" not in content:
+        return None
+    m = _FENCED_WRITE_RE.search(content)
+    if not m:
+        return None
+    path = m.group("path").strip().strip('"').strip("'").strip("`").strip()
+    if not path:
+        return None
+    return {
+        "parsed": {"name": "write_file",
+                   "arguments": {"file_path": path, "content": m.group("body")}},
+        "match_str": m.group(0),
+    }
+
+
 def parse_raw_tool_call(content: str) -> dict | None:
     """Parse a raw tool call from AI-generated content.
     Returns {"parsed": {"name": ..., "arguments": {...}}, "match_str": ...} or None."""
+    # Verbatim write_file block first — unambiguous and escaping-free.
+    fenced = parse_fenced_write(content)
+    if fenced:
+        return fenced
+
     clean = content.strip()
     
     # --- FORMAT 1: Markdown code blocks ---

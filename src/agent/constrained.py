@@ -62,6 +62,15 @@ def build_tool_catalog(tool_schemas: list) -> str:
         params = ", ".join(p if p in required else f"{p}?" for p in props)
         desc = (fn.get("description") or "").split(". ")[0].strip()[:120]
         lines.append(f"- {name}({params}) — {desc}")
+
+    has_write = any((s.get("function", {}) or {}).get("name") == "write_file" for s in tool_schemas)
+    if has_write:
+        lines.append(
+            "\nTIP — to write a file WITHOUT any escaping, use a verbatim block instead of a "
+            "JSON tool call (content is saved exactly as written — no \\n, no doubled \\\\):\n"
+            "```write_file C:/path/to/file.ext\n<file content, exactly as it should be on disk>\n```\n"
+            "Use forward slashes in paths to avoid backslash escaping."
+        )
     return "\n".join(lines)
 
 
