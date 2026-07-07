@@ -148,7 +148,7 @@ You are an autonomous AI software engineer. You design, build, and debug softwar
 - **Tool-First**: Invoke tools immediately via JSON when needed.
 - **Ask Before Guessing**: Use `ask_user_questions` to clarify ambiguous requirements with structured options.
 - **Anti-Lazy**: Run commands and write/edit files yourself.
-- **File Editing**: NEVER use write_file to overwrite existing large files (>150 lines). You MUST use replace_in_file or multi_replace_in_file_chunk to apply targeted patches.
+- **File Editing**: NEVER use write_file to overwrite existing large files (>150 lines). You MUST use replace_in_file or multi_replace_in_file_chunk to apply targeted patches. If you ALREADY have the file's current content in context (you just read it, or just proposed edits for it) and nothing changed it since, apply the edit DIRECTLY — do NOT read_file again first. Re-read only if the file may have changed.
 - **Proactive Search**: Use `search_web` for technical info.
 - **Persistence**: Do NOT stop after a single tool call. If the task requires multiple steps (read → edit → verify), execute ALL steps in a single response. Keep calling tools until the task is FULLY complete.
 - **Strict Environment**: Use {platform.system()}-native commands. On Windows the default shell is PowerShell — `&&`/`||` chains are auto-routed to cmd, so prefer `;` or separate calls. If a command fails, read the [DIAGNOSIS] line in the output.""")
@@ -157,7 +157,7 @@ You are an autonomous AI software engineer. You design, build, and debug softwar
 - **Tool-First**: YOU are the only one with tool access. Invoke tools immediately via JSON.
 - **Ask Before Guessing**: If a user's request is ambiguous or lacks details, you MUST use the `ask_user_questions` tool to prompt them with structured options before writing code. Do NOT just ask questions in plain text chat.
 - **Anti-Lazy**: Never ask the user to run code or copy-paste. Use `run_command` and `write_file` yourself.
-- **File Editing**: NEVER use write_file to overwrite existing large files (>150 lines). You MUST use replace_in_file or multi_replace_in_file_chunk to apply targeted patches.
+- **File Editing**: NEVER use write_file to overwrite existing large files (>150 lines). You MUST use replace_in_file or multi_replace_in_file_chunk to apply targeted patches. If you ALREADY have the file's current content in context (you just read it, or just proposed edits for it) and nothing changed it since, apply the edit DIRECTLY with replace_in_file/write_file — do NOT call read_file again first. Re-read only if the file may have been modified since you last saw it.
 - **Proactive Search**: Always use `search_web` for technical info, documentation, or current events.
 - **Persistence**: Do NOT stop after a single tool call. If the task requires multiple steps (read → edit → verify), execute ALL steps in a single response without waiting for user input. Keep calling tools until the task is FULLY complete.
 - **Testing**: NEVER test logic or GUI apps by running `python app.py` via `run_command` (it will block). You MUST write and run `pytest` tests, or use `start_background_command`.
@@ -316,6 +316,11 @@ Example: {"tool": {"name": "read_file", "arguments": {"file_path": "main.py"}}}"
             self.max_history_messages = max_history_messages
 
         self.loop_guard = LoopGuard()
+        # Per-file signature of the last whole-file read, so a re-read of an
+        # UNCHANGED file (whose content is still in history) is answered with a
+        # compact pointer instead of a full re-dump. Kills the wasteful
+        # "read again before editing" round-trip. {abs_path: {sig, stored}}.
+        self._read_cache: Dict[str, Dict[str, Any]] = {}
         self.messages: List[Dict[str, Any]] = [
             {"role": "system", "content": self.build_system_prompt()}
         ]
@@ -346,6 +351,59 @@ Example: {"tool": {"name": "read_file", "arguments": {"file_path": "main.py"}}}"
     def set_provider(self, provider_name: str):
         self.provider = provider_name
         self.refresh_tier()
+
+    def _read_dedup_note(self, filtered_args: dict) -> str | None:
+        """Short-circuit a re-read of an UNCHANGED whole file still in history.
+
+        Returns a compact pointer (so the model edits directly instead of
+        re-dumping the file) only when it is provably safe: the file is a whole
+        file (no line range), its on-disk mtime+size match the last read, AND
+        that earlier content is still present in the conversation (not trimmed).
+        Otherwise returns None and a real read happens.
+        """
+        if filtered_args.get("start_line") is not None or filtered_args.get("end_line") is not None:
+            return None
+        fp = filtered_args.get("file_path")
+        if not fp:
+            return None
+        try:
+            from tools._helpers import _resolve_path
+            path = _resolve_path(fp)
+            if not path.is_file():
+                return None
+            st = path.stat()
+            sig = [st.st_mtime_ns, st.st_size]
+            cached = self._read_cache.get(str(path))
+            if not cached or cached.get("sig") != sig:
+                return None
+            stored = cached.get("stored")
+            if not stored or not any(stored in (m.get("content") or "") for m in self.messages):
+                return None
+            return (
+                f"[read_file] '{path.name}' is UNCHANGED since you read it earlier "
+                f"(same size and modification time). Its content is already in the "
+                f"conversation above — do NOT re-read it. Apply your edit directly "
+                f"with replace_in_file or write_file."
+            )
+        except Exception:
+            return None
+
+    def _record_read(self, filtered_args: dict, stored_result: str) -> None:
+        """Remember the on-disk signature + exact stored text of a real whole-file read."""
+        if filtered_args.get("start_line") is not None or filtered_args.get("end_line") is not None:
+            return
+        fp = filtered_args.get("file_path")
+        if not fp or not isinstance(stored_result, str):
+            return
+        try:
+            from tools._helpers import _resolve_path
+            path = _resolve_path(fp)
+            if not path.is_file():
+                return
+            st = path.stat()
+            self._read_cache[str(path)] = {"sig": [st.st_mtime_ns, st.st_size], "stored": stored_result}
+        except Exception:
+            pass
 
     def _estimate_tokens(self, text: str) -> int:
         return estimate_tokens(text, self.model_name, self.provider)
@@ -940,7 +998,8 @@ Example: {"tool": {"name": "read_file", "arguments": {"file_path": "main.py"}}}"
                                 if False in hook_results:
                                     result = f"Error: Execution of tool '{func_name}' was blocked by a user plugin."
                                 else:
-                                    result = func(**filtered_args)
+                                    dedup = self._read_dedup_note(filtered_args) if func_name == "read_file" else None
+                                    result = dedup if dedup is not None else func(**filtered_args)
 
                                 # --- AUTO PLUGIN RELOAD ---
                                 if func_name in ["write_file", "replace_in_file", "replace_python_function", "delete_file"]:
@@ -978,7 +1037,12 @@ Example: {"tool": {"name": "read_file", "arguments": {"file_path": "main.py"}}}"
                             self.error_retries = 0
                         
                     result = compress_tool_result(result, self.model_name)
-                    
+
+                    # Cache a real whole-file read (skip the dedup pointer and errors)
+                    # so the next unchanged re-read can be short-circuited.
+                    if func_name == "read_file" and not result.startswith(("[read_file]", "Error")):
+                        self._record_read(filtered_args, result)
+
                     yield {"type": "tool_end", "name": func_name, "result": result}
 
                     self.messages.append(provider.format_tool_result(str(result), tool_call.get("id")))
