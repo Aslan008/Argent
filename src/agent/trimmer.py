@@ -293,7 +293,35 @@ def clean_messages_for_llm(messages: List[Dict[str, Any]], strip_reasoning: bool
     return cleaned
 
 
-def sliding_window_trim(messages: List[Dict[str, Any]], model_name: str, 
+def compact_tool_history(messages: List[Dict[str, Any]], keep_recent: int = 2,
+                         stub_over: int = 200) -> List[Dict[str, Any]]:
+    """Shrink OLD tool-result messages to short stubs, keeping the last
+    `keep_recent` full (they're usually the relevant ones).
+
+    A single kept turn can still blow the context when it carries a few big tool
+    dumps (a full file read, a long diff). Stubbing the older ones often makes it
+    fit — a graceful step before nuking the whole history via hard reset. Returns
+    the same list object unchanged when there's nothing worth compacting."""
+    tool_indices = [i for i, m in enumerate(messages) if m.get("role") == "tool"]
+    to_stub = set(tool_indices[:-keep_recent]) if len(tool_indices) > keep_recent else set()
+    if not to_stub:
+        return messages
+
+    changed = False
+    out = []
+    for i, m in enumerate(messages):
+        content = m.get("content", "") or ""
+        if i in to_stub and len(content) > stub_over:
+            mc = m.copy()
+            mc["content"] = content[:150] + f"\n…[tool output trimmed — {len(content)} chars]"
+            out.append(mc)
+            changed = True
+        else:
+            out.append(m)
+    return out if changed else messages
+
+
+def sliding_window_trim(messages: List[Dict[str, Any]], model_name: str,
                         max_history_messages: int, max_context_tokens: int) -> List[Dict[str, Any]]:
     """Keeps the last N complete chat turns, falling back to fewer turns or hard reset if they exceed context limits."""
     provider = get_provider()
@@ -322,10 +350,20 @@ def sliding_window_trim(messages: List[Dict[str, Any]], model_name: str,
         # Estimate candidate token size using cleaned versions
         cleaned_candidate = clean_messages_for_llm(candidate, strip_enabled)
         candidate_tokens = sum(estimate_tokens(str(m), model_name, provider) for m in cleaned_candidate[1:])
-        
+
         if len(candidate) - 1 <= max_history_messages and candidate_tokens <= (max_context_tokens * 0.75):
             log.info("Sliding window trim successful, keeping last %d turns (%d messages)", turns, len(candidate))
             return candidate
+
+        # Too large by tokens — try stubbing older tool dumps within this window
+        # before giving up on it (a big file read shouldn't cost the whole turn).
+        compacted = compact_tool_history(candidate)
+        if compacted is not candidate:
+            cc = clean_messages_for_llm(compacted, strip_enabled)
+            ctoks = sum(estimate_tokens(str(m), model_name, provider) for m in cc[1:])
+            if len(compacted) - 1 <= max_history_messages and ctoks <= (max_context_tokens * 0.75):
+                log.info("Kept last %d turns after compacting old tool outputs (%d messages)", turns, len(compacted))
+                return compacted
 
     # Fallback to hard reset if even 1 turn is too large
     log.info("Sliding window trim failed to fit context, falling back to hard reset.")
