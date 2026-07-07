@@ -28,6 +28,11 @@ ACTIVE_PROCESSES_LOCK = threading.Lock()
 _pid_counter = 1
 MAX_BACKGROUND_PROCESSES = 10
 
+# A foreground run_command that emits nothing for this long is almost certainly
+# waiting on interactive input (a prompt) or hung — either way it would block the
+# whole turn forever, so we terminate it and tell the model what to do instead.
+COMMAND_SILENCE_LIMIT = 180
+
 def run_command(command: str) -> str:
     """Execute a console command and return its output. Requires user confirmation. Streams output to console."""
     from config import get_command_guard
@@ -81,15 +86,48 @@ def run_command(command: str) -> str:
             stderr=subprocess.STDOUT,
         )
 
+        # Read on a helper thread so a silent, still-running command can't block
+        # the turn forever: the main loop waits on the queue with a timeout and
+        # terminates the process if it goes quiet for too long (likely an
+        # interactive prompt).
+        line_queue: "queue.Queue" = queue.Queue()
+
+        def _pump():
+            try:
+                for raw in iter(process.stdout.readline, b""):
+                    if not raw:
+                        break
+                    line_queue.put(raw)
+            except Exception:
+                pass
+            finally:
+                line_queue.put(None)  # sentinel: stream closed
+
+        threading.Thread(target=_pump, daemon=True).start()
+
         output_lines = []
-        for raw_line in iter(process.stdout.readline, b""):
-            if not raw_line:
+        silent_timeout = False
+        while True:
+            try:
+                raw_line = line_queue.get(timeout=COMMAND_SILENCE_LIMIT)
+            except queue.Empty:
+                if process.poll() is None:      # alive but mute -> stuck/awaiting input
+                    silent_timeout = True
+                    try:
+                        process.terminate()
+                    except Exception:
+                        pass
+                break
+            if raw_line is None:                # stream closed: command finished
                 break
             decoded_line = decode_output(raw_line)
             output_lines.append(decoded_line)
             console.print(f"[dim]{decoded_line.rstrip()}[/dim]")
 
-        process.stdout.close()
+        try:
+            process.stdout.close()
+        except Exception:
+            pass
         process.wait()
 
         final_output = "".join(output_lines).strip()
@@ -98,9 +136,17 @@ def run_command(command: str) -> str:
         if final_output:
             output += f"OUTPUT:\n{final_output}\n"
 
+        if silent_timeout:
+            output += (
+                f"\n[DIAGNOSIS]: No output for {COMMAND_SILENCE_LIMIT}s — the command "
+                f"likely awaits interactive input (a prompt) or is hung, so it was "
+                f"terminated. Re-run non-interactively (add flags like --yes/-y or pipe "
+                f"the answers), or use start_background_command + send_background_command "
+                f"for a program that must be driven interactively.\n"
+            )
         # Append a concrete diagnostic for recognized command failures so the
         # model fixes the real cause instead of guessing.
-        if process.returncode != 0:
+        elif process.returncode != 0:
             hint = diagnose_command_error(command, final_output, process.returncode)
             if hint:
                 output += f"\n[DIAGNOSIS]: {hint}\n"
