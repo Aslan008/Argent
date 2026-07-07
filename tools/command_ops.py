@@ -341,13 +341,29 @@ def read_git_diff() -> str:
 
         unstaged = run_text("git diff", shell=True, capture_output=True).stdout
         staged = run_text("git diff --cached", shell=True, capture_output=True).stdout
-        
+
         res = ""
         if staged:
             res += "=== STAGED CHANGES (READY TO COMMIT) ===\n" + staged + "\n"
         if unstaged:
             res += "=== UNSTAGED CHANGES ===\n" + unstaged + "\n"
-            
-        return res if res else "No changes detected in Git."
+
+        if not res:
+            return "No changes detected in Git."
+
+        # A full diff of a large refactor can be tens of thousands of tokens in a
+        # single result. Cap it: show a per-file summary + a bounded slice, and
+        # point the model at `git diff -- <file>` for the detail it actually needs.
+        LIMIT = 12000
+        if len(res) > LIMIT:
+            stat = run_text("git diff --stat", shell=True, capture_output=True).stdout
+            cached_stat = run_text("git diff --cached --stat", shell=True, capture_output=True).stdout
+            summary = "\n".join(s for s in (cached_stat.strip(), stat.strip()) if s)
+            return (
+                f"[Diff is large ({len(res)} chars) — showing a file summary and the first "
+                f"{LIMIT} characters. Inspect a specific file with `git diff -- <file>` via "
+                f"run_command.]\n\n=== FILES CHANGED ===\n{summary}\n\n{res[:LIMIT]}\n…[diff truncated]"
+            )
+        return res
     except Exception as e:
         return f"Error reading git diff: {e}"
