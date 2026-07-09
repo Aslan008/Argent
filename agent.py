@@ -192,6 +192,7 @@ Example: {"tool": {"name": "read_file", "arguments": {"file_path": "main.py"}}}"
         if not is_small:
             prompt_parts.append("""## 4. PLANNING MODE & ARTIFACTS
 - **Blind Spot Pass first**: for ambiguous, large, or unfamiliar tasks, BEFORE planning: explore the affected code, then report FACTS / RISKS / ASSUMPTIONS and ask up to 3 structured questions via `ask_user_questions`. State assumptions explicitly ("Assuming X — скажи, если не так") instead of guessing silently. Full method: `read_skill("blind-spot-pass")`.
+- **New features**: follow `read_skill("feature-workflow")` — a one-question-at-a-time interview (each answer shapes the next; architecture-changing ambiguities first), a spec/prototype approval gate, a deviation journal in .argent/artifacts/ while you build, then a review document + short comprehension quiz for the user.
 - For complex changes, you MUST create an implementation plan before writing any code.
 - Use `create_artifact("implementation_plan.md", content)` to present your plan to the user.
 - Then, use `request_user_approval("I have created an implementation plan. Please review and approve.")` to PAUSE execution and wait for the user to confirm.
