@@ -190,6 +190,7 @@ Example: {"tool": {"name": "read_file", "arguments": {"file_path": "main.py"}}}"
 - **Outcome Analysis**: After EACH tool call, analyze if the result truly moves you closer to the goal.
 - **False Success**: "Requirement already satisfied" or "Exit code: 0" does NOT always mean success. If a tool reports success but the problem persists, try a different approach.
 - **Proactive Verification**: After installing things or writing complex files, use `run_command` or `read_file` to VERIFY they work as intended.
+- **Prove It**: NEVER declare a task done without having RUN the relevant verification in the same turn (tests, a build, the command itself) and quoting its actual output. If verification is impossible from here (e.g. needs the Unity editor), say so explicitly instead of claiming success.
 - **Self-Correction**: If you are stuck in a loop, STOP. Rethink your strategy. Explain your new reasoning to the user.""")
 
         prompt_parts.append("""## 7. COMMUNICATION
@@ -424,6 +425,49 @@ Example: {"tool": {"name": "read_file", "arguments": {"file_path": "main.py"}}}"
                 return
             st = path.stat()
             self._read_cache[str(path)] = {"sig": [st.st_mtime_ns, st.st_size], "stored": stored_result}
+        except Exception:
+            pass
+
+    _EDIT_TOOLS = {"replace_in_file", "multi_replace_in_file_chunk",
+                   "replace_python_function", "write_file", "append_to_file"}
+
+    def _external_change_note(self, func_name: str, filtered_args: dict) -> str | None:
+        """Warn when an edit targets a file that changed on disk AFTER the last
+        read — i.e. it was edited outside this session (the user, Unity, a
+        formatter). The model's mental copy is stale, and a fuzzy match could
+        land the edit in the wrong place. Own edits don't trigger this: a
+        successful edit drops the file's read-cache entry."""
+        if func_name not in self._EDIT_TOOLS:
+            return None
+        fp = filtered_args.get("file_path")
+        if not fp:
+            return None
+        try:
+            from tools._helpers import _resolve_path
+            path = _resolve_path(fp)
+            cached = self._read_cache.get(str(path))
+            if not cached or not path.is_file():
+                return None
+            st = path.stat()
+            if cached.get("sig") == [st.st_mtime_ns, st.st_size]:
+                return None
+            return (
+                "\n\n[Note]: this file changed on disk AFTER you last read it (edited outside "
+                "this session — e.g. by the user, Unity, or a formatter). The content you saw "
+                "may be stale; re-read the file to confirm the edit landed where intended."
+            )
+        except Exception:
+            return None
+
+    def _drop_read_cache(self, filtered_args: dict) -> None:
+        """Forget a file's read signature after we edited it ourselves, so the
+        next edit isn't misreported as an external change."""
+        fp = filtered_args.get("file_path") if isinstance(filtered_args, dict) else None
+        if not fp:
+            return
+        try:
+            from tools._helpers import _resolve_path
+            self._read_cache.pop(str(_resolve_path(fp)), None)
         except Exception:
             pass
 
@@ -1042,12 +1086,17 @@ Example: {"tool": {"name": "read_file", "arguments": {"file_path": "main.py"}}}"
                                 if False in hook_results:
                                     result = f"Error: Execution of tool '{func_name}' was blocked by a user plugin."
                                 else:
+                                    # Staleness must be checked BEFORE executing:
+                                    # after the edit the mtime change is our own.
+                                    stale_note = self._external_change_note(func_name, filtered_args)
                                     pre = _parallel_results.get(_tc_index)
                                     if pre is not None:
                                         result = pre
                                     else:
                                         dedup = self._read_dedup_note(filtered_args) if func_name == "read_file" else None
                                         result = dedup if dedup is not None else func(**filtered_args)
+                                    if stale_note:
+                                        result = str(result) + stale_note
 
                                 # --- AUTO PLUGIN RELOAD ---
                                 if func_name in ["write_file", "replace_in_file", "replace_python_function", "delete_file"]:
@@ -1090,6 +1139,10 @@ Example: {"tool": {"name": "read_file", "arguments": {"file_path": "main.py"}}}"
                     # so the next unchanged re-read can be short-circuited.
                     if func_name == "read_file" and not result.startswith(("[read_file]", "Error")):
                         self._record_read(filtered_args, result)
+                    # Our own successful edit changes the on-disk signature; drop
+                    # the entry so the next edit isn't flagged as external.
+                    elif func_name in self._EDIT_TOOLS and result.startswith("Successfully"):
+                        self._drop_read_cache(filtered_args)
 
                     yield {"type": "tool_end", "name": func_name, "result": result}
 
