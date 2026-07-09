@@ -41,6 +41,28 @@ Then, before writing a new script, `grep_search` for a similar existing one and 
 - For pure logic (no engine calls), offer an EditMode test if Unity Test Framework is installed (template in references/patterns.md) — the user runs it via Window → General → Test Runner.
 - Something "doesn't work" without errors → it's usually wiring, not code: field not assigned in Inspector, component not attached, wrong scene, EventSystem missing, value overridden by the Inspector (see checklist #4).
 
+## Reduce the unknowns first (non-trivial tasks)
+
+Full method: `read_skill("blind-spot-pass")`. The Unity-flavored quadrants:
+
+- **Stated** (known knowns): the mechanic/fix as asked. Restate it in one
+  sentence; pin with `set_goal`.
+- **Known unknowns** — decide or ask EARLY, they reshape the code: target
+  platform(s) (WebGL has no threads; mobile has tight perf budgets), input
+  devices (KB+M / gamepad / touch), must it survive scene loads or saves,
+  singleplayer or networked?
+- **Unknown knowns** (game feel): never guess feel values. Expose
+  `[SerializeField]` tunables with sane defaults and give the user a 30-second
+  play-test loop; when feel is the point, offer 2–3 variants via
+  `ask_user_questions` (e.g. jump: floaty / snappy / hold-to-rise) instead of
+  asking "how should it feel?".
+- **Unknown unknowns** (Unity's usual suspects): run `unity_context.py` — the
+  classic blind spots ARE pipeline/input/version mismatches; plus scene wiring
+  your code silently expects (EventSystem, tags, layers, collision matrix),
+  execution-order races, prefab overrides beating code defaults, asmdef fences.
+
+Report FACTS / RISKS / ASSUMPTIONS / max-3 QUESTIONS, then the refined task.
+
 ## Self-review checklist — run through this BEFORE submitting any Unity code
 
 1. **Fake null**: destroyed-but-referenced `UnityEngine.Object` breaks `?.` and `??`. Always `if (obj != null)` / `if (obj)` — NEVER `obj?.transform` on Unity types.
