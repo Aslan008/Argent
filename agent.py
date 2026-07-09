@@ -110,38 +110,12 @@ class ArgentAgent:
 # ROLE: Argent Coder
 You are an autonomous AI software engineer. You design, build, and debug software with precision and speed on {platform.system()}.""")
 
-        try:
-            cwd = Path.cwd()
-            prompt_parts.append(f"## REPOSITORY MAP (Current Directory: {cwd})")
-            
-            items = []
-            dirs = []
-            files = []
-            for item in cwd.iterdir():
-                if item.name in ('.git', '__pycache__', '.venv', 'venv', 'node_modules', '.idea', '.vscode'):
-                    continue
-                if item.is_dir():
-                    dirs.append(item.name + "/")
-                else:
-                    files.append(item.name)
-            
-            dirs.sort()
-            files.sort()
-            
-            map_str = ""
-            if not dirs and not files:
-                map_str = "(Empty directory)"
-            else:
-                all_items = dirs + files
-                if len(all_items) > 30:
-                    map_str = "\n".join([f"- {x}" for x in all_items[:30]])
-                    map_str += f"\n- ... and {len(all_items) - 30} more items. Use list_directory to see all."
-                else:
-                    map_str = "\n".join([f"- {x}" for x in all_items])
-                    
-            prompt_parts.append(map_str)
-        except Exception:
-            pass
+        # NOTE: volatile, per-turn facts (repository map, background processes)
+        # deliberately do NOT live here — they change between turns, and the
+        # system prompt is the PREFIX of every request: one changed byte here
+        # invalidates the provider's whole KV/prefix cache and forces a full
+        # re-prefill on local models. They are injected as an ephemeral tail
+        # message instead (_build_ephemeral_context).
 
         if is_small:
             prompt_parts.append(f"""## 1. OPERATIONAL PROTOCOL
@@ -289,15 +263,61 @@ Example: {"tool": {"name": "read_file", "arguments": {"file_path": "main.py"}}}"
         except Exception:
             pass
 
-        # Lightweight reminder of live background processes so the model knows
-        # they exist (and can recover PIDs) even after history summarization
-        # drops the original "PID: N" tool results.
+        full_prompt = "\n\n".join(prompt_parts)
+        return compress_system_prompt(full_prompt, self.model_name)
+
+    def _refresh_system_prompt(self) -> bool:
+        """Rebuild the system prompt only if it actually changed.
+
+        The system prompt is the prefix of every request; replacing it with a
+        byte-identical copy is harmless, but replacing it with a CHANGED one
+        invalidates the provider's whole prefix cache. Stable inputs (tier,
+        AGENTS.md, MCP list) rarely change, so most turns this is a no-op and
+        the KV cache stays warm. Returns True when the prompt was replaced."""
+        new_prompt = self.build_system_prompt()
+        if self.messages and self.messages[0].get("content") == new_prompt:
+            return False
+        if self.messages:
+            self.messages[0]["content"] = new_prompt
+        else:
+            self.messages = [{"role": "system", "content": new_prompt}]
+        return True
+
+    def _build_ephemeral_context(self) -> str | None:
+        """Per-turn volatile facts, injected as a TAIL system message (never
+        stored in history): the repository map and live background processes.
+        Tail position keeps the request prefix stable for the KV cache — and is
+        where small models attend best anyway."""
+        parts = []
+        try:
+            cwd = Path.cwd()
+            dirs, files = [], []
+            for item in cwd.iterdir():
+                if item.name in ('.git', '__pycache__', '.venv', 'venv', 'node_modules', '.idea', '.vscode'):
+                    continue
+                (dirs if item.is_dir() else files).append(item.name + ("/" if item.is_dir() else ""))
+            dirs.sort()
+            files.sort()
+            all_items = dirs + files
+            if not all_items:
+                map_str = "(Empty directory)"
+            elif len(all_items) > 30:
+                map_str = "\n".join(f"- {x}" for x in all_items[:30])
+                map_str += f"\n- ... and {len(all_items) - 30} more items. Use list_directory to see all."
+            else:
+                map_str = "\n".join(f"- {x}" for x in all_items)
+            parts.append(f"## REPOSITORY MAP (Current Directory: {cwd})\n{map_str}")
+        except Exception:
+            pass
+
+        # Live background processes: the model must know they exist (and can
+        # recover PIDs) even after summarization drops the original results.
         try:
             from tools import ACTIVE_PROCESSES, ACTIVE_PROCESSES_LOCK
             with ACTIVE_PROCESSES_LOCK:
                 bg_count = len(ACTIVE_PROCESSES)
             if bg_count:
-                prompt_parts.append(
+                parts.append(
                     f"## BACKGROUND PROCESSES\n"
                     f"You have {bg_count} background process(es) running this session. "
                     f"Call `list_background_commands` to see their PIDs, status and commands "
@@ -306,8 +326,7 @@ Example: {"tool": {"name": "read_file", "arguments": {"file_path": "main.py"}}}"
         except Exception:
             pass
 
-        full_prompt = "\n\n".join(prompt_parts)
-        return compress_system_prompt(full_prompt, self.model_name)
+        return "\n\n".join(parts) if parts else None
 
     def __init__(self, max_history_messages: int = None):
         self.model_name = get_current_model()
@@ -433,8 +452,15 @@ Example: {"tool": {"name": "read_file", "arguments": {"file_path": "main.py"}}}"
         if msg_count <= self.max_history_messages and history_tokens <= budget:
             return
 
+        # Hysteresis: trigger at the full limit, but trim DOWN to lower targets.
+        # Trimming rewrites the request prefix and invalidates the provider's
+        # KV/prefix cache, so trimming a little every turn (the old behaviour
+        # once at the limit) forced a full re-prefill on every turn. Cutting
+        # deeper once buys many append-only (cache-warm) turns between trims.
+        target_msgs = max(4, int(self.max_history_messages * 0.6))
+        target_budget = max(1024, int(budget * 0.75))
         self.messages = self.strategy.trim_history(
-            self.messages, self.model_name, self.max_history_messages, budget
+            self.messages, self.model_name, target_msgs, target_budget
         )
 
     def _parse_raw_tool_call(self, content: str) -> dict | None:
@@ -531,7 +557,7 @@ Example: {"tool": {"name": "read_file", "arguments": {"file_path": "main.py"}}}"
         Process the user input and yield chunks of response or tool activity.
         Supports streaming generation.
         """
-        self.messages[0]["content"] = self.build_system_prompt()
+        self._refresh_system_prompt()
         self.messages.append({"role": "user", "content": user_text})
         
         if not user_text.startswith("/"):
@@ -611,6 +637,13 @@ Example: {"tool": {"name": "read_file", "arguments": {"file_path": "main.py"}}}"
                             {"role": "system", "content": build_tool_catalog(active_tools)}
                         ]
                     active_tools = None
+
+                # Per-turn volatile facts (repo map, background processes) ride
+                # as an ephemeral tail message — never stored, so the request
+                # prefix (system prompt + history) stays cache-stable.
+                ephemeral = self._build_ephemeral_context()
+                if ephemeral:
+                    cleaned_messages = cleaned_messages + [{"role": "system", "content": ephemeral}]
 
                 # Objective anchor: re-pin the goal at the end of long
                 # histories, where small models actually look.
