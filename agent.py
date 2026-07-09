@@ -133,6 +133,7 @@ You are an autonomous AI software engineer. You design, build, and debug softwar
 - **Anti-Lazy**: Never ask the user to run code or copy-paste. Use `run_command` and `write_file` yourself.
 - **File Editing**: NEVER use write_file to overwrite existing large files (>150 lines). You MUST use replace_in_file or multi_replace_in_file_chunk to apply targeted patches. If you ALREADY have the file's current content in context (you just read it, or just proposed edits for it) and nothing changed it since, apply the edit DIRECTLY with replace_in_file/write_file — do NOT call read_file again first. Re-read only if the file may have been modified since you last saw it.
 - **Proactive Search**: Always use `search_web` for technical info, documentation, or current events.
+- **Batch Reads**: independent lookups (read_file, grep_search, list_directory, get_file_outline, search_files) should be issued as MULTIPLE tool calls in ONE response — they execute in parallel, saving a full model round-trip each.
 - **Persistence**: Do NOT stop after a single tool call. If the task requires multiple steps (read → edit → verify), execute ALL steps in a single response without waiting for user input. Keep calling tools until the task is FULLY complete.
 - **Testing**: NEVER test logic or GUI apps by running `python app.py` via `run_command` (it will block). You MUST write and run `pytest` tests, or use `start_background_command`.
 - **Self-Correction**: If a tool fails, analyze the error and fix it proactively. Do not apologize.
@@ -974,8 +975,16 @@ Example: {"tool": {"name": "read_file", "arguments": {"file_path": "main.py"}}}"
                     current_tools = {name: func for name, func in current_tools.items() if name in allowed_tools}
                 
                 has_fatal_error = False
-                
-                for tool_call in tool_calls_accumulator:
+
+                # Independent read-only calls in the batch run concurrently
+                # (pure reads have nothing to serialize for); anything else
+                # falls through to the ordinary sequential dispatch below.
+                from src.agent.parallel_tools import precompute_readonly_parallel
+                _parallel_results = precompute_readonly_parallel(
+                    tool_calls_accumulator, current_tools, dedup=self._read_dedup_note
+                ) or {}
+
+                for _tc_index, tool_call in enumerate(tool_calls_accumulator):
                     func_name = tool_call["function"]["name"]
                     arguments = tool_call["function"].get("arguments", {})
                     
@@ -1033,8 +1042,12 @@ Example: {"tool": {"name": "read_file", "arguments": {"file_path": "main.py"}}}"
                                 if False in hook_results:
                                     result = f"Error: Execution of tool '{func_name}' was blocked by a user plugin."
                                 else:
-                                    dedup = self._read_dedup_note(filtered_args) if func_name == "read_file" else None
-                                    result = dedup if dedup is not None else func(**filtered_args)
+                                    pre = _parallel_results.get(_tc_index)
+                                    if pre is not None:
+                                        result = pre
+                                    else:
+                                        dedup = self._read_dedup_note(filtered_args) if func_name == "read_file" else None
+                                        result = dedup if dedup is not None else func(**filtered_args)
 
                                 # --- AUTO PLUGIN RELOAD ---
                                 if func_name in ["write_file", "replace_in_file", "replace_python_function", "delete_file"]:
