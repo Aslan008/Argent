@@ -6,6 +6,13 @@ event stream, ending with {"type": "done"}. Gated tool actions arrive as
 client answers with {"type": "approval_reply", "id", "decision"} where decision
 is "deny" | "once" | "always". A {"type": "stop"} denies all pending approvals.
 
+Time-machine requests (idle only — refused while a turn is in flight):
+- {"type": "undo_file", "file"}  -> {"type": "undo_result", "file", "ok", "text"}
+  restores one file to its pre-edit snapshot (a diff card's Reject button).
+- {"type": "rewind", "sha"}      -> {"type": "rewind_result", "sha", "ok", "text"}
+  hard-resets the tree to a turn checkpoint (a timeline node click). The GUI
+  confirms with the user BEFORE sending; mechanical safety lives in rewind_to.
+
 The turn runs on a worker thread inside the session, so the single receive loop
 here stays responsive to approval replies while the turn is in flight. The
 session factory is injectable so the endpoint is tested with a fake agent.
@@ -55,6 +62,30 @@ def create_app(session_factory=None) -> FastAPI:
                     session.reply_approval(data.get("id"), data.get("decision", "deny"))
                 elif kind == "stop":
                     session.cancel()
+                elif kind == "undo_file":
+                    fp = data.get("file", "")
+                    if session.busy:
+                        await websocket.send_json({"type": "undo_result", "file": fp,
+                                                   "ok": False, "text": "A turn is in flight — wait for it to finish."})
+                    else:
+                        from file_tracker import undo
+                        text = await loop.run_in_executor(None, undo, fp)
+                        await websocket.send_json({"type": "undo_result", "file": fp,
+                                                   "ok": text.startswith("Restored"), "text": text})
+                elif kind == "rewind":
+                    sha = data.get("sha", "")
+                    if session.busy:
+                        await websocket.send_json({"type": "rewind_result", "sha": sha,
+                                                   "ok": False, "text": "A turn is in flight — wait for it to finish."})
+                    else:
+                        from src.agent.checkpoints import CheckpointError, rewind_to
+                        try:
+                            text = await loop.run_in_executor(None, rewind_to, sha)
+                            ok = True
+                        except CheckpointError as e:
+                            text, ok = str(e), False
+                        await websocket.send_json({"type": "rewind_result", "sha": sha,
+                                                   "ok": ok, "text": text})
         except WebSocketDisconnect:
             session.cancel()
             if sender is not None:

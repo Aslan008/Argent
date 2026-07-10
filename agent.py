@@ -1171,6 +1171,12 @@ Example: {"tool": {"name": "read_file", "arguments": {"file_path": "main.py"}}}"
                     elif func_name in self._EDIT_TOOLS and result.startswith("Successfully"):
                         self._drop_read_cache(filtered_args)
 
+                    # Diff cards: file editors queue the unified diff of what
+                    # they changed — forward each as a structured chunk.
+                    from tools._helpers import drain_diff_events
+                    for _d in drain_diff_events():
+                        yield {"type": "diff", "file": _d["file"], "diff": _d["diff"]}
+
                     yield {"type": "tool_end", "name": func_name, "result": result}
 
                     self.messages.append(provider.format_tool_result(str(result), tool_call.get("id")))

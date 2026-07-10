@@ -12,6 +12,7 @@ contract the GUI can rely on, independent of the terminal renderer:
   {"type": "error",          "text": str}         a genuine failure
   {"type": "usage",          "data": dict}
   {"type": "checkpoint",     "sha": str, "label": str}   time-machine snapshot
+  {"type": "diff",           "file": str, "diff": str}   unified diff of an edit
   {"type": "done"}                                turn finished (added by session)
 
 Returns None for chunks the GUI stream should ignore (e.g. tool_generating).
@@ -42,6 +43,9 @@ def to_event(chunk: dict):
     if kind == "checkpoint":
         return {"type": "checkpoint", "sha": chunk.get("sha", ""),
                 "label": chunk.get("label", "")}
+    if kind == "diff":
+        return {"type": "diff", "file": chunk.get("file", ""),
+                "diff": chunk.get("diff", "")}
     if kind == "error":
         content = str(chunk.get("content", ""))
         etype = "notice" if content.lstrip().startswith(_NOTICE_PREFIXES) else "error"

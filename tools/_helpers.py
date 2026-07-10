@@ -304,6 +304,21 @@ def _changed_region_preview(new_content: str, start_line: int, new_line_count: i
     return "\n".join(out)
 
 
+# GUI side-channel: every rendered diff is also queued as plain text; the
+# agent drains this after each tool call and forwards {"type": "diff"} chunks
+# (the terminal already got its Rich panel directly from _print_diff).
+# Bounded so a consumer that never drains can't grow it without limit.
+_PENDING_DIFFS: list = []
+_PENDING_DIFFS_MAX = 20
+
+
+def drain_diff_events() -> list:
+    """Take (and clear) the diffs produced by file editors since the last drain."""
+    out = _PENDING_DIFFS[:]
+    _PENDING_DIFFS.clear()
+    return out
+
+
 def _print_diff(old_text, new_text, filename):
     """Show a beautiful unified diff in the console."""
     diff = list(difflib.unified_diff(
@@ -314,6 +329,8 @@ def _print_diff(old_text, new_text, filename):
     ))
     if diff:
         diff_str = "".join(diff)
+        if len(_PENDING_DIFFS) < _PENDING_DIFFS_MAX:
+            _PENDING_DIFFS.append({"file": str(filename), "diff": diff_str})
         syntax = Syntax(diff_str, "diff", theme="monokai", background_color="default")
         console.print(Panel(syntax, title=f"Changes in {filename}", border_style="green"))
 
