@@ -196,6 +196,7 @@ def handle_slash_command(command: str, agent: ArgentAgent) -> bool:
             "- `/thinking` - Toggle stripping reasoning blocks from history\n"
             "\n**Build & edit code**\n"
             "- `/work [--auto] [task]` - Modify or fix an EXISTING codebase safely\n"
+            "- `/vibe` - Vibe mode: auto-approve safe actions, checkpoint every turn (undo via /rewind)\n"
             "- `/project [prompt]` - Build a large multi-step project from scratch\n"
             "- `/rooms <task>` - Experimental \"rooms and rails\" engine (declarative graph + triage)\n"
             "- `/init` - Analyze the project and generate .argent/AGENTS.md (project memory)\n"

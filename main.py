@@ -87,6 +87,26 @@ def offer_safety_checkpoint(task: str) -> None:
         pass
 
 
+def toggle_vibe_mode(vibe_mode: bool) -> bool:
+    """The vibecoder switch. Curates EXISTING knobs — no new machinery:
+    auto-approve safe actions (destructive ones still prompt) and guarantee
+    per-turn checkpoints, so every step stays rewindable via /rewind."""
+    vibe_mode = not vibe_mode
+    from src.agent.checkpoints import set_auto_checkpoint
+    if vibe_mode:
+        set_auto_checkpoint(True)
+        approval.set_policy(approval.POLICY_AUTO)
+        print_system(
+            "🌴 Vibe-режим ВКЛ: безопасные действия одобряются автоматически "
+            "(опасные — по-прежнему спросят), перед первой правкой каждого хода "
+            "создаётся чекпоинт. Откат в любой момент: /rewind."
+        )
+    else:
+        approval.set_policy(approval.POLICY_ASK)
+        print_system("Vibe-режим ВЫКЛ: обычный режим подтверждений возвращён.")
+    return vibe_mode
+
+
 def main():
     agent = None
 
@@ -142,7 +162,7 @@ def main():
         # Base commands
         '/help', '/provider', '/model', '/clear', '/init', '/research', '/rag_toggle', '/auto_retrieve',
         '/hooks', '/tools', '/save', '/project', '/work', '/commit',
-        '/sessions', '/load', '/copy', '/logs', '/skills', '/skill import', '/auto', '/verbose', '/debug', '/browser', '/exit', '/quit',
+        '/sessions', '/load', '/copy', '/logs', '/skills', '/skill import', '/auto', '/vibe', '/verbose', '/debug', '/browser', '/exit', '/quit',
         '/mcp', '/thinking', '/temp', '/temperature',
         '/cd', '/undo', '/diff', '/changes', '/rewind', '/stats', '/aux', '/doctor', '/jobs', '/stop', '/goal', '/critic', '/rooms',
         
@@ -231,6 +251,7 @@ def main():
 
     is_project_mode = False
     is_auto_mode = False
+    vibe_mode = False
     auto_sleep_time = 0
     auto_wake_context = ""
     auto_continue_input = None
@@ -360,6 +381,10 @@ def main():
                 )
                 print_system(f"🚀 Запущен автоматический режим для: {auto_task}")
                 is_project_mode = False
+            elif user_input.strip() == "/vibe":
+                vibe_mode = toggle_vibe_mode(vibe_mode)
+                ui_state["mode"] = "VIBE" if vibe_mode else "CHAT"
+                continue
             elif user_input.startswith("/browser"):
                 parts = user_input.strip().split()
                 if len(parts) == 1:
@@ -1105,12 +1130,15 @@ def main():
                 # Regular chat mode
                 active_tools = CHAT_ALLOWED_TOOLS
 
-            # Sync the approval policy with the current mode: in autonomous mode
-            # safe actions are auto-approved, destructive ones still prompt.
-            approval.set_policy(approval.POLICY_AUTO if is_auto_mode else approval.POLICY_ASK)
+            # Sync the approval policy with the current mode: in autonomous and
+            # vibe modes safe actions are auto-approved, destructive ones still prompt.
+            approval.set_policy(approval.POLICY_AUTO if (is_auto_mode or vibe_mode) else approval.POLICY_ASK)
 
             # Reflect the active mode in the status bar.
-            ui_state["mode"] = "AUTO" if is_auto_mode else ("PROJECT" if is_project_mode else "CHAT")
+            ui_state["mode"] = ("AUTO" if is_auto_mode
+                                else "PROJECT" if is_project_mode
+                                else "VIBE" if vibe_mode
+                                else "CHAT")
 
             response_chunks = agent.process_user_input(user_input, allowed_tools=active_tools)
             streamed_text, is_auto_mode, auto_sleep_time, auto_wake_context = render_response_stream(
