@@ -1146,10 +1146,15 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "git_rollback",
-            "description": "Revert all changes to the last 'Argent Checkpoint'. Use this if an experiment failed or logic is broken beyond simple repair.",
+            "description": "Revert all changes to an 'Argent Checkpoint'. Use this if an experiment failed, logic is broken beyond simple repair, or the user asks to undo/return to an earlier state. Argent auto-creates a checkpoint before the first edit of each turn, so recent states are usually available.",
             "parameters": {
                 "type": "object",
-                "properties": {}
+                "properties": {
+                    "to_checkpoint": {
+                        "type": "string",
+                        "description": "Optional: pick an OLDER checkpoint by short sha or a substring of its message (e.g. 'before: fix menu'). Omit to roll back to the most recent checkpoint. On no match the tool lists available checkpoints."
+                    }
+                }
             }
         }
     },

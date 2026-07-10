@@ -144,7 +144,7 @@ def main():
         '/hooks', '/tools', '/save', '/project', '/work', '/commit',
         '/sessions', '/load', '/copy', '/logs', '/skills', '/skill import', '/auto', '/verbose', '/debug', '/browser', '/exit', '/quit',
         '/mcp', '/thinking', '/temp', '/temperature',
-        '/cd', '/undo', '/diff', '/changes', '/stats', '/aux', '/doctor', '/jobs', '/stop', '/goal', '/critic', '/rooms',
+        '/cd', '/undo', '/diff', '/changes', '/rewind', '/stats', '/aux', '/doctor', '/jobs', '/stop', '/goal', '/critic', '/rooms',
         
         # Subcommands and parameter variations
         '/mcp list', '/mcp add', '/mcp remove', '/mcp test', '/mcp start', '/mcp stop',
@@ -927,6 +927,31 @@ def main():
                     for ch in changes:
                         print_system(f"  - {ch['key']} ({ch['snapshot_count']} snapshots)")
                     print_system("\nUse /diff <path> to see changes, /undo <path> to restore.")
+                continue
+
+            elif user_input.strip() == "/rewind":
+                from src.agent.checkpoints import list_checkpoints, rewind_to, CheckpointError
+                cps = list_checkpoints(15)
+                if not cps:
+                    print_system("Нет чекпоинтов Argent в истории текущей ветки. "
+                                 "Они создаются автоматически перед первой правкой каждого хода.")
+                    continue
+                choices = [f"{c['sha']}  {c['label']}  ({c['age']})" for c in cps] + ["❌ Отмена"]
+                sel = questionary.select("Откатить рабочее дерево к какому чекпоинту?",
+                                         choices=choices).ask()
+                if not sel or sel.startswith("❌"):
+                    continue
+                sha = sel.split()[0]
+                confirmed = questionary.confirm(
+                    f"Откатить ВСЁ до чекпоинта {sha}? (незакоммиченное будет сохранено в git stash)",
+                    default=False,
+                ).ask()
+                if not confirmed:
+                    continue
+                try:
+                    print_system(rewind_to(sha))
+                except CheckpointError as e:
+                    print_error(str(e))
                 continue
 
             elif user_input.startswith("/project"):

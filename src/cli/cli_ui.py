@@ -298,6 +298,8 @@ def render_response_stream(
                     )
                 elif type_ == "error":
                     _render_stream_error(chunk["content"])
+                elif type_ == "checkpoint":
+                    console.print(f"[dim]🕰 Чекпоинт {chunk.get('sha', '')} создан — откат: /rewind[/dim]")
 
                 # ====================================================
                 # PHASE 2: Main content stream
@@ -393,6 +395,8 @@ def render_response_stream(
                             )
                         elif type_ == "error":
                             _render_stream_error(chunk["content"])
+                        elif type_ == "checkpoint":
+                            console.print(f"[dim]🕰 Чекпоинт {chunk.get('sha', '')} создан — откат: /rewind[/dim]")
 
             else:
                 # ====================================================

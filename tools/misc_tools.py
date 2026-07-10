@@ -229,50 +229,53 @@ def find_references(file_path: str, line: int, column: int) -> str:
 
 def git_checkpoint(message: str) -> str:
     """Create a temporary git commit (checkpoint) to save state before an experiment."""
+    from src.agent import checkpoints
     try:
-        res = subprocess.run(["git", "rev-parse", "--is-inside-work-tree"], capture_output=True, text=True)
-        if res.returncode != 0:
+        if not checkpoints.is_git_repo():
             return "Error: Not a git repository. Checkpoints require git."
-        
-        subprocess.run(["git", "add", "."], check=True)
-        res = subprocess.run(["git", "diff", "--cached", "--quiet"])
-        if res.returncode == 0:
+        sha = checkpoints.create_checkpoint(message)
+        if sha is None:
             return "No changes to checkpoint."
-            
-        subprocess.run(["git", "commit", "-m", f"Argent Checkpoint: {message}"], check=True)
-        return f"Checkpoint created: '{message}'"
+        return f"Checkpoint created: '{message}' ({sha})"
     except Exception as e:
         return f"Error creating checkpoint: {e}"
 
-def git_rollback() -> str:
-    """Roll back the last checkpoint (git reset --hard HEAD~1)."""
+def git_rollback(to_checkpoint: str = None) -> str:
+    """Roll back to an Argent Checkpoint. Without arguments — the most recent
+    one; to_checkpoint picks an older checkpoint by short sha or a substring
+    of its message (e.g. what the user asked to return to)."""
+    from src.agent import checkpoints
     try:
-        res = subprocess.run(["git", "rev-parse", "--is-inside-work-tree"], capture_output=True, text=True)
-        if res.returncode != 0:
+        if not checkpoints.is_git_repo():
             return "Error: Not a git repository."
-        
-        res = subprocess.run(["git", "log", "-1", "--pretty=%B"], capture_output=True, text=True)
-        last_msg = res.stdout.strip()
-        
-        if not last_msg.startswith("Argent Checkpoint:"):
-            return f"Error: The last commit ('{last_msg}') was not an Argent Checkpoint. Rollback aborted for safety."
-            
+
+        available = checkpoints.list_checkpoints()
+        if not available:
+            return "Error: no Argent Checkpoints found in recent history. Nothing to roll back to."
+
+        target = None
+        if to_checkpoint and to_checkpoint.strip():
+            needle = to_checkpoint.strip().lower()
+            for cp in available:
+                if cp["sha"].lower().startswith(needle) or needle in cp["label"].lower():
+                    target = cp
+                    break
+            if target is None:
+                listing = "\n".join(f"- {c['sha']}  {c['label']}  ({c['age']})" for c in available)
+                return (f"Error: no checkpoint matches '{to_checkpoint}'. Available checkpoints:\n"
+                        f"{listing}")
+        else:
+            target = available[0]
+
         from approval import request_approval
         approved = request_approval(
-            f"откатить ВСЕ изменения до чекпоинта '{last_msg}' (git reset --hard)",
+            f"откатить ВСЕ изменения до чекпоинта '{target['label']}' ({target['sha']}, git reset --hard)",
             destructive=True,
         )
         if not approved:
             return "Rollback aborted by user."
 
-        # Stash unstaged and untracked changes for safety before hard reset
-        status_res = subprocess.run(["git", "status", "--porcelain"], capture_output=True, text=True)
-        if status_res.stdout.strip():
-            console.print("\n[bold yellow]Unstaged or untracked changes detected. Stashing them for safety before rollback...[/bold yellow]")
-            subprocess.run(["git", "stash", "push", "-u", "-m", f"Argent Auto-Save before Rollback to {last_msg}"], capture_output=True)
-            
-        subprocess.run(["git", "reset", "--hard", "HEAD~1"], check=True)
-        return f"Successfully rolled back: {last_msg}"
+        return checkpoints.rewind_to(target["sha"])
     except Exception as e:
         return f"Error rolling back: {e}"
 

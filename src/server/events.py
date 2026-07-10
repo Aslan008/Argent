@@ -11,6 +11,7 @@ contract the GUI can rely on, independent of the terminal renderer:
   {"type": "notice",         "text": str}         self-healing / system notice
   {"type": "error",          "text": str}         a genuine failure
   {"type": "usage",          "data": dict}
+  {"type": "checkpoint",     "sha": str, "label": str}   time-machine snapshot
   {"type": "done"}                                turn finished (added by session)
 
 Returns None for chunks the GUI stream should ignore (e.g. tool_generating).
@@ -38,6 +39,9 @@ def to_event(chunk: dict):
                 "result": str(chunk.get("result", ""))}
     if kind == "usage":
         return {"type": "usage", "data": chunk.get("data", {})}
+    if kind == "checkpoint":
+        return {"type": "checkpoint", "sha": chunk.get("sha", ""),
+                "label": chunk.get("label", "")}
     if kind == "error":
         content = str(chunk.get("content", ""))
         etype = "notice" if content.lstrip().startswith(_NOTICE_PREFIXES) else "error"

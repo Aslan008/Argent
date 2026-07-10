@@ -19,3 +19,15 @@ def _offline_token_estimation(monkeypatch):
         trimmer._TOKEN_CACHE.clear()
     except Exception:
         pass
+
+
+@pytest.fixture(autouse=True)
+def _no_auto_checkpoint():
+    """Agent dispatch auto-commits a git checkpoint before the first edit of a
+    turn. In tests the current directory is the Argent repo itself — a test
+    driving an edit tool must never commit the developer's dirty tree. Tests
+    that exercise the time machine re-enable it inside a tmp repo."""
+    from src.agent import checkpoints
+    checkpoints.set_auto_checkpoint(False)
+    yield
+    checkpoints.set_auto_checkpoint(True)

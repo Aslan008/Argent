@@ -204,6 +204,7 @@ def handle_slash_command(command: str, agent: ArgentAgent) -> bool:
             "- `/changes` - List files the AI modified this session\n"
             "- `/diff <file>` - Diff a file against its pre-edit snapshot\n"
             "- `/undo <file>` - Restore a file to its pre-edit snapshot\n"
+            "- `/rewind` - Time machine: roll the whole tree back to any auto-checkpoint (one per turn)\n"
             "- `/cd [path]` - Change (or show) the working directory\n"
             "\n**Knowledge & search**\n"
             "- `/rag_toggle` - Enable/disable semantic-search indexing\n"

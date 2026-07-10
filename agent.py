@@ -344,6 +344,10 @@ Example: {"tool": {"name": "read_file", "arguments": {"file_path": "main.py"}}}"
         # compact pointer instead of a full re-dump. Kills the wasteful
         # "read again before editing" round-trip. {abs_path: {sig, stored}}.
         self._read_cache: Dict[str, Dict[str, Any]] = {}
+        # Time machine: one auto-checkpoint per turn, made lazily before the
+        # first file edit (see _maybe_turn_checkpoint).
+        self._turn_checkpoint_done = False
+        self._turn_label = ""
         self.messages: List[Dict[str, Any]] = [
             {"role": "system", "content": self.build_system_prompt()}
         ]
@@ -458,6 +462,21 @@ Example: {"tool": {"name": "read_file", "arguments": {"file_path": "main.py"}}}"
             )
         except Exception:
             return None
+
+    def _maybe_turn_checkpoint(self, func_name: str) -> dict | None:
+        """Time machine: before the FIRST file edit of a turn, snapshot the
+        pre-turn tree as an Argent Checkpoint so /rewind (or git_rollback) can
+        return to any turn. One attempt per turn; a failed snapshot never
+        blocks the edit. Returns a 'checkpoint' chunk to yield, or None."""
+        if func_name not in self._EDIT_TOOLS or self._turn_checkpoint_done:
+            return None
+        self._turn_checkpoint_done = True
+        from src.agent.checkpoints import auto_checkpoint
+        label = self._turn_label or func_name
+        sha = auto_checkpoint(label)
+        if not sha:
+            return None
+        return {"type": "checkpoint", "sha": sha, "label": label}
 
     def _drop_read_cache(self, filtered_args: dict) -> None:
         """Forget a file's read signature after we edited it ourselves, so the
@@ -613,6 +632,9 @@ Example: {"tool": {"name": "read_file", "arguments": {"file_path": "main.py"}}}"
             self._maybe_auto_retrieve(user_text)
 
         self._trim_history()
+        self._turn_checkpoint_done = False
+        _label_lines = (user_text or "").strip().splitlines()
+        self._turn_label = _label_lines[0][:60] if _label_lines else ""
         self._truncate_continues = 0
         self._salvage_continues = 0
         self._ctx_overflow_retries = 0
@@ -1086,6 +1108,11 @@ Example: {"tool": {"name": "read_file", "arguments": {"file_path": "main.py"}}}"
                                 if False in hook_results:
                                     result = f"Error: Execution of tool '{func_name}' was blocked by a user plugin."
                                 else:
+                                    # Time machine: snapshot the pre-turn tree
+                                    # before the turn's first edit lands.
+                                    cp_chunk = self._maybe_turn_checkpoint(func_name)
+                                    if cp_chunk:
+                                        yield cp_chunk
                                     # Staleness must be checked BEFORE executing:
                                     # after the edit the mtime change is our own.
                                     stale_note = self._external_change_note(func_name, filtered_args)
