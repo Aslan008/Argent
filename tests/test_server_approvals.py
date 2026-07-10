@@ -41,12 +41,15 @@ class TestSessionApproval:
         assert s.get_event() == {"type": "content", "text": "no"}
         assert s.get_event()["type"] == "done"
 
-    def test_cancel_denies_pending(self):
+    def test_cancel_denies_pending_and_stops_the_turn(self):
         s = AgentSession(agent=ApprovalAgent())
         s.start("go")
         assert s.get_event()["type"] == "approval_request"
         s.cancel()                                     # e.g. client disconnected
-        assert s.get_event() == {"type": "content", "text": "no"}
+        # The denial unblocks the worker, then the turn aborts at the next
+        # chunk boundary — the agent's post-denial output is not forwarded.
+        ev = s.get_event()
+        assert ev["type"] == "notice" and "stopped" in ev["text"]
         assert s.get_event()["type"] == "done"
 
     def test_always_adds_session_grant(self):
@@ -74,12 +77,13 @@ def test_ws_approval_round_trip():
         assert ws.receive_json()["type"] == "done"
 
 
-def test_ws_stop_denies():
+def test_ws_stop_denies_and_aborts():
     app = create_app(session_factory=lambda: AgentSession(agent=ApprovalAgent()))
     client = TestClient(app)
     with client.websocket_connect("/ws") as ws:
         ws.send_json({"type": "message", "text": "go"})
         assert ws.receive_json()["type"] == "approval_request"
         ws.send_json({"type": "stop"})
-        assert ws.receive_json() == {"type": "content", "text": "no"}
+        ev = ws.receive_json()
+        assert ev["type"] == "notice" and "stopped" in ev["text"]
         assert ws.receive_json()["type"] == "done"

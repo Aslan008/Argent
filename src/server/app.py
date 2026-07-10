@@ -4,7 +4,16 @@ A client sends {"type": "message", "text": "..."} and receives the session's
 event stream, ending with {"type": "done"}. Gated tool actions arrive as
 {"type": "approval_request", "id", "action", "destructive", "grant_key"}; the
 client answers with {"type": "approval_reply", "id", "decision"} where decision
-is "deny" | "once" | "always". A {"type": "stop"} denies all pending approvals.
+is "deny" | "once" | "always". A {"type": "stop"} aborts the running turn:
+pending approvals are denied and the turn ends at the next chunk boundary.
+
+Header/state protocol:
+- {"type": "get_state"}          -> {"type": "state", model, provider, tier,
+  context:{tokens,max,percent}, vibe, checkpoints:[{sha,label}]}. The client
+  asks once on connect; after every finished turn the server pushes a fresh
+  state on its own.
+- {"type": "vibe", "enabled"}    -> {"type": "vibe_state", "enabled"} — the
+  GUI's /vibe switch (auto-approve safe actions + per-turn checkpoints).
 
 Time-machine requests (idle only — refused while a turn is in flight):
 - {"type": "undo_file", "file"}  -> {"type": "undo_result", "file", "ok", "text"}
@@ -40,13 +49,19 @@ def create_app(session_factory=None) -> FastAPI:
         loop = asyncio.get_running_loop()
         sender = None
 
+        async def send_state():
+            state = await loop.run_in_executor(None, session.state)
+            await websocket.send_json({"type": "state", **state})
+
         async def pump_events():
             # Drain the (blocking) event queue off-thread and forward each event
-            # until the turn signals completion.
+            # until the turn signals completion; then push the fresh state so
+            # the header (context %, checkpoints) never goes stale.
             while True:
                 event = await loop.run_in_executor(None, session.get_event)
                 await websocket.send_json(event)
                 if event.get("type") == "done":
+                    await send_state()
                     return
 
         try:
@@ -62,6 +77,11 @@ def create_app(session_factory=None) -> FastAPI:
                     session.reply_approval(data.get("id"), data.get("decision", "deny"))
                 elif kind == "stop":
                     session.cancel()
+                elif kind == "get_state":
+                    await send_state()
+                elif kind == "vibe":
+                    enabled = session.set_vibe(bool(data.get("enabled")))
+                    await websocket.send_json({"type": "vibe_state", "enabled": enabled})
                 elif kind == "undo_file":
                     fp = data.get("file", "")
                     if session.busy:

@@ -26,6 +26,8 @@ class AgentSession:
         self._counter = 0
         self._lock = threading.Lock()
         self._active = False
+        self._stop_requested = False
+        self.vibe = False
 
     @property
     def agent(self):
@@ -51,6 +53,7 @@ class AgentSession:
     def start(self, text: str) -> None:
         """Run one turn on a worker thread; consume it with get_event()."""
         self._active = True
+        self._stop_requested = False
         threading.Thread(target=self._run_turn, args=(text,), daemon=True).start()
 
     def get_event(self) -> dict:
@@ -63,8 +66,15 @@ class AgentSession:
     def _run_turn(self, text: str) -> None:
         import approval
         approval.set_approval_backend(self._approval_backend)
+        gen = self.agent.process_user_input(text)
         try:
-            for chunk in self.agent.process_user_input(text):
+            for chunk in gen:
+                # Cooperative stop: takes effect between chunks. close()
+                # raises GeneratorExit at the paused yield inside the turn.
+                if self._stop_requested:
+                    gen.close()
+                    self._out.put({"type": "notice", "text": "[System: turn stopped by user]"})
+                    break
                 event = to_event(chunk)
                 if event is not None:
                     self._out.put(event)
@@ -101,9 +111,52 @@ class AgentSession:
                 entry["event"].set()
 
     def cancel(self) -> None:
-        """Deny every pending approval — e.g. on client disconnect — so the
-        worker thread unblocks instead of hanging forever."""
+        """Stop the running turn: deny every pending approval (so a blocked
+        worker unblocks) and request a cooperative abort — the turn ends at
+        the next chunk boundary instead of running to completion."""
+        self._stop_requested = True
         with self._lock:
             for entry in self._pending.values():
                 entry["decision"] = "deny"
                 entry["event"].set()
+
+    # --- GUI state ------------------------------------------------------------
+    def state(self) -> dict:
+        """Snapshot for the GUI header: model, provider, tier, context usage,
+        vibe flag and the rewindable turn checkpoints (newest first)."""
+        a = self.agent
+        model = getattr(a, "model_name", "?")
+        try:
+            from agent import get_model_size_category
+            tier = get_model_size_category(model)
+        except Exception:
+            tier = "?"
+        try:
+            usage = a.get_context_usage()
+        except Exception:
+            usage = {}
+        try:
+            from src.agent.checkpoints import list_checkpoints
+            cps = [{"sha": c["sha"], "label": c["label"]} for c in list_checkpoints(10)]
+        except Exception:
+            cps = []
+        return {
+            "model": model,
+            "provider": getattr(a, "provider", "?"),
+            "tier": tier,
+            "context": {"tokens": usage.get("tokens", 0), "max": usage.get("max", 0),
+                        "percent": round(usage.get("percent", 0))},
+            "vibe": self.vibe,
+            "checkpoints": cps,
+        }
+
+    def set_vibe(self, enabled: bool) -> bool:
+        """The GUI's vibe switch — same knobs as the terminal /vibe: safe
+        actions auto-approved (destructive still prompt), checkpoints on."""
+        import approval
+        from src.agent.checkpoints import set_auto_checkpoint
+        self.vibe = bool(enabled)
+        approval.set_policy(approval.POLICY_AUTO if self.vibe else approval.POLICY_ASK)
+        if self.vibe:
+            set_auto_checkpoint(True)
+        return self.vibe
