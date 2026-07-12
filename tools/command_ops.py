@@ -165,6 +165,14 @@ def run_command(command: str) -> str:
         log.error("run_command error: %s: %s", command, e)
         return f"Error running command '{command}': {e}"
 
+def _encode_powershell_command(script: str) -> str:
+    """Encode a PowerShell script for `powershell -EncodedCommand`: base64 of
+    its UTF-16LE bytes. Unlike `-Command "..."`, this carries arbitrary quotes
+    and special characters verbatim — no escaping, no injection surface."""
+    import base64
+    return base64.b64encode(script.encode("utf-16-le")).decode("ascii")
+
+
 def run_admin_command(command: str) -> str:
     """Execute a PowerShell command with Administrator privileges (UAC prompt)."""
     approved = request_approval(
@@ -186,10 +194,16 @@ def run_admin_command(command: str) -> str:
     try:
         temp_out.unlink()  # elevated child re-creates it on completion
 
+        # Pass the script via -EncodedCommand (base64 of UTF-16LE), not
+        # -Command "…": inline quoting breaks the moment the user's command
+        # contains a double quote (Write-Host "x"), which both fails valid
+        # commands and is a quote-injection surface. EncodedCommand carries an
+        # arbitrary script verbatim, no escaping needed.
         wrapped_command = f"{command} > '{temp_out}' 2>&1"
+        encoded = _encode_powershell_command(wrapped_command)
         result = ctypes.windll.shell32.ShellExecuteW(
             None, "runas", "powershell.exe",
-            f"-Command \"{wrapped_command}\"", None, 0,
+            f"-NoProfile -EncodedCommand {encoded}", None, 0,
         )
         if result <= 32:
             return f"Error: UAC prompt was denied or execution failed. Error code: {result}"

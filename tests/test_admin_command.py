@@ -1,6 +1,7 @@
 """run_admin_command must use a unique temp file (not a shared hardcoded path)
 and always clean it up. ShellExecuteW is mocked so this runs without UAC."""
 
+import base64
 import re
 from pathlib import Path
 
@@ -11,9 +12,10 @@ class _FakeShell32:
     captured_path = None
 
     def ShellExecuteW(self, hwnd, verb, file, params, cwd, show):
-        # params looks like: -Command "<cmd> > 'PATH' 2>&1"
-        m = re.search(r"> '([^']+)'", params)
-        _FakeShell32.captured_path = m.group(1)
+        # params is now: -NoProfile -EncodedCommand <base64 of UTF-16LE script>
+        m = re.search(r"-EncodedCommand (\S+)", params)
+        script = base64.b64decode(m.group(1)).decode("utf-16-le")
+        _FakeShell32.captured_path = re.search(r"> '([^']+)'", script).group(1)
         Path(_FakeShell32.captured_path).write_text("ADMIN OUTPUT OK", encoding="utf-8")
         return 42  # > 32 => ShellExecute success
 

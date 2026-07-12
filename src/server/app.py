@@ -28,10 +28,31 @@ session factory is injectable so the endpoint is tested with a fake agent.
 """
 
 import asyncio
+from urllib.parse import urlparse
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 
 from src.server.session import AgentSession
+
+# CSWSH defense: a WebSocket is NOT covered by the browser Same-Origin Policy,
+# so any website the user opens could otherwise connect to this localhost
+# socket and drive the agent (run commands, read files). Browsers always send
+# an Origin header they can't forge, so we allow only local origins and reject
+# any real web page. Non-browser clients (the tests, a CLI) send no Origin and
+# are allowed — they already have machine access, which is not the CSWSH threat.
+_ALLOWED_ORIGIN_HOSTS = {"localhost", "127.0.0.1", "::1", "tauri.localhost"}
+
+
+def _origin_allowed(origin: str | None) -> bool:
+    if not origin:
+        return True                       # native client / test — no browser origin
+    try:
+        parsed = urlparse(origin)
+    except Exception:
+        return False
+    if parsed.scheme == "tauri":          # Tauri prod webview (tauri://localhost)
+        return True
+    return (parsed.hostname or "") in _ALLOWED_ORIGIN_HOSTS
 
 
 def create_app(session_factory=None) -> FastAPI:
@@ -44,6 +65,10 @@ def create_app(session_factory=None) -> FastAPI:
 
     @app.websocket("/ws")
     async def ws_endpoint(websocket: WebSocket):
+        # Reject cross-site WebSocket hijacking before accepting the handshake.
+        if not _origin_allowed(websocket.headers.get("origin")):
+            await websocket.close(code=1008)      # policy violation
+            return
         await websocket.accept()
         session = factory()
         loop = asyncio.get_running_loop()
