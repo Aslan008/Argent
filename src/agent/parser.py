@@ -158,9 +158,14 @@ def decode_json_escapes(s: str) -> str:
         i += 2
     return ''.join(out)
 
+# The body is GREEDY and the closing fence must be a line that is exactly ```
+# (optional trailing spaces): so a file whose content itself contains ``` code
+# fences is captured whole, up to the LAST bare fence, instead of being
+# silently truncated at the first inner fence. MULTILINE anchors the close to a
+# line boundary; DOTALL lets the body span newlines.
 _FENCED_WRITE_RE = re.compile(
-    r"```write_file[ \t]+(?P<path>[^\n`]+?)[ \t]*\n(?P<body>.*?)\n?```",
-    re.DOTALL,
+    r"```write_file[ \t]+(?P<path>[^\n`]+?)[ \t]*\n(?P<body>.*)\n```[ \t]*$",
+    re.DOTALL | re.MULTILINE,
 )
 
 

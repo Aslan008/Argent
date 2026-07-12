@@ -14,13 +14,56 @@ without touching the network.
 """
 
 import io
+import ipaddress
 import random
+import socket
 import urllib.parse
 
 from logger import get_logger
 from src.research.cache import get_cached, set_cached
 
 log = get_logger("research")
+
+# SSRF defense. A fetched URL is attacker-influenced (a malicious page can link
+# or redirect anywhere), so before every request we require an http(s) URL whose
+# host resolves ONLY to public addresses. This blocks pivots into the local
+# machine and network: loopback (127/::1 -> Argent's own server, other daemons),
+# private ranges (10/172.16/192.168), link-local incl. the cloud metadata
+# endpoint 169.254.169.254, and other reserved space. Redirects are followed
+# manually so each hop is re-validated (a public URL can 302 to metadata).
+_MAX_REDIRECTS = 5
+
+
+class UnsafeURLError(ValueError):
+    """A URL that resolves to a non-public address (SSRF guard)."""
+
+
+def _ip_is_public(ip: str) -> bool:
+    try:
+        addr = ipaddress.ip_address(ip)
+    except ValueError:
+        return False
+    return not (addr.is_private or addr.is_loopback or addr.is_link_local
+                or addr.is_reserved or addr.is_multicast or addr.is_unspecified)
+
+
+def _guard_url(url: str) -> None:
+    """Raise UnsafeURLError unless url is http(s) and every resolved IP is public."""
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        raise UnsafeURLError(f"blocked non-http(s) URL scheme: {parsed.scheme or '(none)'}")
+    host = parsed.hostname
+    if not host:
+        raise UnsafeURLError("URL has no host")
+    try:
+        infos = socket.getaddrinfo(host, parsed.port or (443 if parsed.scheme == "https" else 80),
+                                   proto=socket.IPPROTO_TCP)
+    except socket.gaierror as e:
+        raise UnsafeURLError(f"could not resolve host '{host}': {e}")
+    for info in infos:
+        ip = info[4][0]
+        if not _ip_is_public(ip):
+            raise UnsafeURLError(f"blocked request to non-public address {ip} (host '{host}')")
 
 _USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -43,13 +86,22 @@ def _http_get(url: str, timeout: int) -> dict:
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
         "Accept-Language": "en-US,en;q=0.5",
     }
-    resp = requests.get(url, headers=headers, timeout=timeout)
-    return {
-        "status": resp.status_code,
-        "content_type": (resp.headers.get("Content-Type") or "").lower(),
-        "text": resp.text,
-        "content": resp.content,
-    }
+    # Follow redirects by hand so every hop passes the SSRF guard (a public URL
+    # can redirect into private space / the metadata endpoint).
+    current = url
+    for _ in range(_MAX_REDIRECTS + 1):
+        _guard_url(current)
+        resp = requests.get(current, headers=headers, timeout=timeout, allow_redirects=False)
+        if resp.is_redirect and resp.headers.get("Location"):
+            current = urllib.parse.urljoin(current, resp.headers["Location"])
+            continue
+        return {
+            "status": resp.status_code,
+            "content_type": (resp.headers.get("Content-Type") or "").lower(),
+            "text": resp.text,
+            "content": resp.content,
+        }
+    raise UnsafeURLError(f"too many redirects (>{_MAX_REDIRECTS})")
 
 
 def _extract_pdf(content: bytes) -> str:

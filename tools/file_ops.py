@@ -171,8 +171,9 @@ def append_to_file(file_path: str, content: str) -> str:
         return f"Error appending to file '{file_path}': {e}"
 
 def replace_python_function(file_path: str, function_name: str, new_code: str) -> str:
-    """Surgically replace a top-level function or class method in a Python file. 
-    function_name can be 'my_func' or 'MyClass.my_method'.
+    """Surgically replace a function or method in a Python file.
+    function_name is a dotted path: 'my_func', 'MyClass.my_method', or a nested
+    target like 'Outer.Inner.method' or 'outer_func.inner_func'.
     """
     restriction_error = _is_plugin_path_restricted(file_path)
     if restriction_error:
@@ -195,26 +196,30 @@ def replace_python_function(file_path: str, function_name: str, new_code: str) -
         except SyntaxError as e:
             return f"Error: The existing file '{file_path}' has a SyntaxError and cannot be parsed: {e}"
 
-        target_node = None
-        
         parts = function_name.split('.')
-        if len(parts) == 1:
-            for node in ast.iter_child_nodes(tree):
-                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == parts[0]:
-                    target_node = node
+        if not all(parts):
+            return f"Error: Invalid function_name format '{function_name}'. Use 'func', 'Class.method' or 'Outer.Inner.method'."
+
+        # Descend the dotted path one component at a time, so a method inside a
+        # nested class (Outer.Inner.method) or a function nested in another
+        # function is reachable — ast.iter_child_nodes only ever saw the top
+        # level, which silently lost any target below the first tier.
+        target_node = None
+        scope = tree.body
+        for depth, name in enumerate(parts):
+            match = None
+            for node in scope:
+                if (isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+                        and node.name == name):
+                    match = node
                     break
-        elif len(parts) == 2:
-            class_name, method_name = parts
-            for node in ast.iter_child_nodes(tree):
-                if isinstance(node, ast.ClassDef) and node.name == class_name:
-                    for child in ast.iter_child_nodes(node):
-                        if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)) and child.name == method_name:
-                            target_node = child
-                            break
-                    if target_node:
-                        break
-        else:
-            return f"Error: Invalid function_name format '{function_name}'. Use 'func' or 'Class.func'."
+            if match is None:
+                break
+            if depth == len(parts) - 1:
+                if isinstance(match, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    target_node = match
+                break
+            scope = match.body  # descend into the class/function body
 
         if not target_node:
             return f"Error: Function/Method '{function_name}' not found in '{file_path}'."

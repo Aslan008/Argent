@@ -30,6 +30,23 @@ def test_does_not_misfire_on_ordinary_code_block():
     assert r is None or r["parsed"]["name"] != "write_file"
 
 
+def test_markdown_file_with_inner_code_fence_is_captured_whole():
+    # The truncation bug: content that itself contains a ``` block used to be
+    # cut at the first inner fence. It must now survive to the last fence.
+    body = "# Notes\n\n```python\nprint(1)\n```\n\nMore text after the block."
+    text = f"```write_file notes.md\n{body}\n```"
+    r = parse_fenced_write(text)
+    assert r is not None
+    assert r["parsed"]["arguments"]["file_path"] == "notes.md"
+    assert r["parsed"]["arguments"]["content"] == body
+
+
+def test_trailing_prose_after_block_is_not_swallowed():
+    text = "```write_file a.py\nx = 1\n```\nDone — I wrote the file."
+    r = parse_fenced_write(text)
+    assert r["parsed"]["arguments"]["content"] == "x = 1"
+
+
 def test_missing_path_returns_none():
     assert parse_fenced_write("```write_file \ncontent\n```") is None
 
