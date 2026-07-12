@@ -123,9 +123,14 @@ def summarize_messages(msgs_to_summarize: List[Dict], model_name: str, timeout: 
             if validation_error:
                 result_container[0] = None
                 return
+            # Pass the deadline down to the HTTP layer so a hung remote provider
+            # ends the call (and this worker thread) instead of lingering past
+            # the join() timeout below. Slightly under `timeout` so the network
+            # gives up first.
             result_container[0] = provider.sync_chat(
                 model=svc_model,
-                messages=[{"role": "user", "content": summary_prompt}]
+                messages=[{"role": "user", "content": summary_prompt}],
+                timeout=max(1.0, timeout - 1.0),
             )
         except Exception as e:
             error_container[0] = e

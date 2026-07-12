@@ -24,15 +24,41 @@ log = get_logger("memory")
 MEMORY_FILE = Path(".argent") / "memory.json"
 
 
+def resolve_memory_file() -> Path:
+    """Locate the project's .argent/memory.json.
+
+    The memory used to be pinned to the CWD, so launching Argent from a
+    subfolder (cd src) created a fresh, empty .argent and dropped the whole
+    project context. Instead we walk UP from the CWD looking for an existing
+    .argent directory — like git finds .git — and reuse it. We stop at the home
+    directory / filesystem root so we never latch onto an unrelated ancestor.
+    If none is found, fall back to CWD/.argent (a brand-new project).
+    """
+    cwd = Path.cwd().resolve()
+    stop = Path.home().resolve()
+    for d in [cwd, *cwd.parents]:
+        # Stop AT the home directory without adopting its .argent: ~/.argent is
+        # Argent's own global state, not a project's memory, and going higher
+        # risks latching onto an unrelated ancestor's .argent.
+        if d == stop:
+            break
+        if (d / ".argent").is_dir():
+            return d / ".argent" / "memory.json"
+    return cwd / ".argent" / "memory.json"
+
+
 class MemoryManager:
     def __init__(self):
+        # Resolve once at construction: a cd mid-session must not silently
+        # migrate the memory file out from under the running agent.
+        self._memory_file = resolve_memory_file()
         self.data = self._load()
         self._lock = threading.Lock()
 
     def _load(self) -> dict:
-        if MEMORY_FILE.exists():
+        if self._memory_file.exists():
             try:
-                return json.loads(MEMORY_FILE.read_text(encoding="utf-8"))
+                return json.loads(self._memory_file.read_text(encoding="utf-8"))
             except Exception:
                 pass
         return {
@@ -47,9 +73,9 @@ class MemoryManager:
 
     def _save(self):
         with self._lock:
-            MEMORY_FILE.parent.mkdir(parents=True, exist_ok=True)
+            self._memory_file.parent.mkdir(parents=True, exist_ok=True)
             self.data["updated_at"] = datetime.now().isoformat()
-            MEMORY_FILE.write_text(json.dumps(self.data, indent=2, ensure_ascii=False), encoding="utf-8")
+            self._memory_file.write_text(json.dumps(self.data, indent=2, ensure_ascii=False), encoding="utf-8")
 
     def set_objective(self, text: str):
         self.data["objective"] = text[:500]

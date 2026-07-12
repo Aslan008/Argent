@@ -149,7 +149,7 @@ class LLMProvider(ABC):
         return False
 
     @abstractmethod
-    def sync_chat(self, model, messages, temperature=0.3, json_format=False) -> str: ...
+    def sync_chat(self, model, messages, temperature=0.3, json_format=False, timeout=None) -> str: ...
 
     @abstractmethod
     def format_tool_result(self, content: str, tool_call_id: str = None) -> dict: ...
@@ -248,7 +248,9 @@ class OllamaProvider(LLMProvider):
                                    "total": prompt + completion}
             yield result
 
-    def sync_chat(self, model, messages, temperature=0.3, json_format=False) -> str:
+    def sync_chat(self, model, messages, temperature=0.3, json_format=False, timeout=None) -> str:
+        # timeout is accepted for interface parity; a local Ollama rarely hangs
+        # and the daemon summarization thread is reclaimed at process exit.
         kwargs = {
             "model": model,
             "messages": messages,
@@ -388,7 +390,7 @@ class OpenAICompatibleProvider(LLMProvider, ABC):
 
             yield result
 
-    def sync_chat(self, model, messages, temperature=0.3, json_format=False) -> str:
+    def sync_chat(self, model, messages, temperature=0.3, json_format=False, timeout=None) -> str:
         client = self._get_client()
         kwargs = {
             "model": model,
@@ -397,6 +399,10 @@ class OpenAICompatibleProvider(LLMProvider, ABC):
         }
         if json_format:
             kwargs["response_format"] = {"type": "json_object"}
+        if timeout is not None:
+            # Bounds a hung remote provider so a caller running this on a worker
+            # thread (e.g. context summarization) can't leak a thread forever.
+            kwargs["timeout"] = timeout
 
         def _call():
             try:

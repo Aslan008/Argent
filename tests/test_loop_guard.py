@@ -55,6 +55,33 @@ class TestLoopGuard:
         assert g.record("t", weird, "r") == "warn"
 
 
+class TestVolatileNormalization:
+    def test_timestamp_noise_no_longer_defeats_the_guard(self):
+        # Same failing command, output differs only by a timestamp each run.
+        g = LoopGuard()
+        outs = [
+            "Build failed at 10:31:07",
+            "Build failed at 10:31:09",
+            "Build failed at 10:31:12",
+            "Build failed at 10:31:15",
+        ]
+        levels = [g.record("run_command", {"command": "build"}, o) for o in outs]
+        assert levels[-1] == "stop"          # caught despite the changing time
+
+    def test_pid_and_hex_noise_collapses(self):
+        g = LoopGuard()
+        a = g.record("run_command", {"command": "x"}, "failed pid 48120 at 0x7ffab3")
+        b = g.record("run_command", {"command": "x"}, "failed pid 51999 at 0x1c2d90")
+        assert a is None and b == "warn"
+
+    def test_small_number_changes_stay_distinct(self):
+        # A genuine re-read where content changed 1 -> 2 is NOT a loop; single
+        # digits are left alone so the results still hash differently.
+        g = LoopGuard()
+        g.record("read_file", {"file_path": "a.py"}, "count = 1")
+        assert g.record("read_file", {"file_path": "a.py"}, "count = 2") is None
+
+
 class TestLoopNotes:
     def test_warn_note_mentions_different_approach(self):
         assert "DIFFERENT" in build_loop_note("warn")
