@@ -413,6 +413,17 @@ def get_ollama_embedding_model() -> str:
     return _get("ollama_embedding_model", "nomic-embed-text")
 
 
+def get_embedding_concurrency() -> int:
+    """Parallel Ollama embedding requests during indexing. Defaults to 4 —
+    conservative for a weak local box (10 concurrent requests could OOM a
+    small GPU or time out). Raise it in config on a capable machine.
+    Clamped to >= 1."""
+    try:
+        return max(1, int(_get("embedding_concurrency", 4)))
+    except (TypeError, ValueError):
+        return 4
+
+
 def set_ollama_embedding_model(model: str):
     _set("ollama_embedding_model", model)
 

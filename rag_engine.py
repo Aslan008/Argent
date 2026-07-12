@@ -44,12 +44,18 @@ class OllamaEmbeddingFunction:
                 log.warning("Ollama embedding failed for text (%d chars): %s", len(text), e)
                 return idx, [0.0] * 768
 
-        with ThreadPoolExecutor(max_workers=10) as executor:
+        # Bound concurrency to what a local Ollama can take: firing one request
+        # per chunk (or a hardcoded 10) can OOM a small GPU or trigger timeouts
+        # on a weak box. Configurable via embedding_concurrency; never more
+        # workers than there are texts.
+        from config import get_embedding_concurrency
+        workers = max(1, min(get_embedding_concurrency(), len(input)))
+        with ThreadPoolExecutor(max_workers=workers) as executor:
             futures = [executor.submit(fetch_embedding, i, text) for i, text in enumerate(input)]
             for future in as_completed(futures):
                 idx, emb = future.result()
                 embeddings[idx] = emb
-                
+
         return embeddings
 
     def embed_query(self, query: str) -> list[float]:
@@ -58,22 +64,63 @@ class OllamaEmbeddingFunction:
     def embed_documents(self, documents: list[str]) -> list[list[float]]:
         return self.__call__(documents)
 
+def init_external_kbs():
+    """Initializes external knowledge bases from the global config."""
+    global _GLOBAL_DB_CLIENT, _ACTIVE_KB_COLLECTIONS
+    try:
+        import chromadb
+    except ImportError:
+        return "ERROR: 'chromadb' is not installed."
+
+    try:
+        from config import get_embedding_provider, get_ollama_embedding_model, get_external_kbs
+        kbs = get_external_kbs()
+        enabled_kbs = [kb for kb in kbs if kb.get("enabled", True)]
+        
+        if enabled_kbs:
+            embedding_provider = get_embedding_provider()
+            if embedding_provider == "ollama":
+                ollama_model = get_ollama_embedding_model()
+                ef = OllamaEmbeddingFunction(model_name=ollama_model)
+            else:
+                try:
+                    from chromadb.utils import embedding_functions
+                    ef = embedding_functions.SentenceTransformerEmbeddingFunction(model_name="all-MiniLM-L6-v2")
+                except ImportError:
+                    return "ERROR: 'sentence-transformers' is not installed."
+
+            global_db_path = Path.home() / ".argent_coder_kbs"
+            global_db_path.mkdir(parents=True, exist_ok=True)
+            _GLOBAL_DB_CLIENT = chromadb.PersistentClient(path=str(global_db_path))
+            _ACTIVE_KB_COLLECTIONS = []
+            
+            for kb in enabled_kbs:
+                try:
+                    col = _GLOBAL_DB_CLIENT.get_collection(name=f"kb_{kb['id']}", embedding_function=ef)
+                    _ACTIVE_KB_COLLECTIONS.append(col)
+                    print(f"[INFO] Loaded External Knowledge Base: {kb['name']}")
+                except Exception:
+                    print(f"[WARN] External KB '{kb['name']}' is enabled but not indexed. Use /kb index {kb['id']} to index it.")
+            return "Successfully loaded external Knowledge Bases."
+        return "No external Knowledge Bases to load."
+    except Exception as e:
+        import traceback
+        return f"Failed to load external KBs: {e}\n{traceback.format_exc()}"
+
 def is_rag_enabled() -> bool:
-    """Check if the RAG module is currently active."""
-    global _RAG_ENABLED
-    return _RAG_ENABLED
+    """Check if the RAG module or any external KB is currently active."""
+    global _RAG_ENABLED, _ACTIVE_KB_COLLECTIONS
+    return _RAG_ENABLED or len(_ACTIVE_KB_COLLECTIONS) > 0
 
 def disable_rag():
-    """Disables RAG and clears the collection reference."""
-    global _RAG_ENABLED, _COLLECTION, _GLOBAL_DB_CLIENT, _ACTIVE_KB_COLLECTIONS
+    """Disables RAG and clears the collection reference (keeps KBs if loaded)."""
+    global _RAG_ENABLED, _COLLECTION
     _RAG_ENABLED = False
     _COLLECTION = None
-    _GLOBAL_DB_CLIENT = None
-    _ACTIVE_KB_COLLECTIONS = []
 
 def enable_rag_for_project(project_dir: str) -> str:
     """Initializes ChromaDB, creates embeddings for the project, and enables semantic search."""
-    global _RAG_ENABLED, _COLLECTION, _GLOBAL_DB_CLIENT, _ACTIVE_KB_COLLECTIONS
+    global _RAG_ENABLED, _COLLECTION
     
     try:
         import chromadb
@@ -110,24 +157,6 @@ def enable_rag_for_project(project_dir: str) -> str:
         _COLLECTION = client.get_or_create_collection(name="project_codebase", embedding_function=ef)
         
         _index_codebase(project_path, _COLLECTION)
-        
-        # --- Load External Knowledge Bases ---
-        from config import get_external_kbs
-        kbs = get_external_kbs()
-        enabled_kbs = [kb for kb in kbs if kb.get("enabled", True)]
-        
-        if enabled_kbs:
-            global_db_path = Path.home() / ".argent_coder_kbs"
-            global_db_path.mkdir(parents=True, exist_ok=True)
-            _GLOBAL_DB_CLIENT = chromadb.PersistentClient(path=str(global_db_path))
-            _ACTIVE_KB_COLLECTIONS = []
-            for kb in enabled_kbs:
-                try:
-                    col = _GLOBAL_DB_CLIENT.get_collection(name=f"kb_{kb['id']}", embedding_function=ef)
-                    _ACTIVE_KB_COLLECTIONS.append(col)
-                    print(f"[INFO] Loaded External Knowledge Base: {kb['name']}")
-                except Exception:
-                    print(f"[WARN] External KB '{kb['name']}' is enabled but not indexed. Use /kb index {kb['id']} to index it.")
         
         _RAG_ENABLED = True
         return f"Successfully enabled RAG for '{project_path.name}' (embeddings: {embedding_provider}). Indexed files and ready for /search."
@@ -538,22 +567,31 @@ def update_file_index(file_path: str):
     except Exception as e:
         print(f"[WARN] Failed to update RAG for {file_path}: {e}")
 
-def semantic_search(query: str, n_results: int = 5) -> str:
+def semantic_search(query: str, n_results: int = 5, target_kb: str = "all") -> str:
     """Tool for the LLM to search the vector database for code snippets using Hybrid Search + RRF."""
     global _RAG_ENABLED, _COLLECTION, _ACTIVE_KB_COLLECTIONS
     
-    if not _RAG_ENABLED:
-        return "Error: RAG is not enabled. Cannot perform semantic search."
+    if not _RAG_ENABLED and len(_ACTIVE_KB_COLLECTIONS) == 0:
+        return "Error: RAG and Knowledge Bases are disabled. Cannot perform semantic search."
         
     collections_to_search = []
-    if _COLLECTION is not None:
-        collections_to_search.append(_COLLECTION)
-    collections_to_search.extend(_ACTIVE_KB_COLLECTIONS)
-    
+    if target_kb == "all":
+        if _COLLECTION is not None:
+            collections_to_search.append(_COLLECTION)
+        collections_to_search.extend(_ACTIVE_KB_COLLECTIONS)
+    elif target_kb == "local":
+        if _COLLECTION is not None:
+            collections_to_search.append(_COLLECTION)
+    else:
+        for kb_col in _ACTIVE_KB_COLLECTIONS:
+            if kb_col.name == f"kb_{target_kb}":
+                collections_to_search.append(kb_col)
+                break
+                
     if not collections_to_search:
-        return "Error: No active collections to search."
+        return f"Error: No active collections found for target '{target_kb}'."
     
-    cache_key = hashlib.md5(f"{query}:{n_results}".encode()).hexdigest()
+    cache_key = hashlib.md5(f"{query}:{n_results}:{target_kb}".encode()).hexdigest()
     now = time.time()
     if cache_key in _SEARCH_CACHE:
         cached_ts, cached_result = _SEARCH_CACHE[cache_key]
@@ -601,7 +639,9 @@ def semantic_search(query: str, n_results: int = 5) -> str:
         for i, doc_id in enumerate(sorted_ids):
             doc, meta = doc_map[doc_id]
             context_str = f" | {meta['context']}" if 'context' in meta else ""
-            output.append(f"--- Snippet {i+1} | {meta['file']} (Lines {meta['start_line']}-{meta['end_line']}{context_str}) ---")
+            start = meta.get('start_line', '?')
+            end = meta.get('end_line', start)
+            output.append(f"--- Snippet {i+1} | {meta['file']} (Lines {start}-{end}{context_str}) ---")
             output.append("```")
             output.append(doc)
             output.append("```\n")
