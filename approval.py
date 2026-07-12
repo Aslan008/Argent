@@ -43,6 +43,23 @@ _DESTRUCTIVE_PATTERNS = [
 ]
 _DESTRUCTIVE_RE = re.compile("|".join(_DESTRUCTIVE_PATTERNS), re.IGNORECASE)
 
+# Interpreters invoked with inline code (python -c, node -e, perl/ruby -e,
+# powershell -Command …). The destructive patterns above scan the literal
+# command string, so a delete hidden inside `python -c "import os; os.remove(...)"`
+# reads as "safe" — and in POLICY_AUTO / vibe mode a "safe" action is
+# auto-approved with no prompt. We can't parse arbitrary embedded code, so we
+# treat any inline-code interpreter invocation as "warn": it still runs, but
+# never silently. A plain `python script.py` (no inline flag) is unaffected.
+# Note: only INLINE code (-c / -e / -Command / -EncodedCommand) qualifies.
+# `python script.py` and `python -m pytest` name a visible, inspectable target
+# and stay "safe" so vibe mode doesn't prompt on every test run.
+_INLINE_CODE_INTERPRETER_RE = re.compile(
+    r"\b(?:python\d?|py|node|deno|bun|perl|ruby|php|osascript)\b[^\n|&;]*\s-(?:c|e)\b"
+    r"|\b(?:powershell|pwsh)\b[^\n|&;]*\s-(?:c|e|enc|encodedcommand)\w*\b"
+    r"|\b(?:sh|bash|zsh)\b[^\n|&;]*\s-c\b",
+    re.IGNORECASE,
+)
+
 # Catastrophic / irreversible / system-wide commands. Each carries a human
 # reason. Broad on purpose: in "warn" mode a false positive is one confirmation;
 # in "block" mode it refuses outright, so the gate stays opt-in for that tier.
@@ -105,6 +122,8 @@ def assess_command_risk(command: str):
         return "block", reasons
     if _DESTRUCTIVE_RE.search(command):
         return "warn", ["deletes/overwrites files or stops processes"]
+    if _INLINE_CODE_INTERPRETER_RE.search(command):
+        return "warn", ["runs inline interpreter code — effects can't be inspected"]
     return "safe", []
 
 

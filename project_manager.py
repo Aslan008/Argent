@@ -29,9 +29,12 @@ class ProjectManager:
         return None
 
     def _save(self):
-        PROJECT_FILE.write_text(
+        # Atomic write: a crash or a second instance must not corrupt the
+        # project brain that autonomous runs depend on.
+        from atomic_io import atomic_write_text
+        atomic_write_text(
+            PROJECT_FILE,
             json.dumps(self.data, indent=2, ensure_ascii=False),
-            encoding='utf-8'
         )
 
     @property

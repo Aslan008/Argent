@@ -51,6 +51,50 @@ class TestDestructiveDetection:
         assert not approval.is_destructive_command(None)
 
 
+class TestInlineInterpreterDetection:
+    """Inline-code interpreters hide arbitrary effects from the regex scanner,
+    so they must never be auto-approved in vibe/auto mode."""
+
+    @pytest.mark.parametrize("command", [
+        'python -c "import os; os.remove(\'x\')"',
+        "python3 -c 'shutil.rmtree(d)'",
+        'node -e "require(\'fs\').rmSync(p)"',
+        "perl -e 'unlink $f'",
+        "ruby -e 'File.delete(x)'",
+        'powershell -Command "Remove-Item x"',
+        "pwsh -EncodedCommand ZQBjAGgAbwA=",
+        'bash -c "rm -rf /tmp/x"',
+    ])
+    def test_inline_code_is_flagged(self, command):
+        level, reasons = approval.assess_command_risk(command)
+        assert level in ("warn", "block")
+        assert approval.is_destructive_command(command)
+
+    @pytest.mark.parametrize("command", [
+        "python script.py",
+        "python -m pytest -q",
+        "python -m pip install requests",
+        "node server.js",
+        "python manage.py migrate",
+    ])
+    def test_named_targets_stay_safe(self, command):
+        assert not approval.is_destructive_command(command)
+
+    def test_inline_interpreter_not_auto_approved(self, monkeypatch):
+        """The whole point: in POLICY_AUTO a python -c delete still prompts."""
+        approval.set_policy(approval.POLICY_AUTO)
+        # destructive=True routes to the backend even under POLICY_AUTO.
+        level, _ = approval.assess_command_risk('python -c "os.remove(x)"')
+        asked = []
+        approval.set_approval_backend(
+            lambda action, destructive, grant_key: asked.append(destructive) or "deny")
+        try:
+            ok = approval.request_approval("run it", destructive=(level != "safe"))
+        finally:
+            approval.reset_approval_backend()
+        assert ok is False and asked == [True]     # prompted, not silently run
+
+
 class TestGrantKey:
     def test_first_token_lowercased(self):
         assert approval.command_grant_key("Git status --short") == "git"

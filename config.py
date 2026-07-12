@@ -28,11 +28,15 @@ def load_config() -> dict:
 
 
 def save_config(config: dict):
-    """Save configuration to disk and update cache."""
+    """Save configuration to disk and update cache.
+
+    Written atomically (temp + os.replace) so a crash mid-write or a second
+    Argent instance racing on the same file can't corrupt the config.
+    """
     global _CONFIG_CACHE
     _CONFIG_CACHE = config
-    with open(CONFIG_FILE, "w", encoding="utf-8") as f:
-        json.dump(config, f, indent=4)
+    from atomic_io import atomic_write_text
+    atomic_write_text(CONFIG_FILE, json.dumps(config, indent=4))
 
 
 def _get(key: str, default=None):
@@ -420,6 +424,13 @@ def get_auto_rag() -> bool:
 
 def set_auto_rag(enabled: bool):
     _set("auto_rag", enabled)
+
+def get_auto_kb() -> bool:
+    """Whether external Knowledge Bases are automatically loaded on startup."""
+    return _get("auto_kb", True)
+
+def set_auto_kb(enabled: bool):
+    _set("auto_kb", enabled)
 
 
 def get_auto_retrieve() -> bool:
