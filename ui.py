@@ -1,5 +1,6 @@
 import os
 import re
+from pathlib import Path
 import yaml
 import questionary
 from rich.console import Console, Group
@@ -12,7 +13,28 @@ from rich.syntax import Syntax
 from rich.progress import Progress, BarColumn, TextColumn
 
 # --- LOAD THEME ---
-THEME_FILE = "theme.yaml"
+# Search order: an explicit ARGENT_THEME override, then the current working
+# directory (project-local theme), then next to this package, then ~/.argent.
+# The old code only checked the CWD, so launching Argent from any other folder
+# silently dropped the user's theme.
+def _find_theme_file():
+    candidates = []
+    env = os.environ.get("ARGENT_THEME")
+    if env:
+        candidates.append(Path(env).expanduser())
+    candidates.append(Path.cwd() / "theme.yaml")
+    candidates.append(Path(__file__).resolve().parent / "theme.yaml")
+    candidates.append(Path.home() / ".argent" / "theme.yaml")
+    for path in candidates:
+        try:
+            if path.is_file():
+                return path
+        except OSError:
+            continue
+    return None
+
+
+THEME_FILE = _find_theme_file()
 default_theme_data = {
     "colors": {
         "user_prompt": "bright_white",
@@ -35,7 +57,7 @@ default_theme_data = {
 }
 
 theme_data = default_theme_data.copy()
-if os.path.exists(THEME_FILE):
+if THEME_FILE is not None:
     try:
         with open(THEME_FILE, "r", encoding="utf-8") as f:
             user_theme = yaml.safe_load(f)

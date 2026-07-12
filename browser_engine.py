@@ -1310,7 +1310,10 @@ class BrowserEngine:
         sc = await self._get_session(session)
         try:
             html = await sc.page.content()
-            md = _html_to_markdown(html)
+            # BeautifulSoup parsing of a large DOM is CPU-bound and synchronous;
+            # run it off the event loop so it can't stall the browser loop.
+            import asyncio
+            md = await asyncio.to_thread(_html_to_markdown, html)
             if len(md) > 15000:
                 md = md[:15000] + "\n... [Content Truncated]"
             return md
