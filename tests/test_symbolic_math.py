@@ -119,6 +119,98 @@ class TestNumericCollapse:
         assert evaluate_symbolic("factorint(360)") == "{2: 3, 3: 2, 5: 1}"
 
 
+class TestMethodsAndProperties:
+    def test_subs_substitutes_a_value(self):
+        assert evaluate_symbolic("integrate(x**2, x).subs(x, 3)") == "9"
+
+    def test_method_chain(self):
+        assert evaluate_symbolic("((x+1)**2).expand().subs(x, 2)") == "9"
+
+    def test_matrix_eigenvalues(self):
+        out = evaluate_symbolic("Matrix([[2, 0], [0, 3]]).eigenvals()")
+        assert "2" in out and "3" in out
+
+    def test_matrix_rref(self):
+        out = evaluate_symbolic("Matrix([[1,2,3],[4,5,6]]).rref()")
+        assert "Matrix" in out
+
+    def test_transpose_property(self):
+        out = evaluate_symbolic("Matrix([[1, 2], [3, 4]]).T")
+        assert "Matrix" in out
+
+    def test_dunder_attribute_rejected(self):
+        with pytest.raises(SymbolicError) as e:
+            evaluate_symbolic("(1).__class__")
+        assert "not allowed" in str(e.value)
+
+    def test_globals_escape_rejected(self):
+        with pytest.raises(SymbolicError):
+            evaluate_symbolic("x.__class__.__mro__")
+
+    def test_non_whitelisted_method_rejected(self):
+        with pytest.raises(SymbolicError):
+            evaluate_symbolic("x.as_coefficients_dict()")
+
+
+class TestStatistics:
+    def test_variance_of_a_die(self):
+        assert evaluate_symbolic('variance(Die("D", 6))') == "35/12"
+
+    def test_expectation(self):
+        assert evaluate_symbolic('expectation(Poisson("L", 3))') == "3"
+
+    def test_probability_of_a_normal_tail(self):
+        assert evaluate_symbolic('probability(Normal("X", 0, 1) > 0)') == "1/2"
+
+    def test_density_is_callable(self):
+        out = evaluate_symbolic('density(Normal("X", 0, 1))(x)')
+        assert "exp(-x**2/2)" in out
+
+
+class TestTransformsAndSpecial:
+    def test_laplace_transform(self):
+        out = evaluate_symbolic("laplace_transform(exp(-2*t), t, s)")
+        assert "1/(s + 2)" in out
+
+    def test_fourier_transform(self):
+        out = evaluate_symbolic("fourier_transform(exp(-x**2), x, k)")
+        assert "pi" in out and "exp" in out
+
+    def test_gamma_half_is_sqrt_pi(self):
+        assert evaluate_symbolic("gamma(Rational(1,2))").startswith("sqrt(pi)")
+
+    def test_fibonacci(self):
+        assert evaluate_symbolic("fibonacci(30)") == "832040"
+
+
+class TestGeometrySetsLogic:
+    def test_circle_area(self):
+        assert evaluate_symbolic("Circle(Point(0, 0), 5).area").startswith("25*pi")
+
+    def test_segment_length(self):
+        assert evaluate_symbolic("Segment(Point(0,0), Point(3,4)).length") == "5"
+
+    def test_set_union_operator(self):
+        out = evaluate_symbolic("Interval(0, 2) | Interval(3, 4)")
+        assert "Union" in out
+
+    def test_logic_simplification(self):
+        assert evaluate_symbolic("simplify_logic(And(x, Or(x, y)))") == "x"
+
+    def test_and_operator_on_relations(self):
+        out = evaluate_symbolic("(x > 0) & (x < 5)")
+        assert "x > 0" in out and "x < 5" in out
+
+    def test_piecewise_integral(self):
+        assert evaluate_symbolic("integrate(Piecewise((x, x < 1), (2 - x, True)), (x, 0, 2))") == "1"
+
+
+class TestUnits:
+    def test_unit_conversion(self):
+        out = evaluate_symbolic("convert_to(5*meter, foot)")
+        assert "foot" in out
+
+
 class TestExactValuesAndApproximation:
     def test_exact_radical_with_decimal_hint(self):
         out = evaluate_symbolic("sqrt(8)")

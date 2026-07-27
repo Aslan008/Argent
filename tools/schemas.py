@@ -1169,8 +1169,16 @@ TOOL_SCHEMAS = [
                 "ceil, abs, round, min, max, factorial, gcd; constants pi, e, tau.\n"
                 "Symbolic (variables allowed): integrate(x**2, x) and definite integrate(exp(-x), (x, 0, oo)); "
                 "diff(sin(x)*x, x); limit(sin(x)/x, x, 0) and one-sided limit(1/x, x, 0, '+'); "
-                "solve(x**2 - 4, x) or solve(Eq(x + 1, 5), x); summation(k, (k, 1, n)); "
-                "series(exp(x), x, 0, 5); simplify/expand/factor. Use 'oo' for infinity."
+                "solve(x**2 - 4, x) or solve(Eq(x + 1, 5), x); inequalities solve(x**2 > 4, x); "
+                "ODEs dsolve(Derivative(f(x), x) - f(x), f(x)); summation(k, (k, 1, n)); "
+                "series(exp(x), x, 0, 5); simplify/expand/factor. Use 'oo' for infinity.\n"
+                "Also: matrices Matrix([[1,2],[3,4]]) with det/trace/M**-1 and methods "
+                ".eigenvals()/.rref()/.T; substitution expr.subs(x, 3); statistics "
+                "variance(Die('D', 6)), probability(Normal('X', 0, 1) > 0), density(...)(x); "
+                "transforms laplace_transform(exp(-2*t), t, s), fourier_transform(...); "
+                "geometry Circle(Point(0,0), 5).area; sets Interval(0,2) | Interval(3,4); "
+                "logic simplify_logic(...); Piecewise((x, x < 1), (2 - x, True)); "
+                "units convert_to(5*meter, foot); special functions gamma/erf/zeta/LambertW."
             ),
             "parameters": {
                 "type": "object",
