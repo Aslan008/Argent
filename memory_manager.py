@@ -25,26 +25,10 @@ MEMORY_FILE = Path(".argent") / "memory.json"
 
 
 def resolve_memory_file() -> Path:
-    """Locate the project's .argent/memory.json.
-
-    The memory used to be pinned to the CWD, so launching Argent from a
-    subfolder (cd src) created a fresh, empty .argent and dropped the whole
-    project context. Instead we walk UP from the CWD looking for an existing
-    .argent directory — like git finds .git — and reuse it. We stop at the home
-    directory / filesystem root so we never latch onto an unrelated ancestor.
-    If none is found, fall back to CWD/.argent (a brand-new project).
-    """
-    cwd = Path.cwd().resolve()
-    stop = Path.home().resolve()
-    for d in [cwd, *cwd.parents]:
-        # Stop AT the home directory without adopting its .argent: ~/.argent is
-        # Argent's own global state, not a project's memory, and going higher
-        # risks latching onto an unrelated ancestor's .argent.
-        if d == stop:
-            break
-        if (d / ".argent").is_dir():
-            return d / ".argent" / "memory.json"
-    return cwd / ".argent" / "memory.json"
+    """Locate the project's .argent/memory.json via the shared project-root
+    lookup, so `cd src` keeps using the same memory instead of starting over."""
+    from project_paths import project_root_or_cwd
+    return project_root_or_cwd() / ".argent" / "memory.json"
 
 
 class MemoryManager:

@@ -413,6 +413,16 @@ def get_ollama_embedding_model() -> str:
     return _get("ollama_embedding_model", "nomic-embed-text")
 
 
+def get_embedding_batch_size() -> int:
+    """How many texts go into one native Ollama /api/embed request. Batching is
+    far more efficient than concurrent single-text calls; 32 keeps a request
+    modest on a small GPU. Clamped to >= 1."""
+    try:
+        return max(1, int(_get("embedding_batch_size", 32)))
+    except (TypeError, ValueError):
+        return 32
+
+
 def get_embedding_concurrency() -> int:
     """Parallel Ollama embedding requests during indexing. Defaults to 4 —
     conservative for a weak local box (10 concurrent requests could OOM a

@@ -14,16 +14,25 @@ from datetime import datetime
 PROJECT_FILE = Path(".argent_project.json")
 
 
+def resolve_project_file() -> Path:
+    """Locate .argent_project.json at the project root rather than the CWD, so
+    an autonomous run resumed from a subfolder finds its existing state."""
+    from project_paths import project_root_or_cwd
+    return project_root_or_cwd() / PROJECT_FILE.name
+
+
 class ProjectManager:
     """Manages project state, tasks, per-file specs, and context building."""
 
     def __init__(self):
+        # Resolved once: a cd mid-run must not split the brain across two files.
+        self._project_file = resolve_project_file()
         self.data = self._load()
 
     def _load(self) -> dict | None:
-        if PROJECT_FILE.exists():
+        if self._project_file.exists():
             try:
-                return json.loads(PROJECT_FILE.read_text(encoding='utf-8'))
+                return json.loads(self._project_file.read_text(encoding='utf-8'))
             except Exception:
                 pass
         return None
@@ -33,7 +42,7 @@ class ProjectManager:
         # project brain that autonomous runs depend on.
         from atomic_io import atomic_write_text
         atomic_write_text(
-            PROJECT_FILE,
+            self._project_file,
             json.dumps(self.data, indent=2, ensure_ascii=False),
         )
 
@@ -67,8 +76,8 @@ class ProjectManager:
 
     def destroy(self):
         """Delete the project file and reset state."""
-        if PROJECT_FILE.exists():
-            PROJECT_FILE.unlink()
+        if self._project_file.exists():
+            self._project_file.unlink()
         self.data = None
 
     # ─── Research (Phase 0) ──────────────────────────────────────────

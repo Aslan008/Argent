@@ -93,7 +93,13 @@ def safe_print(*args, **kwargs):
         try:
             raw_text = " ".join(str(a) for a in args)
             enc = sys.stdout.encoding or 'utf-8'
-            print(raw_text.encode(enc, errors='replace').decode(enc), **kwargs)
+            # Only builtins.print's own kwargs may be forwarded: passing Rich
+            # options (style=, markup=, highlight=…) raises TypeError, which the
+            # outer guard swallowed — losing the message this fallback exists to
+            # deliver.
+            passthrough = {k: v for k, v in kwargs.items()
+                           if k in ("sep", "end", "file", "flush")}
+            print(raw_text.encode(enc, errors='replace').decode(enc), **passthrough)
         except Exception:
             pass
 

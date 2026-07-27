@@ -59,7 +59,11 @@ def build_agents_memory(limit: int) -> List[str]:
     global_path = Path.home() / ".argent" / "AGENTS.md"
     if global_path.exists():
         sources.append((global_path, False))
-    for p in (Path(".argent/AGENTS.md"), Path("AGENTS.md")):
+    # Anchored to the project root, not the CWD: launching from a subfolder
+    # (cd src) must not lose the project's instructions.
+    from project_paths import project_root_or_cwd
+    root = project_root_or_cwd()
+    for p in (root / ".argent" / "AGENTS.md", root / "AGENTS.md"):
         if p.exists():
             sources.append((p, True))
             break

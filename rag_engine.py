@@ -25,13 +25,55 @@ class OllamaEmbeddingFunction:
         self.model_name = model_name
 
     def __call__(self, input: list[str]) -> list[list[float]]:
-        import requests
-        from concurrent.futures import ThreadPoolExecutor, as_completed
-        
-        embeddings = [[0.0] * 768] * len(input)
+        """Embed texts, preferring Ollama's NATIVE batching.
+
+        /api/embed accepts an array of inputs and embeds them in one pass, which
+        is both faster and gentler on a small GPU than firing N concurrent
+        single-text requests (the old approach: it risked OOM/timeouts, and
+        throttling it just made indexing slow). Batches are bounded so a huge
+        collection doesn't become one giant request; if a batch fails — an older
+        Ollama, an oversized payload — that batch degrades to the per-text path
+        with bounded concurrency, so indexing still completes.
+        """
+        if not input:
+            return []
+
+        from config import get_embedding_batch_size
+        embeddings: list[list[float]] = [[0.0] * 768] * len(input)
         ollama_host = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
-        
-        def fetch_embedding(idx, text):
+        batch_size = max(1, get_embedding_batch_size())
+
+        for start in range(0, len(input), batch_size):
+            chunk = input[start:start + batch_size]
+            try:
+                import requests
+                resp = requests.post(
+                    f"{ollama_host}/api/embed",
+                    json={"model": self.model_name, "input": chunk},
+                    timeout=120,
+                )
+                resp.raise_for_status()
+                vectors = resp.json().get("embeddings") or []
+                if len(vectors) != len(chunk):
+                    raise ValueError(
+                        f"expected {len(chunk)} embeddings, got {len(vectors)}")
+                for offset, vec in enumerate(vectors):
+                    embeddings[start + offset] = vec
+            except Exception as e:
+                log.warning("Batch embedding failed (%d texts): %s — falling back "
+                            "to per-text requests", len(chunk), e)
+                for offset, vec in enumerate(self._embed_individually(chunk, ollama_host)):
+                    embeddings[start + offset] = vec
+
+        return embeddings
+
+    def _embed_individually(self, texts: list[str], ollama_host: str) -> list[list[float]]:
+        """Fallback: one request per text, with bounded concurrency so a weak
+        local box isn't overwhelmed. Used only when native batching fails."""
+        import requests
+        from concurrent.futures import ThreadPoolExecutor
+
+        def fetch_embedding(text):
             try:
                 resp = requests.post(
                     f"{ollama_host}/api/embed",
@@ -39,24 +81,15 @@ class OllamaEmbeddingFunction:
                     timeout=60,
                 )
                 resp.raise_for_status()
-                return idx, resp.json()["embeddings"][0]
+                return resp.json()["embeddings"][0]
             except Exception as e:
                 log.warning("Ollama embedding failed for text (%d chars): %s", len(text), e)
-                return idx, [0.0] * 768
+                return [0.0] * 768
 
-        # Bound concurrency to what a local Ollama can take: firing one request
-        # per chunk (or a hardcoded 10) can OOM a small GPU or trigger timeouts
-        # on a weak box. Configurable via embedding_concurrency; never more
-        # workers than there are texts.
         from config import get_embedding_concurrency
-        workers = max(1, min(get_embedding_concurrency(), len(input)))
+        workers = max(1, min(get_embedding_concurrency(), len(texts)))
         with ThreadPoolExecutor(max_workers=workers) as executor:
-            futures = [executor.submit(fetch_embedding, i, text) for i, text in enumerate(input)]
-            for future in as_completed(futures):
-                idx, emb = future.result()
-                embeddings[idx] = emb
-
-        return embeddings
+            return list(executor.map(fetch_embedding, texts))
 
     def embed_query(self, query: str) -> list[float]:
         return self.__call__([query])[0]
