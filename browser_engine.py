@@ -27,6 +27,36 @@ log = get_logger("browser")
 # Minimal HTML-to-Markdown converter (no extra dependency)
 # ---------------------------------------------------------------------------
 
+# Browser navigation is scheme-restricted. A page fetched through the browser
+# is rendered AND its text is handed to the model, so `file:///C:/Users/...`
+# would turn the browser into a file-exfiltration channel that bypasses every
+# filesystem guard in tools/. Same for data:/javascript:/view-source: (script
+# execution, embedded payloads) and chrome:// (browser internals).
+#
+# Note this is deliberately NOT the SSRF guard used by src/research/fetch.py:
+# there, a URL comes from arbitrary web content, so private addresses are
+# blocked. Here the target is user/task driven and http://localhost is a
+# first-class use case — the dev server of the project being built.
+_ALLOWED_URL_SCHEMES = {"http", "https"}
+
+
+def _blocked_url_reason(url: str) -> str | None:
+    """Error string when this URL must not be opened, else None."""
+    import urllib.parse
+    if not url or not str(url).strip():
+        return "Error: no URL provided."
+    raw = str(url).strip()
+    if raw.lower() in ("about:blank", "about:"):
+        return None
+    scheme = urllib.parse.urlparse(raw).scheme.lower()
+    if not scheme:
+        return None                       # bare host: Playwright prepends http
+    if scheme in _ALLOWED_URL_SCHEMES:
+        return None
+    return (f"Error: refusing to open a '{scheme}:' URL in the browser — only http/https "
+            f"are allowed. To read a local file use read_file, not the browser.")
+
+
 def _html_to_markdown(html: str) -> str:
     """Convert HTML to readable Markdown using BeautifulSoup.
     Strips scripts/styles and converts common tags to Markdown equivalents."""
@@ -914,6 +944,9 @@ class BrowserEngine:
     async def open_page(self, url: str, session: str = "default",
                         headed: bool = False) -> str:
         """Open a URL in a session. Creates the session if it doesn't exist."""
+        blocked = _blocked_url_reason(url)
+        if blocked:
+            return blocked
         if session in self._sessions:
             sc = self._sessions[session]
             # Re-check if headed mode mismatch requires restart
@@ -937,6 +970,9 @@ class BrowserEngine:
 
     async def navigate(self, url: str, session: str = "default") -> str:
         """Navigate the current session to a new URL."""
+        blocked = _blocked_url_reason(url)
+        if blocked:
+            return blocked
         sc = await self._get_session(session)
         try:
             await sc.page.goto(url, wait_until="domcontentloaded", timeout=30000)
