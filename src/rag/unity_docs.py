@@ -118,6 +118,6 @@ def chunk_unity_doc(html: str, rel_path: str, max_chars: int = 1800):
 
     chunks = []
     for i, part in enumerate(parts):
-        meta = {"file": rel_path, "symbol": symbol, "start_line": i, "context": "Unity doc"}
+        meta = {"file": rel_path, "symbol": symbol, "start_line": i, "end_line": i, "context": "Unity doc"}
         chunks.append((header + part, meta))
     return chunks

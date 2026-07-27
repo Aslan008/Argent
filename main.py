@@ -261,7 +261,16 @@ def main():
     MAX_TASK_RETRIES = 3
     turn_counter = 0
     
-    from config import get_auto_rag
+    from config import get_auto_rag, get_auto_kb
+    if get_auto_kb():
+        try:
+            from rag_engine import init_external_kbs
+            kb_res = init_external_kbs()
+            if "Successfully" in kb_res:
+                print_system(kb_res)
+        except ImportError:
+            pass
+
     if get_auto_rag():
         import threading
         cwd = os.getcwd()
@@ -438,6 +447,19 @@ def main():
                         print_system("Semantic Search (RAG) has been disabled for the current session.")
                     except ImportError:
                         pass
+                continue
+
+            elif user_input.strip() == "/kb_toggle":
+                from config import get_auto_kb, set_auto_kb
+                current = get_auto_kb()
+                new_state = not current
+                set_auto_kb(new_state)
+                
+                status = "[bold green]ENABLED[/bold green]" if new_state else "[bold red]DISABLED[/bold red]"
+                print_system(f"Auto-KB (External Knowledge Bases loading on startup) is now: {status}")
+                
+                if new_state:
+                    print_system("External KBs will load the next time you start Argent.")
                 continue
 
             elif user_input.strip() == "/auto_retrieve":

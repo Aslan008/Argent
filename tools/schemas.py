@@ -1584,11 +1584,14 @@ def get_tool_schemas(include_hidden: bool = False) -> list[dict]:
             # searchable, so it knows to consult them (the old description only
             # mentioned "the project's codebase").
             kb_note = ""
+            kb_ids = []
             try:
                 from config import get_external_kbs
-                kb_names = [kb.get("name", kb.get("id")) for kb in get_external_kbs() if kb.get("enabled", True)]
+                kb_list = [kb for kb in get_external_kbs() if kb.get("enabled", True)]
+                kb_names = [kb.get("name", kb.get("id")) for kb in kb_list]
+                kb_ids = [kb.get("id") for kb in kb_list]
                 if kb_names:
-                    kb_note = f" Indexed documentation available: {', '.join(kb_names)}."
+                    kb_note = f" Indexed documentation available: {', '.join(kb_names)}. Target KB IDs: {', '.join(kb_ids)}."
             except Exception:
                 pass
             schemas.append({
@@ -1607,11 +1610,15 @@ def get_tool_schemas(include_hidden: bool = False) -> list[dict]:
                         "properties": {
                             "query": {
                                 "type": "string",
-                                "description": "A natural language query (e.g. 'how does Rigidbody.AddForce work?' or 'where does the player take damage?')."
+                                "description": "Use 2-4 keywords or a short natural query (e.g. 'Rigidbody.AddForce' or 'where does the player take damage?'). NEVER use a long list of 10+ words (keyword stuffing) as it ruins search relevance."
                             },
                             "n_results": {
                                 "type": "integer",
                                 "description": "Number of snippets to return (default is 5, recommend keeping under 10)."
+                            },
+                            "target_kb": {
+                                "type": "string",
+                                "description": f"Target specific knowledge base to search. 'all' searches everything. 'local' searches only the project code. To search ONLY external docs, use the exact ID (e.g. {kb_ids[0] if kb_ids else 'unity'}). Default is 'all'."
                             }
                         },
                         "required": ["query"]
