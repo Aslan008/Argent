@@ -46,8 +46,10 @@ class TestCalculateSafety:
     def test_attribute_access_rejected(self):
         assert calculate("(1).__class__").startswith("Error")
 
-    def test_unknown_identifier_rejected(self):
-        assert calculate("x + 1").startswith("Error")
+    def test_free_variable_is_symbolic_not_an_error(self):
+        # Changed intent: with symbolic support a free variable is valid input
+        # (it used to be rejected as an "unknown identifier").
+        assert calculate("x + 1").endswith("= x + 1")
 
     def test_unknown_function_rejected(self):
         assert calculate("eval('1+1')").startswith("Error")

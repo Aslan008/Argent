@@ -1162,13 +1162,22 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "calculate",
-            "description": "Evaluate an arithmetic expression exactly and return the result. ALWAYS use this instead of doing math in your head. Supports +, -, *, /, //, %, ** (or ^) and functions: sqrt, sin, cos, tan, log, log2, log10, exp, floor, ceil, abs, round, min, max, factorial, gcd. Constants: pi, e, tau.",
+            "description": (
+                "Evaluate mathematics exactly — ALWAYS use this instead of doing math in your head. "
+                "Handles both plain arithmetic and symbolic math.\n"
+                "Arithmetic: +, -, *, /, //, %, ** (or ^) with sqrt, sin, cos, tan, log, exp, floor, "
+                "ceil, abs, round, min, max, factorial, gcd; constants pi, e, tau.\n"
+                "Symbolic (variables allowed): integrate(x**2, x) and definite integrate(exp(-x), (x, 0, oo)); "
+                "diff(sin(x)*x, x); limit(sin(x)/x, x, 0) and one-sided limit(1/x, x, 0, '+'); "
+                "solve(x**2 - 4, x) or solve(Eq(x + 1, 5), x); summation(k, (k, 1, n)); "
+                "series(exp(x), x, 0, 5); simplify/expand/factor. Use 'oo' for infinity."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "expression": {
                         "type": "string",
-                        "description": "Pure arithmetic expression, e.g. '(1847 * 0.15) + sqrt(2)'. No variables or code."
+                        "description": "Arithmetic, e.g. '(1847 * 0.15) + sqrt(2)', or symbolic, e.g. 'integrate(x**2, x)'. Never code."
                     }
                 },
                 "required": ["expression"]

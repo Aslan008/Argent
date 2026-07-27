@@ -68,25 +68,46 @@ def _eval_calc_node(node):
 
 
 def calculate(expression: str) -> str:
-    """Safely evaluate an arithmetic expression and return the exact result. Supports +, -, *, /, //, %, ** and math functions (sqrt, sin, log, ...). No code execution."""
+    """Evaluate a mathematical expression exactly. Two engines, one entry point:
+
+    plain arithmetic runs on a fast whitelist evaluator, and anything symbolic
+    (integrals, limits, derivatives, equations, sums, series) falls through to
+    SymPy. Neither path ever executes code.
+    """
     if not expression or not expression.strip():
         return "Error: expression is empty."
     # Models often write ^ meaning exponentiation.
     normalized = expression.strip().replace("^", "**")
+
+    # --- Fast path: pure arithmetic, no dependencies, exact ints ---
     try:
         tree = ast.parse(normalized, mode="eval")
         result = _eval_calc_node(tree.body)
+        if isinstance(result, float) and result.is_integer() and abs(result) < 1e15:
+            result = int(result)
+        log.info("calculate: %s = %s", expression, result)
+        return f"{expression} = {result}"
     except ZeroDivisionError:
         return f"Error: division by zero in '{expression}'."
-    except (ValueError, SyntaxError, OverflowError, TypeError) as e:
+    except (ValueError, SyntaxError, OverflowError, TypeError) as numeric_error:
+        pass
+
+    # --- Symbolic path: the expression mentions variables or calculus ---
+    from tools.symbolic_math import SymbolicError, evaluate_symbolic
+    try:
+        answer = evaluate_symbolic(expression)
+    except SymbolicError as symbolic_error:
         return (
-            f"Error: cannot evaluate '{expression}': {e}. "
-            f"Provide a pure arithmetic expression, e.g. '(1847 * 0.15) + sqrt(2)'."
+            f"Error: cannot evaluate '{expression}': {symbolic_error}. "
+            f"Provide a plain arithmetic expression (e.g. '(1847 * 0.15) + sqrt(2)') or a "
+            f"symbolic one (e.g. 'integrate(x**2, x)', 'limit(sin(x)/x, x, 0)', "
+            f"'solve(x**2 - 4, x)')."
         )
-    if isinstance(result, float) and result.is_integer() and abs(result) < 1e15:
-        result = int(result)
-    log.info("calculate: %s = %s", expression, result)
-    return f"{expression} = {result}"
+    except Exception as e:  # sympy failed on a well-formed but hard expression
+        return f"Error: cannot evaluate '{expression}': {e}."
+
+    log.info("calculate (symbolic): %s = %s", expression, answer)
+    return f"{expression} = {answer}"
 
 
 def set_goal(objective: str = None, current_task: str = None) -> str:

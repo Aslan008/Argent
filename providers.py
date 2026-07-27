@@ -290,6 +290,46 @@ class OpenAICompatibleProvider(LLMProvider, ABC):
         return self._openai.OpenAI(**kwargs)
 
     @staticmethod
+    def _apply_prompt_cache(messages, model):
+        """Mark the system prompt as a cacheable prefix for Anthropic models.
+
+        Anthropic bills a cached prefix at a fraction of the input price and
+        skips re-processing it, which cuts both cost and TTFT dramatically. The
+        marker is an explicit ``cache_control`` block, unlike OpenAI/DeepSeek
+        where caching is automatic and needs nothing from us. Argent's system
+        prompt is the ideal breakpoint: it is large (rules + AGENTS.md + tool
+        guidance) and already kept byte-stable across turns by
+        _refresh_system_prompt, which is exactly what a prefix cache requires.
+
+        Only the FIRST system message is marked (one breakpoint, well under
+        Anthropic's limit of four), and only for models that understand the
+        field — everything else is returned untouched.
+        """
+        name = (model or "").lower()
+        if "claude" not in name and "anthropic" not in name:
+            return messages
+
+        out = []
+        marked = False
+        for m in messages:
+            if not marked and m.get("role") == "system" and isinstance(m.get("content"), str):
+                text = m["content"]
+                # Below Anthropic's minimum cacheable prefix the marker is a
+                # no-op at best, so don't bother rewriting the shape.
+                if len(text) < 2000:
+                    out.append(m)
+                    continue
+                out.append({**m, "content": [{
+                    "type": "text",
+                    "text": text,
+                    "cache_control": {"type": "ephemeral"},
+                }]})
+                marked = True
+            else:
+                out.append(m)
+        return out
+
+    @staticmethod
     def _normalize_outgoing_messages(messages):
         """Make message history conform to the OpenAI tool-call spec.
 
@@ -327,7 +367,8 @@ class OpenAICompatibleProvider(LLMProvider, ABC):
 
         kwargs = {
             "model": model,
-            "messages": self._normalize_outgoing_messages(messages),
+            "messages": self._apply_prompt_cache(
+                self._normalize_outgoing_messages(messages), model),
             "tools": openai_tools,
             "stream": True,
             # Ask for a final usage-only chunk (token counts) at end of stream.

@@ -27,6 +27,7 @@ dependencies = [
     "json5",
     "numpy",
     "pydantic>=2.0",
+    "sympy",
 ]
 
 [project.optional-dependencies]
