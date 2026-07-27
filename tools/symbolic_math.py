@@ -21,6 +21,12 @@ _ALLOWED_FUNCTIONS = {
     # algebra
     "solve", "solveset", "simplify", "expand", "factor", "cancel", "apart",
     "together", "collect", "nsolve", "roots", "Eq", "degree", "div", "rem",
+    "Ne", "Lt", "Le", "Gt", "Ge", "solve_univariate_inequality", "reduce_inequalities",
+    # differential equations
+    "dsolve", "Function", "Derivative", "checkodesol", "classify_ode",
+    # linear algebra (methods need attributes, so the functional forms are exposed)
+    "Matrix", "det", "trace", "transpose", "eye", "zeros", "ones", "diag",
+    "nsimplify", "factorint",
     # elementary
     "sqrt", "cbrt", "root", "exp", "log", "ln", "Abs", "sign",
     "sin", "cos", "tan", "cot", "sec", "csc",
@@ -101,7 +107,10 @@ def _eval_node(node, sympy, symbols):
         if key in _CONSTANT_NAMES:
             return getattr(sympy, _CONSTANT_NAMES[key])
         if key in _ALLOWED_FUNCTIONS:            # bare function reference, e.g. diff(f, x)
-            return getattr(sympy, key)
+            attr = getattr(sympy, key, None)
+            if attr is not None:
+                return attr
+        # Anything else is a plain variable (x, n, theta…).
         return symbols.setdefault(key, sympy.Symbol(key))
 
     if isinstance(node, ast.BinOp):
@@ -118,11 +127,20 @@ def _eval_node(node, sympy, symbols):
         raise SymbolicError(f"unsupported unary operator: {type(node.op).__name__}")
 
     if isinstance(node, ast.Compare):
-        # A single equality becomes an equation: x**2 == 4 -> Eq(x**2, 4).
-        if len(node.ops) != 1 or not isinstance(node.ops[0], ast.Eq):
-            raise SymbolicError("only a single '==' comparison is supported")
-        return sympy.Eq(_eval_node(node.left, sympy, symbols),
-                        _eval_node(node.comparators[0], sympy, symbols))
+        # A single comparison becomes a relation: x**2 == 4 -> Eq(x**2, 4),
+        # x**2 > 4 -> StrictGreaterThan, so inequalities can be solved too.
+        if len(node.ops) != 1:
+            raise SymbolicError("only a single comparison is supported")
+        relations = {
+            ast.Eq: sympy.Eq, ast.NotEq: sympy.Ne,
+            ast.Lt: sympy.Lt, ast.LtE: sympy.Le,
+            ast.Gt: sympy.Gt, ast.GtE: sympy.Ge,
+        }
+        builder = relations.get(type(node.ops[0]))
+        if builder is None:
+            raise SymbolicError(f"unsupported comparison: {type(node.ops[0]).__name__}")
+        return builder(_eval_node(node.left, sympy, symbols),
+                       _eval_node(node.comparators[0], sympy, symbols))
 
     if isinstance(node, ast.Tuple):
         return tuple(_eval_node(el, sympy, symbols) for el in node.elts)
@@ -135,6 +153,14 @@ def _eval_node(node, sympy, symbols):
             raise SymbolicError("only direct calls to known functions are allowed")
         fname = node.func.id
         if fname not in _ALLOWED_FUNCTIONS:
+            # A short, single-letter-ish name is the standard notation for the
+            # UNKNOWN function of a differential equation — f(x), y(t), g(x) —
+            # so it becomes an undefined SymPy Function instead of an error.
+            # Longer names stay rejected, which still catches hallucinated
+            # calls like hack(x) or eval(...).
+            if len(fname) <= 2 and fname.isalpha():
+                undefined = symbols.setdefault(f"__fn_{fname}", sympy.Function(fname))
+                return undefined(*[_eval_node(a, sympy, symbols) for a in node.args])
             raise SymbolicError(
                 f"unknown function '{fname}'. Allowed: {', '.join(sorted(_ALLOWED_FUNCTIONS))}")
         func = getattr(sympy, "log" if fname == "ln" else fname, None)
@@ -185,15 +211,18 @@ def evaluate_symbolic(expression: str) -> str:
 
     result = _eval_node(tree.body, sympy, {})
 
-    # A BARE expression with free symbols is more useful simplified. An explicit
-    # call is never second-guessed: factor(x**2 - 1) must stay factored even
-    # though x**2 - 1 is "simpler" by operation count.
+    # A BARE expression is more useful reduced: with free symbols it gets
+    # simplified, without them it collapses to a value ((1 + I)**8 -> 16).
+    # An explicit call is never second-guessed: factor(x**2 - 1) must stay
+    # factored even though x**2 - 1 is "simpler" by operation count.
     try:
-        if (not isinstance(tree.body, ast.Call)
-                and isinstance(result, sympy.Expr) and result.free_symbols):
-            simplified = sympy.simplify(result)
-            if sympy.count_ops(simplified) <= sympy.count_ops(result):
-                result = simplified
+        if not isinstance(tree.body, ast.Call) and isinstance(result, sympy.Expr):
+            if result.free_symbols:
+                simplified = sympy.simplify(result)
+                if sympy.count_ops(simplified) <= sympy.count_ops(result):
+                    result = simplified
+            else:
+                result = sympy.simplify(result)
     except Exception:
         pass
 

@@ -66,6 +66,59 @@ class TestAlgebra:
         assert evaluate_symbolic("simplify(sin(x)**2 + cos(x)**2)") == "1"
 
 
+class TestInequalities:
+    def test_quadratic_inequality(self):
+        out = evaluate_symbolic("solve(x**2 > 4, x)")
+        assert "-2" in out and "2" in out
+
+    def test_system_of_inequalities(self):
+        assert evaluate_symbolic("reduce_inequalities([x + 3 < 7, x > 0], [x])") \
+            == "(0 < x) & (x < 4)"
+
+    def test_not_equal_relation(self):
+        assert "Ne" in evaluate_symbolic("Ne(x, 2)") or "!=" in evaluate_symbolic("Ne(x, 2)")
+
+
+class TestDifferentialEquations:
+    def test_first_order_ode(self):
+        assert evaluate_symbolic("dsolve(Derivative(f(x), x) - f(x), f(x))") \
+            == "Eq(f(x), C1*exp(x))"
+
+    def test_second_order_ode(self):
+        out = evaluate_symbolic("dsolve(Derivative(y(x), x, 2) + y(x), y(x))")
+        assert "sin(x)" in out and "cos(x)" in out
+
+    def test_undefined_function_is_limited_to_short_names(self):
+        # f(x)/y(t) become undefined functions; a long name stays an error so
+        # hallucinated calls are still caught.
+        with pytest.raises(SymbolicError):
+            evaluate_symbolic("malicious(x)")
+
+
+class TestLinearAlgebra:
+    def test_determinant(self):
+        assert evaluate_symbolic("det(Matrix([[1, 2], [3, 4]]))") == "-2"
+
+    def test_matrix_product(self):
+        out = evaluate_symbolic("Matrix([[1,2],[3,4]]) * Matrix([[5,6],[7,8]])")
+        assert "19" in out and "50" in out
+
+    def test_matrix_inverse_via_power(self):
+        out = evaluate_symbolic("Matrix([[1, 2], [3, 4]])**-1")
+        assert "3/2" in out
+
+    def test_trace(self):
+        assert evaluate_symbolic("trace(Matrix([[1,2],[3,4]]))") == "5"
+
+
+class TestNumericCollapse:
+    def test_complex_power_collapses_to_a_number(self):
+        assert evaluate_symbolic("(1 + I)**8") == "16"
+
+    def test_integer_factorization(self):
+        assert evaluate_symbolic("factorint(360)") == "{2: 3, 3: 2, 5: 1}"
+
+
 class TestExactValuesAndApproximation:
     def test_exact_radical_with_decimal_hint(self):
         out = evaluate_symbolic("sqrt(8)")
