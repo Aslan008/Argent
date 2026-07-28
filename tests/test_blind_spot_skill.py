@@ -36,6 +36,16 @@ class TestGeneralSkill:
         assert "ASSUMPTIONS" in body              # report shape
         assert "FACTS" in body and "RISKS" in body and "QUESTIONS" in body
 
+    def test_pass_starts_with_an_environment_check(self):
+        """Reading code tells you how the project is written, not what state
+        it is in — the pass must establish the starting state as a FACT so the
+        agent doesn't inherit a pre-existing breakage as its own."""
+        body = _GENERAL.read_text(encoding="utf-8")
+        assert "git status" in body
+        assert "already broken before you touched" in body.lower()
+        # The diagnostic must come BEFORE the code exploration step.
+        assert body.index("git status") < body.index("**Explore first**")
+
 
 class TestUnityIntegration:
     def test_unity_skill_references_method(self):

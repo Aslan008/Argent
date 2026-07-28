@@ -36,6 +36,22 @@ trivia. Every task splits into four quadrants; each has its own correct move.
 Run it for: ambiguous or large tasks, unfamiliar parts of the codebase,
 destructive or hard-to-reverse changes, integrations with external systems.
 
+0. **Check the ground first** (before reading a single file). Code tells you
+   how the project is *written*; these tell you what state it is *in* right
+   now — and a wrong answer here wastes the whole pass:
+   - `run_command("git status --short")` — uncommitted work in flight. Editing
+     files someone is mid-change on causes conflicts, and a dirty tree changes
+     what "revert" means.
+   - `run_command("git log --oneline -5")` — what just happened; the bug may
+     have arrived in the last commit.
+   - Run the test/build command the project actually uses (`python -m pytest -q`,
+     `npm test`, `dotnet build`). **Was it already broken before you touched
+     anything?** If yes, say so and agree on scope — do not silently inherit
+     someone else's failure and then be unable to tell your breakage from theirs.
+   Cheap exception: skip for a trivial, well-specified change (see Rules of
+   economy). Where the build can't run from here (e.g. Unity needs the editor),
+   say that explicitly instead of assuming green.
+
 1. **Explore first**: outline / grep / read what the change touches. Map entry
    points, callers, adjacent tests, configs, data formats. Don't ask the user
    anything you can learn here.
@@ -45,7 +61,9 @@ destructive or hard-to-reverse changes, integrations with external systems.
 3. **List open decisions** the prompt doesn't cover: edge cases, failure
    behaviour, backwards compatibility, naming/UX.
 4. **Report compactly**, in exactly this shape:
-   - FACTS — established from the prompt + the code (quadrant 1 + investigated 2)
+   - FACTS — established from the prompt + the code + the ground check in
+     step 0 (quadrant 1 + investigated 2). State the starting state of the
+     tree and the tests as a fact, not an assumption.
    - RISKS — top 3–5, each with its blast radius
    - ASSUMPTIONS — what you will assume unless corrected (explicit!)
    - QUESTIONS — max 3, highest-impact first, each with concrete options

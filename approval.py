@@ -60,6 +60,29 @@ _INLINE_CODE_INTERPRETER_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Obfuscation indicators. Whether a command is destructive is UNDECIDABLE when
+# the command text is assembled at runtime — `$a="Remove"; $b="-Item"; & "$a$b"`
+# defeats any static scanner, regex or AST alike, because the dangerous token
+# simply does not exist until the shell builds it. So instead of trying to see
+# through the obfuscation, we treat the obfuscation ITSELF as the risk signal:
+# a command that builds or evals another command never runs unattended.
+# In POLICY_ASK nothing changes (everything already prompts); this closes the
+# hole in POLICY_AUTO / vibe, where a "safe" verdict means silent execution.
+_OBFUSCATION_PATTERNS = [
+    # Invoke-Expression / iex — the PowerShell "eval".
+    (r"\b(?:invoke-expression|iex)\b", "evaluates a dynamically built command (Invoke-Expression)"),
+    # Call operator on a string/variable: & "$a$b", & $cmd
+    (r"&\s*[\"'$]", "invokes a command built from a variable or string"),
+    # Bash/POSIX eval.
+    (r"\beval\b", "evaluates a dynamically built command (eval)"),
+    # Decoding into execution: FromBase64String, base64 -d | sh
+    (r"\bfrombase64string\b", "decodes a base64 payload before running it"),
+    (r"\bbase64\b[^|&;]*-{1,2}d(?:ecode)?\b", "decodes a base64 payload before running it"),
+    # String concatenation inside a command invocation: ("Rem"+"ove-Item")
+    (r"[\"'][^\"'\n]*[\"']\s*\+\s*[\"'][^\"'\n]*[\"']", "assembles a command from concatenated strings"),
+]
+_OBFUSCATION_RE = [(re.compile(p, re.IGNORECASE), why) for p, why in _OBFUSCATION_PATTERNS]
+
 # Catastrophic / irreversible / system-wide commands. Each carries a human
 # reason. Broad on purpose: in "warn" mode a false positive is one confirmation;
 # in "block" mode it refuses outright, so the gate stays opt-in for that tier.
@@ -124,6 +147,9 @@ def assess_command_risk(command: str):
         return "warn", ["deletes/overwrites files or stops processes"]
     if _INLINE_CODE_INTERPRETER_RE.search(command):
         return "warn", ["runs inline interpreter code — effects can't be inspected"]
+    obfuscated = [why for rx, why in _OBFUSCATION_RE if rx.search(command)]
+    if obfuscated:
+        return "warn", obfuscated
     return "safe", []
 
 

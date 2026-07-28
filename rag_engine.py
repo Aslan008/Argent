@@ -188,10 +188,13 @@ def enable_rag_for_project(project_dir: str) -> str:
                 return "ERROR: 'sentence-transformers' is not installed. Run `pip install sentence-transformers` or switch to Ollama embeddings."
         
         _COLLECTION = client.get_or_create_collection(name="project_codebase", embedding_function=ef)
-        
+
         _index_codebase(project_path, _COLLECTION)
-        
+
         _RAG_ENABLED = True
+        # The collection persists across sessions, so files deleted or renamed
+        # while Argent was closed would otherwise stay searchable forever.
+        prune_deleted_files()
         return f"Successfully enabled RAG for '{project_path.name}' (embeddings: {embedding_provider}). Indexed files and ready for /search."
         
     except Exception as e:
@@ -554,29 +557,99 @@ def _index_codebase(project_path: Path, collection):
     print("[INFO] Indexing complete.")
     log.info("Indexing complete: %d docs, %d ids", len(docs), len(ids))
 
+def _index_rel_path(path: Path) -> str | None:
+    """The 'file' metadata key for a path: its location relative to the project
+    root. None when no root can be resolved."""
+    from project_paths import find_project_root
+    root = find_project_root(path.parent)
+    if root is None:
+        return None
+    try:
+        return str(path.relative_to(root))
+    except ValueError:
+        return None
+
+
+def _clear_keyword_cache():
+    try:
+        from src.rag.keyword_index import clear_cache
+        clear_cache()
+    except Exception:
+        pass
+
+
+def remove_file_index(file_path: str) -> None:
+    """Drop a file's chunks from the vector index.
+
+    Without this, deleting or renaming a file left its chunks in ChromaDB
+    forever: semantic_search kept serving snippets of code that no longer
+    exists, which is a direct source of hallucinated calls.
+    """
+    global _RAG_ENABLED, _COLLECTION
+    if not _RAG_ENABLED or _COLLECTION is None:
+        return
+    try:
+        rel_path = _index_rel_path(Path(file_path).expanduser().resolve())
+        if rel_path is None:
+            return
+        _COLLECTION.delete(where={"file": rel_path})
+        _clear_keyword_cache()
+        log.info("RAG: dropped chunks for removed file %s", rel_path)
+    except Exception as e:
+        log.warning("Failed to drop RAG chunks for %s: %s", file_path, e)
+
+
+def prune_deleted_files() -> int:
+    """Garbage-collect chunks whose source file no longer exists on disk.
+
+    Catches files removed outside Argent (git checkout, an editor, a rename)
+    that never went through delete_file. Returns how many files were pruned.
+    """
+    global _RAG_ENABLED, _COLLECTION
+    if not _RAG_ENABLED or _COLLECTION is None:
+        return 0
+    try:
+        from project_paths import project_root_or_cwd
+        root = project_root_or_cwd()
+        records = _COLLECTION.get(include=["metadatas"])
+        indexed = {m.get("file") for m in (records.get("metadatas") or []) if m.get("file")}
+        pruned = 0
+        for rel in indexed:
+            if not (root / rel).exists():
+                _COLLECTION.delete(where={"file": rel})
+                pruned += 1
+        if pruned:
+            _clear_keyword_cache()
+            log.info("RAG GC: pruned %d file(s) that no longer exist", pruned)
+        return pruned
+    except Exception as e:
+        log.warning("RAG GC failed: %s", e)
+        return 0
+
+
 def update_file_index(file_path: str):
     """Updates the vector index for a single file. Useful for synchronous RAG updates."""
     global _RAG_ENABLED, _COLLECTION
     if not _RAG_ENABLED or _COLLECTION is None:
         return
-        
+
     try:
         path = Path(file_path).expanduser().resolve()
+        rel_path = _index_rel_path(path)
+        if rel_path is None:
+            return  # Root not found
+
+        # A vanished file must be REMOVED from the index, not skipped: silently
+        # returning is what left phantom chunks behind after a delete/rename.
         if not path.exists() or not path.is_file():
+            _COLLECTION.delete(where={"file": rel_path})
+            _clear_keyword_cache()
+            log.info("RAG: dropped chunks for missing file %s", rel_path)
             return
-            
+
         # 1. Delete old chunks for this file
-        # Find current project root - heuristic: look for .argent folder
-        project_root = path.parent
-        while project_root != project_root.parent and not (project_root / ".argent").exists():
-            project_root = project_root.parent
-            
-        if not (project_root / ".argent").exists():
-            return # Root not found
-            
-        rel_path = str(path.relative_to(project_root))
         _COLLECTION.delete(where={"file": rel_path})
-        
+
         # 2. Add new chunks
         with open(path, 'r', encoding='utf-8') as f:
             source = f.read()
@@ -592,11 +665,7 @@ def update_file_index(file_path: str):
                 metadatas=metadatas,
                 ids=ids
             )
-            try:
-                from src.rag.keyword_index import clear_cache
-                clear_cache()
-            except Exception:
-                pass
+            _clear_keyword_cache()
     except Exception as e:
         print(f"[WARN] Failed to update RAG for {file_path}: {e}")
 

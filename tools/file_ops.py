@@ -57,6 +57,13 @@ def delete_file(file_path: str) -> str:
         
         snapshot(str(path))
         path.unlink()
+        # Drop it from the vector index too, or semantic_search keeps serving
+        # snippets of a file that no longer exists.
+        try:
+            from rag_engine import remove_file_index
+            remove_file_index(str(path))
+        except ImportError:
+            pass
         log.info("delete_file: %s", file_path)
         memory.add_completed(f"Deleted {file_path}")
         return f"Successfully deleted '{file_path}'."

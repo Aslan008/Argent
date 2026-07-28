@@ -103,3 +103,33 @@ class TestObjectiveAnchor:
         # only the last 3 completions and last 2 failures are re-pinned
         assert "did 9" in anchor and "did 7" in anchor and "did 6" not in anchor
         assert "err 5" in anchor and "err 4" in anchor and "err 3" not in anchor
+
+    def test_anchor_pins_edited_files(self, monkeypatch):
+        # On a long task the early edits scroll out of history; without this the
+        # model re-edits a file it already rewrote.
+        from memory_manager import memory
+        memory.clear()
+        memory.set_objective("Refactor")
+        memory.add_file_modified("src/board/MatchDetector.cs")
+        anchor = self._agent(monkeypatch)._build_objective_anchor()
+        assert "FILES YOU ALREADY EDITED" in anchor
+        assert "MatchDetector.cs" in anchor
+
+    def test_edited_files_are_deduplicated_and_bounded(self, monkeypatch):
+        from memory_manager import memory
+        memory.clear()
+        for i in range(12):
+            memory.add_file_modified(f"f{i}.py")
+        for _ in range(5):
+            memory.add_file_modified("f11.py")        # repeatedly edited
+        anchor = self._agent(monkeypatch)._build_objective_anchor()
+        files_line = [ln for ln in anchor.splitlines() if "ALREADY EDITED" in ln][0]
+        assert files_line.count("f11.py") == 1        # repeats collapsed
+        assert "f11.py" in files_line and "f0.py" not in files_line   # newest kept
+
+    def test_anchor_fires_with_only_touched_files(self, monkeypatch):
+        from memory_manager import memory
+        memory.clear()
+        memory.add_file_modified("only.py")
+        anchor = self._agent(monkeypatch)._build_objective_anchor()
+        assert anchor is not None and "only.py" in anchor

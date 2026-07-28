@@ -170,7 +170,7 @@ Example: {"tool": {"name": "read_file", "arguments": {"file_path": "main.py"}}}"
 
         if not is_small:
             prompt_parts.append("""## 4. PLANNING MODE & ARTIFACTS
-- **Blind Spot Pass first**: for ambiguous, large, or unfamiliar tasks, BEFORE planning: explore the affected code, then report FACTS / RISKS / ASSUMPTIONS and ask up to 3 structured questions via `ask_user_questions`. State assumptions explicitly ("Assuming X — скажи, если не так") instead of guessing silently. Full method: `read_skill("blind-spot-pass")`.
+- **Blind Spot Pass first**: for ambiguous, large, or unfamiliar tasks, BEFORE planning: check the ground (`git status`, run the project's tests/build — was it ALREADY broken before you touched it?), then explore the affected code, then report FACTS / RISKS / ASSUMPTIONS and ask up to 3 structured questions via `ask_user_questions`. State assumptions explicitly ("Assuming X — скажи, если не так") instead of guessing silently. Full method: `read_skill("blind-spot-pass")`.
 - **New features**: follow `read_skill("feature-workflow")` — a one-question-at-a-time interview (each answer shapes the next; architecture-changing ambiguities first), a spec/prototype approval gate, a deviation journal in .argent/artifacts/ while you build, then a review document + short comprehension quiz for the user.
 - For complex changes, you MUST create an implementation plan before writing any code.
 - Use `create_artifact("implementation_plan.md", content)` to present your plan to the user.
@@ -600,20 +600,32 @@ Example: {"tool": {"name": "read_file", "arguments": {"file_path": "main.py"}}}"
         context reset, so on a long-but-not-overflowing conversation a weak
         model otherwise never sees it and redoes finished work or retries a
         known-bad approach. Kept deliberately short: it's re-injected on every
-        long turn, so only the two highest-signal lists (recent completions,
-        recent failures) are included, tightly bounded."""
+        long turn, so only the highest-signal lists are included, tightly
+        bounded.
+
+        Touched files are pinned too: on a long task the early turns scroll out
+        of history, and without this the model re-edits a file it already
+        rewrote (or "restores" its own earlier change). File paths are cheap —
+        a handful of tokens each — and they carry the most signal per token."""
         d = memory.data
         obj = d.get("objective")
         task = d.get("current_task")
         completed = d.get("completed") or []
         errors = d.get("errors_encountered") or []
-        if not (obj or task or completed or errors):
+        touched = d.get("files_modified") or []
+        if not (obj or task or completed or errors or touched):
             return None
         parts = ["[REMINDER — do not lose the goal]"]
         if obj:
             parts.append(f"OBJECTIVE: {obj}")
         if task and task != obj:
             parts.append(f"CURRENT TASK: {task}")
+        if touched:
+            # De-duplicated, newest last: the same file is usually edited more
+            # than once and repeats would crowd out older, forgotten paths.
+            unique = list(dict.fromkeys(touched))[-8:]
+            parts.append("FILES YOU ALREADY EDITED (re-read before changing again): "
+                         + "; ".join(unique))
         if completed:
             parts.append("ALREADY DONE (do not redo): " + "; ".join(completed[-3:]))
         if errors:
