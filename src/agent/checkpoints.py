@@ -19,6 +19,7 @@ caller's job — terminal prompt, tool approval, or GUI dialog):
 """
 
 import subprocess
+from typing import NamedTuple
 
 from logger import get_logger
 
@@ -72,27 +73,50 @@ def create_checkpoint(message: str) -> str | None:
     return _git("rev-parse", "--short", "HEAD").stdout.strip()
 
 
-def auto_checkpoint(label: str) -> str | None:
-    """Best-effort per-turn checkpoint. Never raises — a failed snapshot must
-    not block the edit it was insuring.
+class CheckpointResult(NamedTuple):
+    """sha of the checkpoint, or why none was made. warn=True marks the one
+    case the user must hear about: edits are about to happen with no safety net
+    even though checkpointing is switched ON."""
+    sha: str | None
+    reason: str | None = None
+    warn: bool = False
 
-    Skipped when disabled, outside git, or when the user has changes STAGED:
-    committing `git add -A` over a hand-crafted index would destroy their
-    in-progress commit, which is worse than missing one checkpoint.
-    """
+
+def auto_checkpoint_detailed(label: str) -> CheckpointResult:
+    """Best-effort per-turn checkpoint, with the reason when it doesn't happen.
+    Never raises — a failed snapshot must not block the edit it was insuring."""
     if not _auto_enabled:
-        return None
+        return CheckpointResult(None, "auto-checkpoints are off")
     try:
         if not is_git_repo():
-            return None
+            return CheckpointResult(None, "not a git repository")
         status = _git("status", "--porcelain").stdout
         if any(line and line[0] not in (" ", "?") for line in status.splitlines()):
+            # Committing `git add -A` over a hand-crafted index would destroy
+            # the user's in-progress commit — worse than missing a checkpoint.
+            # But staying SILENT is its own trap: they'd believe /rewind has
+            # them covered while the agent edits unprotected.
             log.info("auto-checkpoint skipped: user has staged changes")
-            return None
-        return create_checkpoint(f"before: {label}")
+            return CheckpointResult(
+                None,
+                "у вас есть файлы в git-индексе (staged) — авто-чекпоинт пропущен, "
+                "чтобы не разрушить ваш подготовленный коммит. Правки этого хода "
+                "НЕ покрыты /rewind: закоммитьте или снимите индекс (git reset), "
+                "либо откатывайте по файлу через /undo.",
+                warn=True,
+            )
+        sha = create_checkpoint(f"before: {label}")
+        if sha is None:
+            return CheckpointResult(None, "nothing to checkpoint (clean tree)")
+        return CheckpointResult(sha)
     except Exception as e:
         log.warning("auto-checkpoint failed: %s", e)
-        return None
+        return CheckpointResult(None, f"checkpoint failed: {e}", warn=True)
+
+
+def auto_checkpoint(label: str) -> str | None:
+    """Per-turn checkpoint; returns the sha, or None when none was made."""
+    return auto_checkpoint_detailed(label).sha
 
 
 def list_checkpoints(limit: int = 15) -> list[dict]:

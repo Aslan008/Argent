@@ -131,6 +131,18 @@ class StdioTransport(_BaseTransport):
                     self._process.kill()
                 except Exception:
                     pass
+            # Close the pipes explicitly. The reader threads sit in a blocking
+            # readline(); terminating the child normally closes its end and
+            # wakes them, but not if a grandchild inherited the handle or the
+            # child ignores SIGTERM. Closing here guarantees readline() returns
+            # instead of parking a thread for the rest of the session — they
+            # accumulate across MCP restarts.
+            for pipe in (self._process.stdout, self._process.stderr, self._process.stdin):
+                try:
+                    if pipe is not None:
+                        pipe.close()
+                except Exception:
+                    pass
             self._process = None
         self._initialized = False
         with self._lock:

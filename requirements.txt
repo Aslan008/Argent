@@ -19,3 +19,4 @@ json5
 pypdf
 pydantic>=2.0
 sympy
+tiktoken

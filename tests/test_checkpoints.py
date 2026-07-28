@@ -137,6 +137,29 @@ class TestAutoCheckpoint:
         staged = _git("diff", "--cached", "--name-only").stdout.strip()
         assert staged == "staged.py"
 
+    def test_staged_skip_warns_the_user(self, repo):
+        """Skipping is right; skipping SILENTLY is the trap — the user would
+        believe /rewind covers them while the agent edits unprotected."""
+        from src.agent.checkpoints import auto_checkpoint_detailed
+        (repo / "staged.py").write_text("mine\n", encoding="utf-8")
+        _git("add", "staged.py")
+
+        result = auto_checkpoint_detailed("почини меню")
+        assert result.sha is None
+        assert result.warn is True
+        assert "staged" in result.reason and "/rewind" in result.reason
+
+    def test_clean_tree_skip_is_not_a_warning(self, repo):
+        from src.agent.checkpoints import auto_checkpoint_detailed
+        result = auto_checkpoint_detailed("x")
+        assert result.sha is None and result.warn is False
+
+    def test_successful_checkpoint_reports_no_reason(self, repo):
+        from src.agent.checkpoints import auto_checkpoint_detailed
+        (repo / "app.py").write_text("v2\n", encoding="utf-8")
+        result = auto_checkpoint_detailed("x")
+        assert result.sha and result.reason is None and result.warn is False
+
     def test_outside_git_is_silent(self, tmp_path, monkeypatch):
         outside = tmp_path / "no_repo"
         outside.mkdir()
@@ -213,7 +236,8 @@ def agent(monkeypatch):
 
 class TestAgentTurnCheckpoint:
     def test_first_edit_of_turn_yields_checkpoint_chunk(self, agent, monkeypatch):
-        monkeypatch.setattr(checkpoints, "auto_checkpoint", lambda label: "abc1234")
+        monkeypatch.setattr(checkpoints, "auto_checkpoint_detailed",
+                            lambda label: checkpoints.CheckpointResult("abc1234"))
         agent._turn_checkpoint_done = False
         agent._turn_label = "почини меню"
 
@@ -222,8 +246,9 @@ class TestAgentTurnCheckpoint:
 
     def test_only_once_per_turn(self, agent, monkeypatch):
         calls = []
-        monkeypatch.setattr(checkpoints, "auto_checkpoint",
-                            lambda label: calls.append(label) or "abc1234")
+        monkeypatch.setattr(
+            checkpoints, "auto_checkpoint_detailed",
+            lambda label: calls.append(label) or checkpoints.CheckpointResult("abc1234"))
         agent._turn_checkpoint_done = False
         agent._turn_label = "задача"
 
@@ -232,17 +257,30 @@ class TestAgentTurnCheckpoint:
         assert calls == ["задача"]
 
     def test_read_only_tools_never_checkpoint(self, agent, monkeypatch):
-        monkeypatch.setattr(checkpoints, "auto_checkpoint",
+        monkeypatch.setattr(checkpoints, "auto_checkpoint_detailed",
                             MagicMock(side_effect=AssertionError("must not be called")))
         agent._turn_checkpoint_done = False
         assert agent._maybe_turn_checkpoint("read_file") is None
 
     def test_failed_snapshot_yields_nothing(self, agent, monkeypatch):
-        monkeypatch.setattr(checkpoints, "auto_checkpoint", lambda label: None)
+        monkeypatch.setattr(checkpoints, "auto_checkpoint_detailed",
+                            lambda label: checkpoints.CheckpointResult(None, "clean tree"))
         agent._turn_checkpoint_done = False
         agent._turn_label = "x"
         assert agent._maybe_turn_checkpoint("write_file") is None
         assert agent._turn_checkpoint_done is True
+
+    def test_unprotected_edit_surfaces_a_notice(self, agent, monkeypatch):
+        monkeypatch.setattr(
+            checkpoints, "auto_checkpoint_detailed",
+            lambda label: checkpoints.CheckpointResult(
+                None, "staged files — not covered by /rewind", warn=True))
+        agent._turn_checkpoint_done = False
+        agent._turn_label = "x"
+
+        chunk = agent._maybe_turn_checkpoint("write_file")
+        assert chunk["type"] == "error"
+        assert "[System:" in chunk["content"] and "/rewind" in chunk["content"]
 
 
 class TestCheckpointEvent:

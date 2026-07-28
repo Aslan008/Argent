@@ -28,6 +28,9 @@ dependencies = [
     "numpy",
     "pydantic>=2.0",
     "sympy",
+    # Token counting: without it estimate_tokens silently falls back to a
+    # char-count heuristic, so context budgeting becomes a guess.
+    "tiktoken",
 ]
 
 [project.optional-dependencies]

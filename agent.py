@@ -475,12 +475,17 @@ Example: {"tool": {"name": "read_file", "arguments": {"file_path": "main.py"}}}"
         if func_name not in self._EDIT_TOOLS or self._turn_checkpoint_done:
             return None
         self._turn_checkpoint_done = True
-        from src.agent.checkpoints import auto_checkpoint
+        from src.agent.checkpoints import auto_checkpoint_detailed
         label = self._turn_label or func_name
-        sha = auto_checkpoint(label)
-        if not sha:
-            return None
-        return {"type": "checkpoint", "sha": sha, "label": label}
+        result = auto_checkpoint_detailed(label)
+        if result.sha:
+            return {"type": "checkpoint", "sha": result.sha, "label": label}
+        if result.warn:
+            # Editing without a safety net is exactly the thing the user must
+            # not discover only when /rewind turns up empty.
+            return {"type": "error",
+                    "content": f"\n[System: {result.reason}]"}
+        return None
 
     def _drop_read_cache(self, filtered_args: dict) -> None:
         """Forget a file's read signature after we edited it ourselves, so the
