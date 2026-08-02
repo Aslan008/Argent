@@ -5,10 +5,20 @@ separately, compare cosines — the old _rerank_chunks) is fast but coarse. A
 cross-encoder scores each (query, chunk) pair *jointly*, which is the standard
 accuracy jump for retrieval reranking (~55% -> ~85% on the project's docs).
 
-It uses a small model (ms-marco-MiniLM, ~80MB) so it runs on CPU and only loads
-on first use (lazy — kept out of Argent's startup path). It degrades gracefully:
-cross-encoder -> bi-encoder -> input order, so research never hard-fails on a
-missing or broken model.
+The default model (ms-marco-MiniLM, 92MB) runs on CPU and loads lazily, kept out
+of Argent's startup path. It degrades gracefully: cross-encoder -> bi-encoder ->
+input order, so research never hard-fails on a missing or broken model.
+
+LANGUAGE: the default model is ENGLISH-ONLY, and measurement shows this is not a
+mild degradation. On a Russian query against Russian passages it ranked a borscht
+recipe (7.06) ABOVE a directly relevant .NET GC document (6.41) — inverted, worse
+than random. Worse, in a MIXED pool a relevant Russian passage scores about -0.33
+where the same passage in English scores +6.99, so almost any mediocre English
+chunk outranks an excellent Russian one and non-English sources are effectively
+buried. Setting a multilingual model (see config.get_reranker_model) fixes this;
+it is opt-in because the multilingual weights are ~471MB versus 92MB — the
+difference is the 250k-token vocabulary, not depth, so inference speed is
+comparable.
 """
 
 from logger import get_logger
@@ -16,14 +26,31 @@ from logger import get_logger
 log = get_logger("research")
 
 _DEFAULT_MODEL = "cross-encoder/ms-marco-MiniLM-L-6-v2"
-_cross_encoder = None  # cached across a session; the model is expensive to load
+# Same MiniLM cross-encoder architecture, trained on mMARCO (14 languages incl.
+# Russian) — a drop-in swap, no code path changes.
+MULTILINGUAL_MODEL = "cross-encoder/mmarco-mMiniLMv2-L12-H384-v1"
+
+_cross_encoder = None       # cached across a session; the model is expensive to load
+_cross_encoder_name = None  # so switching the setting reloads instead of reusing
 
 
-def _get_cross_encoder(model_name: str = _DEFAULT_MODEL):
-    global _cross_encoder
-    if _cross_encoder is None:
+def active_model_name() -> str:
+    """The reranker the session should use: multilingual when configured."""
+    try:
+        from config import get_reranker_model
+        return get_reranker_model() or _DEFAULT_MODEL
+    except Exception:
+        return _DEFAULT_MODEL
+
+
+def _get_cross_encoder(model_name: str = None):
+    global _cross_encoder, _cross_encoder_name
+    model_name = model_name or active_model_name()
+    if _cross_encoder is None or _cross_encoder_name != model_name:
         from sentence_transformers import CrossEncoder
         _cross_encoder = CrossEncoder(model_name)
+        _cross_encoder_name = model_name
+        log.info("reranker loaded: %s", model_name)
     return _cross_encoder
 
 

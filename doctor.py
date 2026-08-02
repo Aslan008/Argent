@@ -149,6 +149,21 @@ def _check_web_search():
     }
     active = [names.get(e.__name__, e.__name__) for e in active_engines()]
     detail = ", ".join(active)
+
+    # Query language and reranker language must match, or the pipeline fights
+    # itself: non-English pages get retrieved and then scored so low by an
+    # English-only reranker that they never survive into the answer.
+    from config import get_search_languages
+    from src.research.rerank import active_model_name, _DEFAULT_MODEL
+    langs = get_search_languages()
+    multilingual_reranker = active_model_name() != _DEFAULT_MODEL
+    detail += f"; query languages: {', '.join(langs)}"
+    if langs != ["en"] and not multilingual_reranker:
+        return (WARN, detail + " — but the reranker is English-only, so non-English "
+                "results get buried even when relevant (set 'reranker_model')")
+    if multilingual_reranker and langs == ["en"]:
+        detail += " (multilingual reranker loaded but queries are English-only)"
+
     if "Brave" not in active:
         # Brave is a second INDEPENDENT index (DuckDuckGo's results are largely
         # Bing's), so adding it widens recall rather than reshuffling the same

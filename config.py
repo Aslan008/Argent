@@ -430,6 +430,42 @@ def get_ollama_embedding_model() -> str:
     return _get("ollama_embedding_model", "nomic-embed-text")
 
 
+def get_reranker_model() -> str:
+    """Cross-encoder used to rerank research results.
+
+    Empty means the default English model (92MB). Set it to a multilingual one
+    (see rerank.MULTILINGUAL_MODEL, ~471MB) when you research in languages other
+    than English: the English model scores non-English passages so low that even
+    highly relevant ones are buried under mediocre English results.
+    """
+    return _get("reranker_model", "") or ""
+
+
+def set_reranker_model(model: str):
+    _set("reranker_model", (model or "").strip())
+
+
+def get_search_languages() -> list:
+    """Languages the model should write search queries in.
+
+    Default ["en"]: technical documentation, issues and answers are
+    overwhelmingly English, and a translated query silently loses most good
+    sources. Add "ru" when local-language sources matter (regional services,
+    Habr, non-technical research) — but pair it with a multilingual reranker,
+    or those results get scored near-zero and dropped anyway.
+    """
+    value = _get("search_languages", ["en"])
+    if isinstance(value, str):
+        value = [v.strip() for v in value.split(",")]
+    return [v for v in (value or []) if v] or ["en"]
+
+
+def set_search_languages(languages):
+    if isinstance(languages, str):
+        languages = [l.strip() for l in languages.split(",")]
+    _set("search_languages", [l for l in (languages or []) if l] or ["en"])
+
+
 def get_brave_api_key() -> str:
     """API key for the optional Brave Search engine. Empty by default: web
     search stays keyless and zero-setup, and adding the key just widens the

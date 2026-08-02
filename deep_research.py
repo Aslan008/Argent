@@ -31,6 +31,37 @@ def _call_llm_sync(prompt: str, json_format: bool = False, temperature: float = 
         console.print(f"[bold red]Deep Research Error:[/bold red] {e}")
         return ""
 
+_LANGUAGE_NAMES = {
+    "en": "English", "ru": "Russian", "de": "German", "fr": "French",
+    "es": "Spanish", "it": "Italian", "pt": "Portuguese", "zh": "Chinese",
+    "ja": "Japanese", "ko": "Korean", "tr": "Turkish", "pl": "Polish",
+    "uk": "Ukrainian", "nl": "Dutch",
+}
+
+
+def _language_rule() -> str:
+    """The LANGUAGE clause of the query prompt, from the configured languages."""
+    from config import get_search_languages
+    langs = get_search_languages()
+    if langs == ["en"]:
+        return ("write queries in ENGLISH even if the topic is stated in another "
+                "language. Technical documentation, issues and answers are "
+                "overwhelmingly in English; a translated query silently loses most "
+                "of the good sources.")
+
+    names = [_LANGUAGE_NAMES.get(l, l) for l in langs]
+    others = [n for n in names if n != "English"]
+    other_list = ", ".join(others) if others else "the local language"
+    return (
+        f"choose the language PER QUERY from: {', '.join(names)}. "
+        f"Default to ENGLISH — that is where technical documentation, issues and "
+        f"answers live. But write the query in {other_list} when the best sources "
+        f"plainly are in it: regional services and products, local regulations, "
+        f"country-specific practice, or a topic whose strongest community writes "
+        f"in that language. When both could apply, spend one query on each."
+    )
+
+
 def _generate_queries(objective: str) -> List[str]:
     """Brainstorm distinct search queries for the objective.
 
@@ -38,16 +69,20 @@ def _generate_queries(objective: str) -> List[str]:
     recovers from a query that never surfaced the right page — so the rules
     below encode what actually retrieves well rather than asking for "effective
     queries" and hoping.
+
+    The language rule adapts to config.get_search_languages(): English-only by
+    default (that is where technical sources live), but when other languages are
+    enabled the model decides PER TOPIC — writing an English-only query for a
+    regional service or a local-language community would miss the best sources
+    entirely.
     """
     prompt = f"""You are a search strategist. Topic to research: '{objective}'.
 
 Write exactly 5 search queries that will retrieve the best technical sources.
 
 RULES — these decide whether the search finds anything:
-1. LANGUAGE: write queries in ENGLISH even if the topic is stated in another
-   language. Technical documentation, issues and answers are overwhelmingly in
-   English; a translated query silently loses most of the good sources. Keep
-   proper nouns (product, library, API names) exactly as they are.
+1. LANGUAGE: {_language_rule()}
+   Keep proper nouns (product, library, API names) exactly as they are.
 2. ERROR MESSAGES: if the topic contains an error or exception, put the
    distinctive part in "double quotes" VERBATIM and drop the variable parts
    (paths, line numbers, GUIDs, timestamps). Quoted exact strings are the single
