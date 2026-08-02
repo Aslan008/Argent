@@ -32,13 +32,41 @@ def _call_llm_sync(prompt: str, json_format: bool = False, temperature: float = 
         return ""
 
 def _generate_queries(objective: str) -> List[str]:
-    """Ask Ollama to brainstorm 3-5 distinct search queries for DuckDuckGo."""
-    prompt = f"""You are an elite autonomous research agent. 
-The user wants you to research the following topic deeply: '{objective}'.
-Generate exactly 5 distinct, highly effective search queries that you would type into Google to find the best technical articles, forums, or documentation on this topic.
-Focus on different aspects: technical docs, GitHub issues, stackoverflow, and deep-dive blogs.
-Return ONLY a valid JSON array of strings. No markup, no explanations.
-Example: ["query 1", "query 2", "query 3", "query 4", "query 5"]
+    """Brainstorm distinct search queries for the objective.
+
+    Query wording decides what the engines can possibly return — no reranker
+    recovers from a query that never surfaced the right page — so the rules
+    below encode what actually retrieves well rather than asking for "effective
+    queries" and hoping.
+    """
+    prompt = f"""You are a search strategist. Topic to research: '{objective}'.
+
+Write exactly 5 search queries that will retrieve the best technical sources.
+
+RULES — these decide whether the search finds anything:
+1. LANGUAGE: write queries in ENGLISH even if the topic is stated in another
+   language. Technical documentation, issues and answers are overwhelmingly in
+   English; a translated query silently loses most of the good sources. Keep
+   proper nouns (product, library, API names) exactly as they are.
+2. ERROR MESSAGES: if the topic contains an error or exception, put the
+   distinctive part in "double quotes" VERBATIM and drop the variable parts
+   (paths, line numbers, GUIDs, timestamps). Quoted exact strings are the single
+   highest-yield search technique.
+3. VARY THE ANGLE, one per query — do not paraphrase the same question 5 times:
+   - the official documentation (add site: for the vendor's docs domain when you
+     know it, e.g. site:docs.unity3d.com or site:learn.microsoft.com);
+   - a bug report / issue thread (add words like "issue", "regression", or the
+     version number);
+   - a practical Q&A phrasing (how someone actually asks it on StackOverflow);
+   - the underlying concept or mechanism, for background;
+   - a comparison / alternatives angle.
+4. BE SPECIFIC: include version numbers, exact API/class names and the platform
+   when they are known. Vague queries return vague pages.
+5. NO natural-language sentences and no question marks — write keyword queries
+   the way an experienced engineer types them.
+
+Return ONLY a valid JSON array of 5 strings. No markup, no explanations.
+Example: ["\\"NullReferenceException\\" Unity Addressables LoadAssetAsync", "site:docs.unity3d.com Addressables memory management"]
 """
     result = _call_llm_sync(prompt, json_format=True, temperature=0.7)
     return parse_query_list(result, limit=5) or [objective]

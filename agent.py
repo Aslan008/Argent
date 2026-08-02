@@ -270,7 +270,9 @@ Example: {"tool": {"name": "read_file", "arguments": {"file_path": "main.py"}}}"
             pass
 
         full_prompt = "\n\n".join(prompt_parts)
-        return compress_system_prompt(full_prompt, self.model_name)
+        # Pass the tier resolved above: building for one tier and compressing
+        # for another would strip sections the prompt was written to include.
+        return compress_system_prompt(full_prompt, self.model_name, category)
 
     def _refresh_system_prompt(self) -> bool:
         """Rebuild the system prompt only if it actually changed.

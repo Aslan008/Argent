@@ -139,6 +139,25 @@ def _check_rag():
     return (OK, detail)
 
 
+def _check_web_search():
+    """Which search engines this session will actually federate."""
+    from src.research.search import active_engines
+    names = {
+        "_ddg_search": "DuckDuckGo", "_wikipedia_search": "Wikipedia",
+        "_stackoverflow_search": "StackOverflow", "_github_search": "GitHub",
+        "_brave_search": "Brave",
+    }
+    active = [names.get(e.__name__, e.__name__) for e in active_engines()]
+    detail = ", ".join(active)
+    if "Brave" not in active:
+        # Brave is a second INDEPENDENT index (DuckDuckGo's results are largely
+        # Bing's), so adding it widens recall rather than reshuffling the same
+        # pages — and it replaces a scraper with a contracted API.
+        detail += (" — optional: add a Brave Search API key for a second "
+                   "independent index (config key 'brave_api_key')")
+    return (OK, detail)
+
+
 def _check_optional_deps():
     deps = {
         "json5": "tolerant JSON parsing for weak models",
@@ -199,6 +218,7 @@ CHECKS = [
     ("Auxiliary model", _check_auxiliary_model),
     ("Browser automation", _check_browser),
     ("RAG / semantic search", _check_rag),
+    ("Web search engines", _check_web_search),
     ("Optional deps", _check_optional_deps),
     ("MCP servers", _check_mcp),
     ("Git", _check_git),

@@ -284,8 +284,12 @@ def get_model_size_category(model_name: str) -> str:
 
     name = model_name.lower()
 
-    # Cloud provider detection
+    # Cloud provider detection. The explicit ':cloud' / '-cloud' tag counts too:
+    # aggregators name models like "minimax-m3:cloud", and such a model must
+    # never fall through to the keyword heuristic below.
     if any(k in name for k in ["glm-", "gpt-", "claude-", "gemini-"]):
+        return "cloud"
+    if re.search(r"[:\-_]cloud\b", name):
         return "cloud"
 
     # Priority 2: MoE active parameter detection
@@ -309,9 +313,22 @@ def get_model_size_category(model_name: str) -> str:
             size_b = float(match.group(1)) * multiplier
             return _classify_by_size(size_b)
 
-    # Priority 4: Keyword fallback
-    tiny_keywords = ["0.5b", "1b", "1.5b", "2b", "tiny", "mini", "nano", "micro"]
-    if any(k in name for k in tiny_keywords):
+    # Priority 4: Keyword fallback.
+    # Matched on token boundaries, NOT as bare substrings: "mini" inside
+    # "minimax" (a large cloud model) used to classify it as tiny, which
+    # silently handed a capable model the crippled small-model prompt, the slim
+    # toolset and a tiny history budget. Size markers like "1b" still match
+    # anywhere, since they appear glued to the name ("qwen2.5-1.5b").
+    tiny_sizes = ["0.5b", "1b", "1.5b", "2b"]
+    if any(k in name for k in tiny_sizes):
+        return "tiny"
+    # "tiny" as a name prefix is reliable (tinyllama, tinydolphin), so a
+    # following letter is fine. "mini"/"nano"/"micro" are NOT: minimax and
+    # ministral are big models, so those need a boundary on both sides
+    # (phi-3-mini matches, minimax-m3 does not).
+    if re.search(r"(?:^|[\s\-_:./])tiny", name):
+        return "tiny"
+    if re.search(r"(?:^|[\s\-_:./])(mini|nano|micro)(?:$|[\s\-_:./0-9])", name):
         return "tiny"
 
     return "medium"
@@ -411,6 +428,17 @@ def set_embedding_provider(provider: str):
 
 def get_ollama_embedding_model() -> str:
     return _get("ollama_embedding_model", "nomic-embed-text")
+
+
+def get_brave_api_key() -> str:
+    """API key for the optional Brave Search engine. Empty by default: web
+    search stays keyless and zero-setup, and adding the key just widens the
+    federation with a second independent index."""
+    return _get("brave_api_key", "") or ""
+
+
+def set_brave_api_key(key: str):
+    _set("brave_api_key", (key or "").strip())
 
 
 def get_embedding_batch_size() -> int:

@@ -9,7 +9,12 @@ result. No API keys, no Docker, no per-query cost.
 Engines (each isolated — a failure yields [] instead of taking down the search):
   * DuckDuckGo  — general web (single fast attempt, no long backoff);
   * Wikipedia   — encyclopedic, stable MediaWiki JSON API;
-  * StackOverflow — programming Q&A, keyless StackExchange API.
+  * StackOverflow — programming Q&A, keyless StackExchange API;
+  * GitHub      — issues/PRs, where an error string usually appears verbatim
+                  next to the maintainer's answer;
+  * Brave       — optional, needs an API key: a second INDEPENDENT index
+                  (DDG's results are largely Bing's), so it widens recall
+                  rather than re-ranking the same pages.
 
 Each engine has the same shape ``fn(query, limit) -> list[dict]`` with dicts
 ``{title, url, snippet, source}``, so adding an engine is a one-liner and the
@@ -73,6 +78,35 @@ def _wikipedia_search(query: str, limit: int = 3) -> list:
     return out
 
 
+def _github_search(query: str, limit: int = 3) -> list:
+    """Issues and pull requests across public GitHub, via the keyless search API.
+
+    For a coding agent this often beats a web page: an error string usually
+    appears verbatim in an issue, together with the maintainer's answer and the
+    version it was fixed in. Sorted by reactions so the thread people actually
+    found useful comes first. Unauthenticated search is rate-limited (~10/min),
+    which the engine isolation already tolerates — a 403 just yields [].
+    """
+    data = _get_json("https://api.github.com/search/issues", {
+        "q": query, "sort": "reactions", "order": "desc", "per_page": limit,
+    })
+    out = []
+    for item in data.get("items", []):
+        state = item.get("state", "")
+        comments = item.get("comments", 0)
+        body = (item.get("body") or "").strip().replace("\r", "")
+        body = re.sub(r"\s+", " ", body)[:180]
+        # repository_url looks like https://api.github.com/repos/<owner>/<name>
+        repo = (item.get("repository_url") or "").rsplit("/repos/", 1)[-1]
+        out.append({
+            "title": item.get("title", "") or "(no title)",
+            "url": item.get("html_url", ""),
+            "snippet": f"[{repo} · {state} · {comments} comments] {body}".strip(),
+            "source": "github",
+        })
+    return out
+
+
 def _stackoverflow_search(query: str, limit: int = 3) -> list:
     """Programming Q&A via the keyless StackExchange API."""
     data = _get_json("https://api.stackexchange.com/2.3/search/advanced", {
@@ -92,7 +126,70 @@ def _stackoverflow_search(query: str, limit: int = 3) -> list:
     return out
 
 
-DEFAULT_ENGINES = [_ddg_search, _wikipedia_search, _stackoverflow_search]
+def _brave_search(query: str, limit: int = 5) -> list:
+    """General web via the Brave Search API — an INDEPENDENT index.
+
+    This is deliberately additive rather than a replacement for DuckDuckGo.
+    DDG's results are largely Bing's, so running Brave alongside it unions two
+    genuinely different indexes, and union is what lifts RECALL — the one thing
+    the cross-encoder reranker downstream cannot fix (it can only reorder what
+    was retrieved). It also removes a fragility: ddgs is a scraper, Brave is a
+    contracted API.
+
+    Off unless an API key is configured, so the keyless zero-setup default is
+    untouched; when the quota runs out the other engines simply carry the query.
+    """
+    from config import get_brave_api_key
+    key = get_brave_api_key()
+    if not key:
+        return []
+
+    import requests
+    resp = requests.get(
+        "https://api.search.brave.com/res/v1/web/search",
+        params={"q": query, "count": limit},
+        headers={"Accept": "application/json", "X-Subscription-Token": key},
+        timeout=10,
+    )
+    resp.raise_for_status()
+    data = resp.json()
+
+    out = []
+    for item in (data.get("web", {}) or {}).get("results", []):
+        out.append({
+            "title": item.get("title", "") or "(no title)",
+            "url": item.get("url", ""),
+            "snippet": re.sub("<[^>]+>", "", item.get("description", "") or ""),
+            "source": "brave",
+        })
+    # Brave also surfaces forum/discussion threads separately; for debugging
+    # questions those are often worth more than an article.
+    for item in (data.get("discussions", {}) or {}).get("results", []):
+        out.append({
+            "title": item.get("title", "") or "(discussion)",
+            "url": item.get("url", ""),
+            "snippet": re.sub("<[^>]+>", "", item.get("description", "") or ""),
+            "source": "brave-discussions",
+        })
+    return out[:limit]
+
+
+# Keyless engines, always available — the zero-setup baseline.
+DEFAULT_ENGINES = [_ddg_search, _wikipedia_search, _stackoverflow_search, _github_search]
+
+
+def active_engines() -> list:
+    """The engine set for this run: the keyless baseline plus any that the user
+    has configured (currently Brave). Built per call so enabling a key takes
+    effect without a restart."""
+    engines = list(DEFAULT_ENGINES)
+    try:
+        from config import get_brave_api_key
+        if get_brave_api_key():
+            engines.insert(0, _brave_search)   # independent index goes first
+    except Exception:
+        pass
+    return engines
 
 
 def _norm_url(u: str) -> str:
@@ -113,7 +210,7 @@ def meta_search(query: str, max_results: int = 8, engines=None,
     Results are interleaved round-robin so no single source dominates the top.
     ``engines`` is injectable for testing.
     """
-    engines = engines if engines is not None else DEFAULT_ENGINES
+    engines = engines if engines is not None else active_engines()
     if per_engine is None:
         per_engine = max(3, max_results // max(1, len(engines)) + 2)
 

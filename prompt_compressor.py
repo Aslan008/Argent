@@ -35,13 +35,18 @@ def _strip_section(prompt: str, heading: str) -> str:
     return prompt[:idx] + (prompt[nxt + 1:] if nxt != -1 else "")
 
 
-def compress_system_prompt(full_prompt: str, model_name: str) -> str:
+def compress_system_prompt(full_prompt: str, model_name: str, category: str = None) -> str:
     """Compress the system prompt for small models.
     - tiny (<3B): strip heavy sections and append a short rules suffix
     - small (3-7B): append a short clarification reminder
     - medium/large/cloud: no compression
+
+    ``category`` lets the caller pass the tier it already resolved. Re-deriving
+    it here meant one prompt could be BUILT for one tier and COMPRESSED for
+    another whenever the two lookups disagreed — which is exactly what happened
+    when a caller's tier was stubbed but this module's was not.
     """
-    category = get_model_size_category(model_name)
+    category = category or get_model_size_category(model_name)
 
     if category in ("medium", "large", "cloud"):
         return full_prompt
