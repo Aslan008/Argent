@@ -197,6 +197,7 @@ def handle_slash_command(command: str, agent: ArgentAgent) -> bool:
             "\n**Build & edit code**\n"
             "- `/work [--auto] [task]` - Modify or fix an EXISTING codebase safely\n"
             "- `/vibe` - Vibe mode: auto-approve safe actions, checkpoint every turn (undo via /rewind)\n"
+            "- `/tasks` - Scheduled automations that run unattended while Argent is open\n"
             "- `/project [prompt]` - Build a large multi-step project from scratch\n"
             "- `/rooms <task>` - Experimental \"rooms and rails\" engine (declarative graph + triage)\n"
             "- `/init` - Analyze the project and generate .argent/AGENTS.md (project memory)\n"
@@ -456,7 +457,7 @@ def _mcp_add(parts: list):
         print_system("Examples:")
         print_system('  /mcp add files --stdio npx -y @anthropic/mcp-server-filesystem "C:/Projects"')
         print_system("  /mcp add github --stdio npx -y @anthropic/mcp-server-github")
-        print_system("  /mcp add unity --rest http://localhost:7860 unity_bridge")
+        print_system("  /mcp add unity --stdio unity mcp")
         return
 
     name = parts[2]
@@ -485,7 +486,7 @@ def _mcp_add(parts: list):
 
     elif flag == "--rest":
         if len(parts) < 5:
-            print_error("REST requires a URL. Example: /mcp add unity --rest http://localhost:7860 unity_bridge")
+            print_error("REST requires a URL. Example: /mcp add custom --rest http://localhost:7860 standard")
             return
         url = parts[4]
         rest_type = parts[5] if len(parts) > 5 else "standard"

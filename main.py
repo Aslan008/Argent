@@ -87,6 +87,108 @@ def offer_safety_checkpoint(task: str) -> None:
         pass
 
 
+def handle_tasks_command(user_input: str, agent) -> None:
+    """/tasks — scheduled automations that run while Argent is open.
+
+    The terminal manages them; the scheduler itself lives in the server process
+    (python argent_server.py), so a definition added here starts firing as soon
+    as that is running.
+    """
+    from src.automation.schedule import ScheduleError, parse_schedule
+    from src.automation.store import (
+        Automation, load_automations, load_runs, remove_automation, upsert_automation,
+    )
+
+    parts = user_input.strip().split(maxsplit=2)
+    sub = parts[1] if len(parts) > 1 else "list"
+    arg = parts[2] if len(parts) > 2 else ""
+
+    if sub == "list":
+        items = load_automations()
+        if not items:
+            print_system(
+                "Автоматизаций нет. Пример:\n"
+                "  /tasks add отчёт | daily at 09:00 | Собери метрики командой "
+                "`npm run stats` и запиши сводку в reports/daily.md\n"
+                "Запускаются, пока работает argent_server.py.")
+            return
+        print_system("[bold cyan]Автоматизации:[/bold cyan]")
+        for a in items:
+            state = "вкл" if a.enabled else "ВЫКЛ"
+            last = f", последний: {a.last_run[:16]} ({a.last_status})" if a.last_run else ""
+            tools = f", инструменты: {', '.join(a.allowed_tools)}" if a.allowed_tools else ""
+            print_system(f"  • {a.name} [{state}] — {a.schedule}{last}{tools}")
+            print_system(f"      {a.task[:110]}")
+        return
+
+    if sub == "add":
+        pieces = [p.strip() for p in arg.split("|")]
+        if len(pieces) < 3 or not all(pieces[:3]):
+            print_error("Формат: /tasks add <имя> | <расписание> | <задача>\n"
+                        "Расписание: 'every 30m', 'every 2h' или 'daily at 09:00'.")
+            return
+        name, schedule, task = pieces[0], pieces[1], pieces[2]
+        try:
+            parse_schedule(schedule)
+        except ScheduleError as e:
+            print_error(str(e))
+            return
+        upsert_automation(Automation(name=name, task=task, schedule=schedule))
+        print_system(f"Автоматизация '{name}' сохранена ({schedule}).\n"
+                     f"Она выполняется БЕЗ участия человека: любое действие, требующее "
+                     f"подтверждения, будет отклонено и записано в журнал — "
+                     f"смотрите /tasks runs.")
+        return
+
+    if sub in ("on", "off"):
+        items = load_automations()
+        target = next((a for a in items if a.name == arg.strip()), None)
+        if target is None:
+            print_error(f"Автоматизация '{arg.strip()}' не найдена.")
+            return
+        target.enabled = (sub == "on")
+        upsert_automation(target)
+        print_system(f"'{target.name}': {'включена' if target.enabled else 'выключена'}.")
+        return
+
+    if sub in ("rm", "remove", "delete"):
+        print_system(f"Удалена: {arg.strip()}" if remove_automation(arg.strip())
+                     else f"Автоматизация '{arg.strip()}' не найдена.")
+        return
+
+    if sub == "run":
+        from src.automation.runner import run_and_record
+        from src.automation.store import get_automation
+        target = get_automation(arg.strip())
+        if target is None:
+            print_error(f"Автоматизация '{arg.strip()}' не найдена.")
+            return
+        print_system(f"Запускаю '{target.name}' сейчас (без подтверждений)...")
+        result = run_and_record(target, agent=agent)
+        print_system(f"Статус: {result['status']}\n{result['summary'][:1500]}")
+        if result["denied_actions"]:
+            print_system("[yellow]Отклонено (нужен человек):[/yellow] " +
+                         "; ".join(d["action"] for d in result["denied_actions"]))
+        return
+
+    if sub == "runs":
+        runs = load_runs(limit=15, name=arg.strip() or None)
+        if not runs:
+            print_system("Прогонов ещё не было.")
+            return
+        print_system("[bold cyan]Последние прогоны:[/bold cyan]")
+        for r in runs:
+            denied = f", отклонено: {len(r['denied_actions'])}" if r.get("denied_actions") else ""
+            print_system(f"  {r['started'][:16]}  {r['name']}  [{r['status']}] "
+                         f"{r['seconds']}s{denied}")
+            if r.get("summary"):
+                print_system(f"      {r['summary'][:150]}")
+        return
+
+    print_error("Команды: /tasks list | add <имя> | <расписание> | <задача> | "
+                "on <имя> | off <имя> | rm <имя> | run <имя> | runs")
+
+
 def toggle_vibe_mode(vibe_mode: bool) -> bool:
     """The vibecoder switch. Curates EXISTING knobs — no new machinery:
     auto-approve safe actions (destructive ones still prompt) and guarantee
@@ -162,7 +264,7 @@ def main():
         # Base commands
         '/help', '/provider', '/model', '/clear', '/init', '/research', '/rag_toggle', '/auto_retrieve',
         '/hooks', '/tools', '/save', '/project', '/work', '/commit',
-        '/sessions', '/load', '/copy', '/logs', '/skills', '/skill import', '/auto', '/vibe', '/verbose', '/debug', '/browser', '/exit', '/quit',
+        '/sessions', '/load', '/copy', '/logs', '/skills', '/skill import', '/auto', '/vibe', '/tasks', '/verbose', '/debug', '/browser', '/exit', '/quit',
         '/mcp', '/thinking', '/temp', '/temperature',
         '/cd', '/undo', '/diff', '/changes', '/rewind', '/stats', '/aux', '/doctor', '/jobs', '/stop', '/goal', '/critic', '/rooms',
         
@@ -174,6 +276,7 @@ def main():
         '/temperature 0.2', '/temperature 0.7', '/temperature 1.0',
         '/work --auto',
         '/critic on', '/critic off', '/critic model', '/critic status',
+        '/tasks list', '/tasks add', '/tasks on', '/tasks off', '/tasks rm', '/tasks run', '/tasks runs',
         '/guard', '/guard off', '/guard warn', '/guard block',
         '/rooms resume', '/rooms list', '/rooms show', '/rooms spawn on', '/rooms spawn off',
         '/logs clear', '/logs error'
@@ -974,6 +1077,10 @@ def main():
                     for ch in changes:
                         print_system(f"  - {ch['key']} ({ch['snapshot_count']} snapshots)")
                     print_system("\nUse /diff <path> to see changes, /undo <path> to restore.")
+                continue
+
+            elif user_input.startswith("/tasks"):
+                handle_tasks_command(user_input, agent)
                 continue
 
             elif user_input.strip() == "/rewind":

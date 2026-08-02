@@ -28,6 +28,7 @@ session factory is injectable so the endpoint is tested with a fake agent.
 """
 
 import asyncio
+from contextlib import asynccontextmanager
 from urllib.parse import urlparse
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
@@ -55,13 +56,55 @@ def _origin_allowed(origin: str | None) -> bool:
     return (parsed.hostname or "") in _ALLOWED_ORIGIN_HOSTS
 
 
-def create_app(session_factory=None) -> FastAPI:
-    app = FastAPI(title="Argent backend")
+def create_app(session_factory=None, scheduler=None) -> FastAPI:
     factory = session_factory or (lambda: AgentSession())
+
+    # Ambient automations fire while the server is up. Events are broadcast to
+    # every connected client, since a run belongs to the session-independent
+    # background, not to whoever happens to be chatting.
+    clients: set = set()
+
+    def broadcast(event: dict):
+        loop = getattr(app.state, "loop", None)
+        if loop is None:
+            return
+        for ws in list(clients):
+            asyncio.run_coroutine_threadsafe(_safe_send(ws, event), loop)
+
+    async def _safe_send(ws, event):
+        try:
+            await ws.send_json(event)
+        except Exception:
+            clients.discard(ws)
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        app.state.loop = asyncio.get_running_loop()
+        sched = scheduler
+        if sched is None:
+            from src.automation.scheduler import AutomationScheduler
+            sched = AutomationScheduler(on_event=broadcast)
+        else:
+            sched._on_event = broadcast
+        app.state.scheduler = sched
+        sched.start()
+        try:
+            yield
+        finally:
+            sched.stop()
+
+    app = FastAPI(title="Argent backend", lifespan=lifespan)
 
     @app.get("/health")
     def health():
         return {"status": "ok"}
+
+    @app.get("/automations")
+    def list_automations():
+        from dataclasses import asdict
+        from src.automation.store import load_automations, load_runs
+        return {"automations": [asdict(a) for a in load_automations()],
+                "recent_runs": load_runs(limit=20)}
 
     @app.websocket("/ws")
     async def ws_endpoint(websocket: WebSocket):
@@ -73,6 +116,7 @@ def create_app(session_factory=None) -> FastAPI:
         session = factory()
         loop = asyncio.get_running_loop()
         sender = None
+        clients.add(websocket)
 
         async def send_state():
             state = await loop.run_in_executor(None, session.state)
@@ -135,6 +179,8 @@ def create_app(session_factory=None) -> FastAPI:
             session.cancel()
             if sender is not None:
                 sender.cancel()
+        finally:
+            clients.discard(websocket)
 
     return app
 
