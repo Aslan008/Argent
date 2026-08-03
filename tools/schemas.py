@@ -826,8 +826,12 @@ TOOL_SCHEMAS = [
                 "  site:docs.unity3d.com  — restrict to one domain (vendor docs, a specific forum).\n"
                 "  filetype:pdf  — restrict to a file type (also ext:).\n"
                 "  -word  — exclude results containing it, e.g. -tutorial to skip beginner pages.\n"
-                "  intitle:word  — the word must be in the page title.\n"
+                "  intitle:word  — the word must be in the TITLE, not merely mentioned. Use it "
+                "when a common term drowns in passing mentions; it is translated to each engine's "
+                "native form (GitHub's in:title, StackOverflow's title filter).\n"
                 "Combine them: 'site:forum.unity.com \"Addressables\" memory leak -tutorial'.\n"
+                "Quoted phrases work everywhere; the rest are applied where the engine supports "
+                "them and dropped where it does not, so writing them is never harmful.\n"
                 "WARNING: this returns only short snippets and URLs. To read the actual content, "
                 "you MUST call `read_webpage` with the returned URL."
             ),

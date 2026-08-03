@@ -110,11 +110,31 @@ def _github_search(query: str, limit: int = 3) -> list:
 
 
 def _stackoverflow_search(query: str, limit: int = 3) -> list:
-    """Programming Q&A via the keyless StackExchange API."""
-    data = _get_json("https://api.stackexchange.com/2.3/search/advanced", {
-        "order": "desc", "sort": "relevance", "q": query,
-        "site": "stackoverflow", "pagesize": limit,
-    })
+    """Programming Q&A via the keyless StackExchange API.
+
+    This API expresses filters as PARAMETERS rather than query operators, so
+    `intitle:` is lifted out of the text into the native `title` field instead
+    of being searched for literally.
+    """
+    params = {"order": "desc", "sort": "relevance",
+              "site": "stackoverflow", "pagesize": limit}
+
+    title_terms = []
+
+    def _lift_title(m):
+        title_terms.append(m.group("val").strip('"'))
+        return ""
+
+    remainder = re.sub(r'\bintitle:(?P<val>"[^"]*"|\S+)', _lift_title, query,
+                       flags=re.IGNORECASE).strip()
+    if title_terms:
+        params["title"] = " ".join(title_terms)
+    if remainder:
+        params["q"] = remainder
+    if "title" not in params and "q" not in params:
+        return []
+
+    data = _get_json("https://api.stackexchange.com/2.3/search/advanced", params)
     out = []
     for item in data.get("items", []):
         score = item.get("score", 0)
@@ -242,8 +262,9 @@ def active_engines() -> list:
 #
 # Quoted phrases are deliberately absent from this table: every engine here
 # supports them, so they always pass through untouched.
-_OPERATOR_RE = re.compile(r'(?P<op>-?\b(?:site|filetype|ext|inurl|intitle|related|cache)):\S+',
-                          re.IGNORECASE)
+_OPERATOR_RE = re.compile(
+    r'(?P<op>-?\b(?:site|filetype|ext|inurl|intitle|related|cache)):(?P<val>"[^"]*"|\S+)',
+    re.IGNORECASE)
 _EXCLUDE_RE = re.compile(r'(?<!\S)-(?!\s)(?!\w+:)[^\s"]+')
 
 _OPERATOR_SUPPORT = {
@@ -254,29 +275,50 @@ _OPERATOR_SUPPORT = {
     # MediaWiki has its own language (intitle:, insource:) and no notion of a site.
     "_wikipedia_search": {"intitle", "exclude"},
     # The StackExchange API takes filters as query PARAMETERS; operators inside
-    # `q` are matched as text and quietly wreck the search.
-    "_stackoverflow_search": set(),
+    # `q` are matched as text and quietly wreck the search. intitle: is kept
+    # because the engine lifts it into the `title` parameter itself.
+    "_stackoverflow_search": {"intitle"},
     # GitHub has its own qualifiers (repo:, in:title, language:) — Google's are
-    # not valid there, but `-term` exclusion is.
-    "_github_search": {"exclude"},
+    # not valid there, but `-term` exclusion is, and intitle: TRANSLATES (below).
+    "_github_search": {"exclude", "intitle"},
+}
+
+# Where an operator has a native equivalent, translate instead of stripping.
+# The model writes ONE query for the whole federation, so it cannot express a
+# single engine's dialect — deriving it here is the only place that can.
+# Measured: 'Addressables in:title' returns a correctly-titled top hit where the
+# unqualified query returns an unrelated repository.
+def _github_intitle(value: str) -> str:
+    return f"{value} in:title"
+
+
+_OPERATOR_TRANSLATION = {
+    # engine -> {operator: fn(value) -> replacement text}
+    "_github_search": {"intitle": _github_intitle},
+    # Wikipedia's intitle: is already native, and StackExchange's engine lifts it
+    # into the API's `title` parameter itself (see _stackoverflow_search).
 }
 
 
-def adapt_query(query: str, supported: set) -> str:
-    """Drop operator syntax the target engine cannot honour.
+def adapt_query(query: str, supported: set, translation: dict = None) -> str:
+    """Rewrite a query into what the target engine can actually honour:
+    translate an operator when the engine has a native equivalent, keep it when
+    the syntax matches, drop it otherwise.
 
-    Removing an unsupported operator is strictly better than sending it: the
-    engine would otherwise search for the operator's literal text and return
-    nothing, which reads as "this source had no answer".
+    Dropping beats sending: the engine would search for the operator's literal
+    text and return nothing, which reads as "this source had no answer".
     """
     if not query:
         return query
+    translation = translation or {}
 
-    def _drop_op(m):
+    def _rewrite(m):
         name = m.group("op").lstrip("-").lower()
-        return "" if name not in supported else m.group(0)
+        if name in translation:
+            return translation[name](m.group("val").strip('"'))
+        return m.group(0) if name in supported else ""
 
-    out = _OPERATOR_RE.sub(_drop_op, query)
+    out = _OPERATOR_RE.sub(_rewrite, query)
     if "exclude" not in supported:
         out = _EXCLUDE_RE.sub("", out)
     return re.sub(r"\s{2,}", " ", out).strip()
@@ -288,7 +330,8 @@ def adapt_query_for_engine(query: str, engine) -> str:
     name = getattr(engine, "__name__", "")
     if name not in _OPERATOR_SUPPORT:
         return query
-    return adapt_query(query, _OPERATOR_SUPPORT[name])
+    return adapt_query(query, _OPERATOR_SUPPORT[name],
+                       _OPERATOR_TRANSLATION.get(name))
 
 
 def _norm_url(u: str) -> str:

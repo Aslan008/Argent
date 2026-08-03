@@ -217,6 +217,54 @@ class TestOperatorAdaptation:
         assert seen["_stackoverflow_search"] == '"leak"'
 
 
+class TestOperatorTranslation:
+    """Where an engine has a native equivalent, translate rather than strip.
+    The model writes ONE query for the whole federation, so it cannot express a
+    single engine's dialect — only the adapter can."""
+
+    def test_intitle_becomes_githubs_in_title(self):
+        out = search_mod.adapt_query_for_engine(
+            'intitle:"memory leak" Addressables', search_mod._github_search)
+        assert out == "memory leak in:title Addressables"
+
+    def test_intitle_stays_native_on_wikipedia(self):
+        out = search_mod.adapt_query_for_engine(
+            'intitle:"memory leak" x', search_mod._wikipedia_search)
+        assert 'intitle:"memory leak"' in out
+
+    def test_quoted_operator_values_are_not_split(self):
+        out = search_mod.adapt_query_for_engine(
+            'site:"docs.unity3d.com" leak', search_mod._stackoverflow_search)
+        assert "docs.unity3d.com" not in out and out == "leak"
+
+    def test_stackoverflow_lifts_intitle_into_the_title_parameter(self, monkeypatch):
+        """Its API filters by parameter; searching for the literal text
+        'intitle:' returns nothing."""
+        seen = {}
+
+        def fake_get(url, params, timeout=10):
+            seen.update(params)
+            return {"items": []}
+
+        monkeypatch.setattr(search_mod, "_get_json", fake_get)
+        search_mod._stackoverflow_search('intitle:"memory leak" async', limit=3)
+        assert seen["title"] == "memory leak"
+        assert seen["q"] == "async"
+        assert "intitle" not in seen.get("q", "")
+
+    def test_stackoverflow_without_intitle_uses_q_only(self, monkeypatch):
+        seen = {}
+        monkeypatch.setattr(search_mod, "_get_json",
+                            lambda url, params, timeout=10: seen.update(params) or {"items": []})
+        search_mod._stackoverflow_search("async deadlock", limit=3)
+        assert seen["q"] == "async deadlock" and "title" not in seen
+
+    def test_stackoverflow_skips_an_empty_search(self, monkeypatch):
+        monkeypatch.setattr(search_mod, "_get_json",
+                            lambda *a, **k: pytest.fail("must not call the API"))
+        assert search_mod._stackoverflow_search("   ", limit=3) == []
+
+
 class TestActiveEngines:
     def test_keyless_default_is_unchanged(self, no_brave_key):
         assert active_engines() == DEFAULT_ENGINES
