@@ -15,7 +15,9 @@ from config import (
 from providers import create_provider, ProviderError
 from logger import get_logger
 from hook_manager import hook_manager
-from prompt_compressor import compress_system_prompt, compress_tool_result
+from prompt_compressor import (
+    compress_system_prompt, compress_tool_result, drop_unavailable_tool_lines,
+)
 from tool_recovery import recover_tool_call
 from memory_manager import memory
 from config import get_model_size_category
@@ -101,12 +103,46 @@ def build_agents_memory(limit: int) -> List[str]:
 
 
 class ArgentAgent:
-    def build_system_prompt(self) -> str:
+    def build_system_prompt(self, available_tools=None) -> str:
+        """Assemble the system prompt for this turn.
+
+        `available_tools` is the set of tool names that will actually be sent
+        with the request. When given, instructions naming tools outside it are
+        dropped: the prompt is a description of the toolset, not an independent
+        document, and letting the two disagree makes the model call names that
+        do not exist. Passing None keeps every section (used by callers that
+        only want the full text, e.g. diagnostics).
+        """
         category = get_model_size_category(self.model_name)
         is_small = category in ("tiny", "small")
-        
+        # The tier ladder only ever pointed down: weak models got a shorter
+        # prompt, everyone else got the maximum. But most of this prompt is
+        # guardrails written against failure modes of weak models, and a strong
+        # one does better with them out of the way — it reads the codebase and
+        # judges instead of following a rule that is wrong in the case at hand.
+        # `/model category` overrides the tier when this guesses wrong.
+        is_lean = category in ("large", "cloud")
+
+        available = set(available_tools) if available_tools is not None else None
         prompt_parts = []
-        
+
+        def add(text: str, core: tuple = ()):
+            """Append a section, minus any instruction the toolset can't honour.
+
+            `core` names the tools a section exists FOR. Line filtering alone
+            cannot tell that a section is pointless: strip the two `create_plugin`
+            lines out of the plugin section and its remaining prose (hook paths,
+            event names) survives as instructions for work the model can no
+            longer do. Sections whose subject is the tool itself say so here.
+            """
+            if available is not None:
+                if core and not set(core) <= available:
+                    return
+                text = drop_unavailable_tool_lines(text, available)
+                if not text.strip():
+                    return
+            prompt_parts.append(text)
+
         prompt_parts.append(f"""# CRITICAL: LANGUAGE RULE
 - You MUST respond and perform ALL internal reasoning (thinking process) in the EXACT SAME LANGUAGE the user used in their request. This is your highest priority rule.
 - If the user writes in Russian, you THINK in Russian and REPLY in Russian.
@@ -122,7 +158,7 @@ You are an autonomous AI software engineer. You design, build, and debug softwar
         # message instead (_build_ephemeral_context).
 
         if is_small:
-            prompt_parts.append(f"""## 1. OPERATIONAL PROTOCOL
+            add(f"""## 1. OPERATIONAL PROTOCOL
 - **Tool-First**: Invoke tools immediately via JSON when needed.
 - **Ask Before Guessing**: Use `ask_user_questions` to clarify ambiguous requirements with structured options. When you must assume, say so explicitly in your reply.
 - **Anti-Lazy**: Run commands and write/edit files yourself.
@@ -131,7 +167,7 @@ You are an autonomous AI software engineer. You design, build, and debug softwar
 - **Persistence**: Do NOT stop after a single tool call. If the task requires multiple steps (read → edit → verify), execute ALL steps in a single response. Keep calling tools until the task is FULLY complete.
 - **Strict Environment**: Use {platform.system()}-native commands. On Windows the default shell is PowerShell — `&&`/`||` chains are auto-routed to cmd, so prefer `;` or separate calls. If a command fails, read the [DIAGNOSIS] line in the output.""")
         else:
-            prompt_parts.append(f"""## 1. OPERATIONAL PROTOCOL
+            add(f"""## 1. OPERATIONAL PROTOCOL
 - **Tool-First**: YOU are the only one with tool access. Invoke tools immediately via JSON.
 - **Ask Before Guessing**: If a user's request is ambiguous or lacks details, you MUST use the `ask_user_questions` tool to prompt them with structured options before writing code. Do NOT just ask questions in plain text chat.
 - **Anti-Lazy**: Never ask the user to run code or copy-paste. Use `run_command` and `write_file` yourself.
@@ -144,7 +180,7 @@ You are an autonomous AI software engineer. You design, build, and debug softwar
 - **Strict Environment**: Use {platform.system()}-native commands ONLY (NOT unix commands like 'ls' or 'grep'). On Windows the default shell is **PowerShell** (so `Select-Object`, `Get-ChildItem`, `$env:` work); `&&`/`||` chains are auto-routed to cmd, but prefer `;` or separate commands. If a command fails, READ the `[DIAGNOSIS]` line in its output before assuming the cause.""")
 
         if category == "tiny" and self.provider == "ollama":
-            prompt_parts.append("""## RESPONSE FORMAT (STRICT JSON STEPS)
+            add("""## RESPONSE FORMAT (STRICT JSON STEPS)
 Every response is EXACTLY ONE JSON object, one of:
 1. {"tool": {"name": "<tool_name>", "arguments": {...}}} — perform an action.
 2. {"reply": "<final answer to the user>"} — ONLY when the task is fully complete or you must ask the user something.
@@ -154,52 +190,70 @@ Example: {"tool": {"name": "read_file", "arguments": {"file_path": "main.py"}}}"
         auto_plugins = get_autonomous_plugins_enabled()
         if auto_plugins or not is_small:
             hooks_dir = get_hooks_dir()
-            prompt_parts.append(f"""## 2. PLUGIN DEVELOPMENT
+            add(f"""## 2. PLUGIN DEVELOPMENT
 - **HOOKS_DIR**: `{hooks_dir}`
 - **AUTONOMOUS_EXTENSION**: {'ENABLED' if auto_plugins else 'DISABLED'}
 - **Standard Plugin Development**:
   1. Use `create_plugin` to write new logic and `delete_plugin` to remove it (handles ./plugins/ and reloading).
   2. Define a function `command_NAME(*args)` for slash commands (e.g., `command_hello` -> `/hello`).
   3. Use events: `on_startup()`, `pre_prompt(text)`, `on_tool_call(func_name, args)`, `post_response(text)`, `on_chat_saved(file_path)`.
-  4. Always use `from ui import console` for output.""")
+  4. Always use `from ui import console` for output.""", core=("create_plugin",))
 
-        prompt_parts.append("""## 3. SKILLS SYSTEM
+        add("""## 3. SKILLS SYSTEM
 - You have access to instruction-based extensions stored in markdown files.
 - Use `list_skills` to discover skills. Use `read_skill` to read and follow instructions.
 - **Be proactive**: after you work out a non-trivial, repeatable workflow for THIS project (a build/deploy sequence, a multi-step fix pattern, project-specific conventions), persist it with `create_skill` so it can be reused. Don't wait to be asked.""")
 
         if not is_small:
-            prompt_parts.append("""## 4. PLANNING MODE & ARTIFACTS
+            add("""## 4. PLANNING MODE & ARTIFACTS
 - **Blind Spot Pass first**: for ambiguous, large, or unfamiliar tasks, BEFORE planning: check the ground (`git status`, run the project's tests/build — was it ALREADY broken before you touched it?), then explore the affected code, then report FACTS / RISKS / ASSUMPTIONS and ask up to 3 structured questions via `ask_user_questions`. State assumptions explicitly ("Assuming X — скажи, если не так") instead of guessing silently. Full method: `read_skill("blind-spot-pass")`.
 - **New features**: follow `read_skill("feature-workflow")` — a one-question-at-a-time interview (each answer shapes the next; architecture-changing ambiguities first), a spec/prototype approval gate, a deviation journal in .argent/artifacts/ while you build, then a review document + short comprehension quiz for the user.
 - For complex changes, you MUST create an implementation plan before writing any code.
 - Use `create_artifact("implementation_plan.md", content)` to present your plan to the user.
 - Then, use `request_user_approval("I have created an implementation plan. Please review and approve.")` to PAUSE execution and wait for the user to confirm.
 - NEVER start making massive changes without the user's explicit approval.
-- Use `create_artifact("task.md", content)` to track your progress after approval.""")
+- Use `create_artifact("task.md", content)` to track your progress after approval.""",
+                core=("create_artifact", "request_user_approval"))
 
-        if not is_small:
-            prompt_parts.append("""## 5. UI & TERMINOLOGY STANDARDS
+        if is_lean:
+            # Terminal-UI conventions are a fact about THIS codebase, not a rule
+            # a capable model needs restated every turn — it can read the
+            # surrounding code. Projects that need it say so in AGENTS.md.
+            add("""## 5. CODE STYLE
+- Write code that reads like the code around it: match its idiom, naming and comment density.""")
+        elif not is_small:
+            add("""## 5. UI & TERMINOLOGY STANDARDS
 - **"Panel"**: Always refers to `rich.panel.Panel` for terminal UI. NEVER start web servers or use web-dashboard libraries unless building a web app.
 - **"Table"**: Always refers to `rich.table.Table`.
 - **Output**: Use `console.print()` or `print_system()` for beautiful terminal results.""")
 
         if is_small:
-            prompt_parts.append("""## 6. THINK & VERIFY PROTOCOL
+            add("""## 6. THINK & VERIFY PROTOCOL
 - **Outcome Analysis**: Verify if tool results truly move you closer to the goal.
 - **Proactive Verification**: After writing files or executing commands, verify they work as intended.
 - **Self-Correction**: If stuck in a loop, stop, rethink, and explain to the user.""")
+        elif is_lean:
+            # "Analyze each result", "verify your work" and "self-correct" are
+            # descriptions of what a capable model already does; what it cannot
+            # know is that this environment lies about success, and what it must
+            # be held to is not claiming completion it did not observe.
+            add("""## 6. GROUND YOUR CLAIMS
+- **False Success**: "Requirement already satisfied" or "Exit code: 0" does NOT always mean success here. If a tool reports success but the problem persists, try a different approach.
+- **Prove It**: NEVER declare a task done without having RUN the relevant verification in the same turn (tests, a build, the command itself) and quoting its actual output. If verification is impossible from here (e.g. needs the Unity editor), say so explicitly instead of claiming success.""")
         else:
-            prompt_parts.append("""## 6. THINK & VERIFY PROTOCOL
+            add("""## 6. THINK & VERIFY PROTOCOL
 - **Outcome Analysis**: After EACH tool call, analyze if the result truly moves you closer to the goal.
 - **False Success**: "Requirement already satisfied" or "Exit code: 0" does NOT always mean success. If a tool reports success but the problem persists, try a different approach.
 - **Proactive Verification**: After installing things or writing complex files, use `run_command` or `read_file` to VERIFY they work as intended.
 - **Prove It**: NEVER declare a task done without having RUN the relevant verification in the same turn (tests, a build, the command itself) and quoting its actual output. If verification is impossible from here (e.g. needs the Unity editor), say so explicitly instead of claiming success.
 - **Self-Correction**: If you are stuck in a loop, STOP. Rethink your strategy. Explain your new reasoning to the user.""")
 
-        prompt_parts.append("""## 7. COMMUNICATION
-- **Language**: Follow the CRITICAL LANGUAGE RULE at the top of this prompt.
-- **Transparency**: Briefly state your reasoning before executing tools.
+        # The language rule is stated once, at the top. Repeating it here as a
+        # pointer cost tokens to say nothing new. Response length, by contrast,
+        # is NOT implied by anything else in the prompt and has to be asked for.
+        add("""## 7. COMMUNICATION
+- **Transparency**: Before your first tool call, say in one sentence what you are about to do.
+- **Length**: Keep replies reasonably concise — answer the question asked, without a recap of work the user just watched you do.
 - **Visuals**: Use `create_svg_image` to explain complex concepts or UI mockups via browser.""")
 
 
@@ -211,9 +265,13 @@ Example: {"tool": {"name": "read_file", "arguments": {"file_path": "main.py"}}}"
         AGENTS_MD_LIMIT = {"tiny": 2000, "small": 4000}.get(category, 12000)
         prompt_parts.extend(build_agents_memory(AGENTS_MD_LIMIT))
 
+        # Skipped wholesale rather than line-filtered when the model has no
+        # `call_mcp_tool`: the per-server subsections would survive the line
+        # filter as headings with an endpoint and no way to act on it. Checking
+        # first also avoids the blocking tools/list round-trip below.
         try:
             from mcp_client import mcp_client
-            mcp_servers = get_mcp_servers()
+            mcp_servers = get_mcp_servers() if (available is None or "call_mcp_tool" in available) else []
             if mcp_servers:
                 mcp_section = "## MCP SERVERS (External Tool Integration)\n"
                 mcp_section += "You have access to external tool servers via `call_mcp_tool(server_name, tool_name, arguments_json)`.\n"
@@ -246,7 +304,7 @@ Example: {"tool": {"name": "read_file", "arguments": {"file_path": "main.py"}}}"
                     except Exception:
                         mcp_section += "- **Tools**: (connection failed — server may be offline)\n"
                     mcp_section += "\n"
-                prompt_parts.append(mcp_section)
+                add(mcp_section)
         except Exception:
             pass
 
@@ -259,7 +317,7 @@ Example: {"tool": {"name": "read_file", "arguments": {"file_path": "main.py"}}}"
             if is_rag_enabled():
                 kb_names = [kb.get("name", kb.get("id")) for kb in get_external_kbs() if kb.get("enabled", True)]
                 if kb_names:
-                    prompt_parts.append(
+                    add(
                         "## KNOWLEDGE BASES\n"
                         f"Indexed documentation is available: {', '.join(kb_names)}. "
                         "For ANY question about these libraries/APIs, call `semantic_search` FIRST and base your "
@@ -274,7 +332,22 @@ Example: {"tool": {"name": "read_file", "arguments": {"file_path": "main.py"}}}"
         # for another would strip sections the prompt was written to include.
         return compress_system_prompt(full_prompt, self.model_name, category)
 
-    def _refresh_system_prompt(self) -> bool:
+    def effective_tool_names(self, allowed_tools=None) -> set:
+        """The tool names this turn's request will actually carry.
+
+        Mirrors the filtering applied when the request is assembled (config
+        denylist, mode allowlist, tier slimming) so the system prompt can be
+        built against the same set. Stable within a mode, so deriving the
+        prompt from it does not churn the prefix cache."""
+        from tool_profiles import slim_tools_for_category
+
+        names = [t["function"]["name"]
+                 for t in get_tool_schemas(include_hidden=(allowed_tools is not None))]
+        if allowed_tools is not None:
+            names = [n for n in names if n in allowed_tools]
+        return set(slim_tools_for_category(names, get_model_size_category(self.model_name)))
+
+    def _refresh_system_prompt(self, allowed_tools=None) -> bool:
         """Rebuild the system prompt only if it actually changed.
 
         The system prompt is the prefix of every request; replacing it with a
@@ -282,7 +355,7 @@ Example: {"tool": {"name": "read_file", "arguments": {"file_path": "main.py"}}}"
         invalidates the provider's whole prefix cache. Stable inputs (tier,
         AGENTS.md, MCP list) rarely change, so most turns this is a no-op and
         the KV cache stays warm. Returns True when the prompt was replaced."""
-        new_prompt = self.build_system_prompt()
+        new_prompt = self.build_system_prompt(self.effective_tool_names(allowed_tools))
         if self.messages and self.messages[0].get("content") == new_prompt:
             return False
         if self.messages:
@@ -644,7 +717,7 @@ Example: {"tool": {"name": "read_file", "arguments": {"file_path": "main.py"}}}"
         Process the user input and yield chunks of response or tool activity.
         Supports streaming generation.
         """
-        self._refresh_system_prompt()
+        self._refresh_system_prompt(allowed_tools)
         self.messages.append({"role": "user", "content": user_text})
         
         if not user_text.startswith("/"):
@@ -1084,14 +1157,19 @@ Example: {"tool": {"name": "read_file", "arguments": {"file_path": "main.py"}}}"
                         self.messages.append(provider.format_tool_result(str(result), tool_call.get("id")))
                         continue
                     
+                    # Name substitutions must be reported back (see below): the
+                    # model asked for one tool and got another, and only it can
+                    # judge whether the swap preserved its intent.
+                    substituted_from = None
                     if func_name not in current_tools:
                         recovered = recover_tool_call(tool_call, current_tools)
                         if recovered:
+                            substituted_from = recovered.get("renamed_from")
                             func_name = recovered["function"]["name"]
                             arguments = recovered["function"]["arguments"]
                             tool_call["function"]["name"] = func_name
                             tool_call["function"]["arguments"] = arguments
-                    
+
                     yield {"type": "tool_start", "name": func_name, "args": arguments}
                         
                     if func_name in current_tools:
@@ -1162,8 +1240,23 @@ Example: {"tool": {"name": "read_file", "arguments": {"file_path": "main.py"}}}"
                         except Exception as e:
                             result = f"Error executing tool {func_name}: {e}"
                     else:
-                        result = f"Error: Tool {func_name} is not available."
-                        
+                        import difflib as _dl
+                        near = _dl.get_close_matches(func_name, current_tools.keys(), n=3, cutoff=0.4)
+                        result = (f"Error: Tool '{func_name}' is not available."
+                                  + (f" Closest available: {', '.join(near)}." if near else "")
+                                  + " Call one of the tools you were given.")
+
+                    # A recovered call ran under a DIFFERENT name than requested.
+                    # Without this note the model reads the result as its own
+                    # call succeeding — which is how 'append_to_file' resolving
+                    # to 'read_file' silently discarded the content to write.
+                    if substituted_from:
+                        result = str(result) + (
+                            f"\n\n[Argent]: no tool named '{substituted_from}' exists; the closest match "
+                            f"`{func_name}` was run instead. If that does not match your intent, the action "
+                            f"you wanted has NOT happened — call the correct tool now."
+                        )
+
                     # Loop guard: deterministically catch verbatim-repeated calls
                     # that small models never notice on their own.
                     guard_level = self.loop_guard.record(func_name, arguments, str(result))
@@ -1424,6 +1517,16 @@ class ArgentSubAgent(ArgentAgent):
         
         # Replace main system prompt
         self.messages[0] = {"role": "system", "content": custom_system}
+
+    def _refresh_system_prompt(self, allowed_tools=None) -> bool:
+        """A sub-agent's system prompt IS its role, so it is never rebuilt.
+
+        The inherited version regenerates the main agent's prompt and writes it
+        over messages[0] — which happens on the sub-agent's very first turn,
+        before it has produced anything. Every role (Critic, Reviewer, Coder…)
+        was silently dissolved into a generic agent at that point.
+        """
+        return False
 
     def execute(self) -> str:
         """Run the sub-agent loop until completion and return the final report."""

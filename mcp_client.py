@@ -322,6 +322,7 @@ class MCPServer:
         self.config = config
         self.transport: Optional[_BaseTransport] = None
         self._tools_cache: List[dict] = []
+        self._tools_unavailable = False
 
     @property
     def server_type(self) -> MCPTransportType:
@@ -356,10 +357,18 @@ class MCPServer:
             self.transport.stop()
             self.transport = None
         self._tools_cache = []
+        self._tools_unavailable = False      # a restart deserves a fresh attempt
 
     def list_tools(self) -> List[dict]:
         if self._tools_cache:
             return self._tools_cache
+        # A FAILED listing is remembered too. This is called while building the
+        # system prompt, i.e. once per turn: without this an unreachable server
+        # cost a 10s timeout every turn, forever, and the section text flipped
+        # between the tool list and "could not fetch" — churning the prefix
+        # cache. Recovery is via /mcp (stop/start clears the flag).
+        if self._tools_unavailable:
+            return []
         self._refresh_tools()
         return self._tools_cache
 
@@ -370,6 +379,8 @@ class MCPServer:
         tools = result.get("result", {}).get("tools", [])
         if tools and "error" not in tools[0]:
             self._tools_cache = tools
+        else:
+            self._tools_unavailable = True
 
     def call_tool(self, tool_name: str, arguments: dict) -> str:
         if not self.transport:

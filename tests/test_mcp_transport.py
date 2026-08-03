@@ -62,3 +62,37 @@ class TestStopClosesPipes:
         t._pending_requests = {}
         t.stop()
         assert t._initialized is False
+
+
+def _server_with_transport(reply):
+    srv = mcp_client.MCPServer.__new__(mcp_client.MCPServer)
+    srv.name = "srv"
+    srv._tools_cache = []
+    srv._tools_unavailable = False
+    srv.transport = MagicMock()
+    srv.transport.send_request.return_value = reply
+    return srv
+
+
+class TestToolListingIsAskedOnce:
+    """list_tools() runs once per turn while the system prompt is built, so a
+    server that cannot answer must not be re-asked: each miss cost a 10s
+    timeout and flipped the prompt text, churning the provider's prefix cache."""
+
+    def test_success_is_cached(self):
+        srv = _server_with_transport({"result": {"tools": [{"name": "t"}]}})
+        assert srv.list_tools() == [{"name": "t"}]
+        assert srv.list_tools() == [{"name": "t"}]
+        assert srv.transport.send_request.call_count == 1
+
+    def test_failure_is_cached_too(self):
+        srv = _server_with_transport({"error": {"message": "boom"}})
+        assert srv.list_tools() == []
+        assert srv.list_tools() == []
+        assert srv.transport.send_request.call_count == 1
+
+    def test_restart_clears_the_failure(self):
+        srv = _server_with_transport({"error": {"message": "boom"}})
+        srv.list_tools()
+        srv.stop()
+        assert srv._tools_unavailable is False

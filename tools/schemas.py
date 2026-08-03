@@ -5,7 +5,7 @@ from tools.project_tools import (
     write_project_architecture, write_file_spec,
 )
 from tools.file_ops import (
-    read_file, write_file, delete_file, create_directory,
+    read_file, write_file, append_to_file, delete_file, create_directory,
     move_file, copy_file, replace_in_file, replace_python_function,
     multi_replace_in_file, multi_replace_in_file_chunk, get_file_outline, list_directory,
     run_deep_linter
@@ -47,6 +47,7 @@ AVAILABLE_TOOLS = {
     "add_work_task": add_work_task,
     "read_file": read_file,
     "write_file": write_file,
+    "append_to_file": append_to_file,
     "delete_file": delete_file,
     "create_directory": create_directory,
     "move_file": move_file,

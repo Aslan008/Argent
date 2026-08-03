@@ -4,7 +4,75 @@ Adapts system prompt and tool results based on model size.
 Small models get shorter prompts to stay within context limits.
 """
 
+import re
+
 from config import get_model_size_category
+
+# A line that names a tool but is not an instruction to call one. Headings and
+# blank lines carry no tool dependency, so they must never be dropped on their
+# own account — only when the whole section around them empties out.
+_HEADING = re.compile(r"^\s*#{1,6}\s")
+_WORD = re.compile(r"[a-z_]{4,}")
+
+
+def drop_unavailable_tool_lines(prompt: str, available: set) -> str:
+    """Remove prompt lines that instruct the model to use tools it was not given.
+
+    The system prompt and the tool schemas are assembled independently, so they
+    drift: sections kept telling the model to call `create_artifact`,
+    `list_directory` or `create_plugin` on turns where those schemas were never
+    sent — either disabled in config or outside the mode's toolset. The model
+    then emits a call for a name that does not exist and the recovery layer has
+    to guess at it.
+
+    Filtering by line rather than by section keeps a rule whose neighbours are
+    still valid, and a heading left with no instructions under it is dropped
+    with them.
+    """
+    if not available:
+        return prompt
+
+    kept, section, section_has_content = [], None, False
+
+    def flush():
+        # A heading only earns its tokens if something survived beneath it.
+        if section is not None and section_has_content:
+            kept.extend(section)
+
+    for line in prompt.split("\n"):
+        if _HEADING.match(line):
+            flush()
+            section, section_has_content = [line], False
+            continue
+
+        named = {w for w in _WORD.findall(line) if w in _ALL_TOOL_NAMES()}
+        if named and not named <= available:
+            continue
+
+        target = section if section is not None else kept
+        target.append(line)
+        if section is not None and line.strip():
+            section_has_content = True
+
+    flush()
+    return "\n".join(kept)
+
+
+_TOOL_NAME_CACHE = None
+
+
+def _ALL_TOOL_NAMES() -> set:
+    """Every tool name Argent knows, so the filter can tell a tool reference
+    from an ordinary word. Imported lazily — tools imports config, and config
+    must not depend on this module at import time."""
+    global _TOOL_NAME_CACHE
+    if _TOOL_NAME_CACHE is None:
+        try:
+            from tools.schemas import TOOL_SCHEMAS
+            _TOOL_NAME_CACHE = {t["function"]["name"] for t in TOOL_SCHEMAS} | {"semantic_search"}
+        except Exception:
+            _TOOL_NAME_CACHE = set()
+    return _TOOL_NAME_CACHE
 
 _MINI_SYSTEM_SUFFIX = """
 ## RULES (SHORT)

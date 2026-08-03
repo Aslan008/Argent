@@ -104,10 +104,26 @@ def summarize_messages(msgs_to_summarize: List[Dict], model_name: str, timeout: 
             content = f"[Tool Calls: {m['tool_calls']}]"
         text_to_summarize += f"{role.upper()}: {content}\n\n"
         
+    # A hard "1-2 paragraphs" cap optimised for brevity before completeness,
+    # so whatever did not fit was lost for the rest of the session — and what
+    # got dropped first was the open-problem list, the one thing the agent
+    # cannot reconstruct by re-reading the code. Named buckets keep the
+    # unrecoverable facts and let the recoverable ones go.
     summary_prompt = (
-        "You are a context-compression engine. Summarize the following past conversation strictly in 1-2 paragraphs. "
-        "Focus entirely on the technical progress, code written, and facts established. "
-        "Omit politeness and conversational filler. Here is the log:\n\n" + text_to_summarize
+        "You are a context-compression engine. The conversation below is about to be "
+        "dropped from the agent's context; your summary is all that survives.\n\n"
+        "Capture completely, then compress:\n"
+        "- **Goal**: what the user is trying to achieve, in their own terms.\n"
+        "- **Decisions**: choices made and WHY, especially ones already rejected — "
+        "without the reason, they get re-litigated.\n"
+        "- **Changed**: files created/edited and what changed in each.\n"
+        "- **Open**: bugs, failing tests and unfinished work, with the exact error text. "
+        "This is the section that must not be shortened.\n"
+        "- **Learned**: facts about this codebase discovered the hard way "
+        "(commands, paths, gotchas) that a re-read would not reveal.\n\n"
+        "Omit pleasantries, narration and tool output that can be re-fetched. "
+        "Write nothing under a heading that has no content.\n\n"
+        "Here is the log:\n\n" + text_to_summarize
     )
     
     result_container = [None]

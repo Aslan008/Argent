@@ -30,7 +30,9 @@ class TestStableSystemPrompt:
 
     def test_refresh_replaces_on_real_change(self, agent, monkeypatch):
         agent._refresh_system_prompt()
-        monkeypatch.setattr(agent, "build_system_prompt", lambda: "NEW PROMPT")
+        # build_system_prompt now takes the turn's toolset (see
+        # test_prompt_toolset_sync.py) — accept and ignore it here.
+        monkeypatch.setattr(agent, "build_system_prompt", lambda *_: "NEW PROMPT")
         assert agent._refresh_system_prompt() is True
         assert agent.messages[0]["content"] == "NEW PROMPT"
 
