@@ -271,7 +271,7 @@ def main():
         '/hooks', '/tools', '/save', '/project', '/work', '/commit',
         '/sessions', '/load', '/copy', '/logs', '/skills', '/skill import', '/auto', '/vibe', '/tasks', '/verbose', '/debug', '/browser', '/exit', '/quit',
         '/mcp', '/thinking', '/temp', '/temperature',
-        '/cd', '/undo', '/diff', '/changes', '/rewind', '/stats', '/aux', '/doctor', '/jobs', '/stop', '/goal', '/critic', '/rooms',
+        '/cd', '/undo', '/diff', '/changes', '/rewind', '/stats', '/aux', '/search', '/doctor', '/jobs', '/stop', '/goal', '/critic', '/rooms',
         
         # Subcommands and parameter variations
         '/mcp list', '/mcp add', '/mcp remove', '/mcp test', '/mcp start', '/mcp stop',

@@ -182,6 +182,8 @@ def handle_slash_command(command: str, agent: ArgentAgent) -> bool:
             print_system(stop_background_command(parts[1]))
     elif cmd == "/aux":
         _handle_aux_command()
+    elif cmd == "/search":
+        _handle_search_command()
     elif cmd == "/doctor":
         from doctor import print_diagnostics
         print_diagnostics()
@@ -212,6 +214,7 @@ def handle_slash_command(command: str, agent: ArgentAgent) -> bool:
             "- `/rag_toggle` - Enable/disable semantic-search indexing\n"
             "- `/auto_retrieve` - Toggle auto-injecting semantic-search results each query\n"
             "- `/research [topic]` - Autonomous web research → notes\n"
+            "- `/search` - Web search settings: Brave API key, query languages, reranker model\n"
             "- `/skills` - List available skills (flat .md and SKILL.md folders)\n"
             "- `/skill import <source>` - Install a skill from a GitHub repo (owner/repo or URL) or local path\n"
             "\n**Safety & quality**\n"
@@ -326,6 +329,104 @@ def handle_slash_command(command: str, agent: ArgentAgent) -> bool:
         else:
             print_error(f"Unknown command: {command}. Type /help for available commands.")
     return False
+
+
+def _handle_search_command():
+    """Configure web research: the optional Brave index, the query languages and
+    the reranker.
+
+    These three are one setting in practice. Adding a language without a
+    multilingual reranker retrieves pages that are then scored so low they never
+    reach the answer, and a multilingual reranker with English-only queries
+    never sees anything to rerank — so the menu shows the mismatch instead of
+    letting you configure half of it.
+    """
+    from config import (
+        get_brave_api_key, set_brave_api_key,
+        get_reranker_model, set_reranker_model,
+        get_search_languages, set_search_languages,
+    )
+    from src.research.rerank import MULTILINGUAL_MODEL, _DEFAULT_MODEL
+    from src.research.search import engine_labels
+
+    key = get_brave_api_key()
+    langs = get_search_languages()
+    model = get_reranker_model() or _DEFAULT_MODEL
+    multilingual = model != _DEFAULT_MODEL
+
+    print_system(f"Движки: [bold cyan]{', '.join(engine_labels())}[/bold cyan]")
+    print_system(f"Brave API-ключ: {'задан' if key else '[dim]не задан[/dim]'}")
+    print_system(f"Языки запросов: [bold cyan]{', '.join(langs)}[/bold cyan]")
+    print_system(f"Reranker: [bold cyan]{model.split('/')[-1]}[/bold cyan]"
+                 f" ({'мультиязычный' if multilingual else 'только английский'})")
+    if langs != ["en"] and not multilingual:
+        print_system("[yellow]Внимание:[/yellow] запросы не только на английском, но reranker "
+                     "англоязычный — найденные неанглийские страницы будут отброшены при ранжировании.")
+
+    BRAVE = "Brave API-ключ (второй независимый индекс поиска)"
+    LANGS = "Языки поисковых запросов"
+    MODEL = "Модель reranker'а"
+    choice = questionary.select("Что настроить?", choices=[BRAVE, LANGS, MODEL, "Отмена"]).ask()
+
+    if choice == BRAVE:
+        new_key = questionary.password(
+            "Brave Search API key (пусто — отключить; ключ берётся на brave.com/search/api):"
+        ).ask()
+        if new_key is None:
+            return
+        set_brave_api_key(new_key)
+        print_system("Brave включён — второй индекс добавлен к поиску."
+                     if new_key.strip() else "Brave отключён.")
+        return
+
+    if choice == LANGS:
+        picked = questionary.checkbox(
+            "На каких языках писать поисковые запросы (English почти всегда нужен — "
+            "техническая документация и ответы англоязычны):",
+            choices=[
+                questionary.Choice("English", value="en", checked="en" in langs),
+                questionary.Choice("Русский", value="ru", checked="ru" in langs),
+                questionary.Choice("Deutsch", value="de", checked="de" in langs),
+                questionary.Choice("Français", value="fr", checked="fr" in langs),
+                questionary.Choice("Español", value="es", checked="es" in langs),
+                questionary.Choice("中文", value="zh", checked="zh" in langs),
+            ],
+        ).ask()
+        if picked is None:
+            return
+        if not picked:
+            print_error("Нужен хотя бы один язык — оставляю как было.")
+            return
+        set_search_languages(picked)
+        print_system(f"Языки запросов: {', '.join(picked)}")
+        if picked != ["en"] and not multilingual:
+            print_system("[yellow]Теперь стоит переключить reranker на мультиязычный[/yellow] — "
+                         "иначе неанглийские результаты не дойдут до ответа (/search → Модель reranker'а).")
+        return
+
+    if choice == MODEL:
+        ENGLISH = f"Английский, 92 МБ — {_DEFAULT_MODEL.split('/')[-1]}"
+        MULTI = f"Мультиязычный, ~490 МБ — {MULTILINGUAL_MODEL.split('/')[-1]}"
+        OTHER = "Другая модель (ввести имя с HuggingFace)"
+        picked = questionary.select(
+            "Reranker ранжирует найденные фрагменты. Мультиязычный нужен, если ищете "
+            "не только на английском (замерено: англоязычный ставит нерелевантный русский "
+            "текст выше релевантного).",
+            choices=[ENGLISH, MULTI, OTHER, "Отмена"],
+        ).ask()
+        if picked == ENGLISH:
+            set_reranker_model("")
+            print_system("Reranker: англоязычный (по умолчанию).")
+        elif picked == MULTI:
+            set_reranker_model(MULTILINGUAL_MODEL)
+            print_system("Reranker: мультиязычный. Модель скачается при первом поиске "
+                         "(~490 МБ), дальше берётся из кэша.")
+        elif picked == OTHER:
+            name = questionary.text("Имя модели на HuggingFace (cross-encoder):").ask()
+            if name and name.strip():
+                set_reranker_model(name)
+                print_system(f"Reranker: {name.strip()}")
+        return
 
 
 def _handle_aux_command():

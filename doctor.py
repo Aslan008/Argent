@@ -141,13 +141,8 @@ def _check_rag():
 
 def _check_web_search():
     """Which search engines this session will actually federate."""
-    from src.research.search import active_engines
-    names = {
-        "_ddg_search": "DuckDuckGo", "_wikipedia_search": "Wikipedia",
-        "_stackoverflow_search": "StackOverflow", "_github_search": "GitHub",
-        "_brave_search": "Brave",
-    }
-    active = [names.get(e.__name__, e.__name__) for e in active_engines()]
+    from src.research.search import engine_labels
+    active = engine_labels()
     detail = ", ".join(active)
 
     # Query language and reranker language must match, or the pipeline fights

@@ -204,6 +204,21 @@ def _brave_search(query: str, limit: int = 5) -> list:
 DEFAULT_ENGINES = [_ddg_search, _wikipedia_search, _stackoverflow_search, _github_search]
 
 
+# Display names, kept next to the engines themselves so /doctor and /search
+# cannot drift into describing the same federation differently.
+ENGINE_LABELS = {
+    "_ddg_search": "DuckDuckGo", "_wikipedia_search": "Wikipedia",
+    "_stackoverflow_search": "StackOverflow", "_github_search": "GitHub",
+    "_brave_search": "Brave",
+}
+
+
+def engine_labels(engines=None) -> list:
+    """Readable names of the engines that will run."""
+    return [ENGINE_LABELS.get(e.__name__, e.__name__)
+            for e in (engines if engines is not None else active_engines())]
+
+
 def active_engines() -> list:
     """The engine set for this run: the keyless baseline plus any that the user
     has configured (currently Brave). Built per call so enabling a key takes
