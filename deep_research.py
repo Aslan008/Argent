@@ -99,6 +99,14 @@ RULES — these decide whether the search finds anything:
    when they are known. Vague queries return vague pages.
 5. NO natural-language sentences and no question marks — write keyword queries
    the way an experienced engineer types them.
+6. OPERATORS are available and each engine is automatically given only the ones
+   it understands, so use them freely:
+   - "exact phrase" — the words must appear together, verbatim;
+   - site:domain — restrict to a vendor's docs or one forum;
+   - filetype:pdf — for specs, papers and manuals;
+   - -word — exclude a term that keeps polluting the results (e.g. -tutorial
+     when you need reference material, not beginner posts);
+   - intitle:word — the term must be in the title, not just mentioned.
 
 Return ONLY a valid JSON array of 5 strings. No markup, no explanations.
 Example: ["\\"NullReferenceException\\" Unity Addressables LoadAssetAsync", "site:docs.unity3d.com Addressables memory management"]

@@ -816,13 +816,27 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "search_web",
-            "description": "Searches the web using DuckDuckGo to find up-to-date information, documentation, or news. WARNING: This only returns short snippets and URLs. To read the actual content, YOU MUST call `read_webpage` with the returned URL.",
+            "description": (
+                "Searches the web across several engines at once (DuckDuckGo, Wikipedia, "
+                "StackOverflow, GitHub issues, and Brave when configured) and merges the results.\n"
+                "Search operators are supported and worth using — each engine is automatically "
+                "given only the ones it understands:\n"
+                "  \"exact phrase\"  — the words must appear together, verbatim. The single most "
+                "effective technique for error messages: \"NullReferenceException in LoadAsync\".\n"
+                "  site:docs.unity3d.com  — restrict to one domain (vendor docs, a specific forum).\n"
+                "  filetype:pdf  — restrict to a file type (also ext:).\n"
+                "  -word  — exclude results containing it, e.g. -tutorial to skip beginner pages.\n"
+                "  intitle:word  — the word must be in the page title.\n"
+                "Combine them: 'site:forum.unity.com \"Addressables\" memory leak -tutorial'.\n"
+                "WARNING: this returns only short snippets and URLs. To read the actual content, "
+                "you MUST call `read_webpage` with the returned URL."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "query": {
                         "type": "string",
-                        "description": "The search query."
+                        "description": "The search query, optionally with operators (see the description)."
                     }
                 },
                 "required": ["query"]

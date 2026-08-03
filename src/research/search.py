@@ -233,6 +233,64 @@ def active_engines() -> list:
     return engines
 
 
+# Google-style operators the model may write. They are NOT portable: the same
+# string is sent to five engines that speak different query languages, and an
+# operator the engine does not know is treated as literal text — measured, a
+# query carrying `site:` returned 5 results from DuckDuckGo and Brave and ZERO
+# from Wikipedia and GitHub, silently removing them from the federation. So each
+# engine declares what it understands and the rest is stripped before sending.
+#
+# Quoted phrases are deliberately absent from this table: every engine here
+# supports them, so they always pass through untouched.
+_OPERATOR_RE = re.compile(r'(?P<op>-?\b(?:site|filetype|ext|inurl|intitle|related|cache)):\S+',
+                          re.IGNORECASE)
+_EXCLUDE_RE = re.compile(r'(?<!\S)-(?!\s)(?!\w+:)[^\s"]+')
+
+_OPERATOR_SUPPORT = {
+    # DuckDuckGo passes Google's operator set through almost entirely.
+    "_ddg_search": {"site", "filetype", "ext", "inurl", "intitle", "exclude"},
+    # Brave supports the common filters; the rarer ones are ignored, not honoured.
+    "_brave_search": {"site", "filetype", "ext", "exclude"},
+    # MediaWiki has its own language (intitle:, insource:) and no notion of a site.
+    "_wikipedia_search": {"intitle", "exclude"},
+    # The StackExchange API takes filters as query PARAMETERS; operators inside
+    # `q` are matched as text and quietly wreck the search.
+    "_stackoverflow_search": set(),
+    # GitHub has its own qualifiers (repo:, in:title, language:) — Google's are
+    # not valid there, but `-term` exclusion is.
+    "_github_search": {"exclude"},
+}
+
+
+def adapt_query(query: str, supported: set) -> str:
+    """Drop operator syntax the target engine cannot honour.
+
+    Removing an unsupported operator is strictly better than sending it: the
+    engine would otherwise search for the operator's literal text and return
+    nothing, which reads as "this source had no answer".
+    """
+    if not query:
+        return query
+
+    def _drop_op(m):
+        name = m.group("op").lstrip("-").lower()
+        return "" if name not in supported else m.group(0)
+
+    out = _OPERATOR_RE.sub(_drop_op, query)
+    if "exclude" not in supported:
+        out = _EXCLUDE_RE.sub("", out)
+    return re.sub(r"\s{2,}", " ", out).strip()
+
+
+def adapt_query_for_engine(query: str, engine) -> str:
+    """adapt_query for a specific engine function. An engine we don't know
+    (a test double, a user-added one) gets the query unchanged."""
+    name = getattr(engine, "__name__", "")
+    if name not in _OPERATOR_SUPPORT:
+        return query
+    return adapt_query(query, _OPERATOR_SUPPORT[name])
+
+
 def _norm_url(u: str) -> str:
     """Normalise a URL for dedup: host lowercased, trailing slash and fragment
     dropped. Different sources often return the same page with cosmetic diffs."""
@@ -258,7 +316,13 @@ def meta_search(query: str, max_results: int = 8, engines=None,
     buckets = []
     for eng in engines:
         try:
-            buckets.append(list(eng(query, per_engine)) or [])
+            # Each engine gets the query in the dialect it actually speaks.
+            adapted = adapt_query_for_engine(query, eng)
+            if not adapted:
+                # The query was nothing BUT operators this engine cannot use.
+                buckets.append([])
+                continue
+            buckets.append(list(eng(adapted, per_engine)) or [])
         except Exception as e:
             log.debug("search engine %s failed: %s", getattr(eng, "__name__", eng), e)
             buckets.append([])

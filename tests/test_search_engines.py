@@ -7,7 +7,7 @@ import pytest
 
 import config
 from src.research import search as search_mod
-from src.research.search import DEFAULT_ENGINES, active_engines
+from src.research.search import DEFAULT_ENGINES, active_engines, meta_search
 
 
 @pytest.fixture
@@ -141,6 +141,80 @@ class TestBraveRateLimit:
         monkeypatch.setattr(s, "_brave_pace",
                             lambda: pytest.fail("must not pace when disabled"))
         assert s._brave_search("q") == []
+
+
+class TestOperatorAdaptation:
+    """One query string reaches five engines that speak different query
+    languages. Measured before this existed: a query carrying `site:` returned
+    5 results from DuckDuckGo and Brave and ZERO from Wikipedia and GitHub,
+    which silently removed them from the federation."""
+
+    def test_google_operators_survive_for_engines_that_honour_them(self):
+        q = 'site:forum.unity.com "Addressables" leak -tutorial'
+        out = search_mod.adapt_query_for_engine(q, search_mod._ddg_search)
+        assert "site:forum.unity.com" in out
+        assert '"Addressables"' in out and "-tutorial" in out
+
+    def test_site_is_stripped_for_wikipedia(self):
+        out = search_mod.adapt_query_for_engine(
+            'site:forum.unity.com "Addressables" leak', search_mod._wikipedia_search)
+        assert "site:" not in out
+        assert '"Addressables"' in out and "leak" in out     # the real terms stay
+
+    def test_stackoverflow_gets_plain_text_only(self):
+        """Its API takes filters as parameters; operators inside q are matched
+        as literal text and wreck the search."""
+        out = search_mod.adapt_query_for_engine(
+            'site:stackoverflow.com filetype:pdf async deadlock -blog',
+            search_mod._stackoverflow_search)
+        assert out == "async deadlock"
+
+    def test_github_keeps_exclusion_but_drops_site(self):
+        out = search_mod.adapt_query_for_engine(
+            "site:github.com memory leak -docs", search_mod._github_search)
+        assert "site:" not in out and "-docs" in out
+
+    def test_quoted_phrases_always_pass_through(self):
+        q = '"exact error text here"'
+        for engine in (search_mod._ddg_search, search_mod._wikipedia_search,
+                       search_mod._stackoverflow_search, search_mod._github_search):
+            assert '"exact error text here"' in search_mod.adapt_query_for_engine(q, engine)
+
+    def test_hyphenated_words_are_not_mistaken_for_exclusion(self):
+        out = search_mod.adapt_query("well-known cross-platform issue", set())
+        assert out == "well-known cross-platform issue"
+
+    def test_unknown_engine_gets_the_query_unchanged(self):
+        assert search_mod.adapt_query_for_engine("site:x.com q", lambda query, limit: []) \
+            == "site:x.com q"
+
+    def test_engine_is_skipped_when_nothing_survives(self):
+        """A query that is nothing but unusable operators must not be sent as an
+        empty string — that would return arbitrary results."""
+        calls = []
+
+        def spy(query, limit):
+            calls.append(query)
+            return []
+
+        spy.__name__ = "_stackoverflow_search"
+        meta_search("site:example.com", engines=[spy])
+        assert calls == []
+
+    def test_meta_search_adapts_per_engine(self):
+        seen = {}
+
+        def make(name):
+            def engine(query, limit):
+                seen[name] = query
+                return []
+            engine.__name__ = name
+            return engine
+
+        meta_search('site:unity.com "leak" -ads',
+                    engines=[make("_ddg_search"), make("_stackoverflow_search")])
+        assert "site:unity.com" in seen["_ddg_search"]
+        assert seen["_stackoverflow_search"] == '"leak"'
 
 
 class TestActiveEngines:
