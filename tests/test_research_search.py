@@ -74,8 +74,11 @@ class TestEngineParsers:
         out = search_mod._stackoverflow_search("sort list", 1)
         assert out[0]["title"] == "How to sort a list in <Python>?"  # HTML-unescaped
         assert out[0]["url"] == "http://so/1"
-        assert out[0]["snippet"] == "[42 votes, answered]"
-        assert out[0]["source"] == "stackoverflow"
+        # The originating site is carried in both the label and the snippet: an
+        # accepted answer on gamedev means something different from one on
+        # stackoverflow, and the engine now spans several sites.
+        assert out[0]["source"] == "stackexchange:stackoverflow"
+        assert out[0]["snippet"] == "[stackoverflow · 42 votes, answered]"
 
     def test_duckduckgo(self, monkeypatch):
         class FakeDDGS:

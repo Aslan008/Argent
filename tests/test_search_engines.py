@@ -217,6 +217,58 @@ class TestOperatorAdaptation:
         assert seen["_stackoverflow_search"] == '"leak"'
 
 
+class TestStackExchangeSiteRouting:
+    """StackExchange is a network, and the same product splits across sites by
+    question type. Measured: "Unity Addressables memory leak" returns 0 on
+    stackoverflow and 2 on gamedev, while "Unity shader graph vertex
+    displacement" returns 1 on stackoverflow and 0 on gamedev — so picking one
+    site loses the other. Both are asked and merged."""
+
+    def test_stackoverflow_is_always_asked(self):
+        assert search_mod._se_sites("python asyncio gather")[0] == "stackoverflow"
+
+    @pytest.mark.parametrize("query,expected", [
+        ("Unity Addressables memory leak", "gamedev"),
+        ("godot collider not triggering", "gamedev"),
+        ("integral of e^-x^2 derivative", "math"),
+        ("nginx reverse proxy 502", "serverfault"),
+        ("ubuntu apt-get broken packages", "askubuntu"),
+    ])
+    def test_domain_site_is_added(self, query, expected):
+        assert search_mod._se_sites(query) == ["stackoverflow", expected]
+
+    def test_generic_query_asks_one_site_only(self):
+        """Quota discipline: no cue means no second call."""
+        assert search_mod._se_sites("how to reverse a list") == ["stackoverflow"]
+
+    def test_at_most_one_extra_site(self):
+        # A query hitting several cue sets must still cost only two calls.
+        sites = search_mod._se_sites("unity shader nginx integral ubuntu")
+        assert len(sites) == 2
+
+    def test_results_from_both_sites_are_merged_and_labelled(self, monkeypatch):
+        def fake_get(url, params, timeout=10):
+            return {"items": [{"title": f"from {params['site']}", "link": f"http://{params['site']}",
+                               "score": 5, "is_answered": True}]}
+
+        monkeypatch.setattr(search_mod, "_get_json", fake_get)
+        out = search_mod._stackoverflow_search("unity shader bug", limit=3)
+        assert [r["source"] for r in out] == ["stackexchange:stackoverflow",
+                                              "stackexchange:gamedev"]
+        assert "gamedev" in out[1]["snippet"]        # the site is part of the signal
+
+    def test_one_site_failing_does_not_lose_the_other(self, monkeypatch):
+        def fake_get(url, params, timeout=10):
+            if params["site"] == "stackoverflow":
+                raise RuntimeError("503")
+            return {"items": [{"title": "survivor", "link": "http://x",
+                               "score": 1, "is_answered": True}]}
+
+        monkeypatch.setattr(search_mod, "_get_json", fake_get)
+        out = search_mod._stackoverflow_search("unity collider bug", limit=3)
+        assert [r["title"] for r in out] == ["survivor"]
+
+
 class TestOperatorTranslation:
     """Where an engine has a native equivalent, translate rather than strip.
     The model writes ONE query for the whole federation, so it cannot express a

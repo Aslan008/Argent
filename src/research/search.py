@@ -9,7 +9,8 @@ result. No API keys, no Docker, no per-query cost.
 Engines (each isolated — a failure yields [] instead of taking down the search):
   * DuckDuckGo  — general web (single fast attempt, no long backoff);
   * Wikipedia   — encyclopedic, stable MediaWiki JSON API;
-  * StackOverflow — programming Q&A, keyless StackExchange API;
+  * StackExchange — programming Q&A; stackoverflow plus the domain-specific
+                  site the question belongs to (gamedev, math, serverfault…);
   * GitHub      — issues/PRs, where an error string usually appears verbatim
                   next to the maintainer's answer;
   * Brave       — optional, needs an API key: a second INDEPENDENT index
@@ -109,6 +110,39 @@ def _github_search(query: str, limit: int = 3) -> list:
     return out
 
 
+# StackExchange is a NETWORK, and the right site depends on the question.
+# Measured: "Unity Addressables memory leak" returns 0 on stackoverflow and 2 on
+# gamedev, while "Unity shader graph vertex displacement" returns 1 on
+# stackoverflow and 0 on gamedev — the same product, split across sites by
+# whether the question is code-level or design-level. Picking one site would
+# lose the other, so a matching site is queried IN ADDITION to stackoverflow and
+# the results merged, the same principle the engine federation already uses.
+_SE_SITE_CUES = {
+    "gamedev": ("unity", "unreal", "godot", "gamedev", "shader", "sprite",
+                "collider", "rigidbody", "game engine", "gameplay"),
+    "math": ("integral", "derivative", "theorem", "matrix", "eigen",
+             "probability", "topology", "algebra"),
+    "serverfault": ("nginx", "apache", "dns", "kubernetes", "systemd",
+                    "load balancer", "reverse proxy", "iptables"),
+    "askubuntu": ("ubuntu", "apt-get", "apt install", "debian"),
+    "security": ("cve-", "xss", "csrf", "vulnerability", "penetration test"),
+    "superuser": ("windows registry", "excel formula", "bios", "group policy"),
+    "dba": ("postgresql index", "mysql index", "sql server query plan"),
+}
+
+
+def _se_sites(query: str) -> list:
+    """StackExchange sites to ask: always stackoverflow, plus at most one
+    domain-specific site. Capped at one extra to stay inside the daily quota."""
+    sites = ["stackoverflow"]
+    low = (query or "").lower()
+    for site, cues in _SE_SITE_CUES.items():
+        if any(cue in low for cue in cues):
+            sites.append(site)
+            break
+    return sites
+
+
 def _stackoverflow_search(query: str, limit: int = 3) -> list:
     """Programming Q&A via the keyless StackExchange API.
 
@@ -116,8 +150,7 @@ def _stackoverflow_search(query: str, limit: int = 3) -> list:
     `intitle:` is lifted out of the text into the native `title` field instead
     of being searched for literally.
     """
-    params = {"order": "desc", "sort": "relevance",
-              "site": "stackoverflow", "pagesize": limit}
+    params = {"order": "desc", "sort": "relevance", "pagesize": limit}
 
     title_terms = []
 
@@ -134,18 +167,27 @@ def _stackoverflow_search(query: str, limit: int = 3) -> list:
     if "title" not in params and "q" not in params:
         return []
 
-    data = _get_json("https://api.stackexchange.com/2.3/search/advanced", params)
     out = []
-    for item in data.get("items", []):
-        score = item.get("score", 0)
-        answered = "answered" if item.get("is_answered") else "unanswered"
-        out.append({
-            "title": _html.unescape(item.get("title", "")),
-            "url": item.get("link", ""),
-            "snippet": f"[{score} votes, {answered}]",
-            "source": "stackoverflow",
-        })
-    return out
+    for site in _se_sites(query):
+        try:
+            data = _get_json("https://api.stackexchange.com/2.3/search/advanced",
+                             {**params, "site": site})
+        except Exception as e:
+            # One site being unreachable must not cost us the other's answers.
+            log.debug("stackexchange site %s failed: %s", site, e)
+            continue
+        for item in data.get("items", []):
+            score = item.get("score", 0)
+            answered = "answered" if item.get("is_answered") else "unanswered"
+            out.append({
+                "title": _html.unescape(item.get("title", "")),
+                "url": item.get("link", ""),
+                # The site is part of the signal: an accepted answer on gamedev
+                # means something different from one on stackoverflow.
+                "snippet": f"[{site} · {score} votes, {answered}]",
+                "source": f"stackexchange:{site}",
+            })
+    return out[:limit * 2]
 
 
 # Serialises Brave calls so concurrent or back-to-back queries still respect
@@ -228,7 +270,7 @@ DEFAULT_ENGINES = [_ddg_search, _wikipedia_search, _stackoverflow_search, _githu
 # cannot drift into describing the same federation differently.
 ENGINE_LABELS = {
     "_ddg_search": "DuckDuckGo", "_wikipedia_search": "Wikipedia",
-    "_stackoverflow_search": "StackOverflow", "_github_search": "GitHub",
+    "_stackoverflow_search": "StackExchange", "_github_search": "GitHub",
     "_brave_search": "Brave",
 }
 
