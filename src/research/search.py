@@ -24,6 +24,8 @@ sources for diversity and de-duplicated by normalised URL.
 
 import html as _html
 import re
+import threading
+import time
 import urllib.parse
 
 from logger import get_logger
@@ -126,6 +128,23 @@ def _stackoverflow_search(query: str, limit: int = 3) -> list:
     return out
 
 
+# Serialises Brave calls so concurrent or back-to-back queries still respect
+# the per-second quota.
+_BRAVE_LOCK = threading.Lock()
+_BRAVE_MIN_INTERVAL = 1.1
+_brave_last_call = 0.0
+
+
+def _brave_pace():
+    """Block just long enough to stay under the free tier's rate limit."""
+    global _brave_last_call
+    with _BRAVE_LOCK:
+        wait = _BRAVE_MIN_INTERVAL - (time.monotonic() - _brave_last_call)
+        if wait > 0:
+            time.sleep(wait)
+        _brave_last_call = time.monotonic()
+
+
 def _brave_search(query: str, limit: int = 5) -> list:
     """General web via the Brave Search API — an INDEPENDENT index.
 
@@ -143,6 +162,13 @@ def _brave_search(query: str, limit: int = 5) -> list:
     key = get_brave_api_key()
     if not key:
         return []
+
+    # The free tier allows about one query per second, and deep research fires
+    # several in a row. Without pacing, the burst gets 429s — and because engine
+    # failures are isolated, that would SILENTLY drop Brave from the federation
+    # exactly during the multi-query runs it helps most. Waiting a fraction of a
+    # second is cheaper than losing the results.
+    _brave_pace()
 
     import requests
     resp = requests.get(

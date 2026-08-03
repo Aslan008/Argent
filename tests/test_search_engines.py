@@ -113,6 +113,36 @@ class TestBraveEngine:
         assert len(search_mod._brave_search("q", limit=3)) == 3
 
 
+class TestBraveRateLimit:
+    """The free tier is ~1 query/second and deep research fires several in a
+    row. Without pacing the burst gets 429s, and since engine failures are
+    isolated, Brave would vanish from the federation silently."""
+
+    def test_back_to_back_calls_are_paced(self, brave_key, monkeypatch):
+        import time as _t
+        from src.research import search as s
+
+        class _Resp:
+            def raise_for_status(self): pass
+            def json(self): return {"web": {"results": []}}
+
+        import requests
+        monkeypatch.setattr(requests, "get", lambda *a, **k: _Resp())
+        monkeypatch.setattr(s, "_BRAVE_MIN_INTERVAL", 0.2)
+        monkeypatch.setattr(s, "_brave_last_call", 0.0)
+
+        start = _t.monotonic()
+        s._brave_search("a")
+        s._brave_search("b")
+        assert _t.monotonic() - start >= 0.2      # the second call waited
+
+    def test_pacing_does_not_apply_without_a_key(self, no_brave_key, monkeypatch):
+        from src.research import search as s
+        monkeypatch.setattr(s, "_brave_pace",
+                            lambda: pytest.fail("must not pace when disabled"))
+        assert s._brave_search("q") == []
+
+
 class TestActiveEngines:
     def test_keyless_default_is_unchanged(self, no_brave_key):
         assert active_engines() == DEFAULT_ENGINES
