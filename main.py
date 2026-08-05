@@ -397,9 +397,42 @@ def main():
             print() # Visual spacing
             
             if is_auto_mode:
+                from src.cli.interruptible import interruptible_sleep
+
+                # Waiting ON a condition: poll locally instead of waking the
+                # model to look. Each wake costs a full turn, so a ten-poll
+                # "is it done yet?" loop becomes one sleep and one wake.
+                if isinstance(auto_wake_context, dict):
+                    spec, auto_wake_context = auto_wake_context, ""
+                    print_system(f"*[Heartbeat] Жду условие: {spec['until']} "
+                                 f"(до {spec['timeout']} сек., Ctrl+C для прерывания)*")
+                    from src.agent.wait_conditions import wait_for
+                    try:
+                        outcome = wait_for(spec["until"], timeout=spec["timeout"],
+                                           sleep=interruptible_sleep)
+                    except KeyboardInterrupt:
+                        print_system("Ожидание прервано. Выход из автоматического режима.")
+                        is_auto_mode = False
+                        continue
+                    auto_sleep_time = 0
+                    verdict = "ВЫПОЛНЕНО" if outcome["met"] else "НЕ выполнено"
+                    print_system(f"*[Heartbeat] {verdict}: {outcome['reason']} "
+                                 f"({outcome['waited']} сек.)*")
+                    # Hand the verdict to the normal wake path as ordinary text.
+                    # The model must know whether the thing it waited for
+                    # actually happened — a timeout is not a success.
+                    auto_wake_context = (
+                        f"[Heartbeat пробуждение] Ожидалось условие: {spec['until']}\n"
+                        f"Результат: {outcome['reason']} (ждали {outcome['waited']} сек.).\n"
+                        f"Исходная причина ожидания: {spec['reason']}\n"
+                        + ("Условие выполнено — продолжай." if outcome["met"] else
+                           "Условие НЕ выполнено. Не считай ожидаемое событие произошедшим: "
+                           "проверь состояние сам и реши, ждать ли дальше, "
+                           "действовать иначе или завершить работу через `end_auto_mode`.")
+                    )
+
                 if auto_sleep_time > 0:
                     print_system(f"*[Heartbeat] Переход в сон на {auto_sleep_time} сек. (Ctrl+C для прерывания)*")
-                    from src.cli.interruptible import interruptible_sleep
                     try:
                         # Chunked sleep so Ctrl+C aborts within a tick, not after
                         # the full (possibly very long) heartbeat delay.
@@ -409,7 +442,7 @@ def main():
                         is_auto_mode = False
                         continue
                     auto_sleep_time = 0
-                
+
                 user_input = auto_wake_context if auto_wake_context else "[Режим Автоматизма] Продолжай автономную работу. Анализируй результат предыдущего шага. Если нужно подождать — используй `wait_heartbeat`. Если глобальная задача завершена — вызови `end_auto_mode`."
                 auto_wake_context = ""
                 print_system("\n❯ [Автономный импульс]")

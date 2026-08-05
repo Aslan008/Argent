@@ -364,9 +364,43 @@ def request_user_approval(message: str) -> str:
         memory.add_completed(f"Rejected plan: {message}")
         return "User REJECTED. Please ask the user for feedback or revise your plan."
 
-def wait_heartbeat(delay_seconds: int, condition_to_check: str) -> str:
-    """Schedules a delayed continuation in Auto Mode."""
-    return f"Heartbeat scheduled. [HEARTBEAT_REQUEST: {delay_seconds}|{condition_to_check}]"
+def wait_heartbeat(delay_seconds: int = 0, condition_to_check: str = "",
+                   until: str = "", timeout_seconds: int = 600) -> str:
+    """Sleep during Auto Mode, either for a fixed delay or UNTIL something is true.
+
+    `until` is the cheap path: waking up costs a full model turn, so polling
+    "is it done yet?" ten times costs ten turns. A condition is checked locally
+    for free, and the agent wakes once — when it actually happened.
+    """
+    from src.agent.wait_conditions import (
+        ConditionError, MAX_TIMEOUT_SECONDS, describe_predicates, evaluate,
+    )
+
+    if until and until.strip():
+        # Fail fast on a malformed condition: the alternative is sleeping the
+        # whole timeout and reporting a mystery.
+        try:
+            evaluate(until)
+        except ConditionError as e:
+            return (f"Error: {e}\nAvailable checks: {describe_predicates()}\n"
+                    f"Example: wait_heartbeat(until='file_contains(\"build.log\", "
+                    f"\"BUILD SUCCESSFUL\")', timeout_seconds=600)")
+        try:
+            timeout = max(1, min(int(timeout_seconds or 600), MAX_TIMEOUT_SECONDS))
+        except (TypeError, ValueError):
+            timeout = 600
+        reason = condition_to_check or until
+        return (f"Waiting until: {until} (timeout {timeout}s). "
+                f"[HEARTBEAT_REQUEST: 0|{reason}|until={until}|timeout={timeout}]")
+
+    try:
+        delay = max(0, int(delay_seconds or 0))
+    except (TypeError, ValueError):
+        delay = 0
+    if delay <= 0:
+        return ("Error: provide either delay_seconds (a fixed sleep) or until "
+                f"(a condition to wait for). Available checks: {describe_predicates()}")
+    return f"Heartbeat scheduled. [HEARTBEAT_REQUEST: {delay}|{condition_to_check}]"
 
 def end_auto_mode(reason: str) -> str:
     """Stops the experimental Auto Mode."""

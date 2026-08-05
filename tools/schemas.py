@@ -1273,20 +1273,44 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "wait_heartbeat",
-            "description": "Used in Auto Mode to sleep for a specified number of seconds before waking up to check a condition. Use this to wait for compilation, server startup, or long-running background tasks.",
+            "description": (
+                "Used in Auto Mode to pause while something finishes: a compilation, a server "
+                "starting, a long background task.\n"
+                "PREFER `until`: waking up costs a full turn, so polling 'is it done yet?' ten "
+                "times costs ten turns, while a condition is checked locally for free and wakes "
+                "you once — when it actually happened. Fall back to `delay_seconds` only when "
+                "nothing observable marks the end.\n"
+                "Checks available to `until`: file_exists(path), file_missing(path), "
+                "file_contains(path, text), process_finished(pid), process_running(pid). "
+                "Combine them with and / or / not.\n"
+                "Examples:\n"
+                "  until='file_contains(\"build.log\", \"BUILD SUCCESSFUL\")'\n"
+                "  until='process_finished(\"3\")', timeout_seconds=1200\n"
+                "  until='file_exists(\"dist/app.exe\") and file_missing(\".lock\")'\n"
+                "You are told whether the condition was MET or the wait TIMED OUT — a timeout is "
+                "not success, so re-check before assuming the event happened."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
+                    "until": {
+                        "type": "string",
+                        "description": "Condition to wait for, e.g. 'file_contains(\"build.log\", \"Done\")'. Preferred over delay_seconds."
+                    },
+                    "timeout_seconds": {
+                        "type": "integer",
+                        "description": "Maximum wait for `until` before giving up and waking anyway. Default 600."
+                    },
                     "delay_seconds": {
                         "type": "integer",
-                        "description": "The number of seconds to wait before waking up."
+                        "description": "Fixed sleep in seconds. Use only when no condition can express what you are waiting for."
                     },
                     "condition_to_check": {
                         "type": "string",
-                        "description": "What you want to check when you wake up. This will be sent back to you as context."
+                        "description": "Human-readable note on WHY you are waiting; sent back to you on wake-up."
                     }
                 },
-                "required": ["delay_seconds", "condition_to_check"]
+                "required": []
             }
         }
     },
