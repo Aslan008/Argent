@@ -40,6 +40,22 @@ flowchart TD
 
 ---
 
+## 🎚 Which autonomy do you want?
+
+"Autonomous" means five different things in Argent. Pick by how much you intend to watch:
+
+| Command | What it does | You are… |
+| --- | --- | --- |
+| `/vibe` | Safe actions auto-approved, destructive ones still ask, checkpoint every turn | at the keyboard, reading diffs |
+| `/work [--auto] <task>` | Modify or fix an **existing** codebase | reviewing the result |
+| `/project <prompt>` | Build a project from scratch: research → architecture → specs → code | reviewing milestones |
+| `/auto <task>` | Full autonomous "experimenter": plans, works, sleeps on `wait_heartbeat`, stops itself with `end_auto_mode` | letting it run |
+| `/tasks add …` | Scheduled work with **nobody watching** — gated actions are refused, not approved | asleep |
+
+`/auto` and `/tasks` are the two genuinely unattended ones, and they differ in kind: `/auto` is one long task you started deliberately, `/tasks` is recurring work that starts itself. Both are bounded — `/auto` by an offered safety checkpoint and `end_auto_mode`, `/tasks` by a per-task toolset, a turn budget, and refusal of anything needing consent.
+
+---
+
 ## 🚀 Key Features
 
 ### 🧠 Project Brain (Autonomous Mode)
@@ -88,8 +104,50 @@ Every token in the system prompt costs a local model speed and focus, so Argent 
 ### 🆓 OpenRouter: free and paid models, one key
 OpenRouter requires a single API key (a **free** one from [openrouter.ai/keys](https://openrouter.ai/keys) is enough). With it you can run the zero-cost `:free` models, and the moment you want a frontier model you just pick a paid one — same key, no reconfiguration. `/provider → openrouter` lets you list **free models only** or the full catalog, with free models surfaced first. For fully offline, no-key-at-all usage, Ollama remains the local option.
 
-### 🧮 Exact Arithmetic
-The `calculate` tool evaluates math expressions through a whitelisted AST interpreter (no `eval`, no code execution). Small local models no longer guess numbers — they compute them.
+### 🧮 Exact Mathematics — Arithmetic and Symbolic
+The `calculate` tool is two engines behind one entry point. Plain arithmetic runs on a whitelisted AST interpreter; anything symbolic falls through to SymPy: integrals (including improper ones), derivatives, one- and two-sided limits, equations and inequalities, ODEs, matrices, sums and series, statistics, integral transforms, geometry and unit conversion.
+
+```text
+integrate(exp(-x**2), (x, -oo, oo))  →  sqrt(pi)  ≈ 1.772453851
+summation(1/k**2, (k, 1, oo))        →  pi**2/6   ≈ 1.644934067
+dsolve(Derivative(y(x), x, 2) + y(x), y(x))  →  C1*sin(x) + C2*cos(x)
+```
+
+Neither path ever executes code. SymPy's own `sympify`/`parse_expr` call `eval` internally, so they are never handed raw model output — the expression is walked as an AST against an explicit whitelist and rebuilt node by node, which leaves no room for attribute access, imports or smuggled strings.
+
+### 🕰 Time Machine — Fearless Editing
+Before the **first file edit of every turn**, Argent commits a checkpoint of the pre-turn tree. Read-only turns stay commit-free, and a hand-crafted git index is never overwritten (you are told when a checkpoint is skipped, so you never believe you are covered when you are not).
+
+- `/rewind` — pick any turn checkpoint and roll the whole tree back to it. Real user commits in between abort the rewind; uncommitted work is stashed first.
+- `/undo <file>` — per-file rollback when only one edit went wrong.
+- In natural language: *"вернись до того, как ты сломал меню"* — the agent matches the checkpoint by its message.
+
+### 🌴 Vibe Mode
+`/vibe` is one switch over existing knobs: safe actions are auto-approved, destructive ones still prompt, and per-turn checkpoints are guaranteed. The cost of a bad experiment drops to one `/rewind`.
+
+### ⏰ Ambient Automation
+Scheduled tasks that run by themselves while Argent is open — monitoring, reports, watching for changes.
+
+```text
+/tasks add report | daily at 09:00 | Collect metrics with `npm run stats` and write reports/daily.md
+/tasks run report      # run it now
+/tasks runs            # what the agent did while you weren't looking
+```
+
+Unattended is not "interactive with the prompts turned off": **every gated action is refused and recorded**, because waiting would hang the scheduler and approving would hand an unsupervised model the authority to delete or publish. Each task is bounded by its own toolset, a turn budget, and a no-overlap rule. Schedules read back plainly (`every 15m`, `daily at 09:00`) — a misread cron line in a job nobody is watching is expensive.
+
+### 🔎 Federated Web Research
+Several independent sources are queried in parallel and merged, so one of them rate-limiting or failing costs nothing: DuckDuckGo, Wikipedia, StackExchange, GitHub issues, and Brave when you add a key.
+
+- **Search operators work** — `"exact phrase"`, `site:`, `filetype:`, `-exclude`, `intitle:` — and each engine receives only the ones it can honour, translated into its own dialect where an equivalent exists (GitHub's `in:title`, StackExchange's `title` parameter). An operator an engine cannot use is dropped rather than searched for as literal text.
+- **StackExchange is a network, not a site.** A cue-matched site (gamedev, math, serverfault…) is queried alongside stackoverflow.com — measured, "Unity Addressables memory leak" returns nothing on stackoverflow and answers on gamedev, while a shader question is the other way round.
+- **Optional second index.** Adding a Brave key unions two genuinely independent indexes; measured on real queries, 75% of results were unique to one engine.
+- **Multilingual reranking.** A cross-encoder reorders the candidates. The default is English-only and, measured, scores relevant non-English text below mediocre English text — so `/search` can switch to a multilingual model when you research in other languages.
+
+Configure it all from inside Argent with `/search` (the API key is entered masked and never echoed).
+
+### 🖥 Desktop GUI (Tauri)
+A second client on the same core (`python argent_server.py` + `desktop/`): markdown answers, a collapsible reasoning block, tool chips, **diff cards with Accept/Reject**, a clickable checkpoint timeline, approval dialogs, and a live context meter. The terminal version needs none of it.
 
 ### 🧩 Agent Skills (SKILL.md) Support
 Argent reads both its own flat markdown skills and the cross-platform **Agent Skills** standard — a folder with a `SKILL.md` (YAML frontmatter `name`/`description`/`allowed-tools`) plus optional bundled `scripts/`, `references/` and `assets/`. When the model reads a skill, the bundled resources and their paths are surfaced so it can run or reference them. Existing flat `.md` skills keep working unchanged.
@@ -131,9 +189,9 @@ Run local shell commands directly from the prompt by prefixing them with `!`. If
 - `/project [prompt]` — Start a massive multi-step project from scratch.
 - `/work [prompt]` — Modify or fix an existing codebase autonomously.
 - `/commit` — Generate AI commit message and commit staged changes.
-- `/enable_rag` — Enable Semantic Search for the current project.
-- `/disable_rag` — Turn off Semantic Search.
-- `/rag_provider` — Switch embedding provider (sentence-transformers / Ollama).
+- `/rag_toggle` — Enable/disable semantic search (indexing) for the current project.
+- `/auto_retrieve` — Toggle auto-injecting semantic-search results into every query.
+- `/kb_toggle` — Enable/disable an external documentation knowledge base.
 - `/browser [mode/name]` — Configure browser automation (mode: isolated/user, name: auto/yandex/chrome/edge/brave).
 - `/hooks [path]` — Manage global plugin (hook) directory.
 - `/hooks auto [on/off]` — Toggle autonomous AI plugin creation.
@@ -142,20 +200,29 @@ Run local shell commands directly from the prompt by prefixing them with `!`. If
 - `/doctor` — Run environment self-diagnostics (provider, model tier, dependencies, browser, MCP).
 - `/aux` — Set a cheap/local auxiliary model for service tasks (summarization, `/commit`).
 - `/init` — Analyze the project and generate `.argent/AGENTS.md` (persistent project memory loaded every session).
-- `/setup_terminal` — UI optimization guide (Fonts & Colors).
 - `/provider` — Select API Provider (Ollama / Z.ai / OpenRouter / KoboldCPP) and endpoint.
 - `/model` — Select active LLM model.
-- `/obsidian [path]` — Set the path to your Obsidian vault.
+- `/goal [text|clear]` — Show, set or reset the persistent objective.
+- `/critic [text]` — Red-team a plan or the AI's last one with an independent critic.
+- `/guard [off|warn|block]` — Command risk gate: confirm risky, refuse catastrophic.
+- `/rooms [task|list|show|resume]` — Experimental declarative "rooms and rails" engine.
+- `/stats` — Session diagnostics (context budget breakdown).
+- `/jobs`, `/stop <pid>` — List / stop background processes.
+- `/cd [path]` — Change or show the working directory.
 - `/mcp [subcommand]` — Manage MCP servers (list / add / remove / start / stop / test).
 - `/save [name]` — Export the current conversation to a Markdown file.
 - `/sessions` — List saved sessions.
 - `/load <n>` — Restore a saved session by number.
 - `/diff [file]` — Show changes made to files.
 - `/undo [file]` — Restore a file to its previous version.
-- `/undo_all` — Restore all modified files.
+- `/changes` — List the files the AI modified this session.
 - `/copy <n>` — Copy code block #n to clipboard.
 - `/logs [module] [n]` — View logs (e.g. `/logs tools 20`, `/logs error`).
 - `/skills` — List available AI skills.
+- `/rewind` — Time machine: roll the whole tree back to any turn checkpoint.
+- `/vibe` — Vibe mode: auto-approve safe actions + a checkpoint every turn.
+- `/tasks [list|add|on|off|rm|run|runs]` — Scheduled automations that run unattended while Argent is open.
+- `/search` — Web research settings: Brave API key, query languages, reranker model.
 - `/auto [task]` — Run task in experimental full autonomous mode.
 - `/verbose` — Toggle live status indicators (spinners).
 - `/thinking` — Toggle forced removal of reasoning blocks from history.
@@ -174,6 +241,22 @@ Argent — это высокопроизводительный професси�
 > Argent является моим **личным экспериментом** по созданию высокоавтономных ИИ-агентов для терминальной разработки.
 > [!CAUTION]
 > **Внимание**: Проект находится в стадии активной разработки и является экспериментальным. Всё может работать не так, как задумывалось, логика может давать сбои, а код — ломаться. Используйте на свой страх и риск.
+
+---
+
+## 🎚 Какая автономность вам нужна?
+
+«Автономный режим» в Argent означает пять разных вещей. Выбирайте по тому, насколько плотно собираетесь следить:
+
+| Команда | Что делает | Вы в этот момент… |
+| --- | --- | --- |
+| `/vibe` | Безопасные действия одобряются сами, опасные спрашивают, чекпоинт каждый ход | за клавиатурой, читаете диффы |
+| `/work [--auto] <задача>` | Меняет или чинит **существующий** код | проверяете результат |
+| `/project <запрос>` | Строит проект с нуля: разведка → архитектура → спецификации → код | проверяете этапы |
+| `/auto <задача>` | Полностью автономный «экспериментатор»: планирует, работает, засыпает через `wait_heartbeat`, сам завершается через `end_auto_mode` | дали ему работать |
+| `/tasks add …` | Работа по расписанию **без присмотра** — действия, требующие подтверждения, отклоняются, а не одобряются | спите |
+
+По-настоящему без присмотра работают две последние, и различаются они по сути: `/auto` — одна длинная задача, которую вы запустили осознанно, `/tasks` — повторяющаяся работа, которая запускает себя сама. Обе ограничены: `/auto` — предложенным страховочным чекпоинтом и `end_auto_mode`, `/tasks` — своим набором инструментов, бюджетом ходов и отказом от всего, что требует согласия.
 
 ---
 
@@ -225,8 +308,50 @@ Argent определяет размер модели по имени и нез�
 ### 🆓 OpenRouter: бесплатные и платные модели, один ключ
 OpenRouter требует один API-ключ (достаточно **бесплатного** с [openrouter.ai/keys](https://openrouter.ai/keys)). С ним доступны бесплатные модели с суффиксом `:free`, а как только понадобится топовая модель — просто выберите платную: тот же ключ, без перенастройки. В `/provider → openrouter` можно показать **только бесплатные** модели или весь каталог, причём бесплатные идут первыми. Для полностью офлайн-работы без ключа остаётся локальный вариант — Ollama.
 
-### 🧮 Точная арифметика
-Инструмент `calculate` вычисляет выражения через AST-интерпретатор с белым списком операций (никакого `eval` и исполнения кода). Маленькие локальные модели больше не угадывают числа — они их считают.
+### 🧮 Точная математика — арифметика и символьные вычисления
+Инструмент `calculate` — это два движка за одним входом. Обычная арифметика считается AST-интерпретатором с белым списком, а всё символьное уходит в SymPy: интегралы (в том числе несобственные), производные, односторонние и обычные пределы, уравнения и неравенства, дифуры, матрицы, суммы и ряды, статистика, интегральные преобразования, геометрия, перевод единиц.
+
+```text
+integrate(exp(-x**2), (x, -oo, oo))  →  sqrt(pi)  ≈ 1.772453851
+summation(1/k**2, (k, 1, oo))        →  pi**2/6   ≈ 1.644934067
+dsolve(Derivative(y(x), x, 2) + y(x), y(x))  →  C1*sin(x) + C2*cos(x)
+```
+
+Ни один из путей не исполняет код. Собственные `sympify`/`parse_expr` внутри зовут `eval`, поэтому им **никогда** не передаётся сырой вывод модели: выражение обходится как AST по явному белому списку и собирается по узлам — не остаётся места ни доступу к атрибутам, ни импортам, ни протащенным строкам.
+
+### 🕰 Машина времени — правки без страха
+Перед **первой правкой файла в каждом ходе** Argent коммитит чекпоинт состояния до хода. Ходы без правок не создают коммитов, а подготовленный вручную git-индекс никогда не затирается (о пропуске чекпоинта вам сообщат — чтобы вы не считали себя защищённым, когда это не так).
+
+- `/rewind` — выбрать любой чекпоинт хода и откатить всё дерево к нему. Настоящие коммиты между ними отменяют откат, незакоммиченное сначала уходит в stash.
+- `/undo <файл>` — пофайловый откат, когда испорчена только одна правка.
+- Естественным языком: *«вернись до того, как ты сломал меню»* — агент найдёт чекпоинт по его сообщению.
+
+### 🌴 Vibe-режим
+`/vibe` — один переключатель поверх существующих механизмов: безопасные действия одобряются автоматически, опасные по-прежнему спрашивают, а чекпоинт каждого хода гарантирован. Цена неудачного эксперимента падает до одного `/rewind`.
+
+### ⏰ Фоновая автоматизация
+Задачи по расписанию, которые выполняются сами, пока Argent открыт — мониторинг, отчёты, отслеживание изменений.
+
+```text
+/tasks add отчёт | daily at 09:00 | Собери метрики командой `npm run stats` и запиши в reports/daily.md
+/tasks run отчёт       # запустить сейчас
+/tasks runs            # что агент делал, пока вы не смотрели
+```
+
+Работа без присмотра — это **не** «интерактив с выключенными подтверждениями»: любое действие, требующее подтверждения, **отклоняется и записывается**, потому что ждать значит повесить планировщик, а одобрять — выдать бесконтрольной модели право удалять и публиковать. Каждая задача ограничена своим набором инструментов, бюджетом ходов и запретом наложения прогонов. Расписание читается однозначно (`every 15m`, `daily at 09:00`) — неверно понятая cron-строка в задаче, за которой никто не следит, обходится дорого.
+
+### 🔎 Федеративный веб-поиск
+Несколько независимых источников опрашиваются и объединяются, поэтому рейт-лимит или падение одного ничего не стоит: DuckDuckGo, Wikipedia, StackExchange, GitHub Issues и Brave, если добавить ключ.
+
+- **Операторы поиска работают** — `"точная фраза"`, `site:`, `filetype:`, `-исключение`, `intitle:` — и каждый движок получает только то, что понимает, переведённое в его диалект, где есть эквивалент (`in:title` у GitHub, параметр `title` у StackExchange). Непонятный движку оператор **вырезается**, а не ищется как обычный текст.
+- **StackExchange — это сеть, а не один сайт.** Профильный сайт (gamedev, math, serverfault…) опрашивается вместе со stackoverflow.com: замерено, «Unity Addressables memory leak» не находит ничего на stackoverflow и находит ответы на gamedev, а вопрос про шейдеры — наоборот.
+- **Опциональный второй индекс.** Ключ Brave объединяет два по-настоящему независимых индекса; на реальных запросах 75% результатов оказались уникальны для одного из движков.
+- **Мультиязычное ранжирование.** Cross-encoder переупорядочивает кандидатов. Модель по умолчанию англоязычная и, замерено, ставит релевантный неанглийский текст ниже посредственного английского — поэтому в `/search` можно переключиться на мультиязычную.
+
+Всё это настраивается прямо в Argent командой `/search` (ключ вводится скрыто и никогда не печатается).
+
+### 🖥 Десктопный GUI (Tauri)
+Второй клиент на том же ядре (`python argent_server.py` + `desktop/`): markdown-ответы, сворачиваемый блок рассуждений, чипы инструментов, **diff-карточки с Accept/Reject**, кликабельный таймлайн чекпоинтов, диалоги подтверждений и живой счётчик контекста. Терминальной версии всё это не требуется.
 
 ### 🤝 Профессиональная интеграция с Git
 - **Умные коммиты**: Используйте `/commit`, чтобы ИИ проанализировал ваши diff'ы и составил профессиональные сообщения в стиле Conventional Commits.
@@ -251,9 +376,9 @@ OpenRouter требует один API-ключ (достаточно **бесп
 - `/project [prompt]` — Запустить создание масштабного проекта с нуля.
 - `/work [prompt]` — Автономно модифицировать или починить существующий код.
 - `/commit` — Сгенерировать AI-сообщение и закоммитить изменения.
-- `/enable_rag` — Включить семантический поиск по текущему проекту.
-- `/disable_rag` — Выключить семантический поиск.
-- `/rag_provider` — Сменить провайдер эмбеддингов (sentence-transformers / Ollama).
+- `/rag_toggle` — Включить/выключить семантический поиск (индексацию) по проекту.
+- `/auto_retrieve` — Автоматически подмешивать результаты семантического поиска в каждый запрос.
+- `/kb_toggle` — Включить/выключить внешнюю базу знаний из документации.
 - `/browser [mode/name]` — Настройка автоматизации браузера (режим: isolated/user, имя: auto/yandex/chrome/edge/brave).
 - `/hooks [path]` — Управление папкой глобальных плагинов.
 - `/hooks auto [on/off]` — Переключить режим создания плагинов самим ИИ.
@@ -262,20 +387,29 @@ OpenRouter требует один API-ключ (достаточно **бесп
 - `/doctor` — Самодиагностика окружения (провайдер, ярус модели, зависимости, браузер, MCP).
 - `/aux` — Задать дешёвую/локальную вспомогательную модель для сервисных задач (суммаризация, `/commit`).
 - `/init` — Изучить проект и сгенерировать `.argent/AGENTS.md` (постоянная память о проекте, загружается каждую сессию).
-- `/setup_terminal` — Гайд по настройке интерфейса (Шрифты и Цвета).
 - `/provider` — Выбрать провайдера API (Ollama / Z.ai / OpenRouter / KoboldCPP) и эндпоинт.
 - `/model` — Выбрать активную модель ИИ.
-- `/obsidian [path]` — Задать путь к хранилищу Obsidian.
+- `/goal [текст|clear]` — Показать, задать или сбросить постоянную цель работы.
+- `/critic [текст]` — Разобрать план (или последний план ИИ) независимым критиком.
+- `/guard [off|warn|block]` — Гейт рисковых команд: подтверждать опасные, отклонять катастрофические.
+- `/rooms [задача|list|show|resume]` — Экспериментальный декларативный движок «комнаты и рельсы».
+- `/stats` — Диагностика сессии (разбор бюджета контекста).
+- `/jobs`, `/stop <pid>` — Список / остановка фоновых процессов.
+- `/cd [path]` — Сменить или показать рабочую директорию.
 - `/mcp [subcommand]` — Управление MCP-серверами (list / add / remove / start / stop / test).
 - `/save [name]` — Экспортировать историю текущего диалога в Markdown-файл.
 - `/sessions` — Показать сохраненные сессии диалогов.
 - `/load <n>` — Восстановить сохраненную сессию по номеру.
 - `/diff [file]` — Показать изменения, внесенные в файлы.
 - `/undo [file]` — Откатить файл к предыдущей сохраненной версии.
-- `/undo_all` — Откатить все измененные файлы к исходному состоянию.
+- `/changes` — Показать файлы, изменённые ИИ в этой сессии.
 - `/copy <n>` — Скопировать блок кода №n из последнего ответа в буфер обмена.
 - `/logs [module] [n]` — Посмотреть логи (например, `/logs tools 20`, `/logs error`).
 - `/skills` — Показать список доступных навыков ИИ.
+- `/rewind` — Машина времени: откатить всё дерево к любому чекпоинту хода.
+- `/vibe` — Vibe-режим: авто-одобрение безопасных действий + чекпоинт каждый ход.
+- `/tasks [list|add|on|off|rm|run|runs]` — Автоматизации по расписанию, работают без присмотра, пока Argent открыт.
+- `/search` — Настройки веб-поиска: ключ Brave, языки запросов, модель reranker'а.
 - `/auto [task]` — Запустить выполнение задачи в экспериментальном полностью автономном режиме.
 - `/verbose` — Включить/выключить интерактивные спиннеры статуса.
 - `/thinking` — Включить/выключить принудительное удаление рассуждений из истории контекста.

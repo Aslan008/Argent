@@ -117,10 +117,11 @@ def _check_browser():
 
 def _check_rag():
     if not _module_available("chromadb"):
-        return (WARN, "chromadb not installed — RAG (/enable_rag) unavailable")
+        return (WARN, "chromadb not installed — RAG (/rag_toggle) unavailable")
     emb = get_embedding_provider()
     if emb == "sentence_transformers" and not _module_available("sentence_transformers"):
-        return (WARN, "chromadb ok, but sentence-transformers missing (switch /rag_provider to ollama?)")
+        return (WARN, "chromadb ok, but sentence-transformers missing "
+                      "(set embedding_provider to 'ollama' in the config?)")
     from config import get_auto_retrieve, get_external_kbs
     flags = []
     if get_auto_rag():

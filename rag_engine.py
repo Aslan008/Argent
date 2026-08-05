@@ -462,7 +462,8 @@ def index_external_kb(kb_dict: dict) -> str:
         # For documentation-heavy KBs, MiniLM is weaker than a doc-tuned embedder.
         if embedding_provider != "ollama":
             msg += ("\nTip: for technical documentation, nomic-embed-text via Ollama retrieves more "
-                    "accurately than the default MiniLM. Switch with /rag_provider, then re-run /kb index.")
+                    "accurately than the default MiniLM. Set embedding_provider to 'ollama' "
+                    "in the config, then re-run /kb index.")
         return msg
     except Exception as e:
         import traceback
