@@ -31,6 +31,7 @@ def _server(reply, delay=0.0):
     srv = MCPServer.__new__(MCPServer)
     srv.name = "unity"
     srv.transport = _Transport(reply, delay)
+    srv._tools_cache = []            # nothing known yet, so preflight stands aside
     return srv
 
 
@@ -113,3 +114,98 @@ class TestLogging:
         with caplog.at_level(logging.DEBUG, logger=mcp_client.log.name):
             _server(OK).call_tool("editor_status", {})
         assert "slow to respond" not in caplog.text
+
+    def test_a_tool_level_error_is_logged_as_one(self, caplog):
+        """It arrives inside a successful JSON-RPC response, so logging on the
+        transport outcome alone recorded 'ok in 0.1s' for calls the server had
+        flatly rejected — a run of bad-argument errors left a healthy-looking
+        log."""
+        srv = _server({"result": {"isError": True,
+                                  "content": [{"text": "400 Bad Request"}]}})
+        with caplog.at_level(logging.DEBUG, logger=mcp_client.log.name):
+            srv.call_tool("find_assets", {})
+        assert "tool error" in caplog.text
+        assert "ok in" not in caplog.text
+
+
+# The real Unity schema, trimmed. Note there is no `required` list: the rule
+# "at least one of type/name/label" lives in the server, not in the schema.
+FIND_ASSETS = {
+    "name": "find_assets",
+    "description": "Find assets by type and/or name and/or label. Returns paths.",
+    "inputSchema": {"type": "object", "properties": {
+        "type": {}, "name": {}, "label": {}, "search_in": {}, "limit": {}}},
+}
+BAKE = {
+    "name": "bake_navmesh",
+    "description": "Bake the navmesh.",
+    "inputSchema": {"type": "object",
+                    "properties": {"confirm": {}, "dry_run": {}},
+                    "required": ["confirm"]},
+}
+
+
+def _with_tools(tools, reply=OK):
+    srv = _server(reply)
+    srv._tools_cache = tools
+    return srv
+
+
+class TestPreflight:
+    def test_invented_parameter_names_are_answered_with_the_signature(self):
+        """Observed for real: the model sent filter/search/max_results when the
+        parameters are type/name/label/search_in/limit. Signatures are not in
+        the prompt, so a model that skips list_mcp_tools invents plausible ones."""
+        srv = _with_tools([FIND_ASSETS])
+        out = srv.call_tool("find_assets", {"filter": "t:Prefab", "search": "",
+                                            "max_results": 200})
+        assert "unknown parameter(s): filter, max_results, search" in out
+        assert "find_assets(type?, name?, label?, search_in?, limit?)" in out
+        assert srv.transport.timeouts == []          # never left the machine
+
+    def test_a_missing_required_argument_is_caught(self):
+        out = _with_tools([BAKE]).call_tool("bake_navmesh", {"dry_run": True})
+        assert "missing required: confirm" in out
+
+    def test_a_correct_call_is_sent_untouched(self):
+        srv = _with_tools([FIND_ASSETS])
+        srv.call_tool("find_assets", {"type": "Scene", "limit": 5})
+        assert len(srv.transport.timeouts) == 1
+
+    def test_an_unknown_tool_name_gets_near_matches(self):
+        out = _with_tools([FIND_ASSETS, BAKE]).call_tool("find_asset", {"type": "x"})
+        assert "has no tool 'find_asset'" in out and "find_assets" in out
+        assert "list_mcp_tools" in out
+
+    def test_nothing_is_blocked_before_the_tool_list_is_known(self):
+        """A server whose listing failed must still be callable; refusing every
+        call because we cannot check it would be worse than the typo."""
+        srv = _server(OK)
+        srv._tools_cache = []
+        srv.call_tool("anything", {"whatever": 1})
+        assert len(srv.transport.timeouts) == 1
+
+    def test_a_loose_schema_is_left_to_the_server(self):
+        """Plenty of servers accept more than they describe; blocking a call
+        that would have worked is worse than the failure this prevents."""
+        srv = _with_tools([{"name": "eval", "inputSchema": {}}])
+        srv.call_tool("eval", {"code": "1+1"})
+        assert len(srv.transport.timeouts) == 1
+
+
+class TestServerSideExplanation:
+    def test_a_validation_error_comes_back_with_the_signature(self):
+        """Preflight cannot know 'at least one of type, name or label' — that
+        rule is in the server, not the schema."""
+        srv = _with_tools([FIND_ASSETS], reply={"result": {
+            "isError": True,
+            "content": [{"text": "Parameter Validation Failed. At least one of "
+                                 "type, name, or label is required."}]}})
+        out = srv.call_tool("find_assets", {})
+        assert "Signature: find_assets(type?" in out
+
+    def test_an_unrelated_error_is_not_padded(self):
+        srv = _with_tools([FIND_ASSETS], reply={"result": {
+            "isError": True, "content": [{"text": "Editor is compiling"}]}})
+        out = srv.call_tool("find_assets", {"type": "Scene"})
+        assert "Signature:" not in out

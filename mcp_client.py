@@ -29,6 +29,30 @@ log = get_logger("mcp")
 # the early warning for the stall you would otherwise only meet at the timeout.
 SLOW_CALL_SECONDS = 20
 
+# Server messages that mean "you got the arguments wrong". Matching on text is
+# crude, but MCP has no error taxonomy for this and the payoff is high: the
+# model gets the real signature instead of guessing a second time.
+_ARGUMENT_ERROR_CUES = (
+    "parameter validation", "invalid parameter", "unknown parameter",
+    "is required", "are required", "missing required", "invalid arguments",
+)
+
+
+def _signature(tool: dict) -> str:
+    """`name(required, optional?) — first sentence`, the way a docstring reads."""
+    schema = tool.get("inputSchema") or tool.get("parameters") or {}
+    props = schema.get("properties") or {}
+    required = set(schema.get("required") or [])
+    params = ", ".join(p if p in required else f"{p}?" for p in props)
+    desc = (tool.get("description") or "").strip().split(".")[0][:140]
+    return f"{tool.get('name', '?')}({params})" + (f" — {desc}" if desc else "")
+
+
+def _closest_names(name: str, candidates, limit: int = 3):
+    """Nearest tool names, for a call that named something that does not exist."""
+    import difflib
+    return difflib.get_close_matches(name, [c for c in candidates if c], n=limit, cutoff=0.6)
+
 
 # ═══════════════════════════════════════════════════════════════
 # Transport Layer
@@ -398,9 +422,65 @@ class MCPServer:
                         self.name, time.monotonic() - started,
                         str(result.get("error", "no tools returned"))[:150])
 
+    def _find_tool(self, tool_name: str):
+        for tool in self._tools_cache:
+            if tool.get("name") == tool_name:
+                return tool
+        return None
+
+    def preflight(self, tool_name: str, arguments: dict):
+        """Catch a call the server is certain to reject, and answer with the
+        signature instead of a round-trip to a 400.
+
+        The signatures are not in the system prompt — one server can expose
+        hundreds — so a model that skips `list_mcp_tools` invents plausible
+        parameter names. Observed: find_assets(filter=, search=, max_results=)
+        when the real ones are type/name/label/search_in/limit. The schema is
+        already cached here, so the correction costs nothing until it is needed.
+
+        Deliberately narrow: only a wrong tool name, an unknown argument, or a
+        missing REQUIRED argument. Servers accept plenty that a schema does not
+        describe, and blocking a call that would have worked is worse than the
+        failure this prevents. Returns an error string, or None to proceed.
+        """
+        if not self._tools_cache:
+            return None                   # nothing to validate against
+
+        tool = self._find_tool(tool_name)
+        if tool is None:
+            close = _closest_names(tool_name, [t.get("name", "") for t in self._tools_cache])
+            hint = f" Did you mean: {', '.join(close)}?" if close else ""
+            return (f"MCP Error: server '{self.name}' has no tool '{tool_name}'.{hint} "
+                    f"Use list_mcp_tools('{self.name}', '<topic>') to find the right one.")
+
+        schema = tool.get("inputSchema") or tool.get("parameters") or {}
+        props = schema.get("properties") or {}
+        if not props or not isinstance(arguments, dict):
+            return None                   # loose schema — let the server judge
+
+        unknown = [k for k in arguments if k not in props]
+        missing = [k for k in (schema.get("required") or []) if k not in arguments]
+        if not unknown and not missing:
+            return None
+
+        problems = []
+        if unknown:
+            problems.append(f"unknown parameter(s): {', '.join(sorted(unknown))}")
+        if missing:
+            problems.append(f"missing required: {', '.join(missing)}")
+        log.warning("mcp %s.%s REJECTED before sending: %s",
+                    self.name, tool_name, "; ".join(problems))
+        return (f"MCP Error: wrong arguments for '{tool_name}' — {'; '.join(problems)}.\n"
+                f"Correct signature: {_signature(tool)}\n"
+                f"Re-send the call using these parameter names.")
+
     def call_tool(self, tool_name: str, arguments: dict) -> str:
         if not self.transport:
             return f"Error: Server '{self.name}' is not started."
+
+        rejection = self.preflight(tool_name, arguments)
+        if rejection is not None:
+            return rejection
 
         from config import get_mcp_call_timeout
         timeout = get_mcp_call_timeout()
@@ -432,15 +512,22 @@ class MCPServer:
                         f"within {timeout:g}s. The server may still be working on it — "
                         f"check that the application is responsive before retrying, and "
                         f"do NOT immediately repeat the same call.")
-            return f"MCP Error: {message}"
-
-        log.info("mcp %s.%s ok in %.1fs", self.name, tool_name, elapsed)
-        if elapsed > SLOW_CALL_SECONDS:
-            log.warning("mcp %s.%s took %.1fs — the server is slow to respond",
-                        self.name, tool_name, elapsed)
+            return f"MCP Error: {self._explain(tool_name, message)}"
 
         content = result.get("result", {}).get("content", [])
         is_error = result.get("result", {}).get("isError", False)
+
+        # A tool-level failure is a failure. It arrives inside a successful
+        # JSON-RPC response, so logging on the transport outcome alone recorded
+        # "ok in 0.1s" for calls the server had flatly rejected — which is how a
+        # run of bad-argument errors left a log that looked perfectly healthy.
+        if is_error:
+            log.warning("mcp %s.%s tool error after %.1fs", self.name, tool_name, elapsed)
+        else:
+            log.info("mcp %s.%s ok in %.1fs", self.name, tool_name, elapsed)
+        if elapsed > SLOW_CALL_SECONDS:
+            log.warning("mcp %s.%s took %.1fs — the server is slow to respond",
+                        self.name, tool_name, elapsed)
 
         texts = []
         for item in content:
@@ -452,8 +539,24 @@ class MCPServer:
 
         output = "\n".join(texts)
         if is_error:
-            return f"MCP Tool Error: {output}"
+            return f"MCP Tool Error: {self._explain(tool_name, output)}"
         return output
+
+    def _explain(self, tool_name: str, message: str) -> str:
+        """Attach the real signature when the server complains about arguments.
+
+        Preflight cannot catch everything — a rule like "at least one of type,
+        name or label" lives in the server, not in the JSON schema. When the
+        rejection does come back, answering with the signature turns a second
+        guess into a correction.
+        """
+        lowered = (message or "").lower()
+        if not any(cue in lowered for cue in _ARGUMENT_ERROR_CUES):
+            return message
+        tool = self._find_tool(tool_name)
+        if tool is None:
+            return message
+        return f"{message}\nSignature: {_signature(tool)}"
 
     @property
     def is_running(self) -> bool:
