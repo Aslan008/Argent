@@ -22,7 +22,10 @@ def _handled_commands() -> set:
         src += (_ROOT / name).read_text(encoding="utf-8")
     found = set()
     found |= set(re.findall(r'user_input\.strip\(\)\s*==\s*"(/[a-z_]+)"', src))
-    found |= set(re.findall(r'user_input\.startswith\("(/[a-z_]+)"', src))
+    # Both `user_input.startswith(...)` and `user_input.strip().startswith(...)`:
+    # a command dispatched through the second form is no less real, and missing
+    # it made the README look wrong when only the dispatch style had changed.
+    found |= set(re.findall(r'user_input(?:\.strip\(\))?\.startswith\("(/[a-z_]+)"', src))
     found |= set(re.findall(r'cmd\s*==\s*"(/[a-z_]+)"', src))
     # Commands with subcommands are dispatched by prefix (e.g. /mcp add …).
     found |= set(re.findall(r'cmd\.startswith\("(/[a-z_]+)"', src))

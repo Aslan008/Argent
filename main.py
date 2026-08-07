@@ -33,7 +33,10 @@ import subprocess
 import json
 from pathlib import Path
 from project_manager import ProjectManager
-from session import save_session, load_session, list_sessions, delete_session, get_last_session
+from session import (
+    save_session, load_session, list_sessions, delete_session, get_last_session,
+    find_session,
+)
 from file_tracker import snapshot, get_diff, undo, get_pending_changes, undo_all
 from prompts import (
     build_spec_prompt, build_work_investigation_prompt,
@@ -109,6 +112,56 @@ def _parse_task_tools(spec: str):
     names = [n.strip() for n in spec.replace(";", ",").split(",") if n.strip()]
     unknown = [n for n in names if n not in AVAILABLE_TOOLS]
     return names, unknown
+
+
+def restore_session(agent, meta: dict) -> bool:
+    """Put a saved session back, telling the user what does NOT match.
+
+    Restoring the messages is the easy half. The hard half is that the system
+    prompt gets rebuilt for the CURRENT directory and model while the
+    conversation still talks about the old project's files — and the working
+    memory in .argent/memory.json belongs to wherever you are standing now.
+    Nothing downstream can detect that, so it has to be said here.
+    """
+    data = load_session(meta["id"])
+    if not data or not data.get("messages"):
+        print_error("Не удалось прочитать сессию.")
+        return False
+
+    agent.messages = data["messages"]
+    agent.session_id = data.get("id") or meta["id"]
+    print_system(f"Восстановлено {len(data['messages'])} сообщений "
+                 f"({data.get('saved_at', '')[:16]}).")
+
+    saved_model = data.get("model") or ""
+    if saved_model and saved_model != agent.model_name:
+        print_system(f"[yellow]⚠ Сессия велась на '{saved_model}', сейчас активна "
+                     f"'{agent.model_name}'.[/yellow] История содержит вызовы "
+                     f"инструментов, которые текущая модель может не повторить — "
+                     f"смените модель через /model, если это важно.")
+
+    saved_cwd = data.get("cwd") or ""
+    current = os.getcwd()
+    if saved_cwd and os.path.normcase(os.path.abspath(saved_cwd)) != os.path.normcase(current):
+        print_system(f"[yellow]⚠ Сессия сохранена в:[/yellow] {saved_cwd}\n"
+                     f"[yellow]   Вы сейчас в:       [/yellow] {current}")
+        if not os.path.isdir(saved_cwd):
+            print_system("[dim]Директории сессии больше нет — пути из истории "
+                         "не совпадут с текущим проектом.[/dim]")
+            return True
+        # Never silent: after a cd, files land somewhere the user did not ask
+        # for. That is the one class of action Argent always confirms.
+        try:
+            go = questionary.confirm("Перейти в директорию сессии?", default=False).ask()
+        except Exception:
+            go = False
+        if go:
+            os.chdir(saved_cwd)
+            print_system(f"Рабочая директория: {os.getcwd()}")
+        else:
+            print_system("[dim]Остаёмся здесь. Учтите: пути в истории — от другого "
+                         "проекта, как и рабочая память в .argent/memory.json.[/dim]")
+    return True
 
 
 def handle_tasks_command(user_input: str, agent) -> None:
@@ -315,7 +368,7 @@ def main():
                 save_session(agent.messages, {
                     "model": agent.model_name,
                     "provider": get_provider(),
-                })
+                }, session_id=getattr(agent, "session_id", None))
             except Exception:
                 pass
 
@@ -416,17 +469,21 @@ def main():
         if warning:
             print_system(f"[yellow]⚠ {warning}[/yellow]")
 
-    # Offer to restore last session
+    # Offer to restore last session. The directory is shown up front: the most
+    # recent session is often from a different project, and "restore?" alone
+    # gives no way to notice that before saying yes.
     last = get_last_session()
     if last and last.get("preview"):
+        where = last.get("cwd") or ""
+        same_place = (where and os.path.normcase(os.path.abspath(where))
+                      == os.path.normcase(os.getcwd()))
+        suffix = "" if same_place else f" [в {Path(where).name}]" if where else ""
         restore = questionary.confirm(
-            f"Last session found ({last['saved_at'][:16]}): \"{last['preview']}\". Restore?"
+            f"Last session found ({last['saved_at'][:16]}){suffix}: "
+            f"\"{last['preview']}\". Restore?"
         ).ask()
         if restore:
-            data = load_session(last["id"])
-            if data and data.get("messages"):
-                agent.messages = data["messages"]
-                print_system(f"Restored {len(data['messages'])} messages from last session.")
+            restore_session(agent, last)
 
     # Trigger Startup Hook
     hook_manager.call_hook("on_startup")
@@ -959,50 +1016,61 @@ def main():
                 continue
             elif user_input.startswith("/save"):
                 parts = user_input.split(" ", 1)
-                filename = parts[1].strip() if len(parts) > 1 else None
-                export_chat_history(agent, filename=filename, auto=False)
-                # Also save as a restorable session
+                name = parts[1].strip() if len(parts) > 1 else None
+                export_chat_history(agent, filename=name, auto=False)
+                # The same name labels the session, so /load can take it back.
                 try:
-                    save_session(agent.messages, {
+                    saved = save_session(agent.messages, {
                         "model": agent.model_name,
                         "provider": get_provider(),
-                    })
-                except Exception:
-                    pass
+                    }, session_id=agent.session_id, label=name)
+                    if saved:
+                        agent.session_id = saved
+                        print_system(f"Сессия сохранена: {saved}"
+                                     + (f" (метка: {name})" if name else ""))
+                    else:
+                        print_system("[dim]Сессия не сохранена — в истории нет "
+                                     "ни одного вашего сообщения.[/dim]")
+                except Exception as e:
+                    print_error(f"Не удалось сохранить сессию: {e}")
                 continue
-            elif user_input.strip() == "/sessions":
-                sessions = list_sessions()
+            elif user_input.strip().startswith("/sessions"):
+                query = user_input.strip()[len("/sessions"):].strip()
+                sessions = list_sessions(query or None)
                 if not sessions:
-                    print_system("No saved sessions found.")
+                    print_system(f"Ничего не найдено по запросу '{query}'." if query
+                                 else "No saved sessions found.")
                 else:
-                    console.print("[bold cyan]Saved Sessions:[/bold cyan]")
+                    header = (f"[bold cyan]Сессии по запросу '{query}':[/bold cyan]"
+                              if query else "[bold cyan]Saved Sessions:[/bold cyan]")
+                    console.print(header)
+                    here = os.path.normcase(os.getcwd())
                     for i, s in enumerate(sessions[:20]):
-                        date = s.get("saved_at", "")[:16]
-                        model = s.get("model", "?")
-                        preview = s.get("preview", "")
-                        count = s.get("message_count", 0)
-                        console.print(f"  [dim][{i+1}][/dim] {date} [dim]|[/dim] [cyan]{model}[/cyan] [dim]|[/dim] {count} msgs [dim]|[/dim] [italic]\"{preview}\"[/italic]")
-                    print_system("Use /load <number> to restore a session.")
+                        date = (s.get("saved_at") or "")[:16]
+                        model = s.get("model") or "?"
+                        preview = s.get("preview") or ""
+                        count = s.get("message_count") or 0
+                        label = f" [magenta]{s['label']}[/magenta]" if s.get("label") else ""
+                        cwd = s.get("cwd") or ""
+                        # Only the odd one out is worth the width — the project
+                        # you are in right now needs no announcement.
+                        where = ("" if not cwd or os.path.normcase(os.path.abspath(cwd)) == here
+                                 else f" [dim]@{Path(cwd).name}[/dim]")
+                        console.print(f"  [dim][{i+1}][/dim] {date} [dim]|[/dim] [cyan]{model}[/cyan]"
+                                      f"{label}{where} [dim]|[/dim] {count} msgs "
+                                      f"[dim]|[/dim] [italic]\"{preview}\"[/italic]")
+                    print_system("Восстановить: /load <номер | метка | часть текста>")
                 continue
             elif user_input.startswith("/load"):
-                parts = user_input.strip().split()
+                parts = user_input.strip().split(maxsplit=1)
                 if len(parts) < 2:
-                    print_error("Usage: /load <session-number>")
+                    print_error("Usage: /load <номер | метка | часть текста>")
                     continue
-                sessions = list_sessions()
-                try:
-                    idx = int(parts[1]) - 1
-                    if 0 <= idx < len(sessions):
-                        data = load_session(sessions[idx]["id"])
-                        if data and data.get("messages"):
-                            agent.messages = data["messages"]
-                            print_system(f"Restored {len(data['messages'])} messages from {sessions[idx].get('saved_at', '')[:16]}.")
-                        else:
-                            print_error("Failed to load session data.")
-                    else:
-                        print_error("Invalid session number.")
-                except ValueError:
-                    print_error("Please enter a valid number.")
+                target = find_session(parts[1])
+                if target is None:
+                    print_error(f"Сессия '{parts[1]}' не найдена. Список: /sessions")
+                    continue
+                restore_session(agent, target)
                 continue
 
             elif user_input.startswith("/copy"):
@@ -1390,16 +1458,19 @@ def main():
             usage = agent.get_context_usage()
             print_context_usage(usage["tokens"], usage["max"], usage["percent"])
             
-            # Auto-save session every 5 turns
+            # Auto-save every 5 turns, back over the SAME session — otherwise a
+            # long conversation files a new snapshot of itself every five turns
+            # and crowds the other forty-nine out of the store.
             turn_counter += 1
             if turn_counter % 5 == 0:
                 try:
-                    save_session(agent.messages, {
+                    agent.session_id = save_session(agent.messages, {
                         "model": agent.model_name,
                         "provider": get_provider(),
-                    })
-                except Exception:
-                    pass
+                    }, session_id=agent.session_id) or agent.session_id
+                except Exception as e:
+                    from logger import get_logger
+                    get_logger("session").warning("auto-save failed: %s", e)
             
             # Trigger Post Response Hook
             if agent.messages and agent.messages[-1].get("role") in ("assistant", "model"):

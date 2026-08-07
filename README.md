@@ -220,9 +220,9 @@ Run local shell commands directly from the prompt by prefixing them with `!`. If
 - `/jobs`, `/stop <pid>` — List / stop background processes.
 - `/cd [path]` — Change or show the working directory.
 - `/mcp [subcommand]` — Manage MCP servers (list / add / remove / start / stop / test).
-- `/save [name]` — Export the current conversation to a Markdown file.
-- `/sessions` — List saved sessions.
-- `/load <n>` — Restore a saved session by number.
+- `/save [name]` — Export the conversation to Markdown and save a restorable session, labelled with `name`.
+- `/sessions [query]` — List saved sessions; the query matches label, preview, model and directory.
+- `/load <number | label | fragment>` — Restore a session. Warns when it was recorded in a different directory or on a different model, and offers to move.
 - `/diff [file]` — Show changes made to files.
 - `/undo [file]` — Restore a file to its previous version.
 - `/changes` — List the files the AI modified this session.
@@ -417,9 +417,9 @@ dsolve(Derivative(y(x), x, 2) + y(x), y(x))  →  C1*sin(x) + C2*cos(x)
 - `/jobs`, `/stop <pid>` — Список / остановка фоновых процессов.
 - `/cd [path]` — Сменить или показать рабочую директорию.
 - `/mcp [subcommand]` — Управление MCP-серверами (list / add / remove / start / stop / test).
-- `/save [name]` — Экспортировать историю текущего диалога в Markdown-файл.
-- `/sessions` — Показать сохраненные сессии диалогов.
-- `/load <n>` — Восстановить сохраненную сессию по номеру.
+- `/save [name]` — Экспортировать диалог в Markdown и сохранить восстановимую сессию с меткой `name`.
+- `/sessions [запрос]` — Показать сохранённые сессии; запрос ищет по метке, превью, модели и директории.
+- `/load <номер | метка | фрагмент>` — Восстановить сессию. Предупреждает, если она велась в другой директории или на другой модели, и предлагает перейти.
 - `/diff [file]` — Показать изменения, внесенные в файлы.
 - `/undo [file]` — Откатить файл к предыдущей сохраненной версии.
 - `/changes` — Показать файлы, изменённые ИИ в этой сессии.

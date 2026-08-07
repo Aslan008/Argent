@@ -18,13 +18,27 @@ from pathlib import Path
 
 
 def atomic_write_text(path, text: str, encoding: str = "utf-8") -> None:
+    _atomic_write(path, lambda f: f.write(text), "w", encoding=encoding)
+
+
+def atomic_write_bytes(path, writer) -> None:
+    """Same guarantee for binary payloads. ``writer`` receives the open file.
+
+    Passing a callback rather than a bytes blob lets the caller stream into it —
+    a gzip session is written through a wrapper, and materialising the whole
+    compressed blob in memory first would be pointless.
+    """
+    _atomic_write(path, writer, "wb")
+
+
+def _atomic_write(path, writer, mode: str, encoding: str = None) -> None:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     # Include the PID so concurrent writers don't clobber each other's temp.
     tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
     try:
-        with open(tmp, "w", encoding=encoding) as f:
-            f.write(text)
+        with open(tmp, mode, encoding=encoding) as f:
+            writer(f)
             f.flush()
             os.fsync(f.fileno())      # durability: the bytes are on disk pre-rename
         os.replace(tmp, path)         # atomic swap

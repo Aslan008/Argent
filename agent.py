@@ -409,6 +409,11 @@ Example: {"tool": {"name": "read_file", "arguments": {"file_path": "main.py"}}}"
             self.max_history_messages = max_history_messages
 
         self.loop_guard = LoopGuard()
+        # The saved session this conversation IS, once it has one. Autosave
+        # writes back over it instead of filing another snapshot of the same
+        # chat — six copies of one conversation used to compete for the fifty
+        # stored slots.
+        self.session_id: str | None = None
         # Per-file signature of the last whole-file read, so a re-read of an
         # UNCHANGED file (whose content is still in history) is answered with a
         # compact pointer instead of a full re-dump. Kills the wasteful
@@ -1458,6 +1463,9 @@ Example: {"tool": {"name": "read_file", "arguments": {"file_path": "main.py"}}}"
         memory.clear()
         self.loop_guard.reset()
         self.messages = [self.messages[0]]
+        # A cleared history is a different conversation, so the next save must
+        # start a new session rather than overwrite the one just abandoned.
+        self.session_id = None
 
     def get_context_usage(self) -> Dict[str, Any]:
         """Calculates current context usage statistics."""
