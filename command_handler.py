@@ -499,6 +499,12 @@ def _handle_mcp_command(command: str):
             status = "[green]RUNNING[/green]" if running else "[red]STOPPED[/red]"
             tool_count = len(mcp_client.servers[name].list_tools()) if name in mcp_client.servers else 0
             print_system(f"  - [yellow]{name}[/yellow] ({stype}) {status} — {endpoint} [{tool_count} tools]")
+        # RUNNING says nothing about whether the model can reach it — those are
+        # two separate switches, and both read as ON.
+        from src.agent.mcp_prompt import model_access_warning
+        warning = model_access_warning()
+        if warning:
+            print_system(f"[yellow]⚠ {warning}[/yellow]")
         return
 
     subcmd = parts[1].lower() if len(parts) > 1 else ""

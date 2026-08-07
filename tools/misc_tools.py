@@ -300,6 +300,84 @@ def git_rollback(to_checkpoint: str = None) -> str:
     except Exception as e:
         return f"Error rolling back: {e}"
 
+# Above this, dumping every signature is worse than useless: it buries the two
+# tools the model actually wants. Unity's MCP server alone exposes 140.
+MCP_DETAIL_LIMIT = 25
+
+
+def _mcp_tool_line(tool: dict, detailed: bool) -> str:
+    name = tool.get("name", "?")
+    if not detailed:
+        return f"  - {name}"
+    schema = tool.get("inputSchema") or tool.get("parameters") or {}
+    props = schema.get("properties") or {}
+    required = set(schema.get("required") or [])
+    params = ", ".join(p if p in required else f"{p}?" for p in list(props)[:8])
+    desc = (tool.get("description") or "").strip().split(".")[0][:110]
+    return f"  - {name}({params}) — {desc}"
+
+
+def list_mcp_tools(server_name: str = "", filter: str = "") -> str:
+    """Discover what an MCP server offers, instead of carrying its whole catalog.
+
+    A server's tool list is fetched on demand and cached, so asking is cheap;
+    pinning 140 signatures into every system prompt is not. The model gets a
+    one-line map up front and comes here when it needs a signature.
+    """
+    from config import get_mcp_servers
+
+    configured = get_mcp_servers()
+    if not configured:
+        return "No MCP servers are configured. Add one with /mcp."
+
+    if not (server_name or "").strip():
+        lines = ["Configured MCP servers:"]
+        for srv in configured:
+            name = srv["name"]
+            tools = [t for t in mcp_client.list_tools(name) if "error" not in t]
+            state = f"{len(tools)} tools" if tools else "unreachable"
+            lines.append(f"  - {name} ({srv.get('type', 'stdio')}): {state}")
+        lines.append("Call list_mcp_tools(server_name, filter) to see signatures.")
+        return "\n".join(lines)
+
+    server_name = server_name.strip()
+    if server_name not in [s["name"] for s in configured]:
+        known = ", ".join(s["name"] for s in configured)
+        return f"Error: no MCP server named '{server_name}'. Configured: {known}."
+
+    tools = mcp_client.list_tools(server_name)
+    broken = [t for t in tools if "error" in t]
+    tools = [t for t in tools if "name" in t and "error" not in t]
+    if not tools:
+        reason = broken[0].get("error") if broken else "server returned no tools"
+        return f"Server '{server_name}' offers nothing right now: {reason}"
+
+    needle = (filter or "").strip().lower()
+    if needle:
+        matched = [t for t in tools
+                   if needle in t.get("name", "").lower()
+                   or needle in (t.get("description") or "").lower()]
+        if not matched:
+            sample = ", ".join(t["name"] for t in tools[:15])
+            return (f"No tool on '{server_name}' matches '{filter}'. "
+                    f"{len(tools)} available, e.g.: {sample}")
+    else:
+        matched = tools
+
+    # Signatures only when the list is short enough to read. Otherwise names,
+    # plus the nudge that got the model here in the first place.
+    detailed = len(matched) <= MCP_DETAIL_LIMIT
+    head = f"'{server_name}' — {len(matched)} of {len(tools)} tools" if needle \
+        else f"'{server_name}' — {len(tools)} tools"
+    lines = [head + ":"]
+    lines += [_mcp_tool_line(t, detailed) for t in matched[:120]]
+    if len(matched) > 120:
+        lines.append(f"  ... and {len(matched) - 120} more")
+    if not detailed:
+        lines.append("Names only — pass `filter` to get signatures for what you need.")
+    return "\n".join(lines)
+
+
 def call_mcp_tool(server_name: str, tool_name: str, arguments_json: str) -> str:
     """Call a standardized tool from an MCP server. arguments_json must be a valid JSON string."""
     args = None

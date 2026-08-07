@@ -1,3 +1,5 @@
+import pytest
+
 from tool_profiles import slim_tools_for_category, is_slim_category, CORE_CHAT_TOOLS
 
 
@@ -6,6 +8,17 @@ ALL = [
     "browser_open", "browser_click", "call_mcp_tool", "write_obsidian_note",
     "create_svg_image", "git_checkpoint", "run_subagent", "analyze_project",
 ]
+
+
+@pytest.fixture(autouse=True)
+def no_mcp_servers(monkeypatch):
+    """Part of the core set is conditional on what is plugged in, so pin it.
+
+    Without this the suite passes or fails depending on whose machine it runs
+    on — these tests used to read the developer's live config by accident.
+    Conditional membership is covered in test_mcp_prompt.py.
+    """
+    monkeypatch.setattr("config.get_mcp_servers", lambda: [])
 
 
 class TestSlim:

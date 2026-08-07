@@ -179,6 +179,10 @@ Skills written for another agent's tool names (`WebSearch`, `WebFetch`, `Read`, 
 ### 🔌 MCP Server Support (Model Context Protocol)
 Integrate external tools and resources seamlessly. Argent supports **stdio**, **SSE**, and **REST** MCP transports to connect to filesystem, github, database, or other custom APIs.
 
+**Servers are mapped, not inlined.** The system prompt lists which servers are connected and how big they are; the model fetches signatures on demand with `list_mcp_tools(server, filter)`. Measured on a real Unity MCP server (140 tools), inlining the catalog cost 27k characters — ~6.8k tokens in *every* request, of which a turn reads one or two. The map costs ~200.
+
+A server being `RUNNING` and the model being able to reach it are two independent switches, and both read as ON — so `/mcp` says out loud when they disagree.
+
 ### 📚 Documentation Knowledge Bases
 Point Argent at a folder of documentation (`/kb add <id> "Name" "Path"`, `/kb index <id>`) and it becomes a searchable knowledge base, stored separately from your project index. Unity documentation gets a dedicated cleaner that strips the HTML boilerplate and chunks per API symbol, so questions like *"how does Rigidbody.AddForce work?"* return exact, sourced snippets. With `/auto_retrieve` on, relevant snippets are pulled into context automatically each query — so even a weak local model consults the docs at the right moment instead of hallucinating method signatures.
 
@@ -371,6 +375,10 @@ dsolve(Derivative(y(x), x, 2) + y(x), y(x))  →  C1*sin(x) + C2*cos(x)
 
 ### 🔌 Поддержка MCP-серверов (Model Context Protocol)
 Бесшовная интеграция внешних инструментов и ресурсов. Argent поддерживает транспорты **stdio**, **SSE** и **REST** для подключения к файловой системе, GitHub, базам данных и любым другим сторонним API.
+
+**В промпте карта, а не каталог.** Системный промпт перечисляет, какие серверы подключены и насколько они велики; сигнатуры модель запрашивает сама через `list_mcp_tools(server, filter)`. Замерено на настоящем Unity MCP (140 инструментов): каталог целиком стоил 27 000 символов — ≈6 800 токенов в *каждом* запросе, из которых за ход читаются один-два. Карта стоит ≈200.
+
+«Сервер RUNNING» и «модель может к нему обратиться» — два независимых переключателя, и оба выглядят как ВКЛ, поэтому `/mcp` прямо сообщает, когда они разошлись.
 
 ### 📚 Базы знаний из документации
 Укажите Argent папку с документацией (`/kb add <id> "Имя" "Путь"`, `/kb index <id>`) — и она станет базой для семантического поиска, отдельной от индекса проекта. Документация Unity получает специальный чистильщик, который снимает HTML-«мусор» и режёт на чанки по символу API, поэтому вопросы вроде *«как работает Rigidbody.AddForce?»* возвращают точные сниппеты с источником. С включённым `/auto_retrieve` релевантные сниппеты подмешиваются в контекст автоматически на каждый запрос — и даже слабая локальная модель заглядывает в доки в нужный момент, а не выдумывает сигнатуры методов.

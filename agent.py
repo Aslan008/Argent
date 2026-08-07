@@ -29,6 +29,7 @@ from src.agent.trimmer import estimate_tokens
 from src.agent.healing import detect_tool_failure, build_healing_hint, HEALING_TOOLS
 from src.agent.constrained import build_step_schema, build_tool_catalog, StepStreamExtractor
 from src.agent.loop_guard import LoopGuard, build_loop_note
+from src.agent.mcp_prompt import build_mcp_section
 from src.agent.context_limit import is_context_overflow, parse_context_limit
 
 log = get_logger("agent")
@@ -270,41 +271,9 @@ Example: {"tool": {"name": "read_file", "arguments": {"file_path": "main.py"}}}"
         # filter as headings with an endpoint and no way to act on it. Checking
         # first also avoids the blocking tools/list round-trip below.
         try:
-            from mcp_client import mcp_client
             mcp_servers = get_mcp_servers() if (available is None or "call_mcp_tool" in available) else []
             if mcp_servers:
-                mcp_section = "## MCP SERVERS (External Tool Integration)\n"
-                mcp_section += "You have access to external tool servers via `call_mcp_tool(server_name, tool_name, arguments_json)`.\n"
-                mcp_section += "When the user asks to do something related to these servers, use call_mcp_tool AUTOMATICALLY.\n\n"
-                for srv_cfg in mcp_servers:
-                    srv_name = srv_cfg["name"]
-                    stype = srv_cfg.get("type", "stdio")
-                    endpoint = srv_cfg.get("url") or f"{srv_cfg.get('command', '?')} {' '.join(srv_cfg.get('args', []))}".strip()
-                    mcp_section += f"### Server: `{srv_name}` ({stype})\n"
-                    mcp_section += f"- **Endpoint**: {endpoint}\n"
-                    try:
-                        tools = mcp_client.list_tools(srv_name)
-                        valid_tools = [t for t in tools if "name" in t and "error" not in t]
-                        if valid_tools:
-                            mcp_section += "- **Tools**:\n"
-                            for t in valid_tools:
-                                tname = t["name"]
-                                desc = t.get("description", "").split(".")[0]
-                                schema = t.get("inputSchema", t.get("parameters", {}))
-                                params = schema.get("properties", {})
-                                param_str = ", ".join(f'"{p}": value' for p in params)
-                                mcp_section += f"  - `{tname}`: {desc}\n"
-                                if param_str:
-                                    example_args = "{" + param_str + "}"
-                                    mcp_section += f"    -> call_mcp_tool(\"{srv_name}\", \"{tname}\", '{example_args}')\n"
-                                else:
-                                    mcp_section += f"    -> call_mcp_tool(\"{srv_name}\", \"{tname}\", '{{}}')\n"
-                        else:
-                            mcp_section += "- **Tools**: (could not fetch — server may be offline)\n"
-                    except Exception:
-                        mcp_section += "- **Tools**: (connection failed — server may be offline)\n"
-                    mcp_section += "\n"
-                add(mcp_section)
+                add(build_mcp_section(mcp_servers))
         except Exception:
             pass
 

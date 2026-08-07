@@ -25,7 +25,7 @@ from tools.system_ops import (
 from tools.skill_tools import list_skills, read_skill, create_skill, delete_skill
 from tools.misc_tools import (
     find_definition, find_references, git_checkpoint, git_rollback,
-    call_mcp_tool, run_subagent, create_svg_image, ask_user_questions,
+    call_mcp_tool, list_mcp_tools, run_subagent, create_svg_image, ask_user_questions,
     wait_heartbeat, end_auto_mode, create_artifact, request_user_approval,
     calculate, set_goal, filter_new_items,
 )
@@ -91,6 +91,7 @@ AVAILABLE_TOOLS = {
     "git_checkpoint": git_checkpoint,
     "git_rollback": git_rollback,
     "call_mcp_tool": call_mcp_tool,
+    "list_mcp_tools": list_mcp_tools,
     "run_subagent": run_subagent,
     "run_swarm_workers": run_swarm_workers,
     "create_svg_image": create_svg_image,
@@ -267,15 +268,43 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "call_mcp_tool",
-            "description": "Call a standardized tool via the Model Context Protocol (MCP). Use this to interact with external services like GitHub, Slack, or Google Search via a standard interface.",
+            "description": (
+                "Call a tool on an external MCP server (Unity Editor, GitHub, Slack, a database…). "
+                "The servers connected right now are listed in the MCP SERVERS section of your "
+                "instructions. If you do not know the exact tool name or its arguments, call "
+                "list_mcp_tools first — guessing a signature wastes a turn."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "server_name": { "type": "string", "description": "The name of the MCP server (e.g., 'github')." },
-                    "tool_name": { "type": "string", "description": "The name of the tool to call." },
+                    "server_name": { "type": "string", "description": "The name of the MCP server (e.g., 'unity')." },
+                    "tool_name": { "type": "string", "description": "Exact tool name, as returned by list_mcp_tools." },
                     "arguments_json": { "type": "string", "description": "JSON string of arguments for the tool." }
                 },
                 "required": ["server_name", "tool_name", "arguments_json"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_mcp_tools",
+            "description": (
+                "Look up what an MCP server can do. A single server can expose well over a "
+                "hundred tools, so their signatures are NOT in your instructions — you fetch "
+                "the ones you need, when you need them.\n"
+                "  list_mcp_tools() — which servers exist and how many tools each has\n"
+                "  list_mcp_tools('unity', 'navmesh') — signatures of the matching tools\n"
+                "Filter by what you are trying to do ('scene', 'animation', 'build'); an "
+                "unfiltered list on a big server gives names only."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "server_name": { "type": "string", "description": "Server to inspect. Omit to list the servers themselves." },
+                    "filter": { "type": "string", "description": "Substring matched against tool names and descriptions." }
+                },
+                "required": []
             }
         }
     },

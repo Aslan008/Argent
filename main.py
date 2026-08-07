@@ -409,6 +409,12 @@ def main():
                 print_system(result)
             except Exception as e:
                 print_system(f"MCP server '{name}': failed to start — {e}")
+        # "Running with 140 tools" and "the model can use them" are independent
+        # states that both look like ON; say so when they disagree.
+        from src.agent.mcp_prompt import model_access_warning
+        warning = model_access_warning()
+        if warning:
+            print_system(f"[yellow]⚠ {warning}[/yellow]")
 
     # Offer to restore last session
     last = get_last_session()

@@ -35,12 +35,34 @@ CORE_CHAT_TOOLS = {
 # Categories that get the slim profile (they benefit most from a tight prompt).
 _SLIM_CATEGORIES = {"tiny", "small"}
 
+# Only worth their tokens once something is actually plugged in. A fixed core
+# set cannot express "useful here, dead weight there", and a weak model that
+# silently loses its only door to a configured Unity editor is worse off than
+# one carrying two extra schemas.
+_CONDITIONAL_CORE = {
+    ("call_mcp_tool", "list_mcp_tools"): lambda: bool(__import__(
+        "config").get_mcp_servers()),
+}
+
+
+def core_tools_now():
+    """CORE_CHAT_TOOLS plus whatever this environment makes worth having."""
+    tools = set(CORE_CHAT_TOOLS)
+    for names, is_relevant in _CONDITIONAL_CORE.items():
+        try:
+            if is_relevant():
+                tools.update(names)
+        except Exception:
+            pass          # a broken config must not shrink the toolset
+    return tools
+
 
 def slim_tools_for_category(tool_names, category: str):
     """Filter a list of tool names down to the core set for weak models.
     Returns the list unchanged for medium/large/cloud."""
     if category in _SLIM_CATEGORIES:
-        return [n for n in tool_names if n in CORE_CHAT_TOOLS]
+        core = core_tools_now()
+        return [n for n in tool_names if n in core]
     return list(tool_names)
 
 
