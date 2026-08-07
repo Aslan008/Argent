@@ -3,6 +3,7 @@ import os
 import json
 import inspect
 import platform
+import time
 from pathlib import Path
 from typing import List, Dict, Any, Generator
 
@@ -317,6 +318,25 @@ Example: {"tool": {"name": "read_file", "arguments": {"file_path": "main.py"}}}"
             # decision where the request is assembled.
             return set(n for n in names if n in allowed_tools)
         return set(slim_tools_for_category(names, get_model_size_category(self.model_name)))
+
+    def _log_turn_end(self, reason: str, detail: str = "") -> None:
+        """Record WHY a turn stopped.
+
+        A turn can end nine different ways — a final answer, the loop guard, a
+        provider error, three flavours of truncation, exhausted nudges — and
+        none of them used to leave a line on disk. When a run visibly cut short,
+        agent.log held nothing at all for that window, so the only honest answer
+        to "why did it stop?" was "unknowable". One line each fixes that for
+        every future occurrence.
+        """
+        if getattr(self, "_turn_end_logged", False):
+            return          # first reason wins; the wrapper's finally is a backstop
+        self._turn_end_logged = True
+        started = getattr(self, "_turn_started", None)
+        elapsed = (time.monotonic() - started) if started else 0.0
+        log.info("turn ended: %s after %d tool call(s) in %.1fs%s",
+                 reason, getattr(self, "_turn_tool_calls", 0), elapsed,
+                 f" — {detail[:300]}" if detail else "")
 
     def _refresh_system_prompt(self, allowed_tools=None) -> bool:
         """Rebuild the system prompt only if it actually changed.
@@ -684,6 +704,28 @@ Example: {"tool": {"name": "read_file", "arguments": {"file_path": "main.py"}}}"
         return "\n".join(parts)
 
     def process_user_input(self, user_text: str, allowed_tools: List[str] = None) -> Generator[Dict[str, Any], None, None]:
+        """Run one turn, and guarantee the reason it ended is on disk.
+
+        The wrapper exists for the ending no break-site can see: the caller
+        stopping consumption. Ctrl+C, a closing UI or an abandoned generator
+        closes this one, every logging site below is skipped, and the turn
+        vanishes without a trace — which is exactly what "it just cut off"
+        looks like from the outside.
+        """
+        self._turn_end_logged = False
+        try:
+            yield from self._run_turn(user_text, allowed_tools)
+        except GeneratorExit:
+            self._log_turn_end("interrupted — the caller stopped reading")
+            raise
+        except BaseException as e:
+            self._log_turn_end("turn raised", f"{type(e).__name__}: {e}")
+            raise
+        finally:
+            # Reached when the loop simply ran out without passing a break site.
+            self._log_turn_end("ended without a recorded reason")
+
+    def _run_turn(self, user_text: str, allowed_tools: List[str] = None) -> Generator[Dict[str, Any], None, None]:
         """
         Process the user input and yield chunks of response or tool activity.
         Supports streaming generation.
@@ -706,6 +748,8 @@ Example: {"tool": {"name": "read_file", "arguments": {"file_path": "main.py"}}}"
         self._salvage_continues = 0
         self._ctx_overflow_retries = 0
         self._no_action_continues = 0
+        self._turn_started = time.monotonic()
+        self._turn_tool_calls = 0
 
         # One provider instance per turn: tool-result formatting and retries
         # below reuse it instead of re-creating a provider on every call.
@@ -713,9 +757,11 @@ Example: {"tool": {"name": "read_file", "arguments": {"file_path": "main.py"}}}"
             provider = create_provider(self.provider)
             validation_error = provider.validate_config()
             if validation_error:
+                self._log_turn_end("provider config invalid", validation_error)
                 yield {"type": "error", "content": validation_error}
                 return
         except Exception as e:
+            self._log_turn_end("provider could not be created", str(e))
             yield {"type": "error", "content": f"Provider error: {e}"}
             return
 
@@ -921,6 +967,7 @@ Example: {"tool": {"name": "read_file", "arguments": {"file_path": "main.py"}}}"
                                 full_content += content_chunk
                                 yield {"type": "content_stream", "content": content_chunk}
                     except Exception as retry_e:
+                        self._log_turn_end("fallback stream failed", str(retry_e))
                         yield {"type": "error", "content": f"Fallback Error: {retry_e}"}
                         break
                 elif "thought_signature" in error_str or "functioncall" in error_str:
@@ -939,6 +986,7 @@ Example: {"tool": {"name": "read_file", "arguments": {"file_path": "main.py"}}}"
                     # budget, re-trim hard and retry — instead of failing.
                     self._ctx_overflow_retries = getattr(self, "_ctx_overflow_retries", 0) + 1
                     if self._ctx_overflow_retries > 3:
+                        self._log_turn_end("context overflow after 3 shrinks", str(e))
                         yield {"type": "error", "content": (
                             f"{e}\n[Argent: the prompt still won't fit after shrinking the window "
                             f"3×. Start a fresh chat with /clear, or lower it with /context.]"
@@ -959,9 +1007,12 @@ Example: {"tool": {"name": "read_file", "arguments": {"file_path": "main.py"}}}"
                     )}
                     continue
                 elif isinstance(e, ProviderError):
+                    self._log_turn_end("provider error", str(e))
                     yield {"type": "error", "content": str(e)}
                     break
                 else:
+                    self._log_turn_end("unhandled error", f"{type(e).__name__}: {e}")
+                    log.exception("turn aborted by an unhandled exception")
                     yield {"type": "error", "content": f"Error: {e}"}
                     break
 
@@ -1036,6 +1087,8 @@ Example: {"tool": {"name": "read_file", "arguments": {"file_path": "main.py"}}}"
                         ok, detail = verify_salvaged_file(file_path)
                         status = ("The saved file parses cleanly."
                                   if ok else f"WARNING — the saved file is INCOMPLETE: {detail}")
+                        self._log_turn_end("salvage continuations exhausted",
+                                           f"{file_path}: {status}")
                         yield {"type": "error", "content": (
                             f"\n[System: '{file_path}' kept hitting the length limit after "
                             f"{MAX_SALVAGE_CONTINUES} continuations — stopping. The content "
@@ -1062,6 +1115,8 @@ Example: {"tool": {"name": "read_file", "arguments": {"file_path": "main.py"}}}"
                 if self._truncate_continues > MAX_TRUNCATE_CONTINUES:
                     if full_content and not was_building_tool:
                         self.messages.append({"role": "assistant", "content": full_content})
+                    self._log_turn_end("length limit hit repeatedly",
+                                       f"{self._truncate_continues} truncations in a row")
                     yield {"type": "error", "content": (
                         f"\n[System: Generation hit the length limit {self._truncate_continues} times in a row — "
                         "auto-continue stopped. Increase the context window or split the task into smaller pieces.]"
@@ -1269,22 +1324,30 @@ Example: {"tool": {"name": "read_file", "arguments": {"file_path": "main.py"}}}"
                         yield {"type": "diff", "file": _d["file"], "diff": _d["diff"]}
 
                     yield {"type": "tool_end", "name": func_name, "result": result}
+                    self._turn_tool_calls += 1
 
                     self.messages.append(provider.format_tool_result(str(result), tool_call.get("id")))
                 if loop_guard_stop:
+                    self._log_turn_end("loop guard", "a tool call repeated verbatim")
                     yield {"type": "error", "content": "\n[Loop Guard]: повторяющийся цикл инструментов остановлен — ход завершён принудительно."}
                     break
                 # Loop continues to let the model react to tool results
             else:
                 # No tool call this turn.
                 if full_content and full_content.strip():
-                    break  # the model gave a final answer — turn is genuinely done.
+                    # The one healthy ending. Logged too, so "it stopped early"
+                    # can be told apart from "it finished" without guessing.
+                    self._log_turn_end("final answer",
+                                       f"{len(full_content)} chars")
+                    break
 
                 # Otherwise it produced only reasoning (or nothing) and neither
                 # acted nor answered — a premature stop, common with reasoning
                 # models. Nudge it to continue, bounded, instead of dead-ending.
                 self._no_action_continues = getattr(self, "_no_action_continues", 0) + 1
                 if self._no_action_continues > MAX_NO_ACTION_CONTINUES:
+                    self._log_turn_end("no answer and no action",
+                                       f"{MAX_NO_ACTION_CONTINUES} nudges ignored")
                     yield {"type": "error", "content": (
                         f"\n[System: the model produced no answer and no action after "
                         f"{MAX_NO_ACTION_CONTINUES} nudges — stopping.]"
