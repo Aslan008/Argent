@@ -477,6 +477,25 @@ def set_brave_api_key(key: str):
     _set("brave_api_key", (key or "").strip())
 
 
+def get_mcp_call_timeout() -> float:
+    """How long one MCP tool call may take before Argent gives up.
+
+    Was a hard-coded 600. Ten minutes of a frozen terminal with no output and
+    no way to cancel is never the right default: an editor that has not
+    answered in two minutes is stuck, not busy, and the model can retry far
+    cheaper than you can wait. Raise it for genuinely long operations (a build,
+    a bake) via config.
+    """
+    try:
+        return max(5.0, float(_get("mcp_call_timeout", 120)))
+    except (TypeError, ValueError):
+        return 120.0
+
+
+def set_mcp_call_timeout(seconds: float):
+    _set("mcp_call_timeout", max(5.0, float(seconds)))
+
+
 def get_desktop_notifications() -> bool:
     """Whether a finished automation may raise a desktop notification.
 

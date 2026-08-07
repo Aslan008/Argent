@@ -7,7 +7,6 @@ Supports three transport types:
 """
 
 import json
-import logging
 import subprocess
 import threading
 import time
@@ -18,7 +17,17 @@ from typing import Dict, Any, List, Optional
 import requests
 
 import queue
-log = logging.getLogger("argent.mcp")
+from logger import get_logger
+
+# Was logging.getLogger("argent.mcp"), which has no handler — every MCP event
+# went nowhere. A call that hung for ten minutes left not one line on disk, so
+# afterwards there was nothing to diagnose it with. get_logger writes to
+# ~/.argent/logs/mcp.log like every other subsystem.
+log = get_logger("mcp")
+
+# Above this a call is worth flagging even when it eventually succeeds: it is
+# the early warning for the stall you would otherwise only meet at the timeout.
+SLOW_CALL_SECONDS = 20
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -375,27 +384,60 @@ class MCPServer:
     def _refresh_tools(self):
         if not self.transport:
             return
+        started = time.monotonic()
         result = self.transport.send_request("tools/list", timeout=10)
         tools = result.get("result", {}).get("tools", [])
         if tools and "error" not in tools[0]:
             self._tools_cache = tools
+            log.info("mcp %s: listed %d tools in %.1fs",
+                     self.name, len(tools), time.monotonic() - started)
         else:
             self._tools_unavailable = True
+            log.warning("mcp %s: tools/list failed after %.1fs (%s) — the server "
+                        "will be reported as unreachable until /mcp restarts it",
+                        self.name, time.monotonic() - started,
+                        str(result.get("error", "no tools returned"))[:150])
 
     def call_tool(self, tool_name: str, arguments: dict) -> str:
         if not self.transport:
             return f"Error: Server '{self.name}' is not started."
 
+        from config import get_mcp_call_timeout
+        timeout = get_mcp_call_timeout()
+
+        # Every call is timed and recorded. A call that hangs is the one thing
+        # you cannot debug afterwards from anything else: the terminal shows a
+        # spinner, the server keeps no history, and once the turn is over the
+        # only evidence left is the user's memory of how long they waited.
+        # Logged BEFORE the call as well: if it never returns and the session is
+        # killed, the "->" line is the only proof the call was ever made.
+        log.debug("mcp %s.%s -> %s (timeout %gs)", self.name, tool_name,
+                  json.dumps(arguments, ensure_ascii=False)[:200], timeout)
+        started = time.monotonic()
         result = self.transport.send_request("tools/call", {
             "name": tool_name,
             "arguments": arguments
-        }, timeout=600)
+        }, timeout=timeout)
+        elapsed = time.monotonic() - started
 
         if "error" in result:
             err = result["error"]
-            if isinstance(err, dict):
-                return f"MCP Error: {err.get('message', str(err))}"
-            return f"MCP Error: {err}"
+            message = err.get("message", str(err)) if isinstance(err, dict) else str(err)
+            log.warning("mcp %s.%s FAILED after %.1fs: %s",
+                        self.name, tool_name, elapsed, message[:200])
+            if "timed out" in message:
+                # The request is still in flight on the server side. Say so, or
+                # the model re-sends it and queues a second copy behind the first.
+                return (f"MCP Error: '{tool_name}' on server '{self.name}' did not answer "
+                        f"within {timeout:g}s. The server may still be working on it — "
+                        f"check that the application is responsive before retrying, and "
+                        f"do NOT immediately repeat the same call.")
+            return f"MCP Error: {message}"
+
+        log.info("mcp %s.%s ok in %.1fs", self.name, tool_name, elapsed)
+        if elapsed > SLOW_CALL_SECONDS:
+            log.warning("mcp %s.%s took %.1fs — the server is slow to respond",
+                        self.name, tool_name, elapsed)
 
         content = result.get("result", {}).get("content", [])
         is_error = result.get("result", {}).get("isError", False)
