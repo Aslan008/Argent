@@ -344,7 +344,9 @@ Example: {"tool": {"name": "read_file", "arguments": {"file_path": "main.py"}}}"
         names = [t["function"]["name"]
                  for t in get_tool_schemas(include_hidden=(allowed_tools is not None))]
         if allowed_tools is not None:
-            names = [n for n in names if n in allowed_tools]
+            # A hand-picked list is exempt from tier slimming — see the same
+            # decision where the request is assembled.
+            return set(n for n in names if n in allowed_tools)
         return set(slim_tools_for_category(names, get_model_size_category(self.model_name)))
 
     def _refresh_system_prompt(self, allowed_tools=None) -> bool:
@@ -783,11 +785,15 @@ Example: {"tool": {"name": "read_file", "arguments": {"file_path": "main.py"}}}"
 
                 # Tier-based slimming: weak models (tiny/small) get only the core
                 # toolset, cutting the schema budget (~6.5k tokens) and sharpening
-                # tool choice. Larger models keep the full set.
-                from tool_profiles import slim_tools_for_category
-                category = get_model_size_category(self.model_name)
-                _slim_names = set(slim_tools_for_category([t["function"]["name"] for t in active_tools], category))
-                active_tools = [t for t in active_tools if t["function"]["name"] in _slim_names]
+                # tool choice. Larger models keep the full set. An explicit
+                # allowlist is exempt — it is already short, and quietly deleting
+                # a tool the caller hand-picked leaves the task unable to do its
+                # job with nothing in the log to explain why.
+                if allowed_tools is None:
+                    from tool_profiles import slim_tools_for_category
+                    category = get_model_size_category(self.model_name)
+                    _slim_names = set(slim_tools_for_category([t["function"]["name"] for t in active_tools], category))
+                    active_tools = [t for t in active_tools if t["function"]["name"] in _slim_names]
 
                 # No native tool channel — either the strategy never had one
                 # (tiny/local) or a cloud model rejected native tools at runtime

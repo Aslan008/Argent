@@ -115,7 +115,8 @@ def remove_automation(name: str) -> bool:
 
 
 def record_run(name: str, status: str, summary: str, started: datetime,
-               finished: datetime, denied_actions: list = None) -> None:
+               finished: datetime, denied_actions: list = None,
+               new_items: int = 0) -> None:
     """Append one run to the history and stamp the definition.
 
     The history is what you read in the morning to find out what the agent did
@@ -130,6 +131,7 @@ def record_run(name: str, status: str, summary: str, started: datetime,
         "seconds": round((finished - started).total_seconds(), 1),
         "summary": (summary or "").strip()[:2000],
         "denied_actions": denied_actions or [],
+        "new_items": int(new_items or 0),
     }
     try:
         path = runs_path()

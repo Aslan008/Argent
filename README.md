@@ -132,9 +132,14 @@ Scheduled tasks that run by themselves while Argent is open — monitoring, repo
 /tasks add report | daily at 09:00 | Collect metrics with `npm run stats` and write reports/daily.md
 /tasks run report      # run it now
 /tasks runs            # what the agent did while you weren't looking
+/tasks memory          # how much each task remembers
 ```
 
 Unattended is not "interactive with the prompts turned off": **every gated action is refused and recorded**, because waiting would hang the scheduler and approving would hand an unsupervised model the authority to delete or publish. Each task is bounded by its own toolset, a turn budget, and a no-overlap rule. Schedules read back plainly (`every 15m`, `daily at 09:00`) — a misread cron line in a job nobody is watching is expensive.
+
+**It remembers between runs.** A monitoring task calls `filter_new_items` with what it found and gets back only what it has not reported before — otherwise every run repeats the same twenty results and you stop reading it by the third day. The memory is transactional: items are committed only once the run finished, so a crash leaves them unseen instead of silently swallowing the one thing you were watching for. `/tasks forget <name>` resets it.
+
+**It tells you — but only when it matters.** A finished run raises a desktop notification if it found something new, broke, or hit an action that needs you. A silent run stays silent, because a toast after every tick trains you to dismiss them unread.
 
 ### 🔎 Federated Web Research
 Several independent sources are queried in parallel and merged, so one of them rate-limiting or failing costs nothing: DuckDuckGo, Wikipedia, StackExchange, GitHub issues, and Brave when you add a key.
@@ -221,7 +226,7 @@ Run local shell commands directly from the prompt by prefixing them with `!`. If
 - `/skills` — List available AI skills.
 - `/rewind` — Time machine: roll the whole tree back to any turn checkpoint.
 - `/vibe` — Vibe mode: auto-approve safe actions + a checkpoint every turn.
-- `/tasks [list|add|on|off|rm|run|runs]` — Scheduled automations that run unattended while Argent is open.
+- `/tasks [list|add|on|off|rm|run|runs|memory|forget]` — Scheduled automations that run unattended while Argent is open.
 - `/search` — Web research settings: Brave API key, query languages, reranker model.
 - `/auto [task]` — Run task in experimental full autonomous mode.
 - `/verbose` — Toggle live status indicators (spinners).
@@ -336,9 +341,14 @@ dsolve(Derivative(y(x), x, 2) + y(x), y(x))  →  C1*sin(x) + C2*cos(x)
 /tasks add отчёт | daily at 09:00 | Собери метрики командой `npm run stats` и запиши в reports/daily.md
 /tasks run отчёт       # запустить сейчас
 /tasks runs            # что агент делал, пока вы не смотрели
+/tasks memory          # сколько каждая задача помнит
 ```
 
 Работа без присмотра — это **не** «интерактив с выключенными подтверждениями»: любое действие, требующее подтверждения, **отклоняется и записывается**, потому что ждать значит повесить планировщик, а одобрять — выдать бесконтрольной модели право удалять и публиковать. Каждая задача ограничена своим набором инструментов, бюджетом ходов и запретом наложения прогонов. Расписание читается однозначно (`every 15m`, `daily at 09:00`) — неверно понятая cron-строка в задаче, за которой никто не следит, обходится дорого.
+
+**Задача помнит прошлые прогоны.** Мониторинг вызывает `filter_new_items` со списком найденного и получает обратно только то, о чём ещё не докладывал — иначе каждый прогон повторяет одни и те же двадцать результатов, и на третий день вы перестаёте их читать. Память транзакционная: элементы записываются только после успешного завершения прогона, так что сбой оставит их непрочитанными, а не проглотит молча именно то, ради чего всё затевалось. Сброс — `/tasks forget <имя>`.
+
+**И сообщает — но только когда есть о чём.** Завершившийся прогон поднимает уведомление на рабочем столе, если нашёл новое, упал или упёрся в действие, требующее вас. Пустой прогон молчит: уведомление после каждого тика приучает закрывать их не читая — а потом так же уходит и то единственное, что было важным.
 
 ### 🔎 Федеративный веб-поиск
 Несколько независимых источников опрашиваются и объединяются, поэтому рейт-лимит или падение одного ничего не стоит: DuckDuckGo, Wikipedia, StackExchange, GitHub Issues и Brave, если добавить ключ.
@@ -408,7 +418,7 @@ dsolve(Derivative(y(x), x, 2) + y(x), y(x))  →  C1*sin(x) + C2*cos(x)
 - `/skills` — Показать список доступных навыков ИИ.
 - `/rewind` — Машина времени: откатить всё дерево к любому чекпоинту хода.
 - `/vibe` — Vibe-режим: авто-одобрение безопасных действий + чекпоинт каждый ход.
-- `/tasks [list|add|on|off|rm|run|runs]` — Автоматизации по расписанию, работают без присмотра, пока Argent открыт.
+- `/tasks [list|add|on|off|rm|run|runs|memory|forget]` — Автоматизации по расписанию, работают без присмотра, пока Argent открыт.
 - `/search` — Настройки веб-поиска: ключ Brave, языки запросов, модель reranker'а.
 - `/auto [task]` — Запустить выполнение задачи в экспериментальном полностью автономном режиме.
 - `/verbose` — Включить/выключить интерактивные спиннеры статуса.

@@ -169,11 +169,42 @@ def handle_tasks_command(user_input: str, agent) -> None:
             print_error(f"Автоматизация '{arg.strip()}' не найдена.")
             return
         print_system(f"Запускаю '{target.name}' сейчас (без подтверждений)...")
-        result = run_and_record(target, agent=agent)
+        # No toast: you are looking at the output right now.
+        result = run_and_record(target, agent=agent, notify=False)
         print_system(f"Статус: {result['status']}\n{result['summary'][:1500]}")
+        if result.get("new_items"):
+            print_system(f"[green]Новых элементов запомнено: {result['new_items']}[/green]")
         if result["denied_actions"]:
             print_system("[yellow]Отклонено (нужен человек):[/yellow] " +
                          "; ".join(d["action"] for d in result["denied_actions"]))
+        return
+
+    if sub == "memory":
+        from src.automation.memory import stats
+        counts = stats(arg.strip() or None)
+        counts = {k: v for k, v in counts.items() if v}
+        if not counts:
+            print_system(
+                "Память пуста. Она наполняется, когда задача вызывает "
+                "filter_new_items — так мониторинг сообщает только о новом, "
+                "а не повторяет один и тот же список каждый прогон.")
+            return
+        print_system("[bold cyan]Запомнено элементов:[/bold cyan]")
+        for name, count in sorted(counts.items()):
+            print_system(f"  • {name}: {count}")
+        print_system("[dim]Сброс: /tasks forget <имя>[/dim]")
+        return
+
+    if sub == "forget":
+        from src.automation.memory import forget
+        target_name = arg.strip()
+        if not target_name:
+            print_error("Формат: /tasks forget <имя>")
+            return
+        dropped = forget(target_name)
+        print_system(f"Забыто элементов: {dropped}. Следующий прогон '{target_name}' "
+                     f"снова сочтёт всё новым."
+                     if dropped else f"Для '{target_name}' ничего не запомнено.")
         return
 
     if sub == "runs":
@@ -184,14 +215,16 @@ def handle_tasks_command(user_input: str, agent) -> None:
         print_system("[bold cyan]Последние прогоны:[/bold cyan]")
         for r in runs:
             denied = f", отклонено: {len(r['denied_actions'])}" if r.get("denied_actions") else ""
+            fresh = f", новых: {r['new_items']}" if r.get("new_items") else ""
             print_system(f"  {r['started'][:16]}  {r['name']}  [{r['status']}] "
-                         f"{r['seconds']}s{denied}")
+                         f"{r['seconds']}s{fresh}{denied}")
             if r.get("summary"):
                 print_system(f"      {r['summary'][:150]}")
         return
 
     print_error("Команды: /tasks list | add <имя> | <расписание> | <задача> | "
-                "on <имя> | off <имя> | rm <имя> | run <имя> | runs")
+                "on <имя> | off <имя> | rm <имя> | run <имя> | runs | "
+                "memory [имя] | forget <имя>")
 
 
 def toggle_vibe_mode(vibe_mode: bool) -> bool:

@@ -108,6 +108,7 @@ class AutomationScheduler:
                     "status": (result or {}).get("status", "ok"),
                     "summary": ((result or {}).get("summary") or "")[:500],
                     "denied": len((result or {}).get("denied_actions") or []),
+                    "new_items": (result or {}).get("new_items", 0),
                 })
             except Exception as e:
                 log.warning("automation %r crashed: %s", automation.name, e)

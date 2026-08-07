@@ -26,6 +26,10 @@ CORE_CHAT_TOOLS = {
     "stop_background_command", "list_background_commands",
     # interaction & utilities
     "ask_user_questions", "calculate", "set_goal", "analyze_project",
+    # Memory across scheduled runs. Kept in the core set because an automation
+    # that declared no toolset falls back to exactly this list, and without it a
+    # weak model re-reports the same findings every single run.
+    "filter_new_items",
 }
 
 # Categories that get the slim profile (they benefit most from a tight prompt).

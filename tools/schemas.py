@@ -27,7 +27,7 @@ from tools.misc_tools import (
     find_definition, find_references, git_checkpoint, git_rollback,
     call_mcp_tool, run_subagent, create_svg_image, ask_user_questions,
     wait_heartbeat, end_auto_mode, create_artifact, request_user_approval,
-    calculate, set_goal,
+    calculate, set_goal, filter_new_items,
 )
 from tools.swarm_tools import run_swarm_workers
 from tools.browser_tools import (
@@ -85,6 +85,7 @@ AVAILABLE_TOOLS = {
     "delete_skill": delete_skill,
     "wait_heartbeat": wait_heartbeat,
     "end_auto_mode": end_auto_mode,
+    "filter_new_items": filter_new_items,
     "find_definition": find_definition,
     "find_references": find_references,
     "git_checkpoint": git_checkpoint,
@@ -1311,6 +1312,38 @@ TOOL_SCHEMAS = [
                     }
                 },
                 "required": []
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "filter_new_items",
+            "description": (
+                "Keep only what you have NOT already reported on a previous run of this "
+                "scheduled task, and remember the rest.\n"
+                "Use it in any monitoring job — job postings, prices, releases, mentions, "
+                "build failures — right after you collect the candidates and BEFORE you "
+                "write the summary. Without it every run repeats the same list and the "
+                "report becomes noise.\n"
+                "Pass stable identifiers: a URL or an id, not a headline that changes "
+                "wording. You get back only the new ones; if none are new, say exactly "
+                "that instead of restating the old list."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "items": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Identifiers of everything you found this run (URLs or ids preferred)."
+                    },
+                    "label": {
+                        "type": "string",
+                        "description": "Optional note on what these items are, echoed back in the result."
+                    }
+                },
+                "required": ["items"]
             }
         }
     },

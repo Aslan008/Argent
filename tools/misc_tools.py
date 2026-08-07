@@ -405,3 +405,47 @@ def wait_heartbeat(delay_seconds: int = 0, condition_to_check: str = "",
 def end_auto_mode(reason: str) -> str:
     """Stops the experimental Auto Mode."""
     return f"Auto Mode finished. [END_AUTO_MODE] Reason: {reason}"
+
+
+def filter_new_items(items: list, label: str = "") -> str:
+    """Drop everything this task already reported on a previous run.
+
+    Monitoring only means anything if it can say "this is new". Without a
+    memory across runs, a scheduled job re-reports the same twenty results
+    every time and you stop reading it by the third day.
+
+    The items are staged, not committed: if the run fails afterwards they stay
+    unseen and come back next time, because a silently swallowed item is worse
+    than a repeated one.
+    """
+    from src.automation.memory import current_scope, filter_new
+
+    if isinstance(items, str):
+        # Small models sometimes send a JSON string or one item per line.
+        text = items.strip()
+        if text.startswith("["):
+            try:
+                items = json.loads(text)
+            except json.JSONDecodeError:
+                items = [line for line in text.splitlines() if line.strip()]
+        else:
+            items = [line for line in text.splitlines() if line.strip()]
+    if not isinstance(items, list):
+        return "Error: items must be a list of identifiers (URLs, ids or titles)."
+
+    total = len(items)
+    if total == 0:
+        return "No items given, so nothing is new."
+
+    fresh = filter_new(items)
+    where = f" for '{current_scope()}'" if current_scope() else ""
+    if not fresh:
+        return (f"0 of {total} items are new{where} — everything here was already "
+                f"reported. Say so instead of repeating the old list.")
+
+    listed = "\n".join(f"- {item}" for item in fresh[:50])
+    more = f"\n... and {len(fresh) - 50} more" if len(fresh) > 50 else ""
+    header = f"{len(fresh)} of {total} items are new{where}"
+    if label:
+        header += f" ({label})"
+    return f"{header}:\n{listed}{more}"

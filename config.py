@@ -477,6 +477,20 @@ def set_brave_api_key(key: str):
     _set("brave_api_key", (key or "").strip())
 
 
+def get_desktop_notifications() -> bool:
+    """Whether a finished automation may raise a desktop notification.
+
+    On by default: a scheduled run you have to remember to check is just a log
+    file. Runs stay quiet unless they found something new, broke, or hit an
+    action that needs you — see src/automation/notify.py.
+    """
+    return bool(_get("desktop_notifications", True))
+
+
+def set_desktop_notifications(enabled: bool):
+    _set("desktop_notifications", bool(enabled))
+
+
 def get_embedding_batch_size() -> int:
     """How many texts go into one native Ollama /api/embed request. Batching is
     far more efficient than concurrent single-text calls; 32 keeps a request

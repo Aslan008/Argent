@@ -165,10 +165,16 @@ class TestToolBounding:
     def test_declared_tools_are_filtered_by_the_denylist(self):
         tools = resolve_tools(["read_file", "run_command", "ask_user_questions"])
         assert "ask_user_questions" not in tools
-        assert tools == ["read_file", "run_command"]
+        assert tools[:2] == ["read_file", "run_command"]
 
     def test_empty_means_default_set(self):
         assert resolve_tools([]) is None
+
+    def test_run_memory_is_granted_even_to_a_narrow_toolset(self):
+        """Remembering what you already reported is not authority over anything,
+        and a hand-picked list that omits it turns a monitoring job into a
+        machine for repeating itself."""
+        assert "filter_new_items" in resolve_tools(["read_file"])
 
     def test_interactive_and_escaping_tools_are_denied(self):
         for tool in ("ask_user_questions", "run_admin_command", "wait_heartbeat"):
@@ -200,7 +206,8 @@ class TestRunAutomation:
         a = Automation(name="m", task="t", schedule="every 1h",
                        allowed_tools=["read_file", "ask_user_questions"])
         run_automation(a, agent=agent)
-        assert agent.allowed_tools == ["read_file"]
+        assert "ask_user_questions" not in agent.allowed_tools
+        assert agent.allowed_tools[0] == "read_file"
 
     def test_turn_budget_stops_the_run(self):
         chunks = [{"type": "tool_end", "name": "read_file", "result": "x"} for _ in range(50)]
@@ -239,6 +246,66 @@ class TestRunAutomation:
         run_automation(Automation(name="m", task="t", schedule="every 1h"), agent=Boom())
         # A leaked deny-everything backend would break the user's next turn.
         assert approval._active_backend() is approval._terminal_decision
+
+
+class TestRunMemory:
+    """The run owns the transaction: what the model filtered is only remembered
+    once the run actually delivered it."""
+
+    def _agent(self, items, crash=False):
+        from tools.misc_tools import filter_new_items
+
+        class _A:
+            def process_user_input(self, text, allowed_tools=None):
+                filter_new_items(items)
+                if crash:
+                    raise RuntimeError("provider exploded")
+                yield {"type": "content_stream", "content": "reported"}
+
+        return _A()
+
+    def test_a_finished_run_remembers_what_it_reported(self, project):
+        from src.automation import memory
+        a = Automation(name="jobs", task="t", schedule="every 1h")
+        result = run_automation(a, agent=self._agent(["u1", "u2"]))
+        assert result["new_items"] == 2
+        assert memory.filter_new(["u1", "u2"], scope="jobs") == []
+
+    def test_a_crashed_run_forgets_what_it_never_delivered(self, project):
+        from src.automation import memory
+        a = Automation(name="jobs", task="t", schedule="every 1h")
+        result = run_automation(a, agent=self._agent(["u1"], crash=True))
+        assert result["status"] == "error" and result["new_items"] == 0
+        assert memory.filter_new(["u1"], scope="jobs") == ["u1"]
+
+    def test_scope_does_not_leak_into_the_next_interactive_turn(self, project):
+        from src.automation import memory
+        run_automation(Automation(name="jobs", task="t", schedule="every 1h"),
+                       agent=self._agent(["u1"]))
+        assert memory.current_scope() is None
+
+    def test_manual_run_stays_silent(self, project, monkeypatch):
+        """You are looking at the output already; a toast about it is noise."""
+        from src.automation import notify
+        monkeypatch.setattr(notify, "desktop_notify",
+                            lambda *a: pytest.fail("no toast for a manual run"))
+        run_and_record(Automation(name="jobs", task="t", schedule="every 1h"),
+                       agent=self._agent(["u1"]), notify=False)
+
+    def test_scheduled_run_notifies_about_new_items(self, project, monkeypatch):
+        from src.automation import notify
+        sent = []
+        monkeypatch.setattr(notify, "desktop_notify",
+                            lambda t, b: sent.append(t) or True)
+        run_and_record(Automation(name="jobs", task="t", schedule="every 1h"),
+                       agent=self._agent(["u1"]))
+        assert sent and "jobs" in sent[0]
+
+    def test_new_item_count_reaches_the_run_log(self, project):
+        run_and_record(Automation(name="jobs", task="t", schedule="every 1h"),
+                       agent=self._agent(["u1", "u2"]), notify=False)
+        assert store.load_runs()[-1]["new_items"] == 2
+
 
 class TestScheduler:
     def _sched(self, runner=None, on_event=None):

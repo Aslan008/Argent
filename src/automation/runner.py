@@ -47,6 +47,12 @@ class UnattendedGate:
         return "deny"
 
 
+# Granted to every run whatever it declared. Remembering what you already
+# reported is not authority over anything, and a narrow toolset that leaves it
+# out turns a monitoring job into a machine for repeating itself.
+UNATTENDED_ALWAYS_ALLOWED = ("filter_new_items",)
+
+
 def resolve_tools(allowed_tools: list) -> list | None:
     """The toolset for a run: the declared list minus the denylist.
 
@@ -56,17 +62,19 @@ def resolve_tools(allowed_tools: list) -> list | None:
     """
     if not allowed_tools:
         return None
-    return [t for t in allowed_tools if t not in UNATTENDED_TOOL_DENYLIST]
+    tools = [t for t in allowed_tools if t not in UNATTENDED_TOOL_DENYLIST]
+    return tools + [t for t in UNATTENDED_ALWAYS_ALLOWED if t not in tools]
 
 
 def run_automation(automation, agent=None, now=None) -> dict:
     """Execute one automation. Never raises — a scheduler must survive its jobs.
 
-    Returns {status, summary, denied_actions, started, finished} where status is
-    ok | error | denied. 'denied' means the task could not do its job without
-    an action that requires a human.
+    Returns {status, summary, denied_actions, new_items, started, finished}
+    where status is ok | error | denied. 'denied' means the task could not do
+    its job without an action that requires a human.
     """
     import approval
+    from src.automation import memory
 
     started = now or datetime.now()
     gate = UnattendedGate()
@@ -79,6 +87,7 @@ def run_automation(automation, agent=None, now=None) -> dict:
         agent = ArgentAgent()
 
     approval.set_approval_backend(gate)
+    memory.set_scope(automation.name)
     try:
         turns = 0
         for chunk in agent.process_user_input(automation.task, allowed_tools=tools):
@@ -99,6 +108,15 @@ def run_automation(automation, agent=None, now=None) -> dict:
         log.warning("automation %r failed: %s", automation.name, e)
     finally:
         approval.reset_approval_backend()
+        # A run that crashed never delivered its findings, so releasing them
+        # keeps the items unseen and they come back next time. Committing here
+        # would lose exactly what the automation exists to catch.
+        if status == "ok":
+            new_items = memory.commit()
+        else:
+            memory.rollback()
+            new_items = 0       # nothing was delivered, so nothing was news
+        memory.reset_scope()
 
     finished = datetime.now()
     summary = "".join(text_parts).strip()
@@ -111,15 +129,28 @@ def run_automation(automation, agent=None, now=None) -> dict:
         "status": status,
         "summary": summary,
         "denied_actions": gate.denied,
+        "new_items": new_items,
         "started": started,
         "finished": finished,
     }
 
 
-def run_and_record(automation, agent=None) -> dict:
-    """run_automation + persist the outcome to the run log."""
+def run_and_record(automation, agent=None, notify: bool = True) -> dict:
+    """run_automation + persist the outcome + tell the user if it matters.
+
+    ``notify`` is off for a manual /tasks run: you are already looking at the
+    output, and a toast about something on your screen is pure noise.
+    """
+    from src.automation.notify import notify_run
     from src.automation.store import record_run
+
     result = run_automation(automation, agent=agent)
     record_run(automation.name, result["status"], result["summary"],
-               result["started"], result["finished"], result["denied_actions"])
+               result["started"], result["finished"], result["denied_actions"],
+               result.get("new_items", 0))
+    if notify:
+        try:
+            notify_run(automation.name, result)
+        except Exception as e:      # never let delivery break a good run
+            log.info("could not notify about %r: %s", automation.name, e)
     return result
