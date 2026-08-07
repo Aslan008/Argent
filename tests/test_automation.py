@@ -307,6 +307,30 @@ class TestRunMemory:
         assert store.load_runs()[-1]["new_items"] == 2
 
 
+class TestAddCommandToolSpec:
+    """The toolset is the capability boundary of an unattended run; a limit you
+    can only set by hand-editing JSON is a limit nobody sets."""
+
+    def _parse(self, spec):
+        from main import _parse_task_tools
+        return _parse_task_tools(spec)
+
+    def test_no_segment_means_the_default_set(self):
+        assert self._parse("") == ([], [])
+
+    def test_named_tools(self):
+        assert self._parse("tools: search_web, read_webpage") == (
+            ["search_web", "read_webpage"], [])
+
+    def test_prefix_is_optional_and_semicolons_work(self):
+        assert self._parse("search_web; read_webpage")[0] == ["search_web", "read_webpage"]
+
+    def test_a_typo_is_reported_not_silently_dropped(self):
+        """Silently narrowing the toolset would fail the task every night for a
+        reason nobody could see."""
+        assert self._parse("tools: serch_web")[1] == ["serch_web"]
+
+
 class TestScheduler:
     def _sched(self, runner=None, on_event=None):
         from src.automation.scheduler import AutomationScheduler

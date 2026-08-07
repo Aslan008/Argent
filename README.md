@@ -130,6 +130,7 @@ Scheduled tasks that run by themselves while Argent is open — monitoring, repo
 
 ```text
 /tasks add report | daily at 09:00 | Collect metrics with `npm run stats` and write reports/daily.md
+/tasks add watch | every 2h | Check the tracker for new issues | tools: search_web, read_webpage
 /tasks run report      # run it now
 /tasks runs            # what the agent did while you weren't looking
 /tasks memory          # how much each task remembers
@@ -339,6 +340,7 @@ dsolve(Derivative(y(x), x, 2) + y(x), y(x))  →  C1*sin(x) + C2*cos(x)
 
 ```text
 /tasks add отчёт | daily at 09:00 | Собери метрики командой `npm run stats` и запиши в reports/daily.md
+/tasks add вакансии | every 2h | Проверь трекер на новые задачи | tools: search_web, read_webpage
 /tasks run отчёт       # запустить сейчас
 /tasks runs            # что агент делал, пока вы не смотрели
 /tasks memory          # сколько каждая задача помнит

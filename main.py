@@ -92,6 +92,25 @@ def offer_safety_checkpoint(task: str) -> None:
         pass
 
 
+def _parse_task_tools(spec: str):
+    """Parse the optional `tools: a, b` segment of /tasks add.
+
+    Names are validated against the real registry: a typo would otherwise
+    silently narrow the toolset to nothing and the task would fail every night
+    for a reason nobody could see.
+    """
+    from tools.schemas import AVAILABLE_TOOLS
+
+    spec = (spec or "").strip()
+    if not spec:
+        return [], []
+    if spec.lower().startswith("tools:"):
+        spec = spec.split(":", 1)[1]
+    names = [n.strip() for n in spec.replace(";", ",").split(",") if n.strip()]
+    unknown = [n for n in names if n not in AVAILABLE_TOOLS]
+    return names, unknown
+
+
 def handle_tasks_command(user_input: str, agent) -> None:
     """/tasks — scheduled automations that run while Argent is open.
 
@@ -129,7 +148,7 @@ def handle_tasks_command(user_input: str, agent) -> None:
     if sub == "add":
         pieces = [p.strip() for p in arg.split("|")]
         if len(pieces) < 3 or not all(pieces[:3]):
-            print_error("Формат: /tasks add <имя> | <расписание> | <задача>\n"
+            print_error("Формат: /tasks add <имя> | <расписание> | <задача> [| tools: a, b]\n"
                         "Расписание: 'every 30m', 'every 2h' или 'daily at 09:00'.")
             return
         name, schedule, task = pieces[0], pieces[1], pieces[2]
@@ -138,11 +157,27 @@ def handle_tasks_command(user_input: str, agent) -> None:
         except ScheduleError as e:
             print_error(str(e))
             return
-        upsert_automation(Automation(name=name, task=task, schedule=schedule))
+
+        # The toolset is the capability boundary of an unattended run, so it has
+        # to be reachable from here — a limit you can only set by hand-editing
+        # JSON is a limit nobody sets.
+        tools, unknown = _parse_task_tools(pieces[3] if len(pieces) > 3 else "")
+        if unknown:
+            print_error(f"Неизвестные инструменты: {', '.join(unknown)}. "
+                        f"Список — /tools.")
+            return
+
+        upsert_automation(Automation(name=name, task=task, schedule=schedule,
+                                     allowed_tools=tools))
         print_system(f"Автоматизация '{name}' сохранена ({schedule}).\n"
                      f"Она выполняется БЕЗ участия человека: любое действие, требующее "
                      f"подтверждения, будет отклонено и записано в журнал — "
                      f"смотрите /tasks runs.")
+        if tools:
+            print_system(f"Доступные ей инструменты: {', '.join(tools)}.")
+        else:
+            print_system("[yellow]Инструменты не ограничены[/yellow] — задача получит "
+                         "весь набор. Сузьте его: `| tools: search_web, read_webpage`.")
         return
 
     if sub in ("on", "off"):
