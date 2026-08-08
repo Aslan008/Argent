@@ -156,7 +156,12 @@ def decode_json_escapes(s: str) -> str:
             continue
         out.append(nxt)  # unknown escape — keep the char literally
         i += 2
-    return ''.join(out)
+    # A \ud83d whose partner never arrived (truncated output, a split stream
+    # chunk, a malformed low escape) becomes a lone surrogate here, and a lone
+    # surrogate cannot be encoded as UTF-8. Left in, it poisons the history and
+    # every LATER request dies on encoding — for a character nobody sees.
+    from text_safety import repair_surrogates
+    return repair_surrogates(''.join(out))
 
 # The body is GREEDY and the closing fence must be a line that is exactly ```
 # (optional trailing spaces): so a file whose content itself contains ``` code

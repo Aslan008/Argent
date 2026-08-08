@@ -211,8 +211,15 @@ def save_session(messages: list, metadata: dict = None, session_id: str = None,
         from atomic_io import atomic_write_bytes
 
         def _write(fh):
+            # One guard, over the finished payload: a lone surrogate anywhere —
+            # a message, the preview, a label — survives json.dumps and only
+            # explodes at .encode(), and the moment the history most needs to be
+            # written is not the moment to lose all of it.
+            from text_safety import repair_surrogates
+            payload = repair_surrogates(
+                json.dumps(data, ensure_ascii=False, default=str))
             with gzip.GzipFile(fileobj=fh, mode="wb") as gz:
-                gz.write(json.dumps(data, ensure_ascii=False, default=str).encode("utf-8"))
+                gz.write(payload.encode("utf-8"))
 
         atomic_write_bytes(path, _write)
     except Exception as e:

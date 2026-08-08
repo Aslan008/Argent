@@ -311,7 +311,15 @@ def clean_messages_for_llm(messages: List[Dict[str, Any]], strip_reasoning: bool
                     m_copy["content"] = content.strip()
                     
         cleaned.append(m_copy)
-    return cleaned
+
+    # Last stop before the request is serialised and encoded. A lone surrogate
+    # anywhere in the history makes the HTTP body unencodable, so the turn dies
+    # with "'utf-8' codec can't encode ... surrogates not allowed" and so does
+    # every turn after it — the chat stays bricked until /clear. Repairing on
+    # the way out means an ALREADY poisoned history heals itself, which fixing
+    # the producer alone cannot do.
+    from text_safety import repair_structure
+    return repair_structure(cleaned)
 
 
 def compact_tool_history(messages: List[Dict[str, Any]], keep_recent: int = 2,
