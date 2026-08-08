@@ -38,8 +38,21 @@ class TestOptionText:
     def test_numbers_are_usable(self):
         assert _option_text(3) == "3"
 
+    def test_a_checklist_written_as_a_single_key_object(self):
+        """{"Система HP": false} — the text is the KEY. A natural shape for
+        "tick what you already have", and it rendered as None."""
+        assert _option_text({"Система HP": False}) == "Система HP"
+
+    def test_a_value_paired_with_its_state(self):
+        assert _option_text(["Система HP", False]) == "Система HP"
+
+    def test_two_candidates_are_refused_rather_than_guessed(self):
+        """Picking one would decide for the user which text they see."""
+        assert _option_text({"Система HP": "да", "Инвентарь": "нет"}) is None
+        assert _option_text(["Система HP", "Инвентарь"]) is None
+
     def test_nothing_displayable(self):
-        assert _option_text({"weight": 5}) is None
+        assert _option_text({"exists": False, "weight": 5}) is None
         assert _option_text("   ") is None
         assert _option_text(None) is None
 
@@ -47,24 +60,28 @@ class TestOptionText:
 class TestNormalize:
     def test_objects_become_readable_choices(self):
         raw = [{"label": "A"}, {"label": "B"}]
-        assert _normalize_options(raw) == (["A", "B"], 0)
+        assert _normalize_options(raw) == (["A", "B"], [])
 
-    def test_unusable_entries_are_counted_not_shown(self):
-        """Showing them is what produced the menu of Nones."""
-        options, dropped = _normalize_options(["A", {"weight": 1}, None])
-        assert options == ["A"] and dropped == 2
+    def test_unusable_entries_are_returned_not_shown(self):
+        """Showing them is what produced the menu of Nones. Returning them —
+        rather than counting them — is what makes the next occurrence
+        explainable: knowing THAT options were malformed does not say which
+        shape to support, and the payload is gone by the time anyone looks."""
+        options, rejected = _normalize_options(["A", {"exists": 1, "n": 2}, None])
+        assert options == ["A"]
+        assert rejected == [{"exists": 1, "n": 2}, None]
 
     def test_a_json_string_is_accepted(self):
-        assert _normalize_options('["A", "B"]') == (["A", "B"], 0)
+        assert _normalize_options('["A", "B"]') == (["A", "B"], [])
 
     def test_newline_separated_text_is_accepted(self):
-        assert _normalize_options("A\nB\n") == (["A", "B"], 0)
+        assert _normalize_options("A\nB\n") == (["A", "B"], [])
 
     def test_duplicates_collapse(self):
-        assert _normalize_options(["A", "A", {"label": "A"}]) == (["A"], 0)
+        assert _normalize_options(["A", "A", {"label": "A"}]) == (["A"], [])
 
     def test_garbage_yields_nothing_rather_than_raising(self):
-        assert _normalize_options(42) == ([], 0)
+        assert _normalize_options(42) == ([], [42])
 
 
 class TestAsking:
@@ -109,7 +126,7 @@ class TestAsking:
         """It can only stop doing this if something says so within the turn."""
         out = ask_user_questions([{
             "type": "single_choice", "question": "Q",
-            "options": ["A", {"weight": 1}],
+            "options": ["A", {"weight": 1, "n": 2}],
         }])
         assert "must be an array of STRINGS" in out
 
@@ -136,8 +153,19 @@ class TestDegradedInput:
         """An empty menu is unanswerable; keeping the question is better than
         making the user escape out of it."""
         out = ask_user_questions([{"type": "single_choice", "question": "Сколько?",
-                                   "options": [{"weight": 1}]}])
+                                   "options": [{"weight": 1, "n": 2}]}])
         assert "мой ответ" in out
+
+    def test_the_payload_reaches_the_log_not_just_the_question(self, types_text, caplog):
+        """"malformed options in ['<question>']" told us it happened and
+        nothing about what arrived — the shape was unknowable afterwards."""
+        import logging
+
+        from tools import misc_tools as m
+        with caplog.at_level(logging.WARNING, logger=m.log.name):
+            ask_user_questions([{"type": "single_choice", "question": "Сколько?",
+                                 "options": [{"weight": 1, "n": 2}]}])
+        assert "weight" in caplog.text and "Сколько?" in caplog.text
 
     def test_a_single_question_sent_unwrapped(self, types_text):
         out = ask_user_questions({"type": "text", "question": "Как назвать?"})

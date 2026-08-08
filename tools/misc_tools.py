@@ -153,27 +153,46 @@ def _option_text(option):
                 if key != "description" and isinstance(detail, str) and detail.strip():
                     return f"{value.strip()} — {detail.strip()}"
                 return value.strip()
+        # A checklist written as {"Система HP": false} — the text is the KEY.
+        # Only with exactly one entry, so there is no choosing between two
+        # candidates; with more, we would be inventing which one the user sees.
+        if len(option) == 1:
+            only_key = next(iter(option))
+            if isinstance(only_key, str) and only_key.strip():
+                return only_key.strip()
+        return None
+    if isinstance(option, (list, tuple)):
+        # ["Система HP", false] — a value paired with its state. Exactly one
+        # string in it means there is nothing to disambiguate.
+        strings = [x.strip() for x in option if isinstance(x, str) and x.strip()]
+        if len(strings) == 1:
+            return strings[0]
         return None
     return None
 
 
 def _normalize_options(raw):
-    """(usable options, how many were unusable)."""
+    """(usable options, the raw entries that could not be displayed).
+
+    The rejects are returned rather than counted: knowing THAT options were
+    malformed does not tell you what shape to support next, and the payload is
+    gone by the time anyone reads the log. That gap cost a debugging session.
+    """
     if isinstance(raw, str):
         try:
             raw = json.loads(raw)
         except json.JSONDecodeError:
             raw = [line for line in raw.splitlines() if line.strip()]
     if not isinstance(raw, (list, tuple)):
-        return [], 0
-    texts, dropped = [], 0
+        return [], [raw]
+    texts, rejected = [], []
     for option in raw:
         text = _option_text(option)
         if text is None:
-            dropped += 1
+            rejected.append(option)
         elif text not in texts:
             texts.append(text)
-    return texts, dropped
+    return texts, rejected
 
 
 def ask_user_questions(questions: list) -> str:
@@ -202,16 +221,24 @@ def ask_user_questions(questions: list) -> str:
             continue
         q_type = q.get("type", "text")
         q_text = q.get("question", "Question?")
-        options, dropped = _normalize_options(q.get("options", []))
-        if dropped:
+        raw_options = q.get("options", [])
+        options, rejected = _normalize_options(raw_options)
+        if rejected:
             malformed.append(q_text)
+            # The payload, not just the fact: without it the next occurrence is
+            # as unexplainable as this one was.
+            log.warning("ask_user_questions: %d unusable option(s) in %r -> %s",
+                        len(rejected), q_text[:60],
+                        json.dumps(rejected, ensure_ascii=False, default=str)[:400])
 
         if q_type in ("single_choice", "multi_choice") and not options:
             # A choice with nothing to choose from is unanswerable. Asking it as
             # free text at least keeps the question, instead of showing an empty
             # menu the user has to escape out of.
             console.print(f"\n[bold yellow]{q_text}[/bold yellow]")
-            console.print("[dim](вариантов не пришло — ответьте своими словами)[/dim]")
+            console.print("[dim](варианты пришли в неподдерживаемом виде — "
+                          "ответьте своими словами)[/dim]" if rejected else
+                          "[dim](вариантов не пришло — ответьте своими словами)[/dim]")
             try:
                 answer = ptk_prompt("Ваш ответ ❯ ")
                 responses[q_text] = answer.strip() or "No answer"
