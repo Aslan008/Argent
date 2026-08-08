@@ -26,6 +26,39 @@ from ui import (
 from hook_manager import hook_manager
 
 
+def switch_model(agent: ArgentAgent, new_model: str) -> None:
+    """Point the agent at another model and say what that costs the history.
+
+    Everything tier-dependent — strategy, history budget, context window,
+    constrained decoding, native tool support — is swapped by set_model. The
+    part nobody can see is that a conversation built on a cloud model does not
+    fit a small one: the trim happens silently at the start of the next turn,
+    and the model then answers as if the earlier half was never said.
+    """
+    from config import get_model_size_category
+
+    before_tier = get_model_size_category(agent.model_name)
+    before_history = getattr(agent, "max_history_messages", None)
+    before_ctx = getattr(agent, "max_context_tokens", None)
+
+    set_current_model(new_model)
+    agent.set_model(new_model)          # never assign model_name directly
+
+    after_tier = get_model_size_category(new_model)
+    print_system(f"Model updated to: {new_model}"
+                 + (f" [{before_tier} → {after_tier}]" if before_tier != after_tier else ""))
+
+    kept = len([m for m in agent.messages if m.get("role") != "system"])
+    if before_history and agent.max_history_messages < before_history and kept > agent.max_history_messages:
+        print_system(f"[yellow]⚠ Бюджет истории: {before_history} → "
+                     f"{agent.max_history_messages} сообщений.[/yellow] Сейчас в диалоге "
+                     f"{kept} — лишние будут отброшены на следующем ходу.")
+    if before_ctx and agent.max_context_tokens < before_ctx:
+        print_system(f"[yellow]⚠ Окно контекста: {before_ctx} → "
+                     f"{agent.max_context_tokens} токенов.[/yellow] Начало разговора "
+                     f"может не поместиться.")
+
+
 def export_chat_history(agent: ArgentAgent, filename: str = None, auto: bool = False):
     """Exports the current chat history to a Markdown file."""
     from datetime import datetime
@@ -91,9 +124,7 @@ def handle_slash_command(command: str, agent: ArgentAgent) -> bool:
         current = get_current_model()
         new_model = select_model(current)
         if new_model and new_model != current:
-            set_current_model(new_model)
-            agent.set_model(new_model)
-            print_system(f"Model updated to: {new_model}")
+            switch_model(agent, new_model)
         else:
             print_system("Model unchanged.")
     elif cmd == "/provider":
@@ -158,13 +189,14 @@ def handle_slash_command(command: str, agent: ArgentAgent) -> bool:
                     options_text = f" (URL: {new_url})"
 
             print_system(f"API Provider updated to: {new_prov}{options_text}")
-            if new_prov in ("zai", "koboldcpp", "openrouter"):
+            if new_prov != current_prov:
+                # Every provider, ollama included: a model id almost never
+                # exists on two of them, so keeping the old name means every
+                # request 404s until the user works out they must run /model.
                 print_system(f"Select a {new_prov.upper()} model to use:")
                 new_model = select_model(get_current_model())
-                if new_model != get_current_model():
-                    set_current_model(new_model)
-                    agent.model_name = new_model
-                    print_system(f"Model updated to: {new_model}")
+                if new_model and new_model != get_current_model():
+                    switch_model(agent, new_model)
     elif cmd.startswith("/mcp"):
         _handle_mcp_command(command)
     elif cmd.startswith("/kb"):
