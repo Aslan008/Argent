@@ -262,6 +262,53 @@ def _brave_search(query: str, limit: int = 5) -> list:
     return out[:limit]
 
 
+# Ollama returns the whole page as the result "content", not a snippet — one
+# real result measured 223,466 characters. That is the engine's strength (the
+# answer is often already in hand, with no fetch round-trip) and its hazard: a
+# handful of those would swamp the reranker and any local model's context. The
+# cap keeps enough to judge and rank by; read_webpage exists for the rest.
+OLLAMA_SNIPPET_CHARS = 1200
+
+
+def _ollama_search(query: str, limit: int = 5) -> list:
+    """General web via Ollama's hosted search — another INDEPENDENT index.
+
+    Added on evidence, the way Brave was: measured across four real technical
+    queries, 80% of what it returned (16 of 20 URLs) appeared in none of the
+    existing five engines. Union is what lifts RECALL, and recall is the one
+    thing the cross-encoder downstream cannot repair.
+
+    Note it is a CLOUD service even when the model is local: the query leaves
+    the machine. Off unless a key is configured, so the keyless default stands.
+    """
+    from config import get_ollama_api_key
+    key = get_ollama_api_key()
+    if not key:
+        return []
+
+    import requests
+    resp = requests.post(
+        "https://ollama.com/api/web_search",
+        headers={"Authorization": f"Bearer {key}"},
+        json={"query": query, "max_results": max(1, min(int(limit or 5), 10))},
+        timeout=20,
+    )
+    resp.raise_for_status()
+
+    out = []
+    for item in (resp.json() or {}).get("results", []):
+        content = (item.get("content") or "").strip()
+        if len(content) > OLLAMA_SNIPPET_CHARS:
+            content = content[:OLLAMA_SNIPPET_CHARS] + " …"
+        out.append({
+            "title": item.get("title", "") or "(no title)",
+            "url": item.get("url", ""),
+            "snippet": content,
+            "source": "ollama",
+        })
+    return out[:limit]
+
+
 # Keyless engines, always available — the zero-setup baseline.
 DEFAULT_ENGINES = [_ddg_search, _wikipedia_search, _stackoverflow_search, _github_search]
 
@@ -271,7 +318,7 @@ DEFAULT_ENGINES = [_ddg_search, _wikipedia_search, _stackoverflow_search, _githu
 ENGINE_LABELS = {
     "_ddg_search": "DuckDuckGo", "_wikipedia_search": "Wikipedia",
     "_stackoverflow_search": "StackExchange", "_github_search": "GitHub",
-    "_brave_search": "Brave",
+    "_brave_search": "Brave", "_ollama_search": "Ollama",
 }
 
 
@@ -282,14 +329,18 @@ def engine_labels(engines=None) -> list:
 
 
 def active_engines() -> list:
-    """The engine set for this run: the keyless baseline plus any that the user
-    has configured (currently Brave). Built per call so enabling a key takes
-    effect without a restart."""
+    """The engine set for this run: the keyless baseline plus any the user has
+    configured (Brave, Ollama). Built per call so enabling a key takes effect
+    without a restart."""
     engines = list(DEFAULT_ENGINES)
     try:
-        from config import get_brave_api_key
+        from config import get_brave_api_key, get_ollama_api_key
+        # Independent indexes go first: they carry the most that the keyless
+        # baseline cannot reach, and order decides who survives the result cap.
+        if get_ollama_api_key():
+            engines.insert(0, _ollama_search)
         if get_brave_api_key():
-            engines.insert(0, _brave_search)   # independent index goes first
+            engines.insert(0, _brave_search)
     except Exception:
         pass
     return engines
@@ -314,6 +365,12 @@ _OPERATOR_SUPPORT = {
     "_ddg_search": {"site", "filetype", "ext", "inurl", "intitle", "exclude"},
     # Brave supports the common filters; the rarer ones are ignored, not honoured.
     "_brave_search": {"site", "filetype", "ext", "exclude"},
+    # Probed against the live endpoint: site: is obeyed (5/5 results on the
+    # named domain); -exclude is not (the excluded domain still came back) and
+    # filetype: returned nothing of that type. Listing an operator the engine
+    # ignores is worse than stripping it — the model reads the result as if the
+    # filter had applied.
+    "_ollama_search": {"site"},
     # MediaWiki has its own language (intitle:, insource:) and no notion of a site.
     "_wikipedia_search": {"intitle", "exclude"},
     # The StackExchange API takes filters as query PARAMETERS; operators inside

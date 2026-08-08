@@ -363,6 +363,14 @@ def handle_slash_command(command: str, agent: ArgentAgent) -> bool:
     return False
 
 
+# Menu labels live here, not inline: the tests select by label, and a
+# duplicated string drifts the moment either side is reworded.
+SEARCH_MENU_BRAVE = "Brave API-ключ (независимый индекс поиска)"
+SEARCH_MENU_OLLAMA = "Ollama API-ключ (независимый индекс поиска)"
+SEARCH_MENU_LANGS = "Языки поисковых запросов"
+SEARCH_MENU_MODEL = "Модель reranker'а"
+
+
 def _handle_search_command():
     """Configure web research: the optional Brave index, the query languages and
     the reranker.
@@ -375,6 +383,7 @@ def _handle_search_command():
     """
     from config import (
         get_brave_api_key, set_brave_api_key,
+        get_ollama_api_key, set_ollama_api_key,
         get_reranker_model, set_reranker_model,
         get_search_languages, set_search_languages,
     )
@@ -382,12 +391,14 @@ def _handle_search_command():
     from src.research.search import engine_labels
 
     key = get_brave_api_key()
+    ollama_key = get_ollama_api_key()
     langs = get_search_languages()
     model = get_reranker_model() or _DEFAULT_MODEL
     multilingual = model != _DEFAULT_MODEL
 
     print_system(f"Движки: [bold cyan]{', '.join(engine_labels())}[/bold cyan]")
     print_system(f"Brave API-ключ: {'задан' if key else '[dim]не задан[/dim]'}")
+    print_system(f"Ollama API-ключ: {'задан' if ollama_key else '[dim]не задан[/dim]'}")
     print_system(f"Языки запросов: [bold cyan]{', '.join(langs)}[/bold cyan]")
     print_system(f"Reranker: [bold cyan]{model.split('/')[-1]}[/bold cyan]"
                  f" ({'мультиязычный' if multilingual else 'только английский'})")
@@ -395,12 +406,12 @@ def _handle_search_command():
         print_system("[yellow]Внимание:[/yellow] запросы не только на английском, но reranker "
                      "англоязычный — найденные неанглийские страницы будут отброшены при ранжировании.")
 
-    BRAVE = "Brave API-ключ (второй независимый индекс поиска)"
-    LANGS = "Языки поисковых запросов"
-    MODEL = "Модель reranker'а"
-    choice = questionary.select("Что настроить?", choices=[BRAVE, LANGS, MODEL, "Отмена"]).ask()
+    choice = questionary.select(
+        "Что настроить?",
+        choices=[SEARCH_MENU_BRAVE, SEARCH_MENU_OLLAMA, SEARCH_MENU_LANGS,
+                 SEARCH_MENU_MODEL, "Отмена"]).ask()
 
-    if choice == BRAVE:
+    if choice == SEARCH_MENU_BRAVE:
         new_key = questionary.password(
             "Brave Search API key (пусто — отключить; ключ берётся на brave.com/search/api):"
         ).ask()
@@ -411,7 +422,26 @@ def _handle_search_command():
                      if new_key.strip() else "Brave отключён.")
         return
 
-    if choice == LANGS:
+    if choice == SEARCH_MENU_OLLAMA:
+        new_key = questionary.password(
+            "Ollama API key (пусто — отключить; ключ берётся на ollama.com/settings/keys):"
+        ).ask()
+        if new_key is None:
+            return
+        set_ollama_api_key(new_key)
+        if new_key.strip():
+            print_system("Ollama-поиск включён — ещё один независимый индекс.")
+            # Said once, at the moment of enabling: this key also authenticates
+            # Ollama's cloud models, and the search itself is a hosted service
+            # even when the model answering is local.
+            print_system("[dim]Запросы уходят на ollama.com даже для локальных моделей, "
+                         "а ключ хранится в конфиге открытым текстом и даёт доступ "
+                         "к вашим облачным моделям.[/dim]")
+        else:
+            print_system("Ollama-поиск отключён.")
+        return
+
+    if choice == SEARCH_MENU_LANGS:
         picked = questionary.checkbox(
             "На каких языках писать поисковые запросы (English почти всегда нужен — "
             "техническая документация и ответы англоязычны):",
@@ -436,7 +466,7 @@ def _handle_search_command():
                          "иначе неанглийские результаты не дойдут до ответа (/search → Модель reranker'а).")
         return
 
-    if choice == MODEL:
+    if choice == SEARCH_MENU_MODEL:
         ENGLISH = f"Английский, 92 МБ — {_DEFAULT_MODEL.split('/')[-1]}"
         MULTI = f"Мультиязычный, ~490 МБ — {MULTILINGUAL_MODEL.split('/')[-1]}"
         OTHER = "Другая модель (ввести имя с HuggingFace)"

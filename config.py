@@ -477,6 +477,24 @@ def set_brave_api_key(key: str):
     _set("brave_api_key", (key or "").strip())
 
 
+def get_ollama_api_key() -> str:
+    """Key for Ollama's hosted web search (ollama.com/settings/keys).
+
+    Separate from the local Ollama server, which needs no key: this one buys a
+    second independent index. Measured on real queries, 80% of what it returns
+    is absent from the other five engines.
+
+    Note the key is stored in plain JSON like the rest of the config, and it
+    also authenticates Ollama's CLOUD MODELS — so it is worth more than a
+    search-only key. Treat the config file accordingly.
+    """
+    return _get("ollama_api_key", "") or ""
+
+
+def set_ollama_api_key(key: str):
+    _set("ollama_api_key", (key or "").strip())
+
+
 def get_mcp_call_timeout() -> float:
     """How long one MCP tool call may take before Argent gives up.
 

@@ -143,11 +143,11 @@ Unattended is not "interactive with the prompts turned off": **every gated actio
 **It tells you — but only when it matters.** A finished run raises a desktop notification if it found something new, broke, or hit an action that needs you. A silent run stays silent, because a toast after every tick trains you to dismiss them unread.
 
 ### 🔎 Federated Web Research
-Several independent sources are queried in parallel and merged, so one of them rate-limiting or failing costs nothing: DuckDuckGo, Wikipedia, StackExchange, GitHub issues, and Brave when you add a key.
+Several independent sources are queried in parallel and merged, so one of them rate-limiting or failing costs nothing: DuckDuckGo, Wikipedia, StackExchange, GitHub issues, plus Brave and Ollama when you add their keys.
 
 - **Search operators work** — `"exact phrase"`, `site:`, `filetype:`, `-exclude`, `intitle:` — and each engine receives only the ones it can honour, translated into its own dialect where an equivalent exists (GitHub's `in:title`, StackExchange's `title` parameter). An operator an engine cannot use is dropped rather than searched for as literal text.
 - **StackExchange is a network, not a site.** A cue-matched site (gamedev, math, serverfault…) is queried alongside stackoverflow.com — measured, "Unity Addressables memory leak" returns nothing on stackoverflow and answers on gamedev, while a shader question is the other way round.
-- **Optional second index.** Adding a Brave key unions two genuinely independent indexes; measured on real queries, 75% of results were unique to one engine.
+- **Optional extra indexes.** Both are additive, and both earned their place by measurement: a Brave key made 75% of results unique to one engine, and Ollama's hosted search returned 16 of 20 URLs (80%) that none of the other five had. Recall is the one thing the reranker downstream cannot repair. Note Ollama's search is a cloud service even when the model answering is local.
 - **Multilingual reranking.** A cross-encoder reorders the candidates. The default is English-only and, measured, scores relevant non-English text below mediocre English text — so `/search` can switch to a multilingual model when you research in other languages.
 
 Configure it all from inside Argent with `/search` (the API key is entered masked and never echoed).
@@ -357,11 +357,11 @@ dsolve(Derivative(y(x), x, 2) + y(x), y(x))  →  C1*sin(x) + C2*cos(x)
 **И сообщает — но только когда есть о чём.** Завершившийся прогон поднимает уведомление на рабочем столе, если нашёл новое, упал или упёрся в действие, требующее вас. Пустой прогон молчит: уведомление после каждого тика приучает закрывать их не читая — а потом так же уходит и то единственное, что было важным.
 
 ### 🔎 Федеративный веб-поиск
-Несколько независимых источников опрашиваются и объединяются, поэтому рейт-лимит или падение одного ничего не стоит: DuckDuckGo, Wikipedia, StackExchange, GitHub Issues и Brave, если добавить ключ.
+Несколько независимых источников опрашиваются и объединяются, поэтому рейт-лимит или падение одного ничего не стоит: DuckDuckGo, Wikipedia, StackExchange, GitHub Issues, а также Brave и Ollama, если добавить их ключи.
 
 - **Операторы поиска работают** — `"точная фраза"`, `site:`, `filetype:`, `-исключение`, `intitle:` — и каждый движок получает только то, что понимает, переведённое в его диалект, где есть эквивалент (`in:title` у GitHub, параметр `title` у StackExchange). Непонятный движку оператор **вырезается**, а не ищется как обычный текст.
 - **StackExchange — это сеть, а не один сайт.** Профильный сайт (gamedev, math, serverfault…) опрашивается вместе со stackoverflow.com: замерено, «Unity Addressables memory leak» не находит ничего на stackoverflow и находит ответы на gamedev, а вопрос про шейдеры — наоборот.
-- **Опциональный второй индекс.** Ключ Brave объединяет два по-настоящему независимых индекса; на реальных запросах 75% результатов оказались уникальны для одного из движков.
+- **Опциональные дополнительные индексы.** Оба добавлены по замеру, а не по ощущению: ключ Brave дал 75% результатов, уникальных для одного движка, а поиск Ollama вернул 16 URL из 20 (80%), которых не было ни у одного из остальных пяти. Полнота выдачи — единственное, что reranker дальше по цепочке исправить не может. Учтите: поиск Ollama облачный даже для локальной модели.
 - **Мультиязычное ранжирование.** Cross-encoder переупорядочивает кандидатов. Модель по умолчанию англоязычная и, замерено, ставит релевантный неанглийский текст ниже посредственного английского — поэтому в `/search` можно переключиться на мультиязычную.
 
 Всё это настраивается прямо в Argent командой `/search` (ключ вводится скрыто и никогда не печатается).

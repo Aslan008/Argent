@@ -10,13 +10,28 @@ from src.research import search as search_mod
 from src.research.search import DEFAULT_ENGINES, active_engines, meta_search
 
 
-@pytest.fixture
-def no_brave_key(monkeypatch):
+@pytest.fixture(autouse=True)
+def keyless(request, monkeypatch):
+    """No optional engine is configured unless a test says so.
+
+    Without pinning every keyed engine, these tests read whoever's real config
+    they run under and pass or fail by machine — which is exactly what happened
+    the moment a second keyed engine was added. The getters themselves are
+    tested elsewhere in this file, so those tests opt out with `real_getters`.
+    """
+    if "real_getters" in request.keywords:
+        return
     monkeypatch.setattr(config, "get_brave_api_key", lambda: "")
+    monkeypatch.setattr(config, "get_ollama_api_key", lambda: "")
 
 
 @pytest.fixture
-def brave_key(monkeypatch):
+def no_brave_key(keyless):
+    return None
+
+
+@pytest.fixture
+def brave_key(monkeypatch, keyless):
     monkeypatch.setattr(config, "get_brave_api_key", lambda: "test-key")
 
 
@@ -390,6 +405,7 @@ class TestDoctorDiscoverability:
         assert "Brave" in detail and "brave_api_key" not in detail
 
 
+@pytest.mark.real_getters
 class TestBraveConfig:
     def test_default_is_empty(self, monkeypatch):
         store = {}

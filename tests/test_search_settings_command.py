@@ -10,6 +10,9 @@ import pytest
 
 import command_handler
 import config
+from command_handler import (
+    SEARCH_MENU_BRAVE, SEARCH_MENU_LANGS, SEARCH_MENU_MODEL, SEARCH_MENU_OLLAMA,
+)
 from src.research.rerank import MULTILINGUAL_MODEL, _DEFAULT_MODEL
 
 
@@ -68,21 +71,21 @@ class TestStatusReport:
 
 class TestBraveKey:
     def test_sets_the_key(self, cfg, ui, monkeypatch):
-        _answer(monkeypatch, select="Brave API-ключ (второй независимый индекс поиска)",
+        _answer(monkeypatch, select=SEARCH_MENU_BRAVE,
                 password="BSA-test-key")
         command_handler._handle_search_command()
         assert config.get_brave_api_key() == "BSA-test-key"
 
     def test_empty_disables(self, cfg, ui, monkeypatch):
         config.set_brave_api_key("old")
-        _answer(monkeypatch, select="Brave API-ключ (второй независимый индекс поиска)",
+        _answer(monkeypatch, select=SEARCH_MENU_BRAVE,
                 password="")
         command_handler._handle_search_command()
         assert config.get_brave_api_key() == ""
 
     def test_cancel_leaves_it_alone(self, cfg, ui, monkeypatch):
         config.set_brave_api_key("keep-me")
-        _answer(monkeypatch, select="Brave API-ключ (второй независимый индекс поиска)",
+        _answer(monkeypatch, select=SEARCH_MENU_BRAVE,
                 password=None)
         command_handler._handle_search_command()
         assert config.get_brave_api_key() == "keep-me"
@@ -91,7 +94,7 @@ class TestBraveKey:
         """A visible key ends up in scrollback and screen shares, so the prompt
         must be questionary.password, never plain text."""
         used = []
-        _answer(monkeypatch, select="Brave API-ключ (второй независимый индекс поиска)",
+        _answer(monkeypatch, select=SEARCH_MENU_BRAVE,
                 password="k")
 
         class _Spy:
@@ -107,34 +110,79 @@ class TestBraveKey:
         assert used == ["password"]
 
     def test_key_is_never_printed(self, cfg, ui, monkeypatch):
-        _answer(monkeypatch, select="Brave API-ключ (второй независимый индекс поиска)",
+        _answer(monkeypatch, select=SEARCH_MENU_BRAVE,
                 password="SUPERSECRET")
         command_handler._handle_search_command()
         assert not any("SUPERSECRET" in line for line in ui)
 
 
+class TestOllamaKey:
+    def test_sets_the_key(self, cfg, ui, monkeypatch):
+        _answer(monkeypatch, select=SEARCH_MENU_OLLAMA, password="ollama-test-key")
+        command_handler._handle_search_command()
+        assert config.get_ollama_api_key() == "ollama-test-key"
+
+    def test_empty_disables(self, cfg, ui, monkeypatch):
+        config.set_ollama_api_key("old")
+        _answer(monkeypatch, select=SEARCH_MENU_OLLAMA, password="")
+        command_handler._handle_search_command()
+        assert config.get_ollama_api_key() == ""
+
+    def test_cancel_leaves_it_alone(self, cfg, ui, monkeypatch):
+        config.set_ollama_api_key("keep-me")
+        _answer(monkeypatch, select=SEARCH_MENU_OLLAMA, password=None)
+        command_handler._handle_search_command()
+        assert config.get_ollama_api_key() == "keep-me"
+
+    def test_key_is_never_printed(self, cfg, ui, monkeypatch):
+        _answer(monkeypatch, select=SEARCH_MENU_OLLAMA, password="SUPERSECRET")
+        command_handler._handle_search_command()
+        assert not any("SUPERSECRET" in line for line in ui)
+
+    def test_enabling_says_what_the_key_costs(self, cfg, ui, monkeypatch):
+        """It is a hosted service even for a local model, and the same key
+        authenticates Ollama's cloud models — so it is worth more than a
+        search-only key sitting in a plaintext config."""
+        _answer(monkeypatch, select=SEARCH_MENU_OLLAMA, password="k")
+        command_handler._handle_search_command()
+        blob = "\n".join(ui)
+        assert "ollama.com" in blob and "локальных" in blob
+
+    def test_disabling_does_not_lecture(self, cfg, ui, monkeypatch):
+        config.set_ollama_api_key("old")
+        _answer(monkeypatch, select=SEARCH_MENU_OLLAMA, password="")
+        command_handler._handle_search_command()
+        assert not any("уходят на ollama.com" in line for line in ui)
+
+    def test_the_status_line_reports_both_keys(self, cfg, ui, monkeypatch):
+        _answer(monkeypatch, select="Отмена")
+        command_handler._handle_search_command()
+        blob = "\n".join(ui)
+        assert "Brave API-ключ" in blob and "Ollama API-ключ" in blob
+
+
 class TestLanguages:
     def test_sets_the_selection(self, cfg, ui, monkeypatch):
-        _answer(monkeypatch, select="Языки поисковых запросов", checkbox=["en", "ru"])
+        _answer(monkeypatch, select=SEARCH_MENU_LANGS, checkbox=["en", "ru"])
         command_handler._handle_search_command()
         assert config.get_search_languages() == ["en", "ru"]
 
     def test_empty_selection_is_refused(self, cfg, ui, monkeypatch):
         config.set_search_languages(["en", "ru"])
-        _answer(monkeypatch, select="Языки поисковых запросов", checkbox=[])
+        _answer(monkeypatch, select=SEARCH_MENU_LANGS, checkbox=[])
         command_handler._handle_search_command()
         assert config.get_search_languages() == ["en", "ru"]     # unchanged
 
     def test_adding_a_language_points_at_the_reranker(self, cfg, ui, monkeypatch):
         config.set_reranker_model("")
-        _answer(monkeypatch, select="Языки поисковых запросов", checkbox=["en", "ru"])
+        _answer(monkeypatch, select=SEARCH_MENU_LANGS, checkbox=["en", "ru"])
         command_handler._handle_search_command()
         assert any("мультиязычный" in line for line in ui)
 
 
 class TestRerankerModel:
     def test_switch_to_multilingual(self, cfg, ui, monkeypatch):
-        _answer(monkeypatch, select="Модель reranker'а")
+        _answer(monkeypatch, select=SEARCH_MENU_MODEL)
         # The second select (inside the branch) returns the same scripted value,
         # so drive it explicitly.
         answers = iter(["Модель reranker'а",
