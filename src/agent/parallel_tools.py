@@ -23,8 +23,13 @@ READ_ONLY_PARALLEL = {
 _MAX_WORKERS = 4
 
 
-def _resolve_args(func, arguments):
-    """Filter hallucinated params; None when a required argument is missing."""
+def _resolve_args(func, arguments, tool_name=None):
+    """Filter hallucinated params; None when a required argument is missing.
+
+    Types are coerced here too: every tool on the whitelist takes an integer
+    (start_line, max_results), and measured, grep_search with max_results="3"
+    reports "No matches found" for a pattern with three matches.
+    """
     if not isinstance(arguments, dict):
         return None
     sig = inspect.signature(func)
@@ -32,7 +37,12 @@ def _resolve_args(func, arguments):
     filtered = {k: v for k, v in arguments.items() if k in valid}
     missing = [p.name for p in sig.parameters.values()
                if p.default is inspect.Parameter.empty and p.name not in filtered]
-    return None if missing else filtered
+    if missing:
+        return None
+    if tool_name:
+        from src.agent.arg_coercion import coerce_and_log
+        filtered = coerce_and_log(tool_name, filtered)
+    return filtered
 
 
 def precompute_readonly_parallel(tool_calls, current_tools, dedup=None):
@@ -53,7 +63,7 @@ def precompute_readonly_parallel(tool_calls, current_tools, dedup=None):
         if name not in READ_ONLY_PARALLEL or name not in current_tools:
             return None
         func = current_tools[name]
-        filtered = _resolve_args(func, tc["function"].get("arguments", {}))
+        filtered = _resolve_args(func, tc["function"].get("arguments", {}), name)
         if filtered is None:
             return None
         jobs.append((i, name, func, filtered))

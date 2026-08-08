@@ -302,6 +302,17 @@ def replace_in_file(file_path: str, target_text: str, replacement_text: str) -> 
     if restriction_error:
         return restriction_error
         
+    # An empty target matches between every character, so the file reports one
+    # "occurrence" per position and the ambiguity hint tells the model to make
+    # its target MORE distinctive — the opposite of the actual problem, which
+    # is that there is no target. Usually it means the caller sent the wrong
+    # shape and target_text defaulted to "".
+    if not (target_text or "").strip():
+        return (f"Error: 'target_text' is empty, so there is nothing to find in "
+                f"'{file_path}'. Pass the exact existing text you want replaced. "
+                f"(If you are calling multi_replace_in_file, each entry must be "
+                f"flat: {{\"file_path\", \"target_text\", \"replacement_text\"}}.)")
+
     try:
         from tools._helpers import _build_match_hint
         path = _resolve_path(file_path)
@@ -309,7 +320,7 @@ def replace_in_file(file_path: str, target_text: str, replacement_text: str) -> 
             return f"Error: File '{file_path}' does not exist."
         if not path.is_file():
             return f"Error: '{file_path}' is not a file."
-            
+
         with open(path, "r", encoding="utf-8") as f:
             content = f.read()
 

@@ -31,6 +31,7 @@ from src.agent.healing import detect_tool_failure, build_healing_hint, HEALING_T
 from src.agent.constrained import build_step_schema, build_tool_catalog, StepStreamExtractor
 from src.agent.loop_guard import LoopGuard, build_loop_note
 from src.agent.mcp_prompt import build_mcp_section
+from src.agent.arg_coercion import coerce_and_log
 from src.agent.context_limit import is_context_overflow, parse_context_limit
 
 log = get_logger("agent")
@@ -1215,6 +1216,11 @@ Example: {"tool": {"name": "read_file", "arguments": {"file_path": "main.py"}}}"
                             valid_params = set(sig.parameters.keys())
                             hallucinated_args = {k: v for k, v in arguments.items() if k not in valid_params}
                             filtered_args = {k: v for k, v in arguments.items() if k in valid_params}
+                            # Give the tool the types its schema promised. A
+                            # model's "false" is a truthy string, and a guard
+                            # that reads `not overwrite` then silently lets the
+                            # write through — see src/agent/arg_coercion.py.
+                            filtered_args = coerce_and_log(func_name, filtered_args)
                             
                             # Check for missing required arguments
                             missing_args = [
