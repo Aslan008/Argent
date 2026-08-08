@@ -1288,7 +1288,12 @@ TOOL_SCHEMAS = [
                                 "options": {
                                     "type": "array",
                                     "items": {"type": "string"},
-                                    "description": "Required for single_choice/multi_choice. A list of string options."
+                                    "description": (
+                                        "Required for single_choice/multi_choice. An array of PLAIN "
+                                        'STRINGS: ["Only critical paths", "Full coverage"]. NOT objects '
+                                        '— {"label": ..., "description": ...} is wrong and the user will '
+                                        "see an unusable menu. Put any explanation inside the string itself."
+                                    )
                                 }
                             },
                             "required": ["type", "question"]

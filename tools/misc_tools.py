@@ -129,23 +129,98 @@ def set_goal(objective: str = None, current_task: str = None) -> str:
     return "Goal updated: " + "; ".join(changed)
 
 
+# Keys a model plausibly uses when it writes an option as an object instead of
+# the declared string. questionary renders any dict without "name" as the text
+# "None", so an unrecognised shape does not fail — it produces a menu of four
+# Nones that the user cannot answer and nothing anywhere records why.
+_OPTION_TEXT_KEYS = ("name", "label", "title", "text", "option", "value",
+                     "description", "choice")
+
+
+def _option_text(option):
+    """One option as displayable text, or None if there is nothing to show."""
+    if isinstance(option, str):
+        return option.strip() or None
+    if isinstance(option, (int, float, bool)):
+        return str(option)
+    if isinstance(option, dict):
+        for key in _OPTION_TEXT_KEYS:
+            value = option.get(key)
+            if isinstance(value, str) and value.strip():
+                # A label plus its explanation reads better than the label
+                # alone, and the model wrote the explanation for a reason.
+                detail = option.get("description")
+                if key != "description" and isinstance(detail, str) and detail.strip():
+                    return f"{value.strip()} — {detail.strip()}"
+                return value.strip()
+        return None
+    return None
+
+
+def _normalize_options(raw):
+    """(usable options, how many were unusable)."""
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except json.JSONDecodeError:
+            raw = [line for line in raw.splitlines() if line.strip()]
+    if not isinstance(raw, (list, tuple)):
+        return [], 0
+    texts, dropped = [], 0
+    for option in raw:
+        text = _option_text(option)
+        if text is None:
+            dropped += 1
+        elif text not in texts:
+            texts.append(text)
+    return texts, dropped
+
+
 def ask_user_questions(questions: list) -> str:
     """Ask the user a series of structured questions."""
     from prompt_toolkit import prompt as ptk_prompt
-    
-    if not isinstance(questions, list):
-        return "Error: 'questions' must be a JSON array of objects."
-        
+
+    if isinstance(questions, str):
+        try:
+            questions = json.loads(questions)
+        except json.JSONDecodeError:
+            return ("Error: 'questions' must be a JSON array of objects, e.g. "
+                    '[{"type": "single_choice", "question": "...", '
+                    '"options": ["A", "B"]}]')
+    if isinstance(questions, dict):
+        questions = [questions]          # one question, sent unwrapped
+    if not isinstance(questions, list) or not questions:
+        return "Error: 'questions' must be a non-empty JSON array of objects."
+
     responses = {}
+    malformed = []
     console.print("\n[bold cyan]🔍 Уточнение требований:[/bold cyan]")
-    
+
     for q in questions:
+        if not isinstance(q, dict):
+            malformed.append(str(q)[:60])
+            continue
         q_type = q.get("type", "text")
         q_text = q.get("question", "Question?")
-        options = q.get("options", [])
-        
+        options, dropped = _normalize_options(q.get("options", []))
+        if dropped:
+            malformed.append(q_text)
+
+        if q_type in ("single_choice", "multi_choice") and not options:
+            # A choice with nothing to choose from is unanswerable. Asking it as
+            # free text at least keeps the question, instead of showing an empty
+            # menu the user has to escape out of.
+            console.print(f"\n[bold yellow]{q_text}[/bold yellow]")
+            console.print("[dim](вариантов не пришло — ответьте своими словами)[/dim]")
+            try:
+                answer = ptk_prompt("Ваш ответ ❯ ")
+                responses[q_text] = answer.strip() or "No answer"
+            except (KeyboardInterrupt, EOFError):
+                responses[q_text] = "Skipped"
+            continue
+
         console.print(f"\n[bold yellow]{q_text}[/bold yellow]")
-        
+
         if q_type == "text":
             console.print("[dim](Введите текст и нажмите Enter)[/dim]")
             try:
@@ -190,8 +265,17 @@ def ask_user_questions(questions: list) -> str:
     for k, v in responses.items():
         summary_lines.append(f"- {k}: {v}")
         memory.add_fact(f"User preference on '{k}': {v}")
-        
-    return f"User responses:\n" + "\n".join(summary_lines)
+
+    out = "User responses:\n" + "\n".join(summary_lines)
+    if malformed:
+        # Told back to the model, not just logged: it can only stop sending the
+        # wrong shape if something says so within the turn.
+        log.warning("ask_user_questions received malformed options in: %s", malformed)
+        out += ("\n\n[Note: some options were not plain strings and had to be "
+                "converted or dropped. `options` must be an array of STRINGS, "
+                'e.g. "options": ["Only critical paths", "Full coverage"] — not '
+                "objects. Re-check the schema before asking again.]")
+    return out
 
 def create_svg_image(svg_code: str, filename: str = None) -> str:
     """Creates an SVG image file from the provided SVG code and opens it in the default web browser."""
