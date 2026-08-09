@@ -1509,7 +1509,13 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "browser_screenshot",
-            "description": "Take a screenshot of the current browser page and save it to disk. Returns the file path of the saved image.",
+            "description": (
+                "Save a PNG of the current browser page to disk, FOR THE HUMAN TO OPEN. "
+                "You will NOT see the image — no provider here sends pictures back to you, "
+                "so taking one to 'look at the page' is a wasted turn. To understand a page, "
+                "use browser_get_content (text/markdown) or browser_state. Take a screenshot "
+                "only when the user asked for a picture, or as evidence to point them at."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {

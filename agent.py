@@ -1026,11 +1026,19 @@ Example: {"tool": {"name": "read_file", "arguments": {"file_path": "main.py"}}}"
             if tool_calls_accumulator and not is_truncated:
                 for tc in tool_calls_accumulator:
                     if isinstance(tc["function"]["arguments"], str):
+                        raw_args = tc["function"]["arguments"]
                         try:
-                            tc["function"]["arguments"] = json.loads(tc["function"]["arguments"])
+                            tc["function"]["arguments"] = json.loads(raw_args)
                         except json.JSONDecodeError as e:
-                            log.warning("Failed to parse tool args for %s: %s", tc["function"]["name"], e)
-                            tc["function"]["arguments"] = {}
+                            # Falling back to {} runs the tool with no arguments
+                            # at all — read_file() with no path, run_command()
+                            # with no command — and the model is told nothing.
+                            # Marking it instead lets the dispatch answer with a
+                            # real error the model can correct.
+                            log.warning("Failed to parse tool args for %s (%s): %r",
+                                        tc["function"]["name"], e, raw_args[:200])
+                            tc["function"]["arguments"] = {
+                                "__unparsable__": raw_args[:2000], "__error__": str(e)}
 
             # Constrained mode: materialize the final step from the JSON buffer.
             if constrained_extractor is not None and not is_truncated and not tool_calls_accumulator:
@@ -1207,7 +1215,20 @@ Example: {"tool": {"name": "read_file", "arguments": {"file_path": "main.py"}}}"
                             tool_call["function"]["arguments"] = arguments
 
                     yield {"type": "tool_start", "name": func_name, "args": arguments}
-                        
+
+                    if isinstance(arguments, dict) and "__unparsable__" in arguments:
+                        # The stream produced arguments that are not JSON. Say so
+                        # instead of running the tool empty-handed: the model can
+                        # re-emit the call, and nobody can act on a silent no-op.
+                        result = (
+                            f"Error: the arguments for '{func_name}' were not valid JSON "
+                            f"({arguments.get('__error__')}). Send the call again with one "
+                            f"well-formed JSON object per tool call.")
+                        yield {"type": "tool_end", "name": func_name, "result": result}
+                        self.messages.append(
+                            provider.format_tool_result(result, tool_call.get("id")))
+                        continue
+
                     if func_name in current_tools:
                         try:
                             func = current_tools[func_name]

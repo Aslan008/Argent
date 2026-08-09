@@ -171,6 +171,34 @@ def _option_text(option):
     return None
 
 
+def _fit_options(texts):
+    """Keep every option readable in the terminal it will be drawn in.
+
+    questionary draws one line per choice and clips whatever overflows, so a
+    long option loses its END — which is where the distinguishing part usually
+    is ("…быстрее, но дыры останутся" vs "…долго, но надёжно"). Two options
+    that differ only past the cut become the same line, and the choice is
+    unanswerable.
+
+    The full text is kept as the VALUE, so the answer the model receives is
+    still complete; only the drawn label is shortened, and from the middle so
+    both ends survive.
+    """
+    import shutil
+
+    width = max(40, shutil.get_terminal_size((110, 30)).columns)
+    budget = width - 12          # questionary's pointer, padding and a margin
+    out = []
+    for text in texts:
+        if len(text) <= budget:
+            out.append((text, text))
+            continue
+        head = (budget - 3) * 2 // 3
+        tail = budget - 3 - head
+        out.append((f"{text[:head]}...{text[-tail:]}", text))
+    return out
+
+
 def _normalize_options(raw):
     """(usable options, the raw entries that could not be displayed).
 
@@ -257,15 +285,20 @@ def ask_user_questions(questions: list) -> str:
                 responses[q_text] = "Skipped"
                 
         elif q_type in ("single_choice", "multi_choice"):
-            display_options = options.copy()
-            if "✏ Свой вариант..." not in display_options:
-                display_options.append("✏ Свой вариант...")
-                
+            # Drawn short enough to survive the terminal width, answered in
+            # full: the value carries the whole text even when the label is
+            # elided, so the model never receives a truncated answer.
+            fitted = _fit_options(options)
+            display_options = [questionary.Choice(title=label, value=value)
+                               for label, value in fitted]
+            CUSTOM = "✏ Свой вариант..."
+            display_options.append(questionary.Choice(title=CUSTOM, value=CUSTOM))
+
             if q_type == "single_choice":
                 console.print("[dim](Выберите один вариант стрелками ↑↓ и нажмите Enter)[/dim]")
                 try:
                     selected = questionary.select("Выберите:", choices=display_options).ask()
-                    if selected == "✏ Свой вариант...":
+                    if selected == CUSTOM:
                         custom = ptk_prompt("Введите свой вариант ❯ ")
                         responses[q_text] = custom.strip() if custom.strip() else "No answer"
                     elif selected:
@@ -278,8 +311,8 @@ def ask_user_questions(questions: list) -> str:
                 console.print("[dim](Выделите пробелом нужные варианты и нажмите Enter)[/dim]")
                 try:
                     selected = questionary.checkbox("Выберите варианты:", choices=display_options).ask()
-                    if selected and "✏ Свой вариант..." in selected:
-                        selected.remove("✏ Свой вариант...")
+                    if selected and CUSTOM in selected:
+                        selected.remove(CUSTOM)
                         custom = ptk_prompt("Введите свой(и) вариант(ы) через запятую ❯ ")
                         if custom.strip():
                             selected.append(custom.strip())

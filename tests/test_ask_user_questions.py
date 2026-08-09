@@ -8,6 +8,7 @@ deviation into an unanswerable prompt was ours.
 """
 
 import pytest
+from questionary import Choice as _Choice
 
 from tools import misc_tools
 from tools.misc_tools import _normalize_options, _option_text, ask_user_questions
@@ -92,12 +93,17 @@ class TestAsking:
 
         class _Ask:
             def __init__(self, choices):
-                seen["choices"] = choices
+                seen["choices"] = [getattr(c, "title", c) for c in choices]
+                seen["values"] = [getattr(c, "value", c) for c in choices]
 
             def ask(self):
-                return seen["choices"][0]
+                return seen["values"][0]
 
         class _Q:
+            # Choice is what carries the elided label with the full value, so
+            # the double has to model it or the truncation fix is untested.
+            Choice = _Choice
+
             @staticmethod
             def select(_msg, choices):
                 return _Ask(choices)
@@ -181,3 +187,35 @@ class TestDegradedInput:
 
     def test_an_empty_list(self):
         assert ask_user_questions([]).startswith("Error:")
+
+
+class TestLongOptions:
+    """A long option loses its END to the terminal width — and the end is where
+    the distinguishing part lives ("…долго, но надёжно" vs "…быстро, но дыры").
+    Two options that differ only past the cut become the same line."""
+
+    def test_the_drawn_label_fits_the_terminal(self, monkeypatch):
+        import shutil
+
+        from tools.misc_tools import _fit_options
+        monkeypatch.setattr(shutil, "get_terminal_size", lambda d=None: type("S", (), {"columns": 80})())
+        long = "x" * 200
+        label, value = _fit_options([long])[0]
+        assert len(label) < 80
+        assert value == long          # the answer is never truncated
+
+    def test_both_ends_survive(self, monkeypatch):
+        import shutil
+
+        from tools.misc_tools import _fit_options
+        monkeypatch.setattr(shutil, "get_terminal_size", lambda d=None: type("S", (), {"columns": 80})())
+        a = "Полное покрытие тестами всех критических путей и обработки ошибок — долго, но надёжно"
+        b = "Полное покрытие тестами всех критических путей и обработки ошибок — быстро, но дыры"
+        labels = [lbl for lbl, _ in _fit_options([a, b])]
+        assert labels[0] != labels[1]            # still distinguishable
+        assert "надёжно" in labels[0] and "дыры" in labels[1]
+
+    def test_short_options_are_untouched(self):
+        from tools.misc_tools import _fit_options
+        assert _fit_options(["Коротко"]) == [("Коротко", "Коротко")]
+

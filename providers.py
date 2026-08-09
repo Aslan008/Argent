@@ -10,7 +10,13 @@ import logging
 from abc import ABC, abstractmethod
 from typing import List, Dict, Any, Optional, Generator
 
-logger = logging.getLogger("argent.providers")
+# Was logging.getLogger("argent.providers"), which has no handler — so every
+# retry, stream error and tool-channel fallback went nowhere. The same defect
+# hid an MCP call that hung for ten minutes; a provider's warnings are exactly
+# what you need when a turn dies and nobody knows why.
+from logger import get_logger
+
+logger = get_logger("providers")
 
 
 class ProviderError(Exception):
@@ -160,7 +166,24 @@ class OllamaProvider(LLMProvider):
 
     def __init__(self):
         import ollama as _ollama
-        self._ollama = _ollama
+
+        # The bare module client has no read timeout, so a connection that dies
+        # mid-generation is never noticed: the stream simply stops producing and
+        # the turn waits forever. Observed — 948 seconds of "Выполнение…" ended
+        # by Ctrl+C, with `lookup ollama.com: no such host` the moment the user
+        # tried again. A READ timeout is the right one: it measures the gap
+        # BETWEEN tokens, so a slow but living generation is untouched while a
+        # dead socket is caught.
+        try:
+            import httpx
+            from config import get_stream_read_timeout
+
+            self._ollama = _ollama.Client(timeout=httpx.Timeout(
+                connect=15.0, read=get_stream_read_timeout(), write=60.0, pool=15.0))
+        except Exception as e:
+            logger.warning("falling back to the default ollama client (%s); "
+                           "a dropped connection will hang instead of failing", e)
+            self._ollama = _ollama
 
     @property
     def name(self) -> str:
@@ -223,18 +246,31 @@ class OllamaProvider(LLMProvider):
         except Exception as e:
             raise ProviderError(f"Ollama connection error: {e}", original_error=e)
 
+        # Ollama emits each tool call COMPLETE inside a chunk — it does not
+        # stream them as deltas the way the OpenAI API does. So the index has to
+        # count across the whole response: enumerate() restarted at 0 in every
+        # chunk, and the consumer, which appends deltas per index, then merged
+        # every call into slot 0. Observed with GLM 5.2 through Ollama cloud:
+        #   read_file + read_file            -> "read_fileread_file"
+        #   run_command + read_file + read_file -> "run_commandread_fileread_file"
+        # with the arguments concatenated too, so the JSON failed to parse and
+        # the call was executed with {} — silently losing what the model asked
+        # for. Any model emitting more than one tool call per turn hit this.
+        emitted_tool_calls = 0
+
         for chunk in response_stream:
             msg = chunk.get("message", {})
             tool_call_deltas = []
             if "tool_calls" in msg:
-                for idx, tc in enumerate(msg["tool_calls"]):
+                for tc in msg["tool_calls"] or []:
                     args = tc.get("function", {}).get("arguments", {})
                     tool_call_deltas.append({
-                        "index": idx,
+                        "index": emitted_tool_calls,
                         "id": "",
                         "function_name_delta": tc.get("function", {}).get("name", ""),
                         "function_arguments_delta": json.dumps(args) if isinstance(args, dict) else str(args),
                     })
+                    emitted_tool_calls += 1
             result = {
                 "content": msg.get("content", ""),
                 "thinking": msg.get("thinking", ""),

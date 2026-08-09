@@ -477,6 +477,25 @@ def set_brave_api_key(key: str):
     _set("brave_api_key", (key or "").strip())
 
 
+def get_stream_read_timeout() -> float:
+    """Seconds without a single token before the generation is declared dead.
+
+    Not a limit on how long a model may think — it measures the GAP between
+    tokens, so a slow generation is untouched. It exists because a dropped
+    connection produced 948 seconds of spinner and had to be killed by hand;
+    nothing distinguishes "still working" from "the socket is gone" except
+    silence, and forever is the wrong amount of silence to accept.
+    """
+    try:
+        return max(30.0, float(_get("stream_read_timeout", 180)))
+    except (TypeError, ValueError):
+        return 180.0
+
+
+def set_stream_read_timeout(seconds: float):
+    _set("stream_read_timeout", max(30.0, float(seconds)))
+
+
 def get_ollama_api_key() -> str:
     """Key for Ollama's hosted web search (ollama.com/settings/keys).
 

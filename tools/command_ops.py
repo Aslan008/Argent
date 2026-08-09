@@ -93,11 +93,19 @@ def run_command(command: str) -> str:
         line_queue: "queue.Queue" = queue.Queue()
 
         def _pump():
+            # os.read, not readline: an interactive prompt is written WITHOUT a
+            # trailing newline ("Ok to proceed? (y) ") because the program
+            # expects the answer on the same line. readline blocks until a
+            # newline that never comes, so the question never reached the user
+            # at all — the command just went quiet and was killed. os.read
+            # returns as soon as any bytes exist.
+            fd = process.stdout.fileno()
             try:
-                for raw in iter(process.stdout.readline, b""):
-                    if not raw:
+                while True:
+                    chunk = os.read(fd, 4096)
+                    if not chunk:
                         break
-                    line_queue.put(raw)
+                    line_queue.put(chunk)
             except Exception:
                 pass
             finally:
@@ -107,9 +115,10 @@ def run_command(command: str) -> str:
 
         output_lines = []
         silent_timeout = False
+        pending = ""                       # bytes seen since the last newline
         while True:
             try:
-                raw_line = line_queue.get(timeout=COMMAND_SILENCE_LIMIT)
+                raw_chunk = line_queue.get(timeout=COMMAND_SILENCE_LIMIT)
             except queue.Empty:
                 if process.poll() is None:      # alive but mute -> stuck/awaiting input
                     silent_timeout = True
@@ -118,11 +127,19 @@ def run_command(command: str) -> str:
                     except Exception:
                         pass
                 break
-            if raw_line is None:                # stream closed: command finished
+            if raw_chunk is None:               # stream closed: command finished
                 break
-            decoded_line = decode_output(raw_line)
-            output_lines.append(decoded_line)
-            console.print(f"[dim]{decoded_line.rstrip()}[/dim]")
+            pending += decode_output(raw_chunk)
+            *complete, pending = pending.split("\n")
+            for line in complete:
+                output_lines.append(line + "\n")
+                console.print(f"[dim]{line.rstrip()}[/dim]")
+
+        if pending.strip():
+            # The unterminated tail IS the prompt in the interactive case, so it
+            # is shown and reported rather than dropped on the floor.
+            output_lines.append(pending)
+            console.print(f"[dim]{pending.rstrip()}[/dim]")
 
         try:
             process.stdout.close()
@@ -137,10 +154,13 @@ def run_command(command: str) -> str:
             output += f"OUTPUT:\n{final_output}\n"
 
         if silent_timeout:
+            waiting_on = pending.strip()[-160:] if pending.strip() else ""
             output += (
                 f"\n[DIAGNOSIS]: No output for {COMMAND_SILENCE_LIMIT}s — the command "
-                f"likely awaits interactive input (a prompt) or is hung, so it was "
-                f"terminated. Re-run non-interactively (add flags like --yes/-y or pipe "
+                + (f"is waiting for an answer to: {waiting_on!r} — "
+                   if waiting_on else
+                   "likely awaits interactive input (a prompt) or is hung, so it was ")
+                + f"terminated. Re-run non-interactively (add flags like --yes/-y or pipe "
                 f"the answers), or use start_background_command + send_background_command "
                 f"for a program that must be driven interactively.\n"
             )
