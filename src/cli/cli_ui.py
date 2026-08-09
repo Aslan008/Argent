@@ -461,7 +461,7 @@ def render_response_stream(
         except StopIteration:
             break
         except Exception as e:
-            print_error(f"Streaming error: {e}")
+            print_error(f"Ошибка потока: {e}")
             break
 
     # No final re-render: content was committed block-by-block during the

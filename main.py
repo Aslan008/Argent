@@ -380,8 +380,8 @@ def main():
     except Exception:
         _ver = "?"
     console.rule(f"[bold cyan]Argent Coder[/bold cyan] [dim]v{_ver}[/dim]")
-    print_system("Argent Coder. Autonomous Development Environment.")
-    print_system("Type /help for commands.")
+    print_system("Argent Coder — автономная среда разработки.")
+    print_system("Список команд: /help")
     
     agent = ArgentAgent()
     orchestrator = ProjectOrchestrator(agent)
@@ -441,9 +441,9 @@ def main():
         except (KeyboardInterrupt, EOFError):
             print_system("Настройка пропущена. Позже: /provider и /model.")
 
-    print_system(f"Active Provider: {get_provider().upper()}")
-    print_system(f"Active Model: {get_current_model()}")
-    print_system(f"Working Directory: {os.getcwd()}")
+    print_system(f"Провайдер: {get_provider().upper()}")
+    print_system(f"Модель: {get_current_model()}")
+    print_system(f"Рабочая директория: {os.getcwd()}")
     if not Path(".argent/AGENTS.md").exists() and not Path("AGENTS.md").exists():
         print_system("[dim]Подсказка: нет AGENTS.md — выполните /init, чтобы Argent изучил проект и создал память о нём.[/dim]")
     vault = get_obsidian_vault()
@@ -513,7 +513,7 @@ def main():
     if get_auto_rag():
         import threading
         cwd = os.getcwd()
-        print_system(f"Auto-RAG is enabled. Indexing {cwd} in background...")
+        print_system(f"Авто-RAG включён. Индексирую {cwd} в фоне…")
         def _bg_auto_rag():
             try:
                 from rag_engine import enable_rag_for_project
@@ -626,7 +626,7 @@ def main():
             elif user_input.startswith("/research"):
                 parts = user_input.split(" ", 1)
                 if len(parts) < 2:
-                    print_error("Please specify a topic. Example: /research Unity DOTS")
+                    print_error("Укажите тему. Пример: /research Unity DOTS")
                     continue
                 topic = parts[1].strip()
                 active_tools = ["run_deep_research"]
@@ -675,29 +675,29 @@ def main():
                     mode = get_browser_mode()
                     name = get_browser_name()
                     browsers = detect_browsers()
-                    print_system(f"Browser Mode: [bold cyan]{mode}[/bold cyan]")
+                    print_system(f"Режим браузера: [bold cyan]{mode}[/bold cyan]")
                     print_system(f"Selected Browser: [bold cyan]{name}[/bold cyan]")
                     if browsers:
                         print_system("Detected browsers:")
                         for b in browsers:
                             print_system(f"  - [bold yellow]{b.key}[/bold yellow]: {b.exe_path}")
                     else:
-                        print_system("[dim]No Chromium-based browsers detected.[/dim]")
+                        print_system("[dim]Браузеров на основе Chromium не найдено.[/dim]")
                     print_system("\nUsage: /browser user | isolated | chrome | yandex | edge | brave | auto")
                 elif parts[1] in ("user", "isolated"):
                     from config import set_browser_mode
                     set_browser_mode(parts[1])
                     if parts[1] == "user":
-                        print_system("Browser mode: [bold green]USER[/bold green] — AI will use your real browser via CDP.")
+                        print_system("Режим браузера: [bold green]ВАШ[/bold green] — модель работает в вашем браузере через CDP.")
                     else:
-                        print_system("Browser mode: [bold yellow]ISOLATED[/bold yellow] — AI will use Playwright Chromium.")
+                        print_system("Режим браузера: [bold yellow]ИЗОЛИРОВАННЫЙ[/bold yellow] — модель работает в Playwright Chromium.")
                 elif parts[1] in ("chrome", "yandex", "edge", "brave", "auto"):
                     from config import set_browser_name, set_browser_mode
                     set_browser_name(parts[1])
                     set_browser_mode("user")
-                    print_system(f"Browser set to: [bold green]{parts[1]}[/bold green] (user mode enabled).")
+                    print_system(f"Браузер: [bold green]{parts[1]}[/bold green] (режим «ваш браузер» включён).")
                 else:
-                    print_error(f"Unknown browser option: {parts[1]}. Valid: user, isolated, chrome, yandex, edge, brave, auto")
+                    print_error(f"Неизвестный вариант: {parts[1]}. Допустимые: user, isolated, chrome, yandex, edge, brave, auto")
                 continue
 
             elif user_input.strip() == "/rag_toggle":
@@ -707,16 +707,16 @@ def main():
                 set_auto_rag(new_state)
                 
                 status = "[bold green]ENABLED[/bold green]" if new_state else "[bold red]DISABLED[/bold red]"
-                print_system(f"Auto-RAG (Semantic Search indexing on startup) is now: {status}")
+                print_system(f"Авто-RAG (индексация при запуске): {status}")
                 
                 if new_state:
-                    print_system("RAG will be enabled the next time you start Argent.")
+                    print_system("RAG включится при следующем запуске Argent.")
                     print_system("If you want to start it now without restarting, type `/work` and the agent can use semantic search if it's already active.")
                 else:
                     try:
                         from rag_engine import disable_rag
                         disable_rag()
-                        print_system("Semantic Search (RAG) has been disabled for the current session.")
+                        print_system("Семантический поиск (RAG) отключён для текущей сессии.")
                     except ImportError:
                         pass
                 continue
@@ -728,10 +728,10 @@ def main():
                 set_auto_kb(new_state)
                 
                 status = "[bold green]ENABLED[/bold green]" if new_state else "[bold red]DISABLED[/bold red]"
-                print_system(f"Auto-KB (External Knowledge Bases loading on startup) is now: {status}")
+                print_system(f"Авто-KB (загрузка внешних баз знаний при запуске): {status}")
                 
                 if new_state:
-                    print_system("External KBs will load the next time you start Argent.")
+                    print_system("Внешние базы знаний загрузятся при следующем запуске.")
                 continue
 
             elif user_input.strip() == "/auto_retrieve":
@@ -739,9 +739,9 @@ def main():
                 new_state = not get_auto_retrieve()
                 set_auto_retrieve(new_state)
                 status = "[bold green]ENABLED[/bold green]" if new_state else "[bold red]DISABLED[/bold red]"
-                print_system(f"Auto-retrieve (inject semantic_search results into context each query) is now: {status}")
+                print_system(f"Авто-подстановка (результаты semantic_search в контекст на каждый запрос): {status}")
                 if new_state:
-                    print_system("Requires RAG enabled. Best for weak models that forget to search the docs themselves.")
+                    print_system("Требует включённого RAG. Полезно слабым моделям, которые сами не догадываются искать в документации.")
                 continue
 
             elif user_input.startswith("/skill import") or user_input.startswith("/skills import"):
@@ -750,23 +750,23 @@ def main():
                 arg = user_input.split("import", 1)[1].strip().strip('"')
                 if not arg:
                     print_error(
-                        "Usage: /skill import <source>\n"
+                        "Использование: /skill import <источник>\n"
                         "  <source> can be:\n"
                         "    • a GitHub repo:        owner/repo  or  https://github.com/owner/repo\n"
                         "    • a specific skill:     https://github.com/owner/repo/tree/main/skills/<name>\n"
                         "    • a local path:         a SKILL.md folder, a SKILL.md, or a .md file"
                     )
                 else:
-                    print_system("Importing… (cloning if remote, this may take a moment)")
+                    print_system("Импортирую… (если источник удалённый — клонирую, это займёт время)")
                     print_system(skill_manager.import_skill(arg))
                 continue
             elif user_input.startswith("/skills"):
                 from skill_manager import skill_manager
                 skills = skill_manager.list_skills()
                 if not skills:
-                    print_system("No skills found. Create one via the `create_skill` tool or import with /skill import.")
+                    print_system("Навыков нет. Создайте инструментом `create_skill` или импортируйте: /skill import.")
                 else:
-                    print_system("[bold cyan]Available Skills:[/bold cyan]")
+                    print_system("[bold cyan]Доступные навыки:[/bold cyan]")
                     for skill in skills:
                         tag = " [dim](bundle)[/dim]" if skill.get("kind") == "folder" else ""
                         print_system(f"- [bold yellow]{skill['name']}[/bold yellow]{tag}: {skill['description']}")
@@ -781,15 +781,15 @@ def main():
                     files = memory.data.get("files_modified") or []
                     print_system("[bold cyan]Goal[/bold cyan]")
                     print_system(f"  OBJECTIVE: {obj}")
-                    print_system(f"  CURRENT TASK: {task}")
+                    print_system(f"  ТЕКУЩАЯ ЗАДАЧА: {task}")
                     print_system(f"  PROGRESS: {len(done)} step(s) done, {len(files)} file(s) touched")
-                    print_system("Set a goal with [bold]/goal <text>[/bold], or reset with [bold]/goal clear[/bold].")
+                    print_system("Задать цель: [bold]/goal <текст>[/bold], сбросить: [bold]/goal clear[/bold].")
                 elif arg.lower() in ("clear", "reset", "done"):
                     memory.clear()
-                    print_system("Goal and working memory cleared.")
+                    print_system("Цель и рабочая память очищены.")
                 else:
                     memory.set_objective(arg)
-                    print_system(f"Objective set: [bold yellow]{arg}[/bold yellow]")
+                    print_system(f"Цель задана: [bold yellow]{arg}[/bold yellow]")
                 continue
 
             elif user_input.startswith("/rooms"):
@@ -861,7 +861,7 @@ def main():
                     if result.outcome == "escalated":
                         print_system("Прогон эскалирован к человеку. При необходимости продолжите: /rooms resume")
                 except Exception as e:
-                    print_error(f"Rooms run failed: {e}")
+                    print_error(f"Запуск rooms не удался: {e}")
                 continue
             elif user_input.startswith("/critic"):
                 from memory_manager import memory
@@ -889,12 +889,12 @@ def main():
                     elif spec.lower() == "clear":
                         set_critic_model("")
                         set_critic_provider("")
-                        print_system("Critic model reset to the current model.")
+                        print_system("Модель критика сброшена на текущую.")
                     else:
                         prov, mdl = parse_critic_model(spec)
                         set_critic_model(mdl)
                         set_critic_provider(prov)
-                        print_system(f"Critic model set to: [bold yellow]{mdl}[/bold yellow]" + (f" (provider: {prov})" if prov else ""))
+                        print_system(f"Модель критика: [bold yellow]{mdl}[/bold yellow]" + (f" (provider: {prov})" if prov else ""))
                 else:
                     target = arg
                     what = "plan / idea"
@@ -906,26 +906,26 @@ def main():
                         ).strip()
                         what = "assistant's latest plan / answer"
                     if not target:
-                        print_error("Usage: /critic <plan/idea> | /critic on|off | /critic model <name> | /critic status")
+                        print_error("Использование: /critic <план/идея> | /critic on|off | /critic model <имя> | /critic status")
                     else:
                         from agent import run_plan_critique
                         goal = memory.data.get("objective") or ""
-                        print_system("[dim]Spawning an independent critic (cleared context, read-only)…[/dim]")
+                        print_system("[dim]Запускаю независимого критика (чистый контекст, только чтение)…[/dim]")
                         try:
                             print_system(run_plan_critique(target, goal=goal, what=what) or "[critic returned nothing]")
                         except Exception as e:
-                            print_error(f"Critic failed: {e}")
+                            print_error(f"Критик упал: {e}")
                 continue
             elif user_input.startswith("/guard"):
                 from config import get_command_guard, set_command_guard
                 arg = user_input[len("/guard"):].strip().lower()
                 if arg in ("off", "warn", "block"):
                     set_command_guard(arg)
-                    print_system(f"Command risk-gate is now: [bold]{arg}[/bold]")
+                    print_system(f"Защита от опасных команд: [bold]{arg}[/bold]")
                     if arg == "block":
                         print_system("Catastrophic commands (rm -rf /, mkfs, fork bombs, curl|sh…) will be refused without prompting.")
                     elif arg == "off":
-                        print_system("Only the legacy destructive-command confirmation remains.")
+                        print_system("Остаётся только прежнее подтверждение разрушительных команд.")
                 else:
                     print_system(f"Command risk-gate: [bold]{get_command_guard()}[/bold]  (off | warn | block)")
                     print_system("warn = confirm risky commands with the reason; block = refuse catastrophic ones; off = legacy. Set with [bold]/guard <level>[/bold].")
@@ -934,7 +934,7 @@ def main():
                 parts = user_input.split(" ")
                 if len(parts) == 1:
                     status = "ENABLED" if get_autonomous_plugins_enabled() else "DISABLED"
-                    print_system(f"Current Hooks Directory: [bold cyan]{get_hooks_dir()}[/bold cyan]")
+                    print_system(f"Каталог плагинов: [bold cyan]{get_hooks_dir()}[/bold cyan]")
                     print_system(f"Autonomous Plugin Creation: [bold yellow]{status}[/bold yellow]")
                     
                     # Add interactive plugin toggle
@@ -963,9 +963,9 @@ def main():
                                 hook_manager.reload_plugins()
                                 print_system(f"Plugins updated. Disabled: {', '.join(new_disabled) if new_disabled else 'None'}")
                         else:
-                            print_system("No plugins found in the directory.")
+                            print_system("Плагинов в каталоге нет.")
                     else:
-                        print_error(f"Hooks directory not found: {hooks_dir}")
+                        print_error(f"Каталог плагинов не найден: {hooks_dir}")
                 elif parts[1].lower() == "auto":
                     if len(parts) > 2:
                         val = parts[2].lower()
@@ -977,12 +977,12 @@ def main():
                             print_system("Autonomous Plugin Creation [bold red]DISABLED[/bold red]. AI will only create plugins when asked.")
                     else:
                         status = "ENABLED" if get_autonomous_plugins_enabled() else "DISABLED"
-                        print_system(f"Autonomous Plugin Creation is currently: [bold yellow]{status}[/bold yellow]")
+                        print_system(f"Автономное создание плагинов: [bold yellow]{status}[/bold yellow]")
                 else:
                     new_path = user_input.split(" ", 1)[1].strip()
                     set_hooks_dir(new_path)
                     hook_manager.reload_plugins(new_path)
-                    print_system(f"Hooks Directory changed to: [bold green]{new_path}[/bold green]")
+                    print_system(f"Каталог плагинов изменён: [bold green]{new_path}[/bold green]")
                 continue
 
             elif user_input.strip() == "/tools":
@@ -1039,7 +1039,7 @@ def main():
                 sessions = list_sessions(query or None)
                 if not sessions:
                     print_system(f"Ничего не найдено по запросу '{query}'." if query
-                                 else "No saved sessions found.")
+                                 else "Сохранённых сессий нет.")
                 else:
                     header = (f"[bold cyan]Сессии по запросу '{query}':[/bold cyan]"
                               if query else "[bold cyan]Saved Sessions:[/bold cyan]")
@@ -1078,9 +1078,9 @@ def main():
                 blocks = get_code_blocks()
                 parts = user_input.strip().split()
                 if not blocks:
-                    print_system("No code blocks in current response.")
+                    print_system("В последнем ответе нет блоков кода.")
                 elif len(parts) < 2:
-                    print_system("Usage: /copy <number>")
+                    print_system("Использование: /copy <номер>")
                     print_system(f"Available blocks: {', '.join(f'[{b['index']}] {b['lang']}' for b in blocks)}")
                 else:
                     try:
@@ -1090,9 +1090,9 @@ def main():
                             pyperclip.copy(block['code'])
                             print_system(f"Copied block [{idx}] ({block['lang']}, {len(block['code'].splitlines())} lines) to clipboard.")
                         else:
-                            print_error(f"Block {idx} not found. Available: 1-{len(blocks)}")
+                            print_error(f"Блок {idx} не найден. Доступно: 1-{len(blocks)}")
                     except ValueError:
-                        print_error("Usage: /copy <number>")
+                        print_error("Использование: /copy <номер>")
                 continue
 
             elif user_input.startswith("/logs"):
@@ -1102,7 +1102,7 @@ def main():
                 if len(parts) > 1 and parts[1] == "clear":
                     for f in log_dir.glob("*.log"):
                         f.write_text("", encoding="utf-8")
-                    print_system("All logs cleared.")
+                    print_system("Все логи очищены.")
                     continue
                 
                 errors_only = "error" in parts
@@ -1118,7 +1118,7 @@ def main():
                 
                 log_files = sorted(log_dir.glob("*.log"))
                 if not log_files:
-                    print_system("No log files found at ~/.argent/logs/")
+                    print_system("Файлов логов нет в ~/.argent/logs/")
                     continue
                 
                 if module_filter:
@@ -1151,7 +1151,7 @@ def main():
                     for line in output_lines:
                         console.print(line)
                 else:
-                    print_system("No log entries found.")
+                    print_system("Записей в логах нет.")
                 continue
             
             elif user_input.strip() == "/stats":
@@ -1207,28 +1207,28 @@ def main():
             elif user_input.startswith("/cd"):
                 parts = user_input.split(" ", 1)
                 if len(parts) < 2:
-                    print_system(f"Current Working Directory: [bold cyan]{os.getcwd()}[/bold cyan]")
-                    print_system("Usage: /cd <path>")
+                    print_system(f"Рабочая директория: [bold cyan]{os.getcwd()}[/bold cyan]")
+                    print_system("Использование: /cd <путь>")
                     continue
                 target_dir = parts[1].strip()
                 try:
                     resolved = Path(target_dir).expanduser().resolve()
                     if not resolved.exists():
-                        print_error(f"Directory does not exist: {resolved}")
+                        print_error(f"Директории не существует: {resolved}")
                         continue
                     if not resolved.is_dir():
-                        print_error(f"Not a directory: {resolved}")
+                        print_error(f"Это не директория: {resolved}")
                         continue
                     os.chdir(resolved)
-                    print_system(f"Working Directory changed to: [bold green]{os.getcwd()}[/bold green]")
+                    print_system(f"Рабочая директория изменена: [bold green]{os.getcwd()}[/bold green]")
                 except Exception as e:
-                    print_error(f"Failed to change directory: {e}")
+                    print_error(f"Не удалось сменить директорию: {e}")
                 continue
 
             elif user_input.startswith("/undo"):
                 parts = user_input.split(" ", 1)
                 if len(parts) < 2:
-                    print_error("Usage: /undo <file_path>")
+                    print_error("Использование: /undo <путь_к_файлу>")
                     continue
                 result = undo(parts[1].strip())
                 print_system(result)
@@ -1237,7 +1237,7 @@ def main():
             elif user_input.startswith("/diff"):
                 parts = user_input.split(" ", 1)
                 if len(parts) < 2:
-                    print_error("Usage: /diff <file_path>")
+                    print_error("Использование: /diff <путь_к_файлу>")
                     continue
                 result = get_diff(parts[1].strip())
                 if result.startswith("Error") or result.startswith("No") or result.startswith("File"):
@@ -1251,12 +1251,12 @@ def main():
             elif user_input.strip() == "/changes":
                 changes = get_pending_changes()
                 if not changes:
-                    print_system("No tracked file changes in this session.")
+                    print_system("В этой сессии файлы не менялись.")
                 else:
                     print_system("[bold cyan]Tracked File Changes:[/bold cyan]")
                     for ch in changes:
                         print_system(f"  - {ch['key']} ({ch['snapshot_count']} snapshots)")
-                    print_system("\nUse /diff <path> to see changes, /undo <path> to restore.")
+                    print_system("\nПосмотреть изменения: /diff <путь>, откатить: /undo <путь>.")
                 continue
 
             elif user_input.startswith("/tasks"):
@@ -1291,7 +1291,7 @@ def main():
             elif user_input.startswith("/project"):
                 parts = user_input.split(" ", 1)
                 if len(parts) < 2:
-                    print_error("Please specify a project prompt. Example: /project Build a Snake game in Python")
+                    print_error("Опишите проект. Пример: /project Сделай игру «Змейка» на Python")
                     continue
                 proj_prompt = parts[1].strip()
                 is_project_mode, user_input = orchestrator.start_project(proj_prompt)
@@ -1301,7 +1301,7 @@ def main():
             elif user_input.startswith("/work"):
                 parts = user_input.split(" ", 1)
                 if len(parts) < 2:
-                    print_error("Please specify a work task. Example: /work Fix the null reference in player.py")
+                    print_error("Опишите задачу. Пример: /work Исправь null reference в player.py")
                     continue
                 work_prompt = parts[1].strip()
                 
@@ -1310,7 +1310,7 @@ def main():
                     auto_mode = True
                     work_prompt = work_prompt.replace("--auto", "", 1).strip()
                     if not work_prompt:
-                        print_error("Please specify a work task after --auto.")
+                        print_error("После --auto нужно описать задачу.")
                         continue
                 
                 is_project_mode, user_input = orchestrator.start_work(work_prompt, auto_mode=auto_mode)
@@ -1319,7 +1319,7 @@ def main():
                 try:
                     git_check = run_text("git rev-parse --git-dir", capture_output=True)
                     if git_check.returncode != 0:
-                        print_error("Not a git repository. Navigate to a git project first.")
+                        print_error("Это не git-репозиторий. Перейдите в проект с git.")
                         continue
 
                     staged_diff = run_text(["git", "diff", "--cached"], capture_output=True).stdout
@@ -1331,7 +1331,7 @@ def main():
                     if get_critic_auto():
                         from agent import run_plan_critique
                         from memory_manager import memory
-                        print_system("[dim]Critic reviewing the staged diff before commit…[/dim]")
+                        print_system("[dim]Критик смотрит подготовленный дифф перед коммитом…[/dim]")
                         try:
                             review = run_plan_critique(
                                 staged_diff, goal=memory.data.get("objective") or "",
@@ -1340,7 +1340,7 @@ def main():
                             print_system("[bold magenta]── Critic ──[/bold magenta]")
                             print_system(review or "[critic returned nothing]")
                         except Exception as e:
-                            print_error(f"Critic failed (continuing to commit): {e}")
+                            print_error(f"Критик упал (коммит продолжается): {e}")
 
                     print_system("Generating commit message based on staged changes...")
                     
@@ -1359,11 +1359,11 @@ def main():
                             messages=[{"role": "user", "content": commit_prompt}]
                         ).strip().strip('"').strip("'")
                     except Exception as e:
-                        print_error(f"Failed to generate commit message: {e}")
+                        print_error(f"Не удалось сгенерировать сообщение коммита: {e}")
                         continue
                     
                     if not gen_message:
-                        print_error("Failed to generate commit message.")
+                        print_error("Не удалось сгенерировать сообщение коммита.")
                         continue
                         
                     print_system(f"Suggested commit message:\n[bold cyan]{gen_message}[/bold cyan]")
@@ -1376,12 +1376,12 @@ def main():
                         custom_msg = questionary.text("Enter custom commit message (leave empty to prevent commit):").ask()
                         if custom_msg:
                             subprocess.run(["git", "commit", "-m", custom_msg], check=True)
-                            print_system("Commited successfully with custom message!")
+                            print_system("Коммит создан с вашим сообщением.")
                         else:
                             print_system("Commit aborted.")
                             
                 except Exception as e:
-                    print_error(f"Error during commit: {e}")
+                    print_error(f"Ошибка при коммите: {e}")
                 continue
 
             elif user_input.startswith("/"): #
@@ -1416,7 +1416,7 @@ def main():
                         print_error(f"{err}")
                         
                     if result.returncode != 0:
-                        print_error(f"Command failed with exit code {result.returncode}.")
+                        print_error(f"Команда завершилась с кодом {result.returncode}.")
                         ask_fix = questionary.confirm("Would you like Argent to help fix this error?").ask()
                         if ask_fix:
                             user_input = (
@@ -1430,7 +1430,7 @@ def main():
                     else:
                         continue
                 except Exception as e:
-                    print_error(f"Failed to execute command: {e}")
+                    print_error(f"Не удалось выполнить команду: {e}")
                     continue
                 
             if is_project_mode:
@@ -1495,7 +1495,7 @@ def main():
             export_chat_history(agent, auto=True)
             break
         except Exception as e:
-            print_error(f"Main loop error: {e}")
+            print_error(f"Ошибка главного цикла: {e}")
             continue
     
     print_system("Goodbye!")

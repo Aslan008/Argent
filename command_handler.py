@@ -45,7 +45,7 @@ def switch_model(agent: ArgentAgent, new_model: str) -> None:
     agent.set_model(new_model)          # never assign model_name directly
 
     after_tier = get_model_size_category(new_model)
-    print_system(f"Model updated to: {new_model}"
+    print_system(f"Модель изменена: {new_model}"
                  + (f" [{before_tier} → {after_tier}]" if before_tier != after_tier else ""))
 
     kept = len([m for m in agent.messages if m.get("role") != "system"])
@@ -69,7 +69,7 @@ def export_chat_history(agent: ArgentAgent, filename: str = None, auto: bool = F
         
     if not any(m.get("role") == "user" for m in agent.messages):
         if not auto:
-            print_system("Chat history is empty. Nothing to save.")
+            print_system("История пуста — сохранять нечего.")
         return
         
     cwd = os.getcwd()
@@ -101,14 +101,14 @@ def export_chat_history(agent: ArgentAgent, filename: str = None, auto: bool = F
                     f.write(f"### 🤖 Argent\n{content}\n\n")
                     
         if auto:
-            print_system(f"Chat autosaved to: {filepath}")
+            print_system(f"Диалог автосохранён: {filepath}")
         else:
-            print_system(f"Chat saved successfully to: {filepath}")
+            print_system(f"Диалог сохранён: {filepath}")
             
         hook_manager.call_hook("on_chat_saved", filepath)
             
     except Exception as e:
-        print_error(f"Failed to save chat: {e}")
+        print_error(f"Не удалось сохранить диалог: {e}")
 
 
 def handle_slash_command(command: str, agent: ArgentAgent) -> bool:
@@ -119,14 +119,14 @@ def handle_slash_command(command: str, agent: ArgentAgent) -> bool:
         return True
     elif cmd == "/clear":
         agent.clear_history()
-        print_system("Conversation history cleared.")
+        print_system("История диалога очищена.")
     elif cmd == "/model":
         current = get_current_model()
         new_model = select_model(current)
         if new_model and new_model != current:
             switch_model(agent, new_model)
         else:
-            print_system("Model unchanged.")
+            print_system("Модель не изменена.")
     elif cmd == "/provider":
         current_prov = get_provider()
         choices = ["ollama", "zai", "openrouter", "koboldcpp"]
@@ -188,12 +188,12 @@ def handle_slash_command(command: str, agent: ArgentAgent) -> bool:
                     set_koboldcpp_url(new_url)
                     options_text = f" (URL: {new_url})"
 
-            print_system(f"API Provider updated to: {new_prov}{options_text}")
+            print_system(f"Провайдер изменён: {new_prov}{options_text}")
             if new_prov != current_prov:
                 # Every provider, ollama included: a model id almost never
                 # exists on two of them, so keeping the old name means every
                 # request 404s until the user works out they must run /model.
-                print_system(f"Select a {new_prov.upper()} model to use:")
+                print_system(f"Выберите модель {new_prov.upper()}:")
                 new_model = select_model(get_current_model())
                 if new_model and new_model != get_current_model():
                     switch_model(agent, new_model)
@@ -209,7 +209,7 @@ def handle_slash_command(command: str, agent: ArgentAgent) -> bool:
         parts = command.strip().split()
         if len(parts) < 2:
             print_system(list_background_commands())
-            print_system("Usage: /stop <pid>")
+            print_system("Использование: /stop <pid>")
         else:
             print_system(stop_background_command(parts[1]))
     elif cmd == "/aux":
@@ -221,61 +221,61 @@ def handle_slash_command(command: str, agent: ArgentAgent) -> bool:
         print_diagnostics()
     elif cmd == "/help":
         help_text = (
-            "**Argent Coder — Commands**\n"
-            "\n**Model & provider**\n"
-            "- `/provider` - Select API provider (Ollama / Z.ai / OpenRouter / KoboldCPP) and key/endpoint\n"
-            "- `/model` - Select the active LLM model (context window + tier auto-detected)\n"
-            "- `/aux` - Pick a cheap/local auxiliary model for service tasks (summarization, /commit)\n"
-            "- `/temp [value]` - Set or view the generation temperature (0.0 - 2.0)\n"
-            "- `/thinking` - Toggle stripping reasoning blocks from history\n"
-            "\n**Build & edit code**\n"
-            "- `/work [--auto] [task]` - Modify or fix an EXISTING codebase safely\n"
-            "- `/vibe` - Vibe mode: auto-approve safe actions, checkpoint every turn (undo via /rewind)\n"
-            "- `/tasks` - Scheduled automations that run unattended while Argent is open\n"
-            "- `/project [prompt]` - Build a large multi-step project from scratch\n"
-            "- `/rooms <task>` - Experimental \"rooms and rails\" engine (declarative graph + triage)\n"
-            "- `/init` - Analyze the project and generate .argent/AGENTS.md (project memory)\n"
-            "- `/commit` - Generate an AI commit message and commit staged changes\n"
-            "\n**Files & changes**\n"
-            "- `/changes` - List files the AI modified this session\n"
-            "- `/diff <file>` - Diff a file against its pre-edit snapshot\n"
-            "- `/undo <file>` - Restore a file to its pre-edit snapshot\n"
-            "- `/rewind` - Time machine: roll the whole tree back to any auto-checkpoint (one per turn)\n"
-            "- `/cd [path]` - Change (or show) the working directory\n"
-            "\n**Knowledge & search**\n"
-            "- `/rag_toggle` - Enable/disable semantic-search indexing\n"
-            "- `/auto_retrieve` - Toggle auto-injecting semantic-search results each query\n"
-            "- `/research [topic]` - Autonomous web research → notes\n"
-            "- `/search` - Web search settings: Brave API key, query languages, reranker model\n"
-            "- `/skills` - List available skills (flat .md and SKILL.md folders)\n"
-            "- `/skill import <source>` - Install a skill from a GitHub repo (owner/repo or URL) or local path\n"
-            "\n**Safety & quality**\n"
-            "- `/guard [off|warn|block]` - Command risk-gate: confirm risky / refuse catastrophic commands\n"
-            "- `/critic [text]` - Red-team a plan/idea (or the AI's last plan) with an independent critic\n"
-            "- `/critic on|off|model <name>` - Auto-critique the diff before /commit; choose the critic model\n"
-            "- `/goal [text|clear]` - Show the goal & progress, set a new objective, or reset it\n"
-            "\n**Sessions**\n"
-            "- `/save [name]` - Export the conversation to Markdown\n"
-            "- `/sessions` / `/load <n>` - List / restore saved sessions\n"
-            "- `/copy <n>` - Copy code block #n to the clipboard\n"
-            "- `/clear` - Clear the conversation history\n"
-            "\n**Tools & extensions**\n"
-            "- `/tools` - Enable/disable tools interactively\n"
-            "- `/hooks [path]` - View/change the plugins (hooks) directory\n"
-            "- `/mcp` - Manage MCP servers (add/remove/start/stop/test)\n"
-            "\n**Background & diagnostics**\n"
-            "- `/jobs` / `/stop <pid>` - List / terminate background processes\n"
-            "- `/doctor` - Environment self-diagnostics (provider, tier, deps, browser)\n"
-            "- `/stats` - Session diagnostics (model, context budget, plugins, MCP)\n"
-            "- `/logs [module] [n]` - View logs (e.g. /logs tools 20, /logs error)\n"
-            "- `/verbose` / `/debug` - Toggle status spinners / detailed tool logs\n"
-            "\n**Other**\n"
-            "- `/help` - Show this message   ·   `/exit` - Quit\n"
+            "**Argent Coder — команды**\n"
+            "\n**Модель и провайдер**\n"
+            "- `/provider` — Провайдер API (Ollama / Z.ai / OpenRouter / KoboldCPP), ключ и адрес\n"
+            "- `/model` — Активная модель (окно контекста и ярус по ней)\n"
+            "- `/aux` — Дешёвая/локальная модель для служебных задач (сводки, /commit)\n"
+            "- `/temp [значение]` — Температура генерации (0.0 – 2.0)\n"
+            "- `/thinking` — Вырезать ли блоки рассуждений из истории\n"
+            "\n**Писать и править код**\n"
+            "- `/work [--auto] [задача]` — Менять или чинить СУЩЕСТВУЮЩИЙ код\n"
+            "- `/vibe` — Вайб-режим: безопасное одобряется само, чекпоинт каждый ход (откат — /rewind)\n"
+            "- `/tasks` — Автоматизации по расписанию, без присмотра\n"
+            "- `/project [запрос]` — Большой проект с нуля\n"
+            "- `/rooms <задача>` — Экспериментальный движок «комнаты и рельсы»\n"
+            "- `/init` — Изучить проект и создать .argent/AGENTS.md (память о проекте)\n"
+            "- `/commit` — Сгенерировать сообщение коммита и закоммитить\n"
+            "\n**Файлы и изменения**\n"
+            "- `/changes` — Что модель изменила за сессию\n"
+            "- `/diff <файл>` — Дифф файла против снимка до правки\n"
+            "- `/undo <файл>` — Вернуть файл к снимку до правки\n"
+            "- `/rewind` — Машина времени: откат всего дерева к любому чекпоинту\n"
+            "- `/cd [путь]` — Сменить (или показать) рабочую директорию\n"
+            "\n**Знания и поиск**\n"
+            "- `/rag_toggle` — Индексация для семантического поиска\n"
+            "- `/auto_retrieve` — Подставлять результаты поиска в каждый запрос\n"
+            "- `/research [тема]` — Автономное веб-исследование → заметки\n"
+            "- `/search` — Настройки поиска: ключи Brave и Ollama, языки, reranker\n"
+            "- `/skills` — Список навыков\n"
+            "- `/skill import <источник>` — Установить навык из GitHub или папки\n"
+            "\n**Безопасность и качество**\n"
+            "- `/guard [off|warn|block]` — Защита от опасных команд\n"
+            "- `/critic [текст]` — Разбор плана независимым критиком\n"
+            "- `/critic on|off|model <имя>` — Автокритика диффа перед /commit\n"
+            "- `/goal [текст|clear]` — Цель и прогресс: показать, задать, сбросить\n"
+            "\n**Сессии**\n"
+            "- `/save [метка]` — Экспорт диалога и сохранение сессии\n"
+            "- `/sessions [запрос]` · `/load <номер|метка|фрагмент>` — Список и восстановление\n"
+            "- `/copy <n>` — Скопировать блок кода №n в буфер\n"
+            "- `/clear` — Очистить историю диалога\n"
+            "\n**Инструменты и расширения**\n"
+            "- `/tools` — Включить/выключить инструменты\n"
+            "- `/hooks [путь]` — Каталог плагинов\n"
+            "- `/mcp` — MCP-серверы (add/remove/start/stop/test)\n"
+            "\n**Фон и диагностика**\n"
+            "- `/jobs` · `/stop <pid>` — Фоновые процессы\n"
+            "- `/doctor` — Самодиагностика окружения\n"
+            "- `/stats` — Диагностика сессии (модель, бюджет контекста, плагины, MCP)\n"
+            "- `/logs [модуль] [n]` — Логи (например /logs tools 20, /logs error)\n"
+            "- `/verbose` · `/debug` — Индикаторы статуса / подробные логи\n"
+            "\n**Прочее**\n"
+            "- `/help` — Эта справка   ·   `/exit` — Выход\n"
         )
         
         custom_cmds = hook_manager.get_custom_commands()
         if custom_cmds:
-            help_text += "\n**Plugin Commands:**\n"
+            help_text += "\n**Команды плагинов:**\n"
             for c in custom_cmds:
                 help_text += f"- `/{c}`\n"
                 
@@ -291,13 +291,13 @@ def handle_slash_command(command: str, agent: ArgentAgent) -> bool:
         new_val = not current
         set_debug_mode(new_val)
         state = "[bold green]ON[/bold green]" if new_val else "[bold red]OFF[/bold red]"
-        print_system(f"Detailed logs in chat (Debug mode): {state}")
+        print_system(f"Подробные логи в чате (режим отладки): {state}")
     elif cmd == "/thinking":
         current = get_strip_reasoning()
         new_val = not current
         set_strip_reasoning(new_val)
         state = "[bold green]ON[/bold green]" if new_val else "[bold red]OFF[/bold red]"
-        print_system(f"Forced removal of reasoning blocks from history: {state}")
+        print_system(f"Принудительное удаление блоков рассуждений из истории: {state}")
     elif cmd == "/temp" or cmd.startswith("/temp ") or cmd == "/temperature" or cmd.startswith("/temperature "):
         parts = command.strip().split(" ", 1)
         if len(parts) > 1:
@@ -306,11 +306,11 @@ def handle_slash_command(command: str, agent: ArgentAgent) -> bool:
                 val = float(val_str)
                 if 0.0 <= val <= 2.0:
                     set_temperature(val)
-                    print_system(f"Model temperature updated to: {val}")
+                    print_system(f"Температура модели: {val}")
                 else:
-                    print_error("Temperature must be between 0.0 and 2.0.")
+                    print_error("Температура должна быть от 0.0 до 2.0.")
             except ValueError:
-                print_error("Please provide a valid numeric value for temperature.")
+                print_error("Температура должна быть числом.")
         else:
             current_temp = get_temperature()
             choices = [
@@ -330,13 +330,13 @@ def handle_slash_command(command: str, agent: ArgentAgent) -> bool:
             if choice:
                 if choice.startswith("0.2"):
                     set_temperature(0.2)
-                    print_system("Model temperature updated to: 0.2")
+                    print_system("Температура модели: 0.2")
                 elif choice.startswith("0.7"):
                     set_temperature(0.7)
-                    print_system("Model temperature updated to: 0.7")
+                    print_system("Температура модели: 0.7")
                 elif choice.startswith("1.0"):
                     set_temperature(1.0)
-                    print_system("Model temperature updated to: 1.0")
+                    print_system("Температура модели: 1.0")
                 elif choice == "Custom Value...":
                     custom_val = questionary.text("Enter custom temperature (0.0 to 2.0):").ask()
                     if custom_val:
@@ -344,11 +344,11 @@ def handle_slash_command(command: str, agent: ArgentAgent) -> bool:
                             val = float(custom_val)
                             if 0.0 <= val <= 2.0:
                                 set_temperature(val)
-                                print_system(f"Model temperature updated to: {val}")
+                                print_system(f"Температура модели: {val}")
                             else:
-                                print_error("Temperature must be between 0.0 and 2.0.")
+                                print_error("Температура должна быть от 0.0 до 2.0.")
                         except ValueError:
-                            print_error("Please enter a valid number.")
+                            print_error("Введите число.")
     else:
         custom_cmds = hook_manager.get_custom_commands()
         base_cmd = command.strip().split(" ")[0].lstrip("/")
@@ -357,10 +357,53 @@ def handle_slash_command(command: str, agent: ArgentAgent) -> bool:
                 args = command.strip().split(" ")[1:]
                 custom_cmds[base_cmd](*args)
             except Exception as e:
-                print_error(f"Custom command '/{base_cmd}' failed: {e}")
+                print_error(f"Пользовательская команда '/{base_cmd}' упала: {e}")
         else:
-            print_error(f"Unknown command: {command}. Type /help for available commands.")
+            print_error(unknown_command_message(command))
     return False
+
+
+def known_commands() -> list:
+    """Every slash command the REPL dispatches, read from the source.
+
+    Derived rather than hand-listed: a second list of command names would drift
+    from the dispatch the first time one is added, and a "did you mean" that
+    suggests a command that no longer exists is worse than no suggestion.
+    """
+    import re
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parent
+    src = ""
+    for name in ("main.py", "command_handler.py"):
+        try:
+            src += (root / name).read_text(encoding="utf-8")
+        except OSError:
+            continue
+    found = set(re.findall(r'user_input(?:\.strip\(\))?\.startswith\("(/[a-z_]+)"', src))
+    found |= set(re.findall(r'user_input\.strip\(\)\s*==\s*"(/[a-z_]+)"', src))
+    found |= set(re.findall(r'cmd\s*==\s*"(/[a-z_]+)"', src))
+    found |= set(re.findall(r'cmd\.startswith\("(/[a-z_]+)"', src))
+    for group in re.findall(r'cmd in \(([^)]+)\)', src):
+        found |= set(re.findall(r'"(/[a-z_]+)"', group))
+    return sorted(found)
+
+
+def unknown_command_message(command: str) -> str:
+    """Say what was typed, and the nearest real command if there is one.
+
+    Argent already fuzzy-matches tool names for the MODEL — `read_fil` becomes
+    `read_file` — while answering a human's typo with a flat "Unknown command".
+    The person is the one who cannot see the list.
+    """
+    import difflib
+
+    typed = (command or "").strip().split()[0] if (command or "").strip() else ""
+    close = difflib.get_close_matches(typed, known_commands(), n=3, cutoff=0.6)
+    if close:
+        return (f"Неизвестная команда: {typed}. "
+                f"Возможно, вы имели в виду: {', '.join(close)}")
+    return f"Неизвестная команда: {typed}. Список команд: /help"
 
 
 # Menu labels live here, not inline: the tests select by label, and a
@@ -545,7 +588,7 @@ def _handle_mcp_command(command: str):
         servers = mcp_client.get_servers()
         configured = get_mcp_servers()
         if not configured:
-            print_system("No MCP servers configured.")
+            print_system("MCP-серверы не настроены.")
             print_system("Usage:")
             print_system("  /mcp add <name> --stdio <command> [args...]")
             print_system("  /mcp add <name> --sse <url>")
@@ -575,7 +618,7 @@ def _handle_mcp_command(command: str):
         _mcp_add(parts)
     elif subcmd == "remove":
         if len(parts) < 3:
-            print_error("Usage: /mcp remove <name>")
+            print_error("Использование: /mcp remove <имя>")
             return
         name = parts[2]
         remove_mcp_server(name)
@@ -583,14 +626,14 @@ def _handle_mcp_command(command: str):
         print_system(result)
     elif subcmd == "test":
         if len(parts) < 3:
-            print_error("Usage: /mcp test <name>")
+            print_error("Использование: /mcp test <имя>")
             return
         name = parts[2]
         result = mcp_client.test_connection(name)
         print_system(result)
     elif subcmd == "start":
         if len(parts) < 3:
-            print_error("Usage: /mcp start <name>")
+            print_error("Использование: /mcp start <имя>")
             return
         name = parts[2]
         configured = get_mcp_servers()
@@ -603,14 +646,14 @@ def _handle_mcp_command(command: str):
         print_system(result)
     elif subcmd == "stop":
         if len(parts) < 3:
-            print_error("Usage: /mcp stop <name>")
+            print_error("Использование: /mcp stop <имя>")
             return
         name = parts[2]
         result = mcp_client.unregister_server(name)
         print_system(result)
     else:
         print_error(f"Unknown /mcp subcommand: '{subcmd}'")
-        print_system("Usage: /mcp [list|add|remove|start|stop|test]")
+        print_system("Использование: /mcp [list|add|remove|start|stop|test]")
 
 
 def _mcp_add(parts: list):
@@ -677,7 +720,7 @@ def _handle_kb_command(command: str):
     if len(parts) == 1 or parts[1] == "list":
         kbs = get_external_kbs()
         if not kbs:
-            print_system("No External Knowledge Bases configured.")
+            print_system("Внешние базы знаний не настроены.")
             print_system("Usage:")
             print_system('  /kb add <id> "<Name>" "<Path>"')
             return
@@ -692,7 +735,7 @@ def _handle_kb_command(command: str):
 
     if subcmd == "add":
         if len(parts) < 5:
-            print_error("Usage: /kb add <id> <name> <path>")
+            print_error("Использование: /kb add <id> <имя> <путь>")
             print_system('Example: /kb add unity64 "Unity 6.4" "D:/UnityDocs"')
             return
         kb_id = parts[2]
@@ -702,7 +745,7 @@ def _handle_kb_command(command: str):
         try:
             parsed = shlex.split(command)
         except ValueError as e:
-            print_error(f"Error parsing arguments: {e}")
+            print_error(f"Не удалось разобрать аргументы: {e}")
             return
             
         if len(parsed) < 5:
@@ -719,7 +762,7 @@ def _handle_kb_command(command: str):
         
     elif subcmd == "remove":
         if len(parts) < 3:
-            print_error("Usage: /kb remove <id>")
+            print_error("Использование: /kb remove <id>")
             return
         kb_id = parts[2]
         remove_external_kb(kb_id)
@@ -727,7 +770,7 @@ def _handle_kb_command(command: str):
         
     elif subcmd == "toggle":
         if len(parts) < 3:
-            print_error("Usage: /kb toggle <id>")
+            print_error("Использование: /kb toggle <id>")
             return
         kb_id = parts[2]
         new_status = toggle_external_kb(kb_id)
@@ -736,7 +779,7 @@ def _handle_kb_command(command: str):
         
     elif subcmd == "index":
         if len(parts) < 3:
-            print_error("Usage: /kb index <id>")
+            print_error("Использование: /kb index <id>")
             return
         kb_id = parts[2]
         kbs = get_external_kbs()
@@ -751,4 +794,4 @@ def _handle_kb_command(command: str):
         print_system(result)
     else:
         print_error(f"Unknown /kb subcommand: '{subcmd}'")
-        print_system("Usage: /kb [list|add|remove|toggle|index]")
+        print_system("Использование: /kb [list|add|remove|toggle|index]")

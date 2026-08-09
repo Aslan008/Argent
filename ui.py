@@ -188,7 +188,26 @@ def print_system(text: str):
         safe_print(f"[sys]{escape(text)}[/sys]")
 
 def print_error(text: str):
-    safe_print(f"[{c['error_msg']}]Error: {text}[/{c['error_msg']}]")
+    """Print one error, with exactly one prefix and a human explanation.
+
+    A caller that already said "Error:" used to get it twice, so a real failure
+    reached the user as "Error: Error: 'utf-8' codec can't encode characters in
+    position 53000-53001" — a raw Python exception wearing two labels, aimed at
+    nobody. The prefix is added only when the text does not carry one, and the
+    exceptions users actually hit are translated below the raw line rather than
+    instead of it: the original still matters when they report it.
+    """
+    from error_help import explain_error
+
+    text = str(text)
+    body = text if _ERROR_PREFIX_RE.match(text) else f"Ошибка: {text}"
+    safe_print(f"[{c['error_msg']}]{escape(body)}[/{c['error_msg']}]")
+    hint = explain_error(text)
+    if hint:
+        safe_print(f"[dim]{escape(hint)}[/dim]")
+
+
+_ERROR_PREFIX_RE = re.compile(r'^\s*(error|ошибка)\b\s*:?', re.IGNORECASE)
 
 def print_reasoning(thinking: str):
     """Prints a static, finalized reasoning block."""
@@ -357,13 +376,13 @@ def select_model(current_model: str) -> str:
     try:
         provider = create_provider()
     except Exception as e:
-        print_error(f"Failed to create provider: {e}")
+        print_error(f"Не удалось создать провайдера: {e}")
         return current_model
 
     models = provider.list_models()
 
     if not models:
-        print_error(f"No models found for {provider.name}. Check your configuration.")
+        print_error(f"Модели для {provider.name} не найдены. Проверьте настройки.")
         return current_model
 
     # OpenRouter exposes hundreds of paid and free models mixed together.
@@ -392,38 +411,32 @@ def select_model(current_model: str) -> str:
 
     current_ctx = get_context_window()
 
-    if provider.name in ("zai", "openrouter"):
-        ctx_choices = [
-            "8192 (Default)",
-            "16384 (Large)",
-            "32768 (Very Large)",
-            "65536 (Maximum)",
-            "131072 (Ultra)",
-            "Keep Current",
-            "Custom Value..."
-        ]
+    # Anchored to what this model can actually take, when that is knowable.
+    # The old fixed lists (2048/4096/8192…) had nothing to do with the model in
+    # front of you: too small trims the conversation for no reason, too large
+    # overflows — which is exactly what happens moving a chat from a cloud
+    # model to a local one.
+    from model_limits import context_choices
+    detected = context_choices(selected, provider.name, current_ctx)
+    if detected:
+        ctx_choices = detected + ["Оставить текущее", "Своё значение…"]
+        prompt = (f"Окно контекста для {selected} "
+                  f"(сейчас {current_ctx}, максимум модели {detected[-1].split()[0]}):")
     else:
-        ctx_choices = [
-            "2048 (Fastest)",
-            "4096 (Standard)",
-            "8192 (Default)",
-            "16384 (Large)",
-            "32768 (Extreme - High VRAM)",
-            "Keep Current",
-            "Custom Value..."
-        ]
+        if provider.name in ("zai", "openrouter"):
+            ctx_choices = ["8192", "16384", "32768", "65536", "131072"]
+        else:
+            ctx_choices = ["2048", "4096", "8192", "16384", "32768"]
+        ctx_choices += ["Оставить текущее", "Своё значение…"]
+        prompt = f"Окно контекста для {selected} (сейчас {current_ctx}):"
 
-    ctx_choice = _select_from_list(
-        f"Set Context Window for {selected} (Current: {current_ctx}):",
-        ctx_choices,
-        "Keep Current"
-    )
+    ctx_choice = _select_from_list(prompt, ctx_choices, "Оставить текущее")
 
-    if ctx_choice == "Custom Value...":
-        custom_val = questionary.text("Enter custom context size (e.g. 32768):").ask()
+    if ctx_choice == "Своё значение…":
+        custom_val = questionary.text("Размер контекста в токенах (например 32768):").ask()
         if custom_val and custom_val.isdigit():
             set_context_window(int(custom_val))
-    elif ctx_choice and ctx_choice != "Keep Current":
+    elif ctx_choice and ctx_choice != "Оставить текущее":
         try:
             val = int(ctx_choice.split()[0])
             set_context_window(val)
