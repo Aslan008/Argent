@@ -574,6 +574,12 @@ Example: {"tool": {"name": "read_file", "arguments": {"file_path": "main.py"}}}"
     def _estimate_tokens(self, text: str) -> int:
         return estimate_tokens(text, self.model_name, self.provider)
 
+    def _estimate_message(self, message) -> int:
+        """One message, counting an attached image as an image rather than as
+        the length of its base64 — see estimate_message_tokens."""
+        from src.agent.trimmer import estimate_message_tokens
+        return estimate_message_tokens(message, self.model_name, self.provider)
+
     def _trim_history(self):
         self.max_context_tokens = get_context_window()
 
@@ -591,7 +597,7 @@ Example: {"tool": {"name": "read_file", "arguments": {"file_path": "main.py"}}}"
         response_reserve = min(get_max_generation_tokens() or 1024, 2048)
         budget = effective_history_budget(self.max_context_tokens, sys_tokens, response_reserve)
 
-        history_tokens = sum(self._estimate_tokens(str(m)) for m in cleaned[1:])
+        history_tokens = sum(self._estimate_message(m) for m in cleaned[1:])
         msg_count = len(cleaned) - 1
 
         if msg_count <= self.max_history_messages and history_tokens <= budget:
@@ -1509,7 +1515,7 @@ Example: {"tool": {"name": "read_file", "arguments": {"file_path": "main.py"}}}"
 
     def get_context_usage(self) -> Dict[str, Any]:
         """Calculates current context usage statistics."""
-        history_tokens = sum(self._estimate_tokens(str(m)) for m in self.messages)
+        history_tokens = sum(self._estimate_message(m) for m in self.messages)
         max_tokens = get_context_window()
         percent = (history_tokens / max_tokens) * 100 if max_tokens > 0 else 0
         result = {
@@ -1533,7 +1539,7 @@ Example: {"tool": {"name": "read_file", "arguments": {"file_path": "main.py"}}}"
         from tool_profiles import slim_tools_for_category
 
         system_tokens = self._estimate_tokens(str(self.messages[0])) if self.messages else 0
-        history_tokens = sum(self._estimate_tokens(str(m)) for m in self.messages[1:])
+        history_tokens = sum(self._estimate_message(m) for m in self.messages[1:])
 
         tool_tokens = 0
         tool_count = 0

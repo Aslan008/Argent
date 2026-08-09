@@ -190,32 +190,54 @@ class TestDegradedInput:
 
 
 class TestLongOptions:
-    """A long option loses its END to the terminal width — and the end is where
-    the distinguishing part lives ("…долго, но надёжно" vs "…быстро, но дыры").
-    Two options that differ only past the cut become the same line."""
+    """questionary clips each choice to the terminal width. Eliding the middle
+    was worse than the clipping — on sentence-length options it produced
 
-    def test_the_drawn_label_fits_the_terminal(self, monkeypatch):
+        Главная страница подписывается на BroadcastChannel и localStora...оя
+        всё равно нужен экспорт YAML.
+
+    which reads as damage rather than as a choice. The full text now goes above
+    the menu as a numbered list, where the terminal wraps it properly."""
+
+    LONG_A = ("Главная страница подписывается на BroadcastChannel и localStorage от "
+              "редактора, обновляется мгновенно, но для деплоя всё равно нужен экспорт YAML.")
+    LONG_B = ("Редактор пишет прямо в YAML-файл через API, страница перечитывает его "
+              "при сборке — медленнее, зато один источник правды.")
+
+    @pytest.fixture
+    def narrow(self, monkeypatch):
         import shutil
+        monkeypatch.setattr(shutil, "get_terminal_size",
+                            lambda d=None: type("S", (), {"columns": 80})())
 
+    def test_short_options_need_no_listing(self):
         from tools.misc_tools import _fit_options
-        monkeypatch.setattr(shutil, "get_terminal_size", lambda d=None: type("S", (), {"columns": 80})())
-        long = "x" * 200
-        label, value = _fit_options([long])[0]
-        assert len(label) < 80
-        assert value == long          # the answer is never truncated
+        choices, listing = _fit_options(["Да", "Нет"])
+        assert choices == [("Да", "Да"), ("Нет", "Нет")]
+        assert listing == ""          # nothing printed when nothing overflows
 
-    def test_both_ends_survive(self, monkeypatch):
-        import shutil
-
+    def test_the_full_text_is_printed_above_the_menu(self, narrow):
         from tools.misc_tools import _fit_options
-        monkeypatch.setattr(shutil, "get_terminal_size", lambda d=None: type("S", (), {"columns": 80})())
-        a = "Полное покрытие тестами всех критических путей и обработки ошибок — долго, но надёжно"
-        b = "Полное покрытие тестами всех критических путей и обработки ошибок — быстро, но дыры"
-        labels = [lbl for lbl, _ in _fit_options([a, b])]
-        assert labels[0] != labels[1]            # still distinguishable
-        assert "надёжно" in labels[0] and "дыры" in labels[1]
+        _, listing = _fit_options([self.LONG_A, self.LONG_B])
+        assert "экспорт YAML." in listing and "один источник правды." in listing
+        assert "1." in listing and "2." in listing
 
-    def test_short_options_are_untouched(self):
+    def test_the_menu_label_fits_and_is_numbered(self, narrow):
         from tools.misc_tools import _fit_options
-        assert _fit_options(["Коротко"]) == [("Коротко", "Коротко")]
+        choices, _ = _fit_options([self.LONG_A, self.LONG_B])
+        for i, (label, _value) in enumerate(choices, 1):
+            assert label.startswith(f"{i}. ")
+            assert len(label) < 80
 
+    def test_the_label_is_a_beginning_not_a_hole(self, narrow):
+        """The middle-elided form read as corruption; a prefix reads as a
+        prefix, and the number points at the full text."""
+        from tools.misc_tools import _fit_options
+        label = _fit_options([self.LONG_A])[0][0][0]
+        assert "..." not in label
+        assert label.startswith("1. Главная страница подписывается")
+
+    def test_the_model_receives_the_whole_option(self, narrow):
+        from tools.misc_tools import _fit_options
+        choices, _ = _fit_options([self.LONG_A])
+        assert choices[0][1] == self.LONG_A

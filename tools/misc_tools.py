@@ -172,31 +172,36 @@ def _option_text(option):
 
 
 def _fit_options(texts):
-    """Keep every option readable in the terminal it will be drawn in.
+    """Draw options that fit the terminal without losing what they say.
 
-    questionary draws one line per choice and clips whatever overflows, so a
-    long option loses its END — which is where the distinguishing part usually
-    is ("…быстрее, но дыры останутся" vs "…долго, но надёжно"). Two options
-    that differ only past the cut become the same line, and the choice is
-    unanswerable.
+    questionary draws one line per choice and clips the overflow. Eliding the
+    middle was worse than the clipping: on sentence-length options it produced
 
-    The full text is kept as the VALUE, so the answer the model receives is
-    still complete; only the drawn label is shortened, and from the middle so
-    both ends survive.
+        Главная страница подписывается на BroadcastChannel и localStora...оя
+        всё равно нужен экспорт YAML.
+
+    which reads as damage, not as a choice. So when anything overflows, the
+    FULL text is printed above the menu as a numbered list — the terminal wraps
+    it properly there — and the menu carries "N. <beginning>…". The number ties
+    the two together, and the value stays whole so the model still receives the
+    complete answer.
+
+    Returns (choices, listing) where listing is the block to print, or "".
     """
     import shutil
 
     width = max(40, shutil.get_terminal_size((110, 30)).columns)
     budget = width - 12          # questionary's pointer, padding and a margin
-    out = []
-    for text in texts:
-        if len(text) <= budget:
-            out.append((text, text))
-            continue
-        head = (budget - 3) * 2 // 3
-        tail = budget - 3 - head
-        out.append((f"{text[:head]}...{text[-tail:]}", text))
-    return out
+    if all(len(t) <= budget for t in texts):
+        return [(t, t) for t in texts], ""
+
+    numbered = budget - 5        # room for "N. " and the ellipsis
+    choices, lines = [], []
+    for i, text in enumerate(texts, 1):
+        lines.append(f"  [bold]{i}.[/bold] {text}")
+        label = text if len(text) <= numbered else f"{text[:numbered].rstrip()}…"
+        choices.append((f"{i}. {label}", text))
+    return choices, "\n".join(lines)
 
 
 def _normalize_options(raw):
@@ -287,8 +292,10 @@ def ask_user_questions(questions: list) -> str:
         elif q_type in ("single_choice", "multi_choice"):
             # Drawn short enough to survive the terminal width, answered in
             # full: the value carries the whole text even when the label is
-            # elided, so the model never receives a truncated answer.
-            fitted = _fit_options(options)
+            # shortened, so the model never receives a truncated answer.
+            fitted, listing = _fit_options(options)
+            if listing:
+                console.print(listing)
             display_options = [questionary.Choice(title=label, value=value)
                                for label, value in fitted]
             CUSTOM = "✏ Свой вариант..."

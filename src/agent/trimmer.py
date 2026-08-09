@@ -92,6 +92,35 @@ def estimate_tokens(text: str, model_name: str, provider: str) -> int:
     return count
 
 
+# What one image actually costs a vision model, to the right order of
+# magnitude. The number that matters is that it is a CONSTANT: an attached
+# picture is a fixed budget of visual tokens, not the length of its base64.
+IMAGE_TOKEN_COST = 1400
+
+
+def estimate_message_tokens(message, model_name: str, provider: str) -> int:
+    """Tokens for one message, with images counted as images.
+
+    Everything used to measure `str(message)`, which for an attachment means
+    counting every base64 character. Measured on a real 1568px screenshot:
+    192 KB of base64 estimated at 139,242 tokens against a true cost near
+    1,400 — off by ninety times. The context meter read 300k after a single
+    request, and worse, the SAME estimate drives trimming, so one screenshot
+    would evict the entire conversation to make room for a cost that was never
+    real.
+    """
+    if not isinstance(message, dict):
+        return estimate_tokens(str(message), model_name, provider)
+
+    images = message.get("images") or []
+    if not images:
+        return estimate_tokens(str(message), model_name, provider)
+
+    without = {k: v for k, v in message.items() if k != "images"}
+    return (estimate_tokens(str(without), model_name, provider)
+            + IMAGE_TOKEN_COST * len(images))
+
+
 def summarize_messages(msgs_to_summarize: List[Dict], model_name: str, timeout: float = 30.0) -> str:
     """Runs a synchronous LLM call to summarize old context.
     Protected by a timeout to prevent infinite blocking.
@@ -233,7 +262,7 @@ def soft_trim_with_summarization(messages: List[Dict[str, Any]], model_name: str
     target_messages = max_history_messages // 2
     target_tokens = int(max_context_tokens * 0.5)
 
-    current_tokens = sum(estimate_tokens(str(m), model_name, get_provider()) for m in messages[1:])
+    current_tokens = sum(estimate_message_tokens(m, model_name, get_provider()) for m in messages[1:])
     for i in range(1, len(messages)):
         if i in pinned_indices:
             continue
@@ -241,7 +270,7 @@ def soft_trim_with_summarization(messages: List[Dict[str, Any]], model_name: str
             break
         msgs_to_summarize.append(messages[i])
         indices_to_drop.append(i)
-        current_tokens -= estimate_tokens(str(messages[i]), model_name, get_provider())
+        current_tokens -= estimate_message_tokens(messages[i], model_name, get_provider())
 
     if not msgs_to_summarize:
         return messages
@@ -358,7 +387,7 @@ def sliding_window_trim(messages: List[Dict[str, Any]], model_name: str,
     
     # Estimate size of current messages (cleaned)
     cleaned_messages = clean_messages_for_llm(messages, strip_enabled)
-    current_tokens = sum(estimate_tokens(str(m), model_name, provider) for m in cleaned_messages[1:])
+    current_tokens = sum(estimate_message_tokens(m, model_name, provider) for m in cleaned_messages[1:])
     
     if len(messages) - 1 <= max_history_messages and current_tokens <= max_context_tokens:
         return messages
@@ -378,7 +407,7 @@ def sliding_window_trim(messages: List[Dict[str, Any]], model_name: str,
         
         # Estimate candidate token size using cleaned versions
         cleaned_candidate = clean_messages_for_llm(candidate, strip_enabled)
-        candidate_tokens = sum(estimate_tokens(str(m), model_name, provider) for m in cleaned_candidate[1:])
+        candidate_tokens = sum(estimate_message_tokens(m, model_name, provider) for m in cleaned_candidate[1:])
 
         if len(candidate) - 1 <= max_history_messages and candidate_tokens <= (max_context_tokens * 0.75):
             log.info("Sliding window trim successful, keeping last %d turns (%d messages)", turns, len(candidate))
@@ -389,7 +418,7 @@ def sliding_window_trim(messages: List[Dict[str, Any]], model_name: str,
         compacted = compact_tool_history(candidate)
         if compacted is not candidate:
             cc = clean_messages_for_llm(compacted, strip_enabled)
-            ctoks = sum(estimate_tokens(str(m), model_name, provider) for m in cc[1:])
+            ctoks = sum(estimate_message_tokens(m, model_name, provider) for m in cc[1:])
             if len(compacted) - 1 <= max_history_messages and ctoks <= (max_context_tokens * 0.75):
                 log.info("Kept last %d turns after compacting old tool outputs (%d messages)", turns, len(compacted))
                 return compacted
