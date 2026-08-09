@@ -27,7 +27,7 @@ from tools.misc_tools import (
     find_definition, find_references, git_checkpoint, git_rollback,
     call_mcp_tool, list_mcp_tools, run_subagent, create_svg_image, ask_user_questions,
     wait_heartbeat, end_auto_mode, create_artifact, request_user_approval,
-    calculate, set_goal, filter_new_items,
+    calculate, set_goal, filter_new_items, view_image,
 )
 from tools.swarm_tools import run_swarm_workers
 from tools.browser_tools import (
@@ -86,6 +86,7 @@ AVAILABLE_TOOLS = {
     "wait_heartbeat": wait_heartbeat,
     "end_auto_mode": end_auto_mode,
     "filter_new_items": filter_new_items,
+    "view_image": view_image,
     "find_definition": find_definition,
     "find_references": find_references,
     "git_checkpoint": git_checkpoint,
@@ -1384,6 +1385,30 @@ TOOL_SCHEMAS = [
     {
         "type": "function",
         "function": {
+            "name": "view_image",
+            "description": (
+                "LOOK at an image file — a browser screenshot, a mockup, a diagram, a photo "
+                "the user pointed at. Use it when the answer depends on what something LOOKS "
+                "like: verifying a layout you just changed, reading a chart, checking a "
+                "rendered page.\n"
+                "The image arrives in the NEXT message, not in this tool's result, so "
+                "continue after calling it and describe what you actually see. Do not claim "
+                "to have seen anything before that.\n"
+                "Text is still cheaper: for the CONTENT of a web page use browser_get_content."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "file_path": {"type": "string", "description": "Path to the image (png, jpg, gif, webp, bmp)."},
+                    "question": {"type": "string", "description": "Optional: what you are trying to find out, echoed back to keep you on task."}
+                },
+                "required": ["file_path"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "end_auto_mode",
             "description": "Ends the autonomous experimental mode and explicitly returns control to the user. MUST call this when the task is fully completed.",
             "parameters": {
@@ -1510,11 +1535,11 @@ TOOL_SCHEMAS = [
         "function": {
             "name": "browser_screenshot",
             "description": (
-                "Save a PNG of the current browser page to disk, FOR THE HUMAN TO OPEN. "
-                "You will NOT see the image — no provider here sends pictures back to you, "
-                "so taking one to 'look at the page' is a wasted turn. To understand a page, "
-                "use browser_get_content (text/markdown) or browser_state. Take a screenshot "
-                "only when the user asked for a picture, or as evidence to point them at."
+                "Save a PNG of the current browser page to disk and return its path. "
+                "This does NOT show it to you — call view_image(path) afterwards to actually "
+                "look at it, and only if the answer depends on how the page LOOKS (layout, "
+                "rendering, a chart). For the page's CONTENT use browser_get_content: text is "
+                "far cheaper than an image."
             ),
             "parameters": {
                 "type": "object",

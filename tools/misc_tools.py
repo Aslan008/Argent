@@ -624,6 +624,43 @@ def wait_heartbeat(delay_seconds: int = 0, condition_to_check: str = "",
                 f"(a condition to wait for). Available checks: {describe_predicates()}")
     return f"Heartbeat scheduled. [HEARTBEAT_REQUEST: {delay}|{condition_to_check}]"
 
+def view_image(file_path: str, question: str = "") -> str:
+    """Attach an image to the conversation so the model can actually see it.
+
+    The picture cannot travel in a tool result — those are strings — so it is
+    queued here and the turn loop attaches it as the next user message. The
+    model therefore sees it on its NEXT step, which the return value says
+    plainly: a model told "done" would otherwise answer about an image it has
+    not received yet.
+    """
+    from config import get_current_model, get_provider
+    from vision import encode_image, model_supports_vision, queue_image
+
+    provider = get_provider()
+    model = get_current_model()
+    supports = model_supports_vision(model, provider)
+    if supports is False:
+        return (f"Error: model '{model}' cannot see images (Ollama reports no "
+                f"'vision' capability). Switch to a vision model with /model, or "
+                f"read the page as text with browser_get_content.")
+
+    payload, media_type, note = encode_image(file_path)
+    if payload is None:
+        return f"Error: {note}"
+
+    from tools._helpers import _resolve_path
+    label = str(_resolve_path(file_path))
+    queue_image(payload, media_type, label)
+
+    detail = f" ({note})" if note else ""
+    unsure = ("\nNote: this model's vision support could not be verified — if the "
+              "next message looks like it has no image, it does not.") if supports is None else ""
+    asked = f" You asked: {question}" if question else ""
+    return (f"Image '{label}' attached{detail}. You will SEE it in the next "
+            f"message, not in this result — continue and describe what is "
+            f"actually there.{asked}{unsure}")
+
+
 def end_auto_mode(reason: str) -> str:
     """Stops the experimental Auto Mode."""
     return f"Auto Mode finished. [END_AUTO_MODE] Reason: {reason}"

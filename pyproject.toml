@@ -31,6 +31,10 @@ dependencies = [
     # Token counting: without it estimate_tokens silently falls back to a
     # char-count heuristic, so context budgeting becomes a guess.
     "tiktoken",
+    # Downscaling images before they go to a vision model. Without it a
+    # full-page screenshot is sent at full resolution — context spent linearly
+    # on detail no model can attend to. view_image degrades but says so.
+    "pillow",
 ]
 
 [project.optional-dependencies]

@@ -161,6 +161,51 @@ class LLMProvider(ABC):
     def format_tool_result(self, content: str, tool_call_id: str = None) -> dict: ...
 
 
+def _images_for_ollama(messages):
+    """Translate the neutral image attachment into Ollama's dialect.
+
+    History is stored provider-neutrally — {"images": [{"data", "media_type"}]}
+    — because a conversation outlives the provider that started it: writing
+    Ollama's spelling into the history would break the moment the user switches
+    to OpenRouter mid-chat. Ollama wants a bare list of base64 strings.
+    """
+    out, touched = [], False
+    for m in messages:
+        images = m.get("images") if isinstance(m, dict) else None
+        if not images:
+            out.append(m)
+            continue
+        touched = True
+        copy = {k: v for k, v in m.items() if k != "images"}
+        copy["images"] = [img["data"] if isinstance(img, dict) else img for img in images]
+        out.append(copy)
+    return out if touched else messages
+
+
+def _images_for_openai(messages):
+    """The same attachment as OpenAI-style content parts (a data: URI)."""
+    out, touched = [], False
+    for m in messages:
+        images = m.get("images") if isinstance(m, dict) else None
+        if not images:
+            out.append(m)
+            continue
+        touched = True
+        parts = []
+        text = m.get("content")
+        if isinstance(text, str) and text:
+            parts.append({"type": "text", "text": text})
+        for img in images:
+            data = img["data"] if isinstance(img, dict) else img
+            media = img.get("media_type", "image/png") if isinstance(img, dict) else "image/png"
+            parts.append({"type": "image_url",
+                          "image_url": {"url": f"data:{media};base64,{data}"}})
+        copy = {k: v for k, v in m.items() if k != "images"}
+        copy["content"] = parts
+        out.append(copy)
+    return out if touched else messages
+
+
 class OllamaProvider(LLMProvider):
     """Ollama local LLM provider."""
 
@@ -222,7 +267,7 @@ class OllamaProvider(LLMProvider):
                     format_schema=None):
         kwargs = {
             "model": model,
-            "messages": messages,
+            "messages": _images_for_ollama(messages),
             "stream": True,
         }
         if tools:
@@ -376,6 +421,7 @@ class OpenAICompatibleProvider(LLMProvider, ABC):
         reject a dict with HTTP 400; lenient ones (Z.AI) happen to accept it.
         Copies only the parts it changes — never mutates the agent's history.
         """
+        messages = _images_for_openai(messages)
         out = []
         for m in messages:
             tcs = m.get("tool_calls")

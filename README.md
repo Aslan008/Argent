@@ -176,6 +176,10 @@ Skills written for another agent's tool names (`WebSearch`, `WebFetch`, `Read`, 
 - **Smart Commits**: Use `/commit` to let the AI analyze your diffs and generate professional Conventional Commit messages.
 - **Diff Awareness**: Argent can read its own changes to ensure context consistency.
 
+### 👁 Vision: the model can look at what it made
+
+`view_image(path)` attaches a screenshot, mockup or chart to the conversation, so "does the layout actually render?" is answerable instead of guessed. Capability is read from the provider rather than assumed — Ollama reports `capabilities`, and a model without `vision` is refused up front instead of confidently describing a picture it never received. Images are downscaled before encoding: resolution beyond what a model attends to costs context linearly and buys nothing.
+
 ### 🔌 MCP Server Support (Model Context Protocol)
 Integrate external tools and resources seamlessly. Argent supports **stdio**, **SSE**, and **REST** MCP transports to connect to filesystem, github, database, or other custom APIs.
 
@@ -372,6 +376,10 @@ dsolve(Derivative(y(x), x, 2) + y(x), y(x))  →  C1*sin(x) + C2*cos(x)
 ### 🤝 Профессиональная интеграция с Git
 - **Умные коммиты**: Используйте `/commit`, чтобы ИИ проанализировал ваши diff'ы и составил профессиональные сообщения в стиле Conventional Commits.
 - **Понимание Diff**: Argent видит собственные изменения для обеспечения целостности контекста.
+
+### 👁 Зрение: модель видит то, что сделала
+
+`view_image(path)` прикрепляет скриншот, макет или график к разговору — и вопрос «а вёрстка действительно так выглядит?» становится проверяемым, а не угадываемым. Способность спрашивается у провайдера, а не предполагается: Ollama сообщает `capabilities`, и модель без `vision` получает отказ сразу, вместо уверенного описания картинки, которой она не видела. Изображения уменьшаются перед отправкой — разрешение сверх того, что модель способна разглядеть, тратит контекст линейно и не даёт ничего.
 
 ### 🔌 Поддержка MCP-серверов (Model Context Protocol)
 Бесшовная интеграция внешних инструментов и ресурсов. Argent поддерживает транспорты **stdio**, **SSE** и **REST** для подключения к файловой системе, GitHub, базам данных и любым другим сторонним API.

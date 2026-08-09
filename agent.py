@@ -1359,6 +1359,19 @@ Example: {"tool": {"name": "read_file", "arguments": {"file_path": "main.py"}}}"
                     self._turn_tool_calls += 1
 
                     self.messages.append(provider.format_tool_result(str(result), tool_call.get("id")))
+
+                    # A tool result is a string and cannot carry a picture, so
+                    # view_image queues it and it becomes a real user message
+                    # here — which is the only place the model can actually
+                    # receive one.
+                    from vision import build_image_message, drain_images
+                    queued = drain_images()
+                    if queued:
+                        self.messages.append(build_image_message(
+                            [(img["data"], img["media_type"]) for img in queued],
+                            "Вот запрошенное изображение: "
+                            + ", ".join(img["label"] for img in queued)))
+                        yield {"type": "content_stream", "content": ""}
                 if loop_guard_stop:
                     self._log_turn_end("loop guard", "a tool call repeated verbatim")
                     yield {"type": "error", "content": "\n[Loop Guard]: повторяющийся цикл инструментов остановлен — ход завершён принудительно."}
