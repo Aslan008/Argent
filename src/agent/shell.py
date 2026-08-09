@@ -20,20 +20,83 @@ import subprocess
 
 
 def run_text(*args, **kwargs) -> "subprocess.CompletedProcess":
-    """``subprocess.run`` in text mode with crash-proof decoding.
+    """``subprocess.run`` in text mode, with a timeout that actually fires.
 
-    Many Windows tools (tasklist, git, MSBuild/dotnet, node, ...) emit output in
-    the OEM/locale code page, not UTF-8. Under Python's UTF-8 mode a plain
-    ``text=True`` capture decodes stdout/stderr as strict UTF-8, so the first
-    stray byte (e.g. 0xFF) raises UnicodeDecodeError *inside subprocess's reader
-    thread* and crashes it. Forcing ``errors='replace'`` degrades a bad byte to
-    a replacement char instead of throwing. Use this instead of
-    ``subprocess.run(..., text=True)`` anywhere the output is captured.
+    Crash-proof decoding: many Windows tools (tasklist, git, MSBuild/dotnet,
+    node, ...) emit output in the OEM/locale code page, not UTF-8. Under
+    Python's UTF-8 mode a plain ``text=True`` capture decodes stdout/stderr as
+    strict UTF-8, so the first stray byte (e.g. 0xFF) raises UnicodeDecodeError
+    *inside subprocess's reader thread* and crashes it. ``errors='replace'``
+    degrades a bad byte instead of throwing.
+
+    Two more guards, both learned from a three-and-a-half-hour hang:
+
+    * **stdin is closed.** A captured child that asks a question — `npx` with
+      "Ok to proceed? (y)" — inherits the console and waits for an answer
+      nobody can give, because its prompt is inside the captured pipe and
+      invisible. With DEVNULL it reads EOF and exits.
+    * **The timeout kills the whole tree.** ``subprocess.run(timeout=…)`` kills
+      only the direct child; under ``shell=True`` on Windows that is cmd.exe,
+      and its grandchild keeps the stdout pipe open, so the communicate() that
+      follows the kill blocks forever. A ten-second timeout produced a hang of
+      12489 seconds, ended by Ctrl+C.
     """
     kwargs.setdefault("encoding", "utf-8")
     kwargs.setdefault("errors", "replace")
     kwargs["text"] = True
-    return subprocess.run(*args, **kwargs)
+
+    payload = kwargs.pop("input", None)
+    if payload is not None:
+        kwargs["stdin"] = subprocess.PIPE          # a caller that means to feed it
+    elif kwargs.get("capture_output") or kwargs.get("stdout") is not None:
+        kwargs.setdefault("stdin", subprocess.DEVNULL)
+
+    timeout = kwargs.pop("timeout", None)
+    if timeout is None:
+        return subprocess.run(*args, input=payload, **kwargs) if payload is not None \
+            else subprocess.run(*args, **kwargs)
+
+    if kwargs.pop("capture_output", False):
+        kwargs.setdefault("stdout", subprocess.PIPE)
+        kwargs.setdefault("stderr", subprocess.PIPE)
+
+    with subprocess.Popen(*args, **kwargs) as process:
+        try:
+            stdout, stderr = process.communicate(input=payload, timeout=timeout)
+        except subprocess.TimeoutExpired:
+            _kill_tree(process)
+            # A short second wait: the tree is gone, so this returns promptly —
+            # but never wait unbounded again, which is the original bug.
+            try:
+                stdout, stderr = process.communicate(timeout=5)
+            except subprocess.TimeoutExpired:
+                stdout = stderr = ""
+            raise subprocess.TimeoutExpired(process.args, timeout,
+                                            output=stdout, stderr=stderr)
+        return subprocess.CompletedProcess(process.args, process.returncode,
+                                           stdout, stderr)
+
+
+def _kill_tree(process) -> None:
+    """Kill the process AND its descendants.
+
+    On Windows a shell=True child is cmd.exe; killing it orphans the real
+    program, which keeps the inherited stdout pipe open and hangs any further
+    read. taskkill /T walks the tree.
+    """
+    import os
+
+    if os.name == "nt":
+        try:
+            subprocess.run(["taskkill", "/F", "/T", "/PID", str(process.pid)],
+                           capture_output=True, timeout=10)
+            return
+        except Exception:
+            pass
+    try:
+        process.kill()
+    except Exception:
+        pass
 
 # PowerShell cmdlets (Verb-Noun) and syntax that only work in PowerShell.
 _POWERSHELL_HINTS = re.compile(

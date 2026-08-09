@@ -206,7 +206,12 @@ def _validate_code_syntax(file_path: str) -> str | None:
 
     if file_path.endswith(('.ts', '.tsx')):
         try:
-            result = run_text(["npx", "tsc", "--noEmit", "--skipLibCheck", file_path], capture_output=True, timeout=10, shell=(os.name == 'nt'))
+            # --no-install: without it npx offers to DOWNLOAD tsc and waits for
+            # "Ok to proceed? (y)" on a captured pipe nobody can see or answer.
+            # Validation must never install anything, and a project without a
+            # local tsc simply goes unchecked rather than blocking an edit.
+            result = run_text(["npx", "--no-install", "tsc", "--noEmit", "--skipLibCheck", file_path],
+                              capture_output=True, timeout=20, shell=(os.name == 'nt'))
             if result.returncode != 0:
                 err_out = result.stderr or result.stdout
                 if "error TS" in err_out or file_path in err_out:

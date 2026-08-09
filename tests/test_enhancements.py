@@ -105,7 +105,10 @@ class TestArgentEnhancements(unittest.TestCase):
             if os.path.exists(invalid_json_path):
                 os.remove(invalid_json_path)
 
-    @patch('tools._helpers.subprocess.run')
+    # Patched at run_text, not subprocess.run: run_text now drives Popen itself
+    # so it can kill a whole process tree on timeout, and a patch one layer too
+    # low silently stopped intercepting — the real `node --check` ran.
+    @patch('tools._helpers.run_text')
     def test_javascript_syntax_validation(self, mock_run):
         # Valid JS (returncode 0)
         mock_run.return_value = MagicMock(returncode=0)
