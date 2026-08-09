@@ -624,8 +624,13 @@ def wait_heartbeat(delay_seconds: int = 0, condition_to_check: str = "",
                 f"(a condition to wait for). Available checks: {describe_predicates()}")
     return f"Heartbeat scheduled. [HEARTBEAT_REQUEST: {delay}|{condition_to_check}]"
 
-def view_image(file_path: str, question: str = "") -> str:
+def view_image(file_path: str = "", question: str = "", path: str = "") -> str:
     """Attach an image to the conversation so the model can actually see it.
+
+    ``path`` is accepted because browser_screenshot RETURNS its file under that
+    name, so a model chaining the two writes view_image(path=…) — observed on
+    the first real use. Rejecting it would be punishing the model for our own
+    inconsistent naming.
 
     The picture cannot travel in a tool result — those are strings — so it is
     queued here and the turn loop attaches it as the next user message. The
@@ -635,6 +640,10 @@ def view_image(file_path: str, question: str = "") -> str:
     """
     from config import get_current_model, get_provider
     from vision import encode_image, model_supports_vision, queue_image
+
+    file_path = (file_path or path or "").strip()
+    if not file_path:
+        return "Error: give the image path, e.g. view_image('screenshot.png')."
 
     provider = get_provider()
     model = get_current_model()

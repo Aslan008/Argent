@@ -1399,7 +1399,7 @@ TOOL_SCHEMAS = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "file_path": {"type": "string", "description": "Path to the image (png, jpg, gif, webp, bmp)."},
+                    "file_path": {"type": "string", "description": "Path to the image (png, jpg, gif, webp, bmp). `path` is accepted as an alias, since browser_screenshot returns it under that name."},
                     "question": {"type": "string", "description": "Optional: what you are trying to find out, echoed back to keep you on task."}
                 },
                 "required": ["file_path"]

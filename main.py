@@ -46,26 +46,32 @@ from src.cli.cli_ui import render_response_stream
 from src.project.orchestrator import ProjectOrchestrator
 from src.agent.shell import run_text
 
-# Default tools allowed in regular chat (excludes Project Brain tools and bloat OS tools).
-# Every name here must exist in the tool registry and every tool the system prompt
-# instructs the model to use must appear here — test_tool_registry_consistency.py
-# enforces both, because a prompt pointing at a tool that is not sent makes the
-# model call a name that does not exist, which the recovery layer then has to guess at.
-CHAT_ALLOWED_TOOLS = [
-    "read_file", "write_file", "append_to_file", "delete_file", "replace_in_file", "replace_python_function",
-    "grep_search", "search_files", "analyze_project", "run_command", "run_admin_command",
-    "start_background_command", "read_background_command", "send_background_command",
-    "stop_background_command", "list_background_commands",
-    "search_web", "read_webpage", "get_file_outline", "list_directory",
-    "multi_replace_in_file", "multi_replace_in_file_chunk",
-    "semantic_search", "create_plugin", "delete_plugin",
-    "create_skill", "read_skill", "list_skills", "delete_skill",
-    "ask_user_questions", "wait_heartbeat", "end_auto_mode",
-    "create_artifact", "request_user_approval",
-    "browser_open", "browser_state", "browser_click", "browser_input",
-    "browser_screenshot", "browser_scroll", "browser_get_content", "browser_close",
-    "call_mcp_tool", "calculate", "create_svg_image",
-]
+# Tools that belong to a MODE, not to ordinary chat: the project brain is
+# driven by the orchestrator's own state machine, and offering its steps in a
+# normal conversation invites the model to write a spec nobody asked for.
+#
+# Stated as a DENYLIST on purpose. It used to be a hand-written allowlist, and
+# every tool added after it was written silently vanished from chat — measured,
+# 27 of 66, including move_file, find_definition, list_mcp_tools and
+# view_image. The model would call a name it had been told about, get "not
+# available", and be offered a nonsense substitute. A denylist states intent
+# once; anything new is available unless someone decides otherwise.
+CHAT_DENIED_TOOLS = {
+    "add_project_task", "complete_project_task", "list_project_tasks",
+    "write_project_spec", "write_project_architecture", "write_file_spec",
+    "plan_work_changes", "add_work_task",
+}
+
+
+def chat_allowed_tools() -> list:
+    """The toolset for a regular chat turn: everything real, minus the modes.
+
+    Derived from the live registry so it cannot drift, and it also drops names
+    the user disabled via /tools — the old list still contained six tools that
+    no longer resolved.
+    """
+    from tools.schemas import get_available_tools
+    return [name for name in get_available_tools() if name not in CHAT_DENIED_TOOLS]
 
 
 
@@ -1492,10 +1498,10 @@ def main():
                     continue
                 
             if is_project_mode:
-                active_tools = orchestrator.get_active_tools() or CHAT_ALLOWED_TOOLS
+                active_tools = orchestrator.get_active_tools() or chat_allowed_tools()
             else:
                 # Regular chat mode
-                active_tools = CHAT_ALLOWED_TOOLS
+                active_tools = chat_allowed_tools()
 
             # Sync the approval policy with the current mode: in autonomous and
             # vibe modes safe actions are auto-approved, destructive ones still prompt.

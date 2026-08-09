@@ -38,18 +38,47 @@ class TestSchemaFunctionParity:
 
 
 class TestChatToolset:
+    """The chat toolset is DERIVED from the registry, not hand-listed.
+
+    It used to be an allowlist of names, and every tool added after it was
+    written silently vanished from ordinary chat — measured, 27 of 66,
+    including move_file, find_definition, list_mcp_tools and view_image. The
+    model would call a name the prompt had given it, be told "not available",
+    and be offered an unrelated substitute.
+    """
+
     def test_no_dead_names(self, registry):
-        """`semantic_search` is the one legitimate exception: it is appended at
-        runtime by get_tool_schemas() only when RAG is enabled."""
-        from main import CHAT_ALLOWED_TOOLS
+        from main import chat_allowed_tools
         known = registry["schemas"] | {"semantic_search"}
-        dead = [n for n in CHAT_ALLOWED_TOOLS if n not in known]
-        assert not dead, f"CHAT_ALLOWED_TOOLS references non-existent tools: {dead}"
+        dead = [n for n in chat_allowed_tools() if n not in known]
+        assert not dead, f"chat toolset references non-existent tools: {dead}"
 
     def test_no_duplicates(self):
-        from main import CHAT_ALLOWED_TOOLS
-        dupes = {n for n in CHAT_ALLOWED_TOOLS if CHAT_ALLOWED_TOOLS.count(n) > 1}
+        from main import chat_allowed_tools
+        names = chat_allowed_tools()
+        dupes = {n for n in names if names.count(n) > 1}
         assert not dupes, f"duplicated entries: {sorted(dupes)}"
+
+    def test_a_new_tool_is_available_without_touching_a_list(self):
+        """The whole point of inverting it."""
+        from main import chat_allowed_tools
+        for recent in ("view_image", "list_mcp_tools", "filter_new_items",
+                       "move_file", "find_definition"):
+            assert recent in chat_allowed_tools(), f"{recent} is invisible in chat"
+
+    def test_mode_tools_stay_out_of_chat(self):
+        """The project brain is driven by the orchestrator's state machine;
+        offering its steps in conversation invites a spec nobody asked for."""
+        from main import CHAT_DENIED_TOOLS, chat_allowed_tools
+        available = set(chat_allowed_tools())
+        assert not (CHAT_DENIED_TOOLS & available)
+        assert "write_project_spec" in CHAT_DENIED_TOOLS
+
+    def test_tools_disabled_by_the_user_are_excluded(self, monkeypatch):
+        """The old list still named six tools that no longer resolved."""
+        from main import chat_allowed_tools
+        monkeypatch.setattr("config.get_disabled_tools", lambda: ["read_file"])
+        assert "read_file" not in chat_allowed_tools()
 
 
 class TestPromptMatchesToolset:
@@ -58,7 +87,7 @@ class TestPromptMatchesToolset:
     def test_prompt_only_references_available_tools(self, monkeypatch):
         import agent as agent_module
         from agent import ArgentAgent
-        from main import CHAT_ALLOWED_TOOLS
+        from main import chat_allowed_tools
         from tools.schemas import TOOL_SCHEMAS
 
         monkeypatch.setattr(agent_module, "get_mcp_servers", lambda: [])
@@ -66,11 +95,16 @@ class TestPromptMatchesToolset:
 
         a = ArgentAgent.__new__(ArgentAgent)
         a.model_name, a.provider = "test-model", "test"
-        text = a.build_system_prompt() + "\n" + (a._build_ephemeral_context() or "")
+        # Built against the SAME toolset it is compared with — that is what
+        # happens at runtime, and comparing an unfiltered prompt to a filtered
+        # list reports lines the model would never have been shown.
+        toolset = chat_allowed_tools()
+        text = (a.build_system_prompt(set(toolset)) + "\n"
+                + (a._build_ephemeral_context() or ""))
 
         known = {t["function"]["name"] for t in TOOL_SCHEMAS} | {"semantic_search"}
         mentioned = {w for w in re.findall(r"[a-z_]{4,}", text) if w in known}
-        missing = sorted(mentioned - set(CHAT_ALLOWED_TOOLS))
+        missing = sorted(mentioned - set(toolset))
         assert not missing, (
             f"system prompt instructs the model to use tools absent from the chat "
             f"toolset: {missing}"
