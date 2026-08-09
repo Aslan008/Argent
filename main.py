@@ -114,6 +114,76 @@ def _parse_task_tools(spec: str):
     return names, unknown
 
 
+def carried_over_memory() -> list:
+    """What the working memory would drag into a brand-new chat.
+
+    .argent/memory.json is per-project and loaded at construction, so a fresh
+    launch silently inherits the previous run's objective, its list of
+    completed steps and its recorded failures — all of which feed the objective
+    anchor in the prompt. Nothing said so, which is why declining to restore a
+    session did not actually give you a clean slate.
+    """
+    from memory_manager import memory
+
+    data = memory.data or {}
+    parts = []
+    objective = (data.get("objective") or "").strip()
+    if objective:
+        parts.append(f"цель «{objective[:60]}»")
+    for key, word in (("completed", "шагов сделано"),
+                      ("key_facts", "фактов"),
+                      ("errors_encountered", "ошибок запомнено")):
+        count = len(data.get(key) or [])
+        if count:
+            parts.append(f"{count} {word}")
+    return parts
+
+
+def offer_previous_context(agent) -> None:
+    """One question about everything that survives from the last run.
+
+    There used to be two independent things and one question: the saved
+    conversation was offered, while the working memory came back regardless.
+    Answering "no" therefore did NOT give a clean start — which is why /clear
+    was pressed 115 times, more than every other command combined. Now the
+    choice covers both, so "начать с чистого листа" is literally true.
+    """
+    from memory_manager import memory
+
+    last = get_last_session()
+    has_session = bool(last and last.get("preview"))
+    carried = carried_over_memory()
+    if not has_session and not carried:
+        return
+
+    if has_session:
+        where = last.get("cwd") or ""
+        same_place = (where and os.path.normcase(os.path.abspath(where))
+                      == os.path.normcase(os.getcwd()))
+        suffix = "" if same_place else f" [в {Path(where).name}]" if where else ""
+        print_system(f"Прошлая сессия ({last['saved_at'][:16]}){suffix}: "
+                     f"\"{last['preview']}\"")
+    if carried:
+        # Named out loud: this is the part that used to arrive uninvited.
+        print_system(f"[dim]Рабочая память проекта: {', '.join(carried)}.[/dim]")
+
+    RESTORE = "Продолжить прошлую сессию"
+    KEEP_MEMORY = "Новый чат, но сохранить рабочую память проекта"
+    CLEAN = "Начать с чистого листа (забыть всё выше)"
+    choices = ([RESTORE] if has_session else []) + ([KEEP_MEMORY] if carried else []) + [CLEAN]
+    try:
+        choice = questionary.select("С чего начать?", choices=choices,
+                                    default=choices[0]).ask()
+    except (KeyboardInterrupt, EOFError):
+        choice = None
+
+    if choice == RESTORE:
+        restore_session(agent, last)
+    elif choice == CLEAN:
+        memory.clear()
+        print_system("[dim]Рабочая память очищена — контекста прошлых разговоров нет.[/dim]")
+
+
 def restore_session(agent, meta: dict) -> bool:
     """Put a saved session back, telling the user what does NOT match.
 
@@ -389,7 +459,7 @@ def main():
     builtin_cmds = [
         # Base commands
         '/help', '/provider', '/model', '/clear', '/init', '/research', '/rag_toggle', '/auto_retrieve',
-        '/hooks', '/tools', '/save', '/project', '/work', '/commit',
+        '/hooks', '/plugin', '/tools', '/save', '/project', '/work', '/commit',
         '/sessions', '/load', '/copy', '/logs', '/skills', '/skill import', '/auto', '/vibe', '/tasks', '/verbose', '/debug', '/browser', '/exit', '/quit',
         '/mcp', '/thinking', '/temp', '/temperature',
         '/cd', '/undo', '/diff', '/changes', '/rewind', '/stats', '/aux', '/search', '/doctor', '/jobs', '/stop', '/goal', '/critic', '/rooms',
@@ -397,7 +467,7 @@ def main():
         # Subcommands and parameter variations
         '/mcp list', '/mcp add', '/mcp remove', '/mcp test', '/mcp start', '/mcp stop',
         '/browser user', '/browser isolated', '/browser chrome', '/browser yandex', '/browser edge', '/browser brave', '/browser auto',
-        '/hooks auto',
+        '/hooks auto', '/plugin auto',
         '/temp 0.2', '/temp 0.7', '/temp 1.0',
         '/temperature 0.2', '/temperature 0.7', '/temperature 1.0',
         '/work --auto',
@@ -469,21 +539,7 @@ def main():
         if warning:
             print_system(f"[yellow]⚠ {warning}[/yellow]")
 
-    # Offer to restore last session. The directory is shown up front: the most
-    # recent session is often from a different project, and "restore?" alone
-    # gives no way to notice that before saying yes.
-    last = get_last_session()
-    if last and last.get("preview"):
-        where = last.get("cwd") or ""
-        same_place = (where and os.path.normcase(os.path.abspath(where))
-                      == os.path.normcase(os.getcwd()))
-        suffix = "" if same_place else f" [в {Path(where).name}]" if where else ""
-        restore = questionary.confirm(
-            f"Last session found ({last['saved_at'][:16]}){suffix}: "
-            f"\"{last['preview']}\". Restore?"
-        ).ask()
-        if restore:
-            restore_session(agent, last)
+    offer_previous_context(agent)
 
     # Trigger Startup Hook
     hook_manager.call_hook("on_startup")
@@ -930,7 +986,9 @@ def main():
                     print_system(f"Command risk-gate: [bold]{get_command_guard()}[/bold]  (off | warn | block)")
                     print_system("warn = confirm risky commands with the reason; block = refuse catastrophic ones; off = legacy. Set with [bold]/guard <level>[/bold].")
                 continue
-            elif user_input.startswith("/hooks"):
+            # /plugin too: the interface calls them «плагины» everywhere, so
+            # that is the word people reach for. It was typed and did not exist.
+            elif user_input.startswith("/hooks") or user_input.startswith("/plugin"):
                 parts = user_input.split(" ")
                 if len(parts) == 1:
                     status = "ENABLED" if get_autonomous_plugins_enabled() else "DISABLED"
