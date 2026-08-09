@@ -113,6 +113,22 @@ AVAILABLE_TOOLS = {
     "browser_switch_tab": browser_switch_tab,
 }
 
+# Tools that take over the terminal to ask the user something. The CLI must not
+# run its "Выполнение…" spinner around these: Rich's status display owns the
+# same lines questionary draws on, so the question is rendered and immediately
+# overwritten — the user sees the preamble, no prompt, and a program that will
+# not continue. request_user_approval sat outside this set and did exactly
+# that; git_rollback and browser_input were one report away from the same.
+#
+# Declared here, beside the registry, because the list lived in the CLI and
+# fell behind every tool added since. test_interactive_tools derives the true
+# set from the sources and fails if this one drifts again.
+INTERACTIVE_TOOLS = frozenset({
+    "ask_user_questions", "request_user_approval",
+    "run_command", "run_admin_command", "start_background_command",
+    "delete_file", "plan_work_changes", "git_rollback", "browser_input",
+})
+
 TOOL_SCHEMAS = [
     {
         "type": "function",

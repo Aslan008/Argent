@@ -412,12 +412,8 @@ def render_response_stream(
                 # ====================================================
                 # Tool execution — wait for tool_end
                 # ====================================================
-                interactive_tools = {
-                    "ask_user_questions", "run_command",
-                    "run_admin_command", "start_background_command",
-                    "delete_file", "plan_work_changes",
-                }
-                use_spinner = current_tool_name not in interactive_tools
+                from tools.schemas import INTERACTIVE_TOOLS
+                use_spinner = current_tool_name not in INTERACTIVE_TOOLS
 
                 if use_spinner:
                     with console.status(

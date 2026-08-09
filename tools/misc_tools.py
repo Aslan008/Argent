@@ -584,14 +584,23 @@ def request_user_approval(message: str) -> str:
     """Pause execution and ask the user for approval. Use this after generating an implementation plan."""
     from ui import console
     import questionary
-    console.print(f"\n[bold yellow]Agent requests approval:[/bold yellow] {message}")
-    approved = questionary.confirm("Do you approve this plan/action?").ask()
+    console.print(f"\n[bold yellow]Агент просит подтверждения:[/bold yellow] {message}")
+    console.print("[dim](y — принять, n — отклонить, Enter — принять)[/dim]")
+    try:
+        approved = questionary.confirm("Одобряете?", default=True).ask()
+    except (KeyboardInterrupt, EOFError):
+        approved = None
+    if approved is None:
+        # Escaped rather than answered. Treating that as approval would let a
+        # Ctrl+C start the very work the user was declining to authorise.
+        memory.add_completed(f"Approval dismissed: {message}")
+        return ("User dismissed the approval prompt without answering. Treat it as a NO: "
+                "do not proceed, ask what they want changed.")
     if approved:
         memory.add_completed(f"Approved plan: {message}")
         return "User approved. Proceed with execution."
-    else:
-        memory.add_completed(f"Rejected plan: {message}")
-        return "User REJECTED. Please ask the user for feedback or revise your plan."
+    memory.add_completed(f"Rejected plan: {message}")
+    return "User REJECTED. Please ask the user for feedback or revise your plan."
 
 def wait_heartbeat(delay_seconds: int = 0, condition_to_check: str = "",
                    until: str = "", timeout_seconds: int = 600) -> str:
