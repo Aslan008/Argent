@@ -50,7 +50,10 @@ def delete_file(file_path: str) -> str:
             return f"Error: '{file_path}' is not a file."
 
         from approval import request_approval
-        approved = request_approval(f"удалить файл '{file_path}'", destructive=True)
+        # The resolved path, not the string the model typed: a relative name can
+        # resolve outside the working directory (see _resolve_path), and consent
+        # to delete "notes.md" is not consent to delete some other notes.md.
+        approved = request_approval(f"удалить файл '{path}'", destructive=True)
 
         if not approved:
             return f"Deletion aborted by user. The file '{file_path}' was NOT deleted."
