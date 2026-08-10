@@ -1157,13 +1157,31 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "run_deep_research",
-            "description": "Starts an autonomous Deep Research Sub-Agent that deeply researches an objective using search engines, reads top web pages, extracts data, and returns a massive synthesized technical report. Use this instead of search_web for broad topics.",
+            "description": "Starts an autonomous Deep Research Sub-Agent that deeply researches an objective using search engines, reads top web pages, extracts data, and returns a massive synthesized technical report. Use this instead of search_web for broad topics. You can guide the research with focus/context parameters and control depth with max_rounds.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "objective": {
                         "type": "string",
                         "description": "The specific research objective or question (e.g., 'Best Unity DOTS optimizations for CPU spikes')."
+                    },
+                    "focus": {
+                        "type": "string",
+                        "description": "Optional: aspect to prioritise in the research. The report will lean toward this angle. E.g., 'memory usage' or 'CPU profiling'."
+                    },
+                    "context": {
+                        "type": "string",
+                        "description": "Optional: already-known facts. The pipeline avoids re-searching these and the extractor focuses on NEW information beyond this context. Pass a summary of what you already know."
+                    },
+                    "max_rounds": {
+                        "type": "integer",
+                        "description": "Total rounds including the initial one. 1 = no gap-filling (fastest), 2 = one gap-filling pass (default), 3 = two gap-filling passes (most thorough). Default: 2.",
+                        "default": 2
+                    },
+                    "max_sources": {
+                        "type": "integer",
+                        "description": "Maximum new sources to fetch per round. Default: 15. Increase for broader topics, decrease for faster runs.",
+                        "default": 15
                     }
                 },
                 "required": ["objective"]

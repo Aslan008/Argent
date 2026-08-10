@@ -5,7 +5,7 @@ from ui import console
 from logger import get_logger
 from src.research.chunking import chunk_document
 from src.research.rerank import rerank
-from src.research.synthesis import parse_query_list, number_sources
+from src.research.synthesis import parse_query_list, number_sources, dedup_chunks
 
 log = get_logger("research")
 
@@ -62,7 +62,8 @@ def _language_rule() -> str:
     )
 
 
-def _generate_queries(objective: str) -> List[str]:
+def _generate_queries(objective: str, focus: str = None,
+                        context: str = None) -> List[str]:
     """Brainstorm distinct search queries for the objective.
 
     Query wording decides what the engines can possibly return — no reranker
@@ -76,7 +77,13 @@ def _generate_queries(objective: str) -> List[str]:
     regional service or a local-language community would miss the best sources
     entirely.
     """
-    prompt = f"""You are a search strategist. Topic to research: '{objective}'.
+    focus_clause = f"\nFocus particularly on: {focus}." if focus else ""
+    context_clause = ""
+    if context:
+        context_clause = ("\n\nKNOWN CONTEXT — the following is already established; "
+                          "do NOT search for it, search for what it does NOT cover:\n"
+                          f"{context[:2000]}")
+    prompt = f"""You are a search strategist. Topic to research: '{objective}'.{focus_clause}{context_clause}
 
 Write exactly 5 search queries that will retrieve the best technical sources.
 
@@ -115,11 +122,17 @@ Example: ["\\"NullReferenceException\\" Unity Addressables LoadAssetAsync", "sit
     return parse_query_list(result, limit=5) or [objective]
 
 
-def _find_gaps(objective: str, notes: str) -> List[str]:
+def _find_gaps(objective: str, notes: str, focus: str = None,
+               context: str = None) -> List[str]:
     """Ask the model which important aspects are still missing, as follow-up
     search queries. Returns [] when coverage already looks sufficient."""
+    focus_clause = f"\nFocus area: {focus}." if focus else ""
+    context_clause = ""
+    if context:
+        context_clause = ("\n\nAlready-known context (do NOT re-search these):\n"
+                          f"{context[:1500]}")
     prompt = f"""You are a meticulous research auditor.
-Objective: '{objective}'
+Objective: '{objective}'{focus_clause}{context_clause}
 
 Notes gathered so far:
 {notes[:6000]}
@@ -131,13 +144,35 @@ Return ONLY a JSON array of strings (it may be empty)."""
     return parse_query_list(_call_llm_sync(prompt, json_format=True, temperature=0.5), limit=3)
 
 
+def _fetch_with_retry(url: str, max_retries: int = 2) -> dict:
+    """Fetch a page with retry on network errors (timeout, connection).
+    HTTP 4xx/5xx are NOT retried — the page exists but is inaccessible."""
+    import time
+    from src.research.fetch import fetch_page, UnsafeURLError
+    for attempt in range(max_retries + 1):
+        res = fetch_page(url)
+        if res.get("ok"):
+            return res
+        err = res.get("error", "")
+        # Retry only on network/timeout errors, not on HTTP status or SSRF.
+        retryable = any(k in err.lower() for k in
+                        ("timeout", "timed out", "connection", "unreachable",
+                         "reset", "broken pipe"))
+        if attempt < max_retries and retryable:
+            backoff = 1.0 * (2 ** attempt)
+            console.print(f"  [dim yellow]Retry {attempt+1}/{max_retries} in {backoff:.0f}s: {url}[/dim yellow]")
+            time.sleep(backoff)
+            continue
+        return res
+    return res
+
+
 def _gather(queries: List[str], visited_urls: set, all_chunks: list,
-            source_map: dict, max_new_sources: int = 10) -> int:
+            source_map: dict, max_new_sources: int = 15) -> int:
     """Search the queries, fetch new pages and chunk them into all_chunks
     (mapping each chunk back to its URL). Mutates the passed collections and
     returns the number of new sources read."""
     from src.research.search import meta_search
-    from src.research.fetch import fetch_page
 
     new_urls = []
     for q in queries:
@@ -154,7 +189,7 @@ def _gather(queries: List[str], visited_urls: set, all_chunks: list,
     read = 0
     for url in new_urls[:max_new_sources]:
         console.print(f"Reading: {url}")
-        res = fetch_page(url)
+        res = _fetch_with_retry(url)
         content = res["text"] if res.get("ok") else ""
         if len(content) < 200:
             continue
@@ -164,14 +199,34 @@ def _gather(queries: List[str], visited_urls: set, all_chunks: list,
         read += 1
     return read
 
-def _extract_info(objective: str, combined_text: str) -> str:
+def _smart_truncate(text: str, max_chars: int) -> str:
+    """Truncate at max_chars without breaking mid-sentence when possible."""
+    if len(text) <= max_chars:
+        return text
+    cut = text[:max_chars]
+    # Try to break at the last sentence boundary within the limit.
+    for sep in (".\n", ". ", "! ", "? ", "\n"):
+        idx = cut.rfind(sep)
+        if idx > max_chars * 0.6:
+            return cut[:idx + len(sep)].rstrip()
+    return cut.rstrip()
+
+
+def _extract_info(objective: str, combined_text: str, focus: str = None,
+                  context: str = None) -> str:
     """Extract useful, source-tagged notes from the annotated fragments.
 
     ``combined_text`` is the chunks already prefixed with [n] source markers
     (see number_sources); the model is told to keep those markers so facts stay
     traceable through to the final report."""
+    focus_clause = f"\nPay special attention to: {focus}." if focus else ""
+    context_clause = ""
+    if context:
+        context_clause = ("\n\nAlready-known facts (do NOT re-extract these, "
+                          "focus on NEW information):\n"
+                          f"{context[:1500]}")
     prompt = f"""You are a research data extractor.
-Your overarching objective is: '{objective}'
+Your overarching objective is: '{objective}'{focus_clause}{context_clause}
 
 Below are fragments found on the internet, each prefixed with a [n] source marker.
 Extract useful facts, code snippets, optimizations, or relevant details that help
@@ -180,61 +235,95 @@ traceable to its source. Omit irrelevant parts.
 If NOTHING useful is found, reply with "NOTHING".
 
 TEXT FRAGMENTS:
-{combined_text[:12000]}
+{_smart_truncate(combined_text, 12000)}
 """
     result = _call_llm_sync(prompt, temperature=0.2).strip()
     if result.upper().strip('"') == "NOTHING":
         return ""
     return result
 
-def run_deep_research(objective: str) -> str:
+def run_deep_research(objective: str, focus: str = None,
+                     context: str = None, max_rounds: int = 2,
+                     max_sources: int = 15) -> str:
+    """Execute an autonomous Deep Research loop with model-controlled parameters.
+
+    Parameters
+    ----------
+    objective : str
+        The research topic or question.
+    focus : str, optional
+        Aspect to prioritise — injected into query generation, extraction and
+        synthesis so the report leans toward this angle.
+    context : str, optional
+        Already-known facts. The pipeline avoids re-searching these and the
+        extractor focuses on NEW information beyond this context.
+    max_rounds : int (default 2)
+        Total rounds including the initial one. ``max_rounds=1`` disables
+        gap-filling; ``max_rounds=3`` allows two gap-filling passes. Capped
+        at 3 to prevent unbounded loops.
+    max_sources : int (default 15)
+        Maximum new sources per gather pass.
+
+    Returns a Markdown report with [n] inline citations and a SOURCES section.
     """
-    Executes an autonomous Deep Research loop:
-    1. Generates 5 search queries.
-    2. Searches DDG and gets top links.
-    3. Scrapes content from top sites.
-    4. Chunks text and Reranks most relevant fragments.
-    5. Summarizes everything into a unified report.
-    """
+    max_rounds = max(1, min(max_rounds, 3))
+
     console.print(f"\n[bold cyan]Starting Advanced Deep Research...[/bold cyan]")
-    log.info("Deep research started: %s", objective[:100])
+    log.info("Deep research started: %s (focus=%s, rounds=%d, sources=%d)",
+             objective[:100], focus, max_rounds, max_sources)
     console.print(f"Objective: {objective}")
-    
+    if focus:
+        console.print(f"Focus: {focus}")
+    if context:
+        console.print(f"Context: {len(context)} chars of prior knowledge provided")
+
     console.print("Thinking: Brainstorming search queries...")
-    queries = _generate_queries(objective)
+    queries = _generate_queries(objective, focus=focus, context=context)
     for i, q in enumerate(queries, 1):
         console.print(f"  {i}. {q}")
-    
+
     visited_urls, all_chunks, source_map = set(), [], {}
 
     # Round 1 — gather from the initial queries (federated meta-search + fetch).
     console.print("Searching the web (federated)...")
-    _gather(queries, visited_urls, all_chunks, source_map)
+    _gather(queries, visited_urls, all_chunks, source_map, max_new_sources=max_sources)
 
     if not all_chunks:
         return f"Deep Research failed to find any text content for: '{objective}'."
 
     def _rerank_and_extract():
+        # Deduplicate near-identical chunks before reranking (mirrors, syndication).
+        unique = dedup_chunks(all_chunks)
+        if len(unique) < len(all_chunks):
+            console.print(f"  [dim]Dedup: {len(all_chunks)} → {len(unique)} chunks[/dim]")
         # Cross-encoder rerank (falls back to bi-encoder, then input order),
         # then extract source-tagged notes from the best fragments.
-        console.print(f"  [dim cyan]Reranking {len(all_chunks)} chunks...[/dim cyan]")
-        relevant = rerank(objective, all_chunks, top_n=15)
+        console.print(f"  [dim cyan]Reranking {len(unique)} chunks...[/dim cyan]")
+        relevant = rerank(objective, unique, top_n=15)
         annotated, sources = number_sources(relevant, source_map)
         console.print("  [dim]Synthesizing extracted knowledge via LLM...[/dim]")
-        return _extract_info(objective, annotated), sources
+        return _extract_info(objective, annotated, focus=focus, context=context), sources
 
     extracted_notes, sources = _rerank_and_extract()
 
-    # Round 2 — one bounded gap-filling pass: find important missing aspects,
-    # gather more sources for them, then re-rank and re-extract over the larger
-    # corpus. Bounded to a single extra round so a model can't loop forever.
-    gap_queries = _find_gaps(objective, extracted_notes) if extracted_notes else []
-    if gap_queries:
-        console.print("Filling coverage gaps with follow-up searches...")
+    # Gap-filling rounds — find important missing aspects, gather more sources,
+    # re-rank and re-extract. Bounded to max_rounds-1 extra rounds.
+    for round_num in range(2, max_rounds + 1):
+        if not extracted_notes:
+            break
+        gap_queries = _find_gaps(objective, extracted_notes, focus=focus, context=context)
+        if not gap_queries:
+            console.print(f"[dim]Round {round_num}/{max_rounds}: coverage sufficient, stopping.[/dim]")
+            break
+        console.print(f"Round {round_num}/{max_rounds}: filling coverage gaps...")
         for i, q in enumerate(gap_queries, 1):
             console.print(f"  +{i}. {q}")
-        if _gather(gap_queries, visited_urls, all_chunks, source_map):
+        if _gather(gap_queries, visited_urls, all_chunks, source_map,
+                   max_new_sources=max_sources):
             extracted_notes, sources = _rerank_and_extract()
+        else:
+            console.print(f"[dim]No new sources found in round {round_num}.[/dim]")
+            break
 
     if not extracted_notes:
         return f"Research completed, but no relevant technical info was found in the {len(source_map)} fragments."
@@ -242,8 +331,9 @@ def run_deep_research(objective: str) -> str:
     # Final synthesis with numbered, inline-citable sources.
     console.print("[bold cyan]Building Final Report...[/bold cyan]")
     sources_text = "\n".join(sources)
+    focus_clause = f"\n\nFocus the report on: {focus}." if focus else ""
     synthesis_prompt = f"""You are an elite expert researcher.
-Your overarching research objective was: '{objective}'
+Your overarching research objective was: '{objective}'{focus_clause}
 
 Here are the extracted findings. Each fact carries a [n] marker identifying its source:
 {extracted_notes}
