@@ -4,17 +4,36 @@ import shutil
 from pathlib import Path
 from file_tracker import snapshot
 from memory_manager import memory
-from tools._helpers import _resolve_path, _is_plugin_path_restricted, _is_unity_meta_restricted, _validate_code_syntax, _print_diff, _shift_indent, _maybe_unescape_content, _changed_region_preview, _unity_script_placement_error
+from tools._helpers import _resolve_path, _is_plugin_path_restricted, _is_unity_meta_restricted, _validate_code_syntax, _print_diff, _shift_indent, _maybe_unescape_content, _changed_region_preview, _unity_script_placement_error, _strip_read_line_numbers
 from logger import get_logger
 
 log = get_logger("tools")
 
-MAX_READ_LINES = 500
 # A line budget bounds a source file but not a minified bundle, a base64 blob or
 # a one-line JSON dump: those are a single line of any size, and the whole thing
-# went into the context window. This is the backstop, in characters, roughly
-# 10k tokens.
-MAX_READ_CHARS = 40_000
+# went into the context window. The character budget is the real bound; the line
+# budget just keeps a narrow file from arriving as a wall.
+#
+# Both scale with what the model can hold. A 3B model on an 8k window drowns in
+# 40k characters, while making a 128k cloud model read agent.py in four calls
+# costs four round trips and four chances to lose the thread — and the files
+# that matter most are the long ones.
+_READ_BUDGET = {
+    "tiny":  (400, 12_000),
+    "small": (400, 12_000),
+}
+_READ_BUDGET_DEFAULT = (1500, 40_000)
+# Kept as module constants because tests and callers refer to them.
+MAX_READ_LINES, MAX_READ_CHARS = _READ_BUDGET_DEFAULT
+
+
+def _read_budget() -> tuple:
+    try:
+        from config import get_current_model, get_model_size_category
+        return _READ_BUDGET.get(get_model_size_category(get_current_model()),
+                                _READ_BUDGET_DEFAULT)
+    except Exception:
+        return _READ_BUDGET_DEFAULT
 
 
 def read_file(file_path: str, start_line: int = None, end_line: int = None) -> str:
@@ -26,11 +45,15 @@ def read_file(file_path: str, start_line: int = None, end_line: int = None) -> s
         if not path.is_file():
             return f"Error: '{file_path}' is not a file."
 
+        max_lines, max_chars = _read_budget()
         ranged = start_line is not None or end_line is not None
         first = max(1, start_line or 1)
         last = end_line if end_line is not None else None
 
-        lines = []
+        # Numbered, so a later reference to "line 412" is read off the output
+        # instead of counted by a model that cannot count. It also makes
+        # start_line/end_line usable on the follow-up read without guessing.
+        numbered = []
         size = 0
         total = 0
         stopped_at_chars = False
@@ -42,29 +65,31 @@ def read_file(file_path: str, start_line: int = None, end_line: int = None) -> s
                 if last is not None and number > last:
                     # Keep counting so the header can report the real total.
                     continue
-                if not ranged and len(lines) >= MAX_READ_LINES:
+                if not ranged and len(numbered) >= max_lines:
                     continue
-                if size + len(line) > MAX_READ_CHARS:
+                if size + len(line) > max_chars:
                     stopped_at_chars = True
                     break
-                lines.append(line)
+                numbered.append(f"{number:>5}\t{line}")
                 size += len(line)
 
-        body = "".join(lines)
-        shown_to = first + len(lines) - 1
+        body = "".join(numbered)
+        if body and not body.endswith("\n"):
+            body += "\n"
+        shown_to = first + len(numbered) - 1
 
         if stopped_at_chars:
-            return (f"[Stopped at {MAX_READ_CHARS} characters — lines {first}-{shown_to}. "
+            return (f"[Stopped at {max_chars} characters — lines {first}-{shown_to}. "
                     f"The file has very long lines (minified, base64 or one-line JSON?). "
                     f"Use grep_search to find what you need, or start_line/end_line "
                     f"for a smaller range.]\n" + body)
         if ranged:
             return f"[Lines {first}-{shown_to} of {total}]\n" + body
-        if total > MAX_READ_LINES:
+        if total > max_lines:
             nav = (" or get_file_outline to jump straight to a symbol"
                    if path.suffix.lower() in (".py", ".cs") else "")
-            return (f"[File exceeds {MAX_READ_LINES} lines ({total} total). Showing first "
-                    f"{MAX_READ_LINES}. Use start_line/end_line to read specific "
+            return (f"[File exceeds {max_lines} lines ({total} total). Showing first "
+                    f"{max_lines}. Use start_line/end_line to read specific "
                     f"sections{nav}.]\n" + body)
         return body
     except Exception as e:
@@ -372,8 +397,9 @@ def replace_in_file(file_path: str, target_text: str, replacement_text: str) -> 
         with open(path, "r", encoding="utf-8") as f:
             content = f.read()
 
-        target_text_processed = _maybe_unescape_content(target_text)
-        replacement_text_processed = _maybe_unescape_content(replacement_text)
+        target_text_processed = _strip_read_line_numbers(_maybe_unescape_content(target_text))
+        replacement_text_processed = _strip_read_line_numbers(
+            _maybe_unescape_content(replacement_text))
 
         fuzzy_note = ""
         anchor_line = 0            # 0-indexed start of the changed region

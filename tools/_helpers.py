@@ -293,6 +293,48 @@ def _maybe_unescape_content(text: str) -> str:
     return text
 
 
+_LINE_NUMBER_PREFIX = None
+
+
+def _strip_read_line_numbers(text: str) -> str:
+    """Drop the gutter read_file adds, when the model has pasted it back.
+
+    read_file returns "  412\\tcode" so the model can cite a line without
+    counting. The predictable cost is that it then quotes those lines verbatim
+    as an edit target, which matches nothing in the file — and the failure
+    reads as "the text isn't there", sending the model off to re-read.
+
+    Three signals together, because any one of them alone has a false positive
+    that costs real data. "1\\tAlice\\n2\\tBob" is a tab-separated table, not a
+    gutter, and stripping it would silently mangle the file:
+
+      * every non-blank line carries a number and a tab;
+      * the numbers run consecutively;
+      * the column is right-aligned — at least one line has padding before its
+        digits, which read_file emits and a hand-written table does not.
+    """
+    global _LINE_NUMBER_PREFIX
+    if not text or "\t" not in text:
+        return text
+    if _LINE_NUMBER_PREFIX is None:
+        import re
+        _LINE_NUMBER_PREFIX = re.compile(r"^(\s{0,8})(\d+)\t")
+
+    # A blank source line still gets a number ("    2\t"), so only a genuinely
+    # empty string — the tail left by a trailing newline — is skipped here.
+    lines = text.split("\n")
+    matches = [_LINE_NUMBER_PREFIX.match(ln) for ln in lines if ln != ""]
+    if len(matches) < 2 or not all(matches):
+        return text
+    numbers = [int(m.group(2)) for m in matches]
+    if any(b - a != 1 for a, b in zip(numbers, numbers[1:])):
+        return text
+    if not any(m.group(1) for m in matches):
+        return text
+    return "\n".join(_LINE_NUMBER_PREFIX.sub("", ln) if ln != "" else ln
+                     for ln in lines)
+
+
 def _changed_region_preview(new_content: str, start_line: int, new_line_count: int,
                             context: int = 3, max_lines: int = 30) -> str:
     """Numbered excerpt of the just-edited region so the model can verify the

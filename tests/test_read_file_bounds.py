@@ -48,26 +48,35 @@ class TestReadIsBounded:
 
 
 class TestOrdinaryReadsAreUnchanged:
+    """Line numbering is covered in test_read_line_numbers.py; here only the
+    bounds matter, so the gutter is stripped before asserting on content."""
+
+    @staticmethod
+    def _plain(out):
+        from tools._helpers import _strip_read_line_numbers
+        return _strip_read_line_numbers(out)
+
     def test_a_small_file_comes_back_whole(self, tmp_path):
         _write(tmp_path, "a.py", "def f():\n    return 1\n")
-        assert file_ops.read_file("a.py") == "def f():\n    return 1\n"
+        assert self._plain(file_ops.read_file("a.py")) == "def f():\n    return 1\n"
 
-    def test_the_line_cap_still_reports_the_true_total(self, tmp_path):
+    def test_the_line_cap_still_reports_the_true_total(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("config.get_model_size_category", lambda m: "tiny")
         _write(tmp_path, "long.py", "".join(f"line {i}\n" for i in range(1, 801)))
         out = file_ops.read_file("long.py")
         assert "800 total" in out
-        assert "line 500\n" in out and "line 501\n" not in out
+        assert "\tline 400\n" in out and "\tline 401\n" not in out
 
     def test_a_range_reports_its_span(self, tmp_path):
         _write(tmp_path, "m.txt", "".join(f"{i}\n" for i in range(1, 51)))
         out = file_ops.read_file("m.txt", start_line=10, end_line=12)
         assert out.startswith("[Lines 10-12 of 50]")
-        assert out.endswith("10\n11\n12\n")
+        assert out.endswith("   10\t10\n   11\t11\n   12\t12\n")
 
     def test_a_range_past_the_end_is_clamped(self, tmp_path):
         _write(tmp_path, "s.txt", "a\nb\n")
         out = file_ops.read_file("s.txt", start_line=1, end_line=99)
-        assert "of 2]" in out and out.endswith("a\nb\n")
+        assert "of 2]" in out and out.endswith("    1\ta\n    2\tb\n")
 
 
 class TestAppendDoesNotAccumulateBlankLines:

@@ -421,7 +421,7 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "read_file",
-            "description": "Reads file content. Files over 500 lines are auto-truncated; use start_line/end_line to read specific sections.",
+            "description": "Reads file content. Every line is prefixed with its line number and a tab — that gutter is NOT part of the file: never include it in target_text or in content you write back. Long files are truncated; use start_line/end_line to read specific sections.",
             "parameters": {
                 "type": "object",
                 "properties": {
