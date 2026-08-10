@@ -17,6 +17,7 @@ import threading
 from pathlib import Path
 from datetime import datetime
 
+from atomic_io import atomic_write_text
 from logger import get_logger
 
 log = get_logger("memory")
@@ -42,9 +43,16 @@ class MemoryManager:
     def _load(self) -> dict:
         if self._memory_file.exists():
             try:
-                return json.loads(self._memory_file.read_text(encoding="utf-8"))
-            except Exception:
-                pass
+                loaded = json.loads(self._memory_file.read_text(encoding="utf-8"))
+                if isinstance(loaded, dict):
+                    return loaded
+                raise ValueError(f"expected an object, got {type(loaded).__name__}")
+            except Exception as e:
+                # This file is what a small model knows about the work after a
+                # context reset. Starting over from blank without a word makes
+                # the model look like it forgot, with no way to tell that from
+                # a damaged file — and the next _save() overwrites the evidence.
+                self._quarantine(e)
         return {
             "objective": "",
             "current_task": "",
@@ -55,11 +63,27 @@ class MemoryManager:
             "updated_at": "",
         }
 
+    def _quarantine(self, reason) -> None:
+        """Keep a damaged memory file instead of writing over it."""
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        backup = self._memory_file.with_name(f"{self._memory_file.name}.broken-{stamp}")
+        try:
+            self._memory_file.replace(backup)
+            log.warning("memory.json unreadable (%s) — kept as %s", reason, backup.name)
+        except OSError as e:
+            log.error("memory.json unreadable (%s) and could not be set aside: %s",
+                      reason, e)
+
     def _save(self):
         with self._lock:
-            self._memory_file.parent.mkdir(parents=True, exist_ok=True)
             self.data["updated_at"] = datetime.now().isoformat()
-            self._memory_file.write_text(json.dumps(self.data, indent=2, ensure_ascii=False), encoding="utf-8")
+            # write_text truncates first: a crash mid-write left the file
+            # half-written, and the project already had atomic_write_text for
+            # exactly this (config.py and session.py use it).
+            atomic_write_text(
+                self._memory_file,
+                json.dumps(self.data, indent=2, ensure_ascii=False),
+            )
 
     def set_objective(self, text: str):
         self.data["objective"] = text[:500]
