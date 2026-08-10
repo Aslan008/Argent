@@ -3,7 +3,7 @@ import questionary
 
 from agent import ArgentAgent
 from config import (
-    get_current_model, set_current_model, get_obsidian_vault, set_obsidian_vault,
+    get_current_model, set_current_model,
     get_hooks_dir, set_hooks_dir, get_autonomous_plugins_enabled, set_autonomous_plugins_enabled,
     get_disabled_tools, set_disabled_tools,
     get_provider, set_provider, get_zai_api_key, set_zai_api_key,

@@ -366,14 +366,6 @@ def get_model_size_category(model_name: str) -> str:
 
 # ─── Paths & integrations ────────────────────────────────────────────────────
 
-def get_obsidian_vault() -> str | None:
-    return _get("obsidian_vault")
-
-
-def set_obsidian_vault(path: str):
-    _set("obsidian_vault", path)
-
-
 def get_hooks_dir() -> str:
     # Default to local ./plugins folder (evaluated at call time)
     return _get("hooks_dir", str(Path.cwd() / "plugins"))

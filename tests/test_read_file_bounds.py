@@ -18,8 +18,7 @@ from tools import file_ops
 
 
 @pytest.fixture(autouse=True)
-def no_vault(monkeypatch, tmp_path):
-    monkeypatch.setattr("tools._helpers.get_obsidian_vault", lambda: None)
+def in_tmp(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
 
 

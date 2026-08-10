@@ -9,38 +9,22 @@ from src.agent.shell import run_text
 from rich.syntax import Syntax
 from rich.panel import Panel
 from ui import console
-from config import get_obsidian_vault, get_hooks_dir
+from config import get_hooks_dir
 from logger import get_logger
 
 log = get_logger("tools")
 
 def _resolve_path(file_path: str) -> Path:
-    """Resolve file path locally first. If missing, check if it exists in the
-    configured Obsidian Vault.
+    """Resolve a path against the working directory.
 
-    The vault fallback silently retargets a relative path into an unrelated
-    directory tree, and every file tool runs through here — including
-    delete_file. It is logged so a surprising result is at least explainable
-    afterwards, and callers that ask for consent must name the path this
-    returns, not the one the model typed.
+    This used to fall back to a configured Obsidian vault when the file did not
+    exist locally — the last living piece of an integration whose tools and
+    /obsidian command were both removed. Every file tool runs through here,
+    delete_file included, so a relative name absent from the project but present
+    in the vault silently retargeted the operation into an unrelated directory
+    tree. Removed with the rest of the feature.
     """
-    path = Path(file_path).expanduser().resolve()
-    if path.exists():
-        return path
-
-    vault_str = get_obsidian_vault()
-    if vault_str:
-        vault_path = Path(vault_str).expanduser().resolve()
-        try:
-            possible_vault_file = (vault_path / file_path).resolve()
-            if possible_vault_file.exists() and str(possible_vault_file).startswith(str(vault_path)):
-                log.info("path %r resolved into the Obsidian vault: %s",
-                         file_path, possible_vault_file)
-                return possible_vault_file
-        except Exception:
-            pass
-
-    return path
+    return Path(file_path).expanduser().resolve()
 
 def _is_plugin_path_restricted(file_path: str) -> str | None:
     """Checks if the path is inside the plugins directory and returns an error if restricted."""

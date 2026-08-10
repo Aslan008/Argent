@@ -11,7 +11,7 @@ any tool the model still manages to call is unaffected.
 
 # Essentials for a coding agent: file editing, search, command execution,
 # background processes, user interaction and a couple of utilities. Excludes
-# browser automation, MCP, Obsidian, SVG, skill/plugin CRUD, project-brain
+# browser automation, MCP, SVG, skill/plugin CRUD, project-brain
 # tools and system_ops — all rarely usable by a 3-7B model and heavy on tokens.
 CORE_CHAT_TOOLS = {
     # files

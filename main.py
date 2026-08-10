@@ -13,7 +13,7 @@ import questionary
 import approval
 from agent import ArgentAgent
 from config import (
-    get_current_model, set_current_model, get_obsidian_vault, set_obsidian_vault,
+    get_current_model, set_current_model,
     get_hooks_dir, set_hooks_dir, get_autonomous_plugins_enabled, set_autonomous_plugins_enabled,
     get_disabled_tools, set_disabled_tools,
     get_provider, set_provider, get_zai_api_key, set_zai_api_key,
@@ -524,10 +524,6 @@ def main():
     print_system(f"Рабочая директория: {os.getcwd()}")
     if not Path(".argent/AGENTS.md").exists() and not Path("AGENTS.md").exists():
         print_system("[dim]Подсказка: нет AGENTS.md — выполните /init, чтобы Argent изучил проект и создал память о нём.[/dim]")
-    vault = get_obsidian_vault()
-    if vault:
-        print_system(f"Obsidian Vault: {vault}")
-
     from config import get_mcp_servers
     from mcp_client import mcp_client
     mcp_servers = get_mcp_servers()
