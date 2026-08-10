@@ -1,13 +1,17 @@
 import os
 import re
 import threading
-import logging
 from typing import List, Dict, Any
 from memory_manager import memory
 from providers import create_provider, ProviderError
+from logger import get_logger
 from config import get_provider, get_context_window, get_model_size_category, get_strip_reasoning
 
-log = logging.getLogger("argent.agent.trimmer")
+# Was logging.getLogger("argent.agent.trimmer") — a name nothing ever attaches a
+# handler to, so every record below vanished. That is the one place you would
+# look to find out why a compacted session forgot the project: whether the
+# summary was written, timed out, or was skipped for a hard reset.
+log = get_logger("trimmer")
 
 # estimate_tokens is on the hot path: _trim_history and get_context_usage call
 # it for EVERY message EVERY turn. Without a cache that meant one HTTP request
