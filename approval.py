@@ -11,6 +11,10 @@ The active policy decides what happens:
 The user can also grant a session-wide allowance for a command family
 (e.g. "always allow 'git' commands this session") directly from the prompt.
 Destructive actions are never auto-approved and never covered by grants.
+
+Both shortcuts are consent from a human who is present. A backend marked
+`unattended` (see _nobody_is_watching) turns them off: whatever the interactive
+session pre-authorised, a scheduled run has to ask its own gate.
 """
 
 import re
@@ -186,6 +190,18 @@ def _active_backend():
     return getattr(_local, "backend", None) or _terminal_decision
 
 
+def _nobody_is_watching() -> bool:
+    """True when the installed backend speaks for an unattended run.
+
+    Session grants and POLICY_AUTO are pre-authorisations a PRESENT human gave
+    for the work in front of them. They say nothing about what a scheduled job
+    may do at 04:00, and a backend that exists to refuse everything is no gate
+    at all if those shortcuts answer before it is asked. A backend declares
+    itself by carrying `unattended = True`.
+    """
+    return bool(getattr(_active_backend(), "unattended", False))
+
+
 def _terminal_decision(action: str, destructive: bool, grant_key: str | None) -> str:
     """Interactive TTY prompt. Returns 'deny' | 'once' | 'always'."""
     from ui import console
@@ -220,7 +236,7 @@ def request_approval(action: str, *, destructive: bool = False,
     """
     from ui import console
 
-    if not destructive:
+    if not destructive and not _nobody_is_watching():
         if grant_key and grant_key in _session_grants:
             console.print(f"[dim]✓ Авто-одобрено (сессионное разрешение '{grant_key}'): {action}[/dim]")
             log.info("Approved via session grant '%s': %s", grant_key, action)

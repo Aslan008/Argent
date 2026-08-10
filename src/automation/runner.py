@@ -38,6 +38,13 @@ UNATTENDED_TOOL_DENYLIST = {
 class UnattendedGate:
     """Approval backend for a run with no human: deny, and remember."""
 
+    # Read by approval.request_approval: suppresses the session grants and the
+    # POLICY_AUTO shortcut, both of which are consent a present human gave for
+    # their own work. Without it a user who had run /vibe, or who had once
+    # answered "always allow git", handed every later scheduled run the same
+    # authority — and the refusal log stayed empty because nothing was refused.
+    unattended = True
+
     def __init__(self):
         self.denied = []
 
