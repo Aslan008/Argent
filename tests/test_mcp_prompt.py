@@ -158,10 +158,18 @@ class TestWeakModelProfile:
         assert "call_mcp_tool" in slim_tools_for_category(["call_mcp_tool"], "tiny")
 
     def test_a_broken_config_does_not_shrink_the_toolset(self, monkeypatch):
+        """Every conditional is pinned, not just the one under test.
+
+        The LSP tools join the core set when multilspy is importable, so this
+        used to pass or fail depending on whether the developer had installed
+        it — the assertion is about a RAISING conditional being skipped, and it
+        should not move when an unrelated one starts answering True.
+        """
         def boom():
             raise RuntimeError("config unreadable")
 
         monkeypatch.setattr("config.get_mcp_servers", boom)
+        monkeypatch.setattr("src.lsp.manager.lsp_manager.is_available", lambda: False)
         from tool_profiles import CORE_CHAT_TOOLS, core_tools_now
         assert core_tools_now() == set(CORE_CHAT_TOOLS)
 

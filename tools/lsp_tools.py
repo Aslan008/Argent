@@ -118,22 +118,36 @@ def find_implementations(file_path: str, line: int, column: int) -> str:
 
     Given a symbol at a position (e.g. an interface method or abstract class),
     returns all concrete implementations. Works across all LSP-supported
-    languages. Requires multilspy.
+    languages. Falls back to Jedi-based reference search for Python when the
+    language server doesn't support textDocument/implementation.
     """
     from src.lsp.manager import lsp_manager
 
-    if not lsp_manager.is_available():
-        return ("LSP (multilspy) is not installed. Install with: pip install multilspy")
+    # Try LSP first (cross-language)
+    if lsp_manager.is_available():
+        results = lsp_manager.find_implementations(file_path, line, column)
+        if results:
+            out = f"Found {len(results)} implementation(s) (LSP):\n"
+            for r in results:
+                out += f"- {r['file_path']}:{r['line']}:{r['column']}\n"
+            return out.rstrip()
 
-    results = lsp_manager.find_implementations(file_path, line, column)
-    if results is None:
-        return ("LSP server could not process this request. The language "
-                "server may not support textDocument/implementation.")
-    if not results:
+    # Fall back to Jedi (Python only) — find references that are definitions
+    from intelligence import intel
+    refs = intel.find_references(file_path, line, column)
+    if not refs or "error" in refs[0]:
         return "No implementations found."
-    out = f"Found {len(results)} implementation(s) (LSP):\n"
-    for r in results:
-        out += f"- {r['file_path']}:{r['line']}:{r['column']}\n"
+
+    # Filter for references that look like definitions (not call sites).
+    # Jedi's description for definitions starts with "def " or "class ".
+    impls = [r for r in refs if r.get("description", "").startswith(("def ", "class "))]
+    if not impls:
+        # No definition-like references; show all as best-effort
+        impls = refs
+
+    out = f"Found {len(impls)} implementation(s):\n"
+    for r in impls:
+        out += f"- {r['name']} in {r['file_path']}:{r['line']}\n"
     return out.rstrip()
 
 
@@ -164,18 +178,65 @@ def get_call_hierarchy(file_path: str, line: int, column: int,
     - "incoming" — find all functions that CALL this function (callers).
     - "outgoing" — find all functions that this function CALLS (callees).
 
-    Requires multilspy. Works across all LSP-supported languages.
+    Uses LSP (multilspy) when the language server supports it. Falls back to
+    a Jedi-based implementation for Python when the server doesn't support
+    call hierarchy (e.g. jedi-language-server).
     """
     from src.lsp.manager import lsp_manager
-
-    if not lsp_manager.is_available():
-        return ("LSP (multilspy) is not installed. Install with: pip install multilspy")
 
     if direction not in ("incoming", "outgoing"):
         direction = "incoming"
 
-    results = lsp_manager.get_call_hierarchy(file_path, line, column, direction)
-    if results is None:
-        return ("LSP server could not process this request. The language "
-                "server may not support call hierarchy.")
-    return lsp_manager.format_call_hierarchy(results, direction)
+    # Try LSP first (cross-language)
+    if lsp_manager.is_available():
+        results = lsp_manager.get_call_hierarchy(file_path, line, column, direction)
+        if results is not None:
+            return lsp_manager.format_call_hierarchy(results, direction)
+
+    # Fall back to Jedi (Python only)
+    from intelligence import intel
+
+    if direction == "incoming":
+        # All references to this function are potential callers
+        refs = intel.find_references(file_path, line, column)
+        if not refs or "error" in refs[0]:
+            return "No callers found."
+        out = f"Callers ({len(refs)}):\n"
+        for r in refs:
+            out += f"  {r['name']} — {r['file_path']}:{r['line']}\n"
+        return out.rstrip()
+    else:
+        # Outgoing: find all function calls within the function body using AST
+        import ast
+        try:
+            with open(file_path, encoding="utf-8") as f:
+                source = f.read()
+            tree = ast.parse(source)
+            calls = []
+            for node in ast.walk(tree):
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    if node.lineno <= line <= (node.end_lineno or node.lineno):
+                        for child in ast.walk(node):
+                            if isinstance(child, ast.Call):
+                                func = child.func
+                                if isinstance(func, ast.Name):
+                                    calls.append((func.id, child.lineno))
+                                elif isinstance(func, ast.Attribute):
+                                    calls.append((func.attr, child.lineno))
+                        break
+            if not calls:
+                return "No callees found."
+            # Deduplicate
+            seen = set()
+            unique = []
+            for name, lineno in calls:
+                key = (name, lineno)
+                if key not in seen:
+                    seen.add(key)
+                    unique.append((name, lineno))
+            out = f"Callees ({len(unique)}):\n"
+            for name, lineno in unique:
+                out += f"  {name} — {file_path}:{lineno}\n"
+            return out.rstrip()
+        except Exception as e:
+            return f"Error finding callees: {e}"
