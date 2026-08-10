@@ -125,14 +125,29 @@ def choose_shell(command: str) -> str:
     return "powershell"
 
 
-def build_command_argv(command: str, shell_kind: str) -> list[str]:
-    """Build the argv for subprocess (shell=False) for the chosen shell.
+def build_command_argv(command: str, shell_kind: str):
+    """What to hand subprocess (shell=False) for the chosen shell.
 
-    Passing the command as a single argument avoids the double-escaping that a
-    wrapped `-Command "..."` string would suffer. PowerShell output is forced to
-    UTF-8 so the byte decoder downstream stays consistent.
+    A LIST for PowerShell, a raw command-line STRING for cmd.exe — because the
+    two disagree about how an embedded quote is written and only one of them can
+    be expressed as a list.
+
+    subprocess builds a Windows command line from a list with list2cmdline,
+    which escapes an inner `"` as `\\"`. PowerShell accepts that form. cmd.exe
+    does not: backslash-escaping is a C-runtime convention, so cmd passes the
+    backslash through and the quote reads as a delimiter. Measured, this
+
+        cd C:\\proj && python -c "import sys; print('ok')"
+
+    reached Python as argv[2] == '"import' and died with "unterminated string
+    literal" — the model then blamed itself and started writing temp files.
+
+    `/s /c "…"` is the form that survives: with /s cmd strips exactly the first
+    and last quote and takes the rest verbatim. Without it a command that BEGINS
+    with a quote — `"C:\\Program Files\\...\\python.exe" -c ...` — loses the
+    quotes around its own executable path and fails to launch.
     """
     if shell_kind == "powershell":
         wrapped = "[Console]::OutputEncoding=[Text.Encoding]::UTF8; " + command
         return ["powershell", "-NoProfile", "-NonInteractive", "-Command", wrapped]
-    return ["cmd", "/c", command]
+    return f'cmd /s /c "{command}"'

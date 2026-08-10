@@ -33,5 +33,7 @@ class TestBuildArgv:
         assert "OutputEncoding" in argv[-1]
         assert argv[-1].endswith("dotnet build")
 
-    def test_cmd_argv(self):
-        assert build_command_argv("dir", "cmd") == ["cmd", "/c", "dir"]
+    def test_cmd_gets_a_raw_command_line(self):
+        """Not a list: list2cmdline escapes an inner quote as \\", which cmd.exe
+        does not understand. See test_shell_quoting.py."""
+        assert build_command_argv("dir", "cmd") == 'cmd /s /c "dir"'
