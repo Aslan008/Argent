@@ -418,6 +418,21 @@ def set_verbose_status(enabled: bool):
     _set("verbose_status", enabled)
 
 
+def get_show_tool_results() -> bool:
+    """Whether a tool's full output is printed after every call.
+
+    Off by default. A tool result is written for the model — read_file returns
+    the whole file, grep_search every match — and printing it pushed the
+    conversation off the screen. The compact line keeps the shape of the
+    result; /debug or this setting brings back the full panel.
+    """
+    return _get("show_tool_results", False)
+
+
+def set_show_tool_results(enabled: bool):
+    _set("show_tool_results", enabled)
+
+
 def get_debug_mode() -> bool:
     """Whether debug mode (detailed logs in chat) is enabled."""
     return _get("debug_mode", False)

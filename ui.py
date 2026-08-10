@@ -51,7 +51,11 @@ default_theme_data = {
     },
     "settings": {
         "content_width": 110,
-        "syntax_theme": "monokai",
+        # Was "monokai", whose operator colour is #ff4689 — hot pink. Every
+        # "=", ".", ":" and "->" in every code block and diff was rendered in
+        # it, which is why the terminal read as pink overall. Sober
+        # alternatives, if you prefer: "nord" (no pink at all), "github-dark".
+        "syntax_theme": "one-dark",
         "auto_save_chat": True
     }
 }
@@ -322,21 +326,47 @@ def print_tool_start(name: str, args: dict):
     except UnicodeEncodeError:
         pass
     
+def _tool_result_summary(result: str) -> str:
+    """One line describing what came back, for the compact view.
+
+    A tool result is written for the model, not for you: read_file returns the
+    file, grep_search returns every match. Rendering all of it pushed the
+    conversation off the screen — you scroll past your own work to find the
+    answer. The interesting part is almost always the shape of the result.
+    """
+    text = str(result)
+    lines = text.splitlines()
+    body = [ln for ln in lines if ln.strip()]
+    if not body:
+        return "пусто"
+    first = body[0].strip()
+    if len(body) == 1:
+        return first if len(first) <= 110 else first[:107] + "…"
+    return f"{len(lines)} строк · {first[:70]}{'…' if len(first) > 70 else ''}"
+
+
 def print_tool_end(name: str, result: str):
     # Interactive tools — the user already saw the interaction, no need for a result panel
     if name in ("ask_user_questions",):
         return
     res_preview = str(result)
-    
-    from config import get_debug_mode
+
+    from config import get_debug_mode, get_show_tool_results
     is_debug = get_debug_mode()
-    
+
+    # Errors are never collapsed: a failure the user cannot see is a failure
+    # they will discover three turns later, from the model's behaviour.
+    is_error = res_preview.lstrip().lower().startswith("error")
+    if not is_debug and not is_error and not get_show_tool_results():
+        safe_print(f"  [dim]✓ {name} · {escape(_tool_result_summary(res_preview))}[/dim]")
+        return
+
     lines = res_preview.splitlines()
     max_lines = 100 if is_debug else 15
-    
+
     if len(lines) > max_lines:
         res_preview = "\n".join(lines[:max_lines]) + f"\n... [{len(lines) - max_lines} lines hidden in UI]"
-        
+
     try:
         panel = Panel(
             f"[dim]{escape(res_preview)}[/dim]", 

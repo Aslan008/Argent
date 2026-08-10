@@ -273,6 +273,7 @@ def handle_slash_command(command: str, agent: ArgentAgent) -> bool:
             "- `/doctor` — Самодиагностика окружения\n"
             "- `/stats` — Диагностика сессии (модель, бюджет контекста, плагины, MCP)\n"
             "- `/logs [модуль] [n]` — Логи (например /logs tools 20, /logs error)\n"
+            "- `/results` — Показывать полный вывод инструментов (по умолчанию — только сводка)\n"
             "- `/verbose` · `/debug` — Индикаторы статуса / подробные логи\n"
             "\n**Прочее**\n"
             "- `/help` — Эта справка   ·   `/exit` (или `/quit`) — Выход\n"
@@ -291,6 +292,14 @@ def handle_slash_command(command: str, agent: ArgentAgent) -> bool:
         set_verbose_status(new_val)
         state = "[bold green]ON[/bold green]" if new_val else "[bold red]OFF[/bold red]"
         print_system(f"Live status indicators: {state}")
+    elif cmd == "/results":
+        from config import get_show_tool_results, set_show_tool_results
+        new_val = not get_show_tool_results()
+        set_show_tool_results(new_val)
+        state = "[bold green]ON[/bold green]" if new_val else "[bold red]OFF[/bold red]"
+        print_system(f"Полный вывод результатов инструментов: {state}")
+        if not new_val:
+            print_system("[dim]Остаётся строка-сводка; ошибки показываются целиком всегда.[/dim]")
     elif cmd == "/debug":
         current = get_debug_mode()
         new_val = not current

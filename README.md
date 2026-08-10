@@ -241,6 +241,7 @@ Run local shell commands directly from the prompt by prefixing them with `!`. If
 - `/search` — Web research settings: Brave API key, query languages, reranker model.
 - `/auto [task]` — Run task in experimental full autonomous mode.
 - `/verbose` — Toggle live status indicators (spinners).
+- `/results` — Print the full output of every tool call. Off by default: a one-line summary is shown instead, and errors are always printed in full.
 - `/debug` — Toggle verbose tool logging.
 - `/thinking` — Toggle forced removal of reasoning blocks from history.
 - `/temp [value]` — Set or view the model temperature (range: 0.0 - 2.0).
@@ -445,6 +446,7 @@ dsolve(Derivative(y(x), x, 2) + y(x), y(x))  →  C1*sin(x) + C2*cos(x)
 - `/search` — Настройки веб-поиска: ключ Brave, языки запросов, модель reranker'а.
 - `/auto [task]` — Запустить выполнение задачи в экспериментальном полностью автономном режиме.
 - `/verbose` — Включить/выключить интерактивные спиннеры статуса.
+- `/results` — Печатать полный вывод каждого инструмента. По умолчанию выключено: показывается строка-сводка, а ошибки печатаются целиком всегда.
 - `/debug` — Включить/выключить подробное логирование инструментов.
 - `/thinking` — Включить/выключить принудительное удаление рассуждений из истории контекста.
 - `/temp [value]` — Просмотреть или задать температуру генерации модели (от 0.0 до 2.0).

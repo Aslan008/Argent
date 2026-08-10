@@ -467,7 +467,7 @@ def main():
         '/help', '/provider', '/model', '/clear', '/init', '/research', '/rag_toggle', '/auto_retrieve',
         '/kb', '/kb_toggle',
         '/hooks', '/plugin', '/tools', '/save', '/project', '/work', '/commit',
-        '/sessions', '/load', '/copy', '/logs', '/skills', '/skill import', '/auto', '/vibe', '/tasks', '/verbose', '/debug', '/browser', '/exit', '/quit',
+        '/sessions', '/load', '/copy', '/logs', '/skills', '/skill import', '/auto', '/vibe', '/tasks', '/verbose', '/results', '/debug', '/browser', '/exit', '/quit',
         '/mcp', '/thinking', '/temp', '/temperature',
         '/cd', '/undo', '/diff', '/changes', '/rewind', '/stats', '/aux', '/search', '/doctor', '/jobs', '/stop', '/goal', '/critic', '/rooms',
         
