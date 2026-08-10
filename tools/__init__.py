@@ -92,7 +92,10 @@ from tools.browser_tools import (
     browser_get_content,
     browser_close,
 )
-from tools.lsp_tools import check_code
+from tools.lsp_tools import (
+    check_code, find_implementations,
+    search_workspace_symbols, get_call_hierarchy,
+)
 from tools.schemas import (
     TOOL_SCHEMAS,
     AVAILABLE_TOOLS,

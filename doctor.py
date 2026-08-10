@@ -201,8 +201,12 @@ def _check_lsp():
         from src.lsp.manager import lsp_manager
         if lsp_manager.is_available():
             exts = sorted(lsp_manager.supported_extensions())
+            ops = ("check_code (diagnostics), find_definition, find_references, "
+                   "find_implementations, search_workspace_symbols, get_call_hierarchy, "
+                   "get_hover, get_document_symbols")
             return (OK, f"multilspy ready — {len(exts)} extensions: "
-                        + ", ".join(exts[:8]) + ("…" if len(exts) > 8 else ""))
+                        + ", ".join(exts[:8]) + ("…" if len(exts) > 8 else "")
+                        + f"; tools: {ops}")
         return (WARN, "multilspy installed but no language server could start")
     except Exception as e:
         return (WARN, f"multilspy check failed: {e}")

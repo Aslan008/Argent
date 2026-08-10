@@ -29,7 +29,10 @@ from tools.misc_tools import (
     wait_heartbeat, end_auto_mode, create_artifact, request_user_approval,
     calculate, set_goal, filter_new_items, view_image,
 )
-from tools.lsp_tools import check_code
+from tools.lsp_tools import (
+    check_code, find_implementations,
+    search_workspace_symbols, get_call_hierarchy,
+)
 from tools.swarm_tools import run_swarm_workers
 from tools.browser_tools import (
     run_browser_task, browser_open, browser_state, browser_click, browser_input,
@@ -113,6 +116,9 @@ AVAILABLE_TOOLS = {
     "browser_close": browser_close,
     "browser_switch_tab": browser_switch_tab,
     "check_code": check_code,
+    "find_implementations": find_implementations,
+    "search_workspace_symbols": search_workspace_symbols,
+    "get_call_hierarchy": get_call_hierarchy,
 }
 
 # Tools that take over the terminal to ask the user something. The CLI must not
@@ -1724,6 +1730,53 @@ TOOL_SCHEMAS = [
                     }
                 },
                 "required": ["file_path"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "find_implementations",
+            "description": "Find all implementations of an interface or abstract method using LSP. Given a symbol position (e.g. an interface method), returns all concrete implementations. More precise than grep because it understands type relationships. Requires multilspy.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "file_path": {"type": "string", "description": "Path to the file containing the symbol."},
+                    "line": {"type": "integer", "description": "Line number (1-indexed)."},
+                    "column": {"type": "integer", "description": "Column number (0-indexed)."}
+                },
+                "required": ["file_path", "line", "column"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_workspace_symbols",
+            "description": "Search for symbols (classes, functions, methods, variables) across the entire workspace using LSP. Faster and more precise than grep because it understands code structure. Requires multilspy.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Symbol name or partial name to search for."}
+                },
+                "required": ["query"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_call_hierarchy",
+            "description": "Get the call hierarchy for a function/method at the given position. direction='incoming' finds all callers (who calls this function), direction='outgoing' finds all callees (what this function calls). Requires multilspy.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "file_path": {"type": "string", "description": "Path to the file containing the function."},
+                    "line": {"type": "integer", "description": "Line number (1-indexed)."},
+                    "column": {"type": "integer", "description": "Column number (0-indexed)."},
+                    "direction": {"type": "string", "enum": ["incoming", "outgoing"], "description": "'incoming' = find callers, 'outgoing' = find callees. Default: incoming."}
+                },
+                "required": ["file_path", "line", "column"]
             }
         }
     }

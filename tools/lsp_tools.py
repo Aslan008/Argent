@@ -111,3 +111,71 @@ def lsp_references(file_path: str, line: int, column: int) -> str:
     for r in results:
         out += f"- {r['name']} in {r['file_path']}:{r['line']}:{r['column']}\n"
     return out.rstrip()
+
+
+def find_implementations(file_path: str, line: int, column: int) -> str:
+    """Find implementations of an interface or abstract method using LSP.
+
+    Given a symbol at a position (e.g. an interface method or abstract class),
+    returns all concrete implementations. Works across all LSP-supported
+    languages. Requires multilspy.
+    """
+    from src.lsp.manager import lsp_manager
+
+    if not lsp_manager.is_available():
+        return ("LSP (multilspy) is not installed. Install with: pip install multilspy")
+
+    results = lsp_manager.find_implementations(file_path, line, column)
+    if results is None:
+        return ("LSP server could not process this request. The language "
+                "server may not support textDocument/implementation.")
+    if not results:
+        return "No implementations found."
+    out = f"Found {len(results)} implementation(s) (LSP):\n"
+    for r in results:
+        out += f"- {r['file_path']}:{r['line']}:{r['column']}\n"
+    return out.rstrip()
+
+
+def search_workspace_symbols(query: str) -> str:
+    """Search for symbols (classes, functions, methods, etc.) across the
+    entire workspace using LSP. Faster and more precise than grep because
+    it understands code structure. Requires multilspy.
+
+    Returns matching symbols with their file locations.
+    """
+    from src.lsp.manager import lsp_manager
+
+    if not lsp_manager.is_available():
+        return ("LSP (multilspy) is not installed. Install with: pip install multilspy")
+
+    results = lsp_manager.get_workspace_symbols(query)
+    if results is None:
+        return ("LSP server could not process this request. The language "
+                "server may not support workspace/symbol, or no server is running.")
+    return lsp_manager.format_symbols(results)
+
+
+def get_call_hierarchy(file_path: str, line: int, column: int,
+                       direction: str = "incoming") -> str:
+    """Get the call hierarchy for a function/method at the given position.
+
+    ``direction``:
+    - "incoming" — find all functions that CALL this function (callers).
+    - "outgoing" — find all functions that this function CALLS (callees).
+
+    Requires multilspy. Works across all LSP-supported languages.
+    """
+    from src.lsp.manager import lsp_manager
+
+    if not lsp_manager.is_available():
+        return ("LSP (multilspy) is not installed. Install with: pip install multilspy")
+
+    if direction not in ("incoming", "outgoing"):
+        direction = "incoming"
+
+    results = lsp_manager.get_call_hierarchy(file_path, line, column, direction)
+    if results is None:
+        return ("LSP server could not process this request. The language "
+                "server may not support call hierarchy.")
+    return lsp_manager.format_call_hierarchy(results, direction)
