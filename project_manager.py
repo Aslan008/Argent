@@ -52,7 +52,7 @@ class ProjectManager:
 
     # ─── Project Lifecycle ────────────────────────────────────────────
 
-    def create(self, objective: str, status: str = "specifying", mode: str = "project", auto_mode: bool = False, tdd_mode: bool = False, use_obsidian: bool = False):
+    def create(self, objective: str, status: str = "specifying", mode: str = "project", auto_mode: bool = False, tdd_mode: bool = False):
         """Create a new project or work session from scratch."""
         self.data = {
             "mode": mode,
@@ -70,7 +70,6 @@ class ProjectManager:
             "work_strategy": "",
             "work_auto_mode": auto_mode,
             "tdd_mode": tdd_mode,
-            "use_obsidian": use_obsidian
         }
         self._save()
 

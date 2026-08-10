@@ -5,7 +5,7 @@ from tool_profiles import slim_tools_for_category, is_slim_category, CORE_CHAT_T
 
 ALL = [
     "read_file", "write_file", "run_command", "grep_search", "calculate",
-    "browser_open", "browser_click", "call_mcp_tool", "write_obsidian_note",
+    "browser_open", "browser_click", "call_mcp_tool", "create_skill",
     "create_svg_image", "git_checkpoint", "run_subagent", "analyze_project",
 ]
 

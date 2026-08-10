@@ -1,7 +1,6 @@
 import questionary
 from project_manager import ProjectManager
 from ui import print_system, print_error
-from config import get_obsidian_vault
 from prompts import (
     build_spec_prompt, build_work_investigation_prompt,
     build_work_planning_prompt, build_planning_prompt, build_architecture_prompt
@@ -42,8 +41,6 @@ class ProjectOrchestrator:
                 "stop_background_command", "search_web", "read_webpage",
                 "complete_project_task"
             ]
-            if self.pm.data.get("use_obsidian", False):
-                active_tools.extend(["write_obsidian_note", "search_obsidian_notes", "update_obsidian_properties"])
             return active_tools
             
         return None
@@ -53,16 +50,12 @@ class ProjectOrchestrator:
         run_research = questionary.confirm("Run Deep Research (Phase 0) to gather up-to-date context before planning?").ask()
         tdd_mode = questionary.confirm("Enable TDD Mode? (AI will write tests BEFORE code)").ask()
         
-        use_obsidian = False
-        if get_obsidian_vault():
-            use_obsidian = questionary.confirm("Enable Obsidian integration for this project? (Create notes instead of normal files)").ask()
-        
         self.pm.destroy()
         self.last_task_id = None
         self.task_retries = 0
         
         if run_research:
-            self.pm.create(proj_prompt, status="researching", tdd_mode=tdd_mode, use_obsidian=use_obsidian)
+            self.pm.create(proj_prompt, status="researching", tdd_mode=tdd_mode)
             user_input = (
                 f"You are the Phase 0 Research Agent for the new project: '{proj_prompt}'.\n\n"
                 f"Your task is to gather the MAXIMUM amount of up-to-date information, best practices, and API references required to build this project.\n"
@@ -72,7 +65,7 @@ class ProjectOrchestrator:
             )
             print_system(f"[Brain] Phase 0: Starting Deep Research...")
         else:
-            self.pm.create(proj_prompt, status="specifying_architecture", tdd_mode=tdd_mode, use_obsidian=use_obsidian)
+            self.pm.create(proj_prompt, status="specifying_architecture", tdd_mode=tdd_mode)
             user_input = build_architecture_prompt(proj_prompt)
             print_system(f"[Brain] Phase 1a: Designing architecture...")
             
@@ -83,16 +76,12 @@ class ProjectOrchestrator:
         run_research = questionary.confirm("Run Deep Research (Phase 0) to gather up-to-date context before investigation?").ask()
         tdd_mode = questionary.confirm("Enable TDD Mode? (AI will write tests BEFORE code)").ask()
         
-        use_obsidian = False
-        if get_obsidian_vault():
-            use_obsidian = questionary.confirm("Enable Obsidian integration for this work task?").ask()
-            
         self.pm.destroy()
         self.last_task_id = None
         self.task_retries = 0
         
         if run_research:
-            self.pm.create(work_prompt, status="work_researching", mode="work", auto_mode=auto_mode, tdd_mode=tdd_mode, use_obsidian=use_obsidian)
+            self.pm.create(work_prompt, status="work_researching", mode="work", auto_mode=auto_mode, tdd_mode=tdd_mode)
             user_input = (
                 f"You are the Phase 0 Research Agent for the codebase modification task: '{work_prompt}'.\n\n"
                 f"Your task is to gather the MAXIMUM amount of up-to-date information, best practices, and API references required for this task.\n"
@@ -102,7 +91,7 @@ class ProjectOrchestrator:
             )
             print_system(f"[Brain] Phase 0: Starting Deep Research...")
         else:
-            self.pm.create(work_prompt, status="work_investigating", mode="work", auto_mode=auto_mode, tdd_mode=tdd_mode, use_obsidian=use_obsidian)
+            self.pm.create(work_prompt, status="work_investigating", mode="work", auto_mode=auto_mode, tdd_mode=tdd_mode)
             user_input = build_work_investigation_prompt(work_prompt, "")
             print_system(f"[Brain] Phase 1: Investigating codebase...")
             

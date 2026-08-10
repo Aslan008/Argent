@@ -9,7 +9,7 @@ from typing import List, Dict, Any, Generator
 
 from tools import TOOL_SCHEMAS, AVAILABLE_TOOLS, get_tool_schemas, get_available_tools
 from config import (
-    get_current_model, get_obsidian_vault, 
+    get_current_model,
     get_hooks_dir, get_autonomous_plugins_enabled,
     get_context_window, get_provider, get_mcp_servers
 )
@@ -1564,8 +1564,7 @@ Example: {"tool": {"name": "read_file", "arguments": {"file_path": "main.py"}}}"
         }
 
     def inject_context(self):
-        """Clear conversation history but preserve the full system prompt
-        (including dynamic extensions like Obsidian vault config).
+        """Clear conversation history but preserve the full system prompt.
         Used by Project Brain to give the model a fresh context window."""
         self.messages = [
             {"role": "system", "content": self.messages[0]["content"]}

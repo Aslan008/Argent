@@ -14,14 +14,12 @@ from tools._helpers import _validate_code_syntax
 
 class TestArgentEnhancements(unittest.TestCase):
 
-    @patch('agent.get_obsidian_vault')
     @patch('agent.get_current_model')
     @patch('agent.get_model_size_category')
-    def test_dynamic_prompt_compilation_cloud(self, mock_category, mock_model, mock_vault):
+    def test_dynamic_prompt_compilation_cloud(self, mock_category, mock_model):
         # Setup mock behavior for large cloud model
         mock_model.return_value = "gpt-4"
         mock_category.return_value = "large"
-        mock_vault.return_value = "C:\\path\\to\\my\\vault"
 
         agent = ArgentAgent()
         prompt = agent.build_system_prompt()
@@ -31,22 +29,18 @@ class TestArgentEnhancements(unittest.TestCase):
         self.assertIn("ROLE: Argent Coder", prompt)
         self.assertIn("## 4. PLANNING MODE & ARTIFACTS", prompt)
 
-    @patch('agent.get_obsidian_vault')
     @patch('agent.get_current_model')
     @patch('agent.get_model_size_category')
-    def test_dynamic_prompt_compilation_tiny_no_vault(self, mock_category, mock_model, mock_vault):
-        # Setup mock behavior for tiny local model without Obsidian vault
+    def test_dynamic_prompt_compilation_tiny(self, mock_category, mock_model):
+        # Setup mock behavior for tiny local model
         mock_model.return_value = "qwen2.5:1.5b"
         mock_category.return_value = "tiny"
-        mock_vault.return_value = ""
 
         agent = ArgentAgent()
         prompt = agent.build_system_prompt()
 
         self.assertIn("CRITICAL: LANGUAGE RULE", prompt)
         self.assertIn("ROLE: Argent Coder", prompt)
-        # Should NOT have Obsidian section
-        self.assertNotIn("OBSIDIAN INTEGRATION", prompt)
         # Tiny model should NOT have Project Brain Mode instructions
         self.assertNotIn("PROJECT BRAIN MODE", prompt)
         # Tiny model should have a shorter/simplified operational protocol

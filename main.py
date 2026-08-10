@@ -698,8 +698,8 @@ def main():
                     f"1. MUST CALL `run_deep_research(objective='{topic}')` right now to let the sub-agent gather massive information.\n"
                     f"2. Read the final synthesized report returned by the sub-agent.\n"
                     f"3. Present the findings directly to me in a highly structured, readable, and detailed format right here in the chat.\n"
-                    f"Do NOT write any notes to Obsidian unless I explicitly ask you to do so. Just give me the info.\n"
-                    f"Do not ask for permission, start by calling `run_deep_research` right away." 
+                    f"Do NOT write the findings to a file unless I explicitly ask you to. Just give me the info.\n"
+                    f"Do not ask for permission, start by calling `run_deep_research` right away."
                 )
                 print_system(f"Starting auto-research on: {topic}...")
             elif user_input.startswith("/auto"):

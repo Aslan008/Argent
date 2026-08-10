@@ -16,9 +16,9 @@ import os
 import re
 
 # Tool calls whose content can be salvaged and continued via append.
-SALVAGEABLE_TOOLS = ("write_file", "append_to_file", "write_obsidian_note")
+SALVAGEABLE_TOOLS = ("write_file", "append_to_file")
 
-_PATH_RE = re.compile(r'"(file_path|filename|filepath|path|file|note_path)"\s*:\s*"([^"]*)"')
+_PATH_RE = re.compile(r'"(file_path|filename|filepath|path|file)"\s*:\s*"([^"]*)"')
 # Grab everything after the opening quote of "content": "  (greedy to EOF).
 _CONTENT_RE = re.compile(r'"content"\s*:\s*"([\s\S]*)$')
 
@@ -42,7 +42,7 @@ def extract_partial_write(arguments):
     or an already-parsed dict."""
     if isinstance(arguments, dict):
         path = next((arguments[k] for k in
-                     ("file_path", "filename", "filepath", "path", "file", "note_path")
+                     ("file_path", "filename", "filepath", "path", "file")
                      if arguments.get(k)), None)
         if path and "content" in arguments:
             return str(path), str(arguments.get("content") or "")

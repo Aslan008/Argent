@@ -330,12 +330,12 @@ def try_parse_json_tool(json_str: str) -> dict | None:
 
 def try_recover_malformed_tool(content: str, tool_name: str) -> dict | None:
     """Last-resort recovery for malformed JSON (e.g., write_file with unescaped newlines)."""
-    CONTENT_TOOLS = ["write_file", "write_obsidian_note", "replace_python_function", "replace_in_file"]
+    CONTENT_TOOLS = ["write_file", "replace_python_function", "replace_in_file"]
     if tool_name not in CONTENT_TOOLS:
         return None
-    
+
     fp_match = re.search(
-        r'"(?:file_path|filename|filepath|path|file|note_path)"\s*:\s*"([^"]+)"', content
+        r'"(?:file_path|filename|filepath|path|file)"\s*:\s*"([^"]+)"', content
     )
     ct_match = re.search(r'"content"\s*:\s*"([\s\S]*)', content)
     
@@ -350,14 +350,10 @@ def try_recover_malformed_tool(content: str, tool_name: str) -> dict | None:
     # Decode escapes
     recovered = decode_json_escapes(recovered)
     
-    path_param = "file_path"
-    if tool_name == "write_obsidian_note":
-        path_param = "note_path"
-        
     parsed = {
         "name": tool_name,
         "arguments": {
-            path_param: fp_match.group(1),
+            "file_path": fp_match.group(1),
             "content": recovered
         }
     }
