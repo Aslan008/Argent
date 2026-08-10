@@ -10,6 +10,30 @@ DEFAULT_MODEL = "llama3.1"
 _CONFIG_CACHE = None
 
 
+def quarantine_config(reason: str) -> Path | None:
+    """Move an unreadable config aside and say so. Returns the new path.
+
+    An unreadable file used to be swallowed silently: the session started on
+    defaults — no provider, no API keys, no MCP servers, no knowledge bases —
+    and the very next setting change wrote those defaults back over the file,
+    destroying settings that were still perfectly recoverable by hand.
+    """
+    import sys
+    from datetime import datetime
+
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    backup = CONFIG_FILE.with_name(f"{CONFIG_FILE.name}.broken-{stamp}")
+    try:
+        CONFIG_FILE.replace(backup)
+    except OSError as e:
+        print(f"[Argent] Конфиг нечитаем ({reason}), и отложить его не удалось: {e}",
+              file=sys.stderr)
+        return None
+    print(f"[Argent] Конфиг нечитаем ({reason}). Он сохранён как {backup.name}; "
+          f"Argent продолжает на настройках по умолчанию.", file=sys.stderr)
+    return backup
+
+
 def load_config() -> dict:
     """Load configuration from disk with caching."""
     global _CONFIG_CACHE
@@ -19,10 +43,16 @@ def load_config() -> dict:
     if CONFIG_FILE.exists():
         try:
             with open(CONFIG_FILE, "r", encoding="utf-8") as f:
-                _CONFIG_CACHE = json.load(f)
+                loaded = json.load(f)
+        except (json.JSONDecodeError, UnicodeDecodeError) as e:
+            quarantine_config(str(e))
+        else:
+            if isinstance(loaded, dict):
+                _CONFIG_CACHE = loaded
                 return _CONFIG_CACHE
-        except json.JSONDecodeError:
-            pass
+            # Valid JSON of the wrong shape is worse than broken JSON: nothing
+            # raises here, and every _get() after it fails with AttributeError.
+            quarantine_config(f"ожидался объект, получен {type(loaded).__name__}")
     _CONFIG_CACHE = {"model": DEFAULT_MODEL}
     return _CONFIG_CACHE
 
