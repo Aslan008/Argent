@@ -1,22 +1,15 @@
-requests>=2.31.0
-beautifulsoup4>=4.12.0
-trafilatura>=1.8.0
-markdownify
-ddgs
-crawl4ai
-playwright
-playwright-stealth
-sentence-transformers
-numpy
-openai>=1.0
-prompt-toolkit
-questionary
-rich
-ollama
-jedi
-pyyaml
-json5
-pypdf
-pydantic>=2.0
-sympy
-tiktoken
+# pyproject.toml is the single source of truth for dependencies. This file
+# exists for `pip install -r requirements.txt` and delegates to it, with the
+# optional stacks a full desktop install wants.
+#
+# It used to be a hand-copied second list, and it had drifted: pillow was
+# missing (view_image then degrades to sending screenshots at full resolution)
+# and chromadb was missing entirely (sentence-transformers was there, so RAG
+# installed half of itself). Nothing reported either — you found out when the
+# feature quietly did less.
+#
+# Lighter installs:
+#   pip install -e .                     terminal agent only
+#   pip install -e .[rag]                + semantic search
+#   pip install -e .[server]             + the Tauri/web GUI backend
+-e .[rag,browser,research]

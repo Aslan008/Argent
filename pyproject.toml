@@ -52,12 +52,13 @@ argent = "main:main"
 [tool.setuptools]
 # Flat layout: explicit top-level modules plus the src/ and tools/ packages.
 py-modules = [
-    "agent", "approval", "browser_detect", "browser_engine", "command_handler",
-    "config", "deep_research", "doctor", "file_tracker", "hook_manager",
-    "intelligence", "logger", "main", "mcp_client", "memory_manager",
-    "project_manager", "prompt_compressor", "prompts", "providers", "rag_engine",
-    "session", "skill_manager", "storage", "tool_profiles", "tool_recovery",
-    "ui", "usage_tracker", "version",
+    "agent", "approval", "atomic_io", "browser_detect", "browser_engine",
+    "command_handler", "config", "deep_research", "doctor", "error_help",
+    "file_tracker", "hook_manager", "intelligence", "logger", "main",
+    "mcp_client", "memory_manager", "model_limits", "project_manager",
+    "project_paths", "prompt_compressor", "prompts", "providers", "rag_engine",
+    "session", "skill_manager", "text_safety", "tool_profiles", "tool_recovery",
+    "ui", "usage_tracker", "version", "vision",
 ]
 
 [tool.setuptools.packages.find]
