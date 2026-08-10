@@ -42,6 +42,8 @@ _SLIM_CATEGORIES = {"tiny", "small"}
 _CONDITIONAL_CORE = {
     ("call_mcp_tool", "list_mcp_tools"): lambda: bool(__import__(
         "config").get_mcp_servers()),
+    ("check_code",): lambda: __import__(
+        "src.lsp.manager", fromlist=["lsp_manager"]).lsp_manager.is_available(),
 }
 
 

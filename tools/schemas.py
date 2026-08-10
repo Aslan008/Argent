@@ -29,6 +29,7 @@ from tools.misc_tools import (
     wait_heartbeat, end_auto_mode, create_artifact, request_user_approval,
     calculate, set_goal, filter_new_items, view_image,
 )
+from tools.lsp_tools import check_code
 from tools.swarm_tools import run_swarm_workers
 from tools.browser_tools import (
     run_browser_task, browser_open, browser_state, browser_click, browser_input,
@@ -111,6 +112,7 @@ AVAILABLE_TOOLS = {
     "browser_get_content": browser_get_content,
     "browser_close": browser_close,
     "browser_switch_tab": browser_switch_tab,
+    "check_code": check_code,
 }
 
 # Tools that take over the terminal to ask the user something. The CLI must not
@@ -1705,6 +1707,23 @@ TOOL_SCHEMAS = [
                         "description": "Path to a file or directory to lint. Defaults to the current project directory ('.')."
                     }
                 }
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "check_code",
+            "description": "Check code for errors and warnings using the Language Server Protocol (LSP). Returns instant diagnostics (errors, warnings) for a file. Works with Python, C#, TypeScript, JavaScript, Rust, Go, Java, C++, Ruby, Kotlin, PHP, Dart. Requires the multilspy package (pip install multilspy).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "file_path": {
+                        "type": "string",
+                        "description": "Path to the file to check for diagnostics."
+                    }
+                },
+                "required": ["file_path"]
             }
         }
     }

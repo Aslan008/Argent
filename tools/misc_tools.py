@@ -373,7 +373,25 @@ def create_svg_image(svg_code: str, filename: str = None) -> str:
         return f"Error creating SVG image: {e}"
 
 def find_definition(file_path: str, line: int, column: int) -> str:
-    """Find the definition of a symbol at the given line and column."""
+    """Find the definition of a symbol at the given line and column.
+
+    Uses LSP (multilspy) when available — cross-language, type-aware — and
+    falls back to the Jedi-based intelligence module for Python.
+    """
+    # Try LSP first (cross-language, type-aware)
+    try:
+        from src.lsp.manager import lsp_manager
+        if lsp_manager.is_available():
+            results = lsp_manager.find_definition(file_path, line, column)
+            if results:
+                out = "Found definitions (LSP):\n"
+                for d in results:
+                    out += f"- {d['file_path']}:{d['line']}:{d['column']}\n"
+                return out.rstrip()
+    except Exception:
+        pass
+
+    # Fall back to Jedi (Python only)
     results = intel.find_definitions(file_path, line, column)
     if not results:
         return "No definitions found."
@@ -384,10 +402,28 @@ def find_definition(file_path: str, line: int, column: int) -> str:
     for d in results:
         out += f"- {d['name']} ({d['type']}) in {d['file_path']}:{d['line']}:{d['column']}\n"
         out += f"  {d['description']}\n"
-    return out
+    return out.rstrip()
 
 def find_references(file_path: str, line: int, column: int) -> str:
-    """Find all references to a symbol at the given line and column."""
+    """Find all references to a symbol at the given line and column.
+
+    Uses LSP (multilspy) when available — cross-language, type-aware — and
+    falls back to the Jedi-based intelligence module for Python.
+    """
+    # Try LSP first (cross-language, type-aware)
+    try:
+        from src.lsp.manager import lsp_manager
+        if lsp_manager.is_available():
+            results = lsp_manager.find_references(file_path, line, column)
+            if results:
+                out = "Found references (LSP):\n"
+                for r in results:
+                    out += f"- {r['file_path']}:{r['line']}:{r['column']}\n"
+                return out.rstrip()
+    except Exception:
+        pass
+
+    # Fall back to Jedi (Python only)
     results = intel.find_references(file_path, line, column)
     if not results:
         return "No references found."
@@ -397,7 +433,7 @@ def find_references(file_path: str, line: int, column: int) -> str:
     out = "Found references:\n"
     for r in results:
         out += f"- {r['name']} in {r['file_path']}:{r['line']}:{r['column']}\n"
-    return out
+    return out.rstrip()
 
 def git_checkpoint(message: str) -> str:
     """Create a temporary git commit (checkpoint) to save state before an experiment."""

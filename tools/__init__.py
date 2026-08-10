@@ -92,6 +92,7 @@ from tools.browser_tools import (
     browser_get_content,
     browser_close,
 )
+from tools.lsp_tools import check_code
 from tools.schemas import (
     TOOL_SCHEMAS,
     AVAILABLE_TOOLS,
