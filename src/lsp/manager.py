@@ -295,7 +295,7 @@ class LSPManager:
         rel_path = self._to_relative(file_path, project_root)
         try:
             with server.open_file(rel_path):
-                results = server.request_definition(rel_path, line, column)
+                results = server.request_definition(rel_path, line - 1, column)
             return [
                 {
                     "file_path": str(pathlib.Path(project_root) / loc.get("absolutePath", loc.get("uri", ""))),
@@ -326,7 +326,7 @@ class LSPManager:
         rel_path = self._to_relative(file_path, project_root)
         try:
             with server.open_file(rel_path):
-                results = server.request_references(rel_path, line, column)
+                results = server.request_references(rel_path, line - 1, column)
             return [
                 {
                     "file_path": str(pathlib.Path(project_root) / loc.get("absolutePath", loc.get("uri", ""))),
@@ -356,7 +356,7 @@ class LSPManager:
         rel_path = self._to_relative(file_path, project_root)
         try:
             with server.open_file(rel_path):
-                result = server.request_hover(rel_path, line, column)
+                result = server.request_hover(rel_path, line - 1, column)
             if result is None:
                 return None
             return {
@@ -429,7 +429,7 @@ class LSPManager:
             with server.open_file(rel_path):
                 params = {
                     "textDocument": {"uri": uri},
-                    "position": {"line": line, "character": column},
+                    "position": {"line": line - 1, "character": column},
                 }
                 response = self._send_request(server, "implementation", params)
             if not response:
@@ -550,7 +550,7 @@ class LSPManager:
                 # Step 1: prepare call hierarchy
                 params = {
                     "textDocument": {"uri": uri},
-                    "position": {"line": line, "character": column},
+                    "position": {"line": line - 1, "character": column},
                 }
                 items = self._send_request(
                     server, "prepare_call_hierarchy", params, timeout=timeout)
