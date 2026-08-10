@@ -51,6 +51,15 @@ MAX_SALVAGE_CONTINUES = 12
 # giving up — instead of silently dead-ending the turn.
 MAX_NO_ACTION_CONTINUES = 2
 
+# How often to say how long this is taking. Deliberately NOT a cap: measured
+# over 1315 recorded turns, the long ones were all productive — 127 tool calls
+# ending in a final answer, 106, 100 — and every turn that did not finish
+# normally was already stopped by the loop guard or an error. A ceiling at any
+# of those numbers would have cut finished work to prevent a runaway that the
+# log does not contain. What the log does show is turns running 30-40 minutes,
+# where the thing you actually lack is a way to notice and decide.
+TURN_PROGRESS_EVERY = 25
+
 
 def build_agents_memory(limit: int) -> List[str]:
     """Persistent-memory sections for the system prompt.
@@ -1363,6 +1372,11 @@ Example: {"tool": {"name": "read_file", "arguments": {"file_path": "main.py"}}}"
 
                     yield {"type": "tool_end", "name": func_name, "result": result}
                     self._turn_tool_calls += 1
+                    if self._turn_tool_calls % TURN_PROGRESS_EVERY == 0:
+                        mins = (time.monotonic() - self._turn_started) / 60
+                        yield {"type": "error", "content":
+                               f"[Argent: {self._turn_tool_calls} вызовов инструментов, "
+                               f"{mins:.0f} мин работы над этим запросом. Ctrl+C — остановить.]"}
 
                     self.messages.append(provider.format_tool_result(str(result), tool_call.get("id")))
 

@@ -312,8 +312,13 @@ def clean_messages_for_llm(messages: List[Dict[str, Any]], strip_reasoning: bool
     - If strip_reasoning is True, strips <think>...</think> and unclosed <think>... from 'content'.
     - Removes the custom 'thinking' key to ensure OpenAI API schema compatibility.
     """
+    # Before anything else: old image payloads never leave the machine again.
+    # Done here rather than in the trimmer's fallback path because the cost is
+    # per REQUEST — re-uploading a screenshot from twenty turns ago is waste
+    # whether or not the history needs trimming — and because this is also the
+    # copy the token estimate is computed from, so the meter matches the wire.
     cleaned = []
-    for m in messages:
+    for m in compact_image_history(messages):
         m_copy = m.copy()
         
         # Always remove custom 'thinking' key for API compatibility,
@@ -353,6 +358,44 @@ def clean_messages_for_llm(messages: List[Dict[str, Any]], strip_reasoning: bool
     # the producer alone cannot do.
     from text_safety import repair_structure
     return repair_structure(cleaned)
+
+
+# How many image-carrying messages keep their payload. Two covers the real
+# working pattern — a screenshot, an action, a second screenshot to check, or a
+# before/after comparison — while everything older keeps only its caption.
+KEEP_RECENT_IMAGES = 2
+
+
+def compact_image_history(messages: List[Dict[str, Any]],
+                          keep_recent: int = KEEP_RECENT_IMAGES) -> List[Dict[str, Any]]:
+    """Drop the pixels of images the model has already looked at.
+
+    An attached screenshot is ~190 KB of base64 and it lived in the history
+    forever, so every later request re-uploaded every picture ever taken — the
+    one unbounded thing in a conversation that is otherwise trimmed. The model
+    does not need the pixels twice: by the time the next turn starts it has
+    already written what it saw, and that text is what the history is for.
+
+    The caption stays, so "the screenshot you took" still refers to something.
+    Returns the same list object when there is nothing to compact.
+    """
+    carriers = [i for i, m in enumerate(messages)
+                if isinstance(m, dict) and m.get("images")]
+    to_strip = set(carriers[:-keep_recent]) if len(carriers) > keep_recent else set()
+    if not to_strip:
+        return messages
+
+    out = []
+    for i, m in enumerate(messages):
+        if i not in to_strip:
+            out.append(m)
+            continue
+        stripped = {k: v for k, v in m.items() if k != "images"}
+        count = len(m["images"])
+        note = f"[{count} изобр. показано ранее — содержимое описано выше]"
+        stripped["content"] = f"{(m.get('content') or '').strip()} {note}".strip()
+        out.append(stripped)
+    return out
 
 
 def compact_tool_history(messages: List[Dict[str, Any]], keep_recent: int = 2,
