@@ -25,7 +25,9 @@ def _handled_commands() -> set:
     # Both `user_input.startswith(...)` and `user_input.strip().startswith(...)`:
     # a command dispatched through the second form is no less real, and missing
     # it made the README look wrong when only the dispatch style had changed.
-    found |= set(re.findall(r'user_input(?:\.strip\(\))?\.startswith\("(/[a-z_]+)"', src))
+    # A two-word dispatch (`/skill import`) is a command too; matching only up
+    # to the closing quote used to drop it, which made it look undispatched.
+    found |= set(re.findall(r'user_input(?:\.strip\(\))?\.startswith\("(/[a-z_]+)', src))
     found |= set(re.findall(r'cmd\s*==\s*"(/[a-z_]+)"', src))
     # Commands with subcommands are dispatched by prefix (e.g. /mcp add …).
     found |= set(re.findall(r'cmd\.startswith\("(/[a-z_]+)"', src))
@@ -35,8 +37,28 @@ def _handled_commands() -> set:
 
 
 def _documented_commands() -> set:
+    """Any command named in backticks, not only the ones opening a bullet:
+    /quit and /stop are documented on the /exit and /jobs lines."""
     readme = (_ROOT / "README.md").read_text(encoding="utf-8")
-    return set(re.findall(r"^- `(/[a-z_]+)", readme, re.M))
+    return set(re.findall(r"`(/[a-z_]+)", readme))
+
+
+def _completer_commands() -> set:
+    """What the REPL offers on Tab."""
+    src = (_ROOT / "main.py").read_text(encoding="utf-8")
+    block = re.search(r"builtin_cmds = \[(.*?)\n    \]", src, re.S)
+    return set(re.findall(r"'(/[a-z_]+)", block.group(1)))
+
+
+def _commands_with_help() -> set:
+    """What the completer can describe while you type."""
+    src = (_ROOT / "src" / "cli" / "cli_prompt.py").read_text(encoding="utf-8")
+    block = re.search(r"COMMAND_HELP = \{(.*?)\n\}", src, re.S)
+    return set(re.findall(r'"(/[a-z_]+)"\s*:', block.group(1)))
+
+
+# Spellings that exist only as an alias of a documented command.
+_ALIASES = {"/temperature": "/temp", "/skills": "/skill"}
 
 
 class TestReadme:
@@ -55,6 +77,41 @@ class TestReadme:
         for command in ("/rewind", "/vibe", "/tasks", "/search"):
             assert readme.count(f"- `{command}") >= 2, \
                 f"{command} is missing from one of the language sections"
+
+
+class TestDiscoverability:
+    """A command you cannot find is a feature you do not have.
+
+    /kb — add, index and search external documentation, the thing that makes
+    semantic_search useful on a Unity or library codebase — was dispatched by
+    command_handler and appeared in none of the three places a user looks: Tab
+    completion, /help, the README. It had been invisible since it shipped.
+    """
+
+    def test_every_command_is_offered_on_tab(self):
+        missing = sorted(_handled_commands() - _completer_commands() - set(_ALIASES))
+        assert not missing, f"эти команды работают, но не предлагаются по Tab: {missing}"
+
+    def test_tab_never_offers_something_that_does_not_run(self):
+        """Worse than hiding a command: an offered one falls through to the
+        model as an ordinary message."""
+        ghosts = sorted(_completer_commands() - _handled_commands())
+        assert not ghosts, f"Tab предлагает несуществующие команды: {ghosts}"
+
+    def test_every_offered_command_describes_itself(self):
+        undescribed = sorted(_completer_commands() - _commands_with_help())
+        assert not undescribed, f"в подсказке Tab у них пустое описание: {undescribed}"
+
+    def test_help_text_lists_every_command(self):
+        help_source = (_ROOT / "command_handler.py").read_text(encoding="utf-8")
+        block = help_source.split('elif cmd == "/help":', 1)[1].split("custom_cmds", 1)[0]
+        listed = set(re.findall(r"`(/[a-z_]+)", block))
+        missing = sorted(_handled_commands() - listed - set(_ALIASES))
+        assert not missing, f"/help не упоминает: {missing}"
+
+    def test_readme_lists_every_command(self):
+        missing = sorted(_handled_commands() - _documented_commands() - set(_ALIASES))
+        assert not missing, f"README не упоминает: {missing}"
 
 
 class TestInProgramHints:

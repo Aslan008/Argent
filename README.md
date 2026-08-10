@@ -205,10 +205,12 @@ Run local shell commands directly from the prompt by prefixing them with `!`. If
 - `/commit` — Generate AI commit message and commit staged changes.
 - `/rag_toggle` — Enable/disable semantic search (indexing) for the current project.
 - `/auto_retrieve` — Toggle auto-injecting semantic-search results into every query.
+- `/kb [list|add|remove|toggle|index]` — External knowledge bases: index engine or library documentation and search it through `semantic_search`.
 - `/kb_toggle` — Enable/disable an external documentation knowledge base.
 - `/browser [mode/name]` — Configure browser automation (mode: isolated/user, name: auto/yandex/chrome/edge/brave).
 - `/hooks [path]` — Manage global plugin (hook) directory.
 - `/hooks auto [on/off]` — Toggle autonomous AI plugin creation.
+- `/plugin [auto on|off]` — List plugins and toggle autonomous plugin creation.
 - `/research [topic]` — Deep autonomous web research.
 - `/tools` — Interactive menu to enable/disable specific AI capabilities.
 - `/doctor` — Run environment self-diagnostics (provider, model tier, dependencies, browser, MCP).
@@ -239,6 +241,7 @@ Run local shell commands directly from the prompt by prefixing them with `!`. If
 - `/search` — Web research settings: Brave API key, query languages, reranker model.
 - `/auto [task]` — Run task in experimental full autonomous mode.
 - `/verbose` — Toggle live status indicators (spinners).
+- `/debug` — Toggle verbose tool logging.
 - `/thinking` — Toggle forced removal of reasoning blocks from history.
 - `/temp [value]` — Set or view the model temperature (range: 0.0 - 2.0).
 - `/clear` — Clear conversation history.
@@ -406,10 +409,12 @@ dsolve(Derivative(y(x), x, 2) + y(x), y(x))  →  C1*sin(x) + C2*cos(x)
 - `/commit` — Сгенерировать AI-сообщение и закоммитить изменения.
 - `/rag_toggle` — Включить/выключить семантический поиск (индексацию) по проекту.
 - `/auto_retrieve` — Автоматически подмешивать результаты семантического поиска в каждый запрос.
+- `/kb [list|add|remove|toggle|index]` — Внешние базы знаний: проиндексировать документацию движка или библиотеки и искать по ней через `semantic_search`.
 - `/kb_toggle` — Включить/выключить внешнюю базу знаний из документации.
 - `/browser [mode/name]` — Настройка автоматизации браузера (режим: isolated/user, имя: auto/yandex/chrome/edge/brave).
 - `/hooks [path]` — Управление папкой глобальных плагинов.
 - `/hooks auto [on/off]` — Переключить режим создания плагинов самим ИИ.
+- `/plugin [auto on|off]` — Список плагинов и переключение авто-создания плагинов ИИ.
 - `/research [topic]` — Глубокое автономное исследование темы в сети.
 - `/tools` — Интерактивное меню для настройки инструментов ИИ.
 - `/doctor` — Самодиагностика окружения (провайдер, ярус модели, зависимости, браузер, MCP).
@@ -440,6 +445,7 @@ dsolve(Derivative(y(x), x, 2) + y(x), y(x))  →  C1*sin(x) + C2*cos(x)
 - `/search` — Настройки веб-поиска: ключ Brave, языки запросов, модель reranker'а.
 - `/auto [task]` — Запустить выполнение задачи в экспериментальном полностью автономном режиме.
 - `/verbose` — Включить/выключить интерактивные спиннеры статуса.
+- `/debug` — Включить/выключить подробное логирование инструментов.
 - `/thinking` — Включить/выключить принудительное удаление рассуждений из истории контекста.
 - `/temp [value]` — Просмотреть или задать температуру генерации модели (от 0.0 до 2.0).
 - `/clear` — Очистить историю текущего диалога.

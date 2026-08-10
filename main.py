@@ -465,6 +465,7 @@ def main():
     builtin_cmds = [
         # Base commands
         '/help', '/provider', '/model', '/clear', '/init', '/research', '/rag_toggle', '/auto_retrieve',
+        '/kb', '/kb_toggle',
         '/hooks', '/plugin', '/tools', '/save', '/project', '/work', '/commit',
         '/sessions', '/load', '/copy', '/logs', '/skills', '/skill import', '/auto', '/vibe', '/tasks', '/verbose', '/debug', '/browser', '/exit', '/quit',
         '/mcp', '/thinking', '/temp', '/temperature',
@@ -472,6 +473,7 @@ def main():
         
         # Subcommands and parameter variations
         '/mcp list', '/mcp add', '/mcp remove', '/mcp test', '/mcp start', '/mcp stop',
+        '/kb list', '/kb add', '/kb remove', '/kb toggle', '/kb index',
         '/browser user', '/browser isolated', '/browser chrome', '/browser yandex', '/browser edge', '/browser brave', '/browser auto',
         '/hooks auto', '/plugin auto',
         '/temp 0.2', '/temp 0.7', '/temp 1.0',

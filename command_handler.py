@@ -231,6 +231,7 @@ def handle_slash_command(command: str, agent: ArgentAgent) -> bool:
             "\n**Писать и править код**\n"
             "- `/work [--auto] [задача]` — Менять или чинить СУЩЕСТВУЮЩИЙ код\n"
             "- `/vibe` — Вайб-режим: безопасное одобряется само, чекпоинт каждый ход (откат — /rewind)\n"
+            "- `/auto [задача]` — Полностью автономный режим (экспериментальный)\n"
             "- `/tasks` — Автоматизации по расписанию, без присмотра\n"
             "- `/project [запрос]` — Большой проект с нуля\n"
             "- `/rooms <задача>` — Экспериментальный движок «комнаты и рельсы»\n"
@@ -245,6 +246,8 @@ def handle_slash_command(command: str, agent: ArgentAgent) -> bool:
             "\n**Знания и поиск**\n"
             "- `/rag_toggle` — Индексация для семантического поиска\n"
             "- `/auto_retrieve` — Подставлять результаты поиска в каждый запрос\n"
+            "- `/kb [list|add|remove|toggle|index]` — Внешние базы знаний (документация движка, библиотеки)\n"
+            "- `/kb_toggle` — Загружать внешние базы знаний при старте\n"
             "- `/research [тема]` — Автономное веб-исследование → заметки\n"
             "- `/search` — Настройки поиска: ключи Brave и Ollama, языки, reranker\n"
             "- `/skills` — Список навыков\n"
@@ -262,7 +265,9 @@ def handle_slash_command(command: str, agent: ArgentAgent) -> bool:
             "\n**Инструменты и расширения**\n"
             "- `/tools` — Включить/выключить инструменты\n"
             "- `/hooks [путь]` — Каталог плагинов\n"
+            "- `/plugin [auto on|off]` — Плагины: список и авто-создание их самим ИИ\n"
             "- `/mcp` — MCP-серверы (add/remove/start/stop/test)\n"
+            "- `/browser [режим|браузер]` — Автоматизация браузера\n"
             "\n**Фон и диагностика**\n"
             "- `/jobs` · `/stop <pid>` — Фоновые процессы\n"
             "- `/doctor` — Самодиагностика окружения\n"
@@ -270,7 +275,7 @@ def handle_slash_command(command: str, agent: ArgentAgent) -> bool:
             "- `/logs [модуль] [n]` — Логи (например /logs tools 20, /logs error)\n"
             "- `/verbose` · `/debug` — Индикаторы статуса / подробные логи\n"
             "\n**Прочее**\n"
-            "- `/help` — Эта справка   ·   `/exit` — Выход\n"
+            "- `/help` — Эта справка   ·   `/exit` (или `/quit`) — Выход\n"
         )
         
         custom_cmds = hook_manager.get_custom_commands()
