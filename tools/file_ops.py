@@ -1,4 +1,5 @@
 import ast
+import os
 import shutil
 from pathlib import Path
 from file_tracker import snapshot
@@ -8,6 +9,14 @@ from logger import get_logger
 
 log = get_logger("tools")
 
+MAX_READ_LINES = 500
+# A line budget bounds a source file but not a minified bundle, a base64 blob or
+# a one-line JSON dump: those are a single line of any size, and the whole thing
+# went into the context window. This is the backstop, in characters, roughly
+# 10k tokens.
+MAX_READ_CHARS = 40_000
+
+
 def read_file(file_path: str, start_line: int = None, end_line: int = None) -> str:
     """Read the contents of a file. Optionally read a specific range of lines (1-indexed)."""
     try:
@@ -16,23 +25,48 @@ def read_file(file_path: str, start_line: int = None, end_line: int = None) -> s
             return f"Error: File '{file_path}' does not exist."
         if not path.is_file():
             return f"Error: '{file_path}' is not a file."
+
+        ranged = start_line is not None or end_line is not None
+        first = max(1, start_line or 1)
+        last = end_line if end_line is not None else None
+
+        lines = []
+        size = 0
+        total = 0
+        stopped_at_chars = False
         with open(path, "r", encoding="utf-8") as f:
-            if start_line is not None or end_line is not None:
-                lines = f.readlines()
-                total = len(lines)
-                s = max(1, start_line or 1) - 1
-                e = min(total, end_line or total)
-                selected = lines[s:e]
-                header = f"[Lines {s+1}-{e} of {total}]\n"
-                return header + "".join(selected)
-            else:
-                lines = []
-                for i, line in enumerate(f):
-                    if i >= 500:
-                        nav = " or get_file_outline to jump straight to a symbol" if path.suffix.lower() in (".py", ".cs") else ""
-                        return f"[File exceeds 500 lines. Showing first 500. Use start_line/end_line to read specific sections{nav}.]\n" + "".join(lines)
-                    lines.append(line)
-                return "".join(lines)
+            for number, line in enumerate(f, start=1):
+                total = number
+                if number < first:
+                    continue
+                if last is not None and number > last:
+                    # Keep counting so the header can report the real total.
+                    continue
+                if not ranged and len(lines) >= MAX_READ_LINES:
+                    continue
+                if size + len(line) > MAX_READ_CHARS:
+                    stopped_at_chars = True
+                    break
+                lines.append(line)
+                size += len(line)
+
+        body = "".join(lines)
+        shown_to = first + len(lines) - 1
+
+        if stopped_at_chars:
+            return (f"[Stopped at {MAX_READ_CHARS} characters — lines {first}-{shown_to}. "
+                    f"The file has very long lines (minified, base64 or one-line JSON?). "
+                    f"Use grep_search to find what you need, or start_line/end_line "
+                    f"for a smaller range.]\n" + body)
+        if ranged:
+            return f"[Lines {first}-{shown_to} of {total}]\n" + body
+        if total > MAX_READ_LINES:
+            nav = (" or get_file_outline to jump straight to a symbol"
+                   if path.suffix.lower() in (".py", ".cs") else "")
+            return (f"[File exceeds {MAX_READ_LINES} lines ({total} total). Showing first "
+                    f"{MAX_READ_LINES}. Use start_line/end_line to read specific "
+                    f"sections{nav}.]\n" + body)
+        return body
     except Exception as e:
         return f"Error reading file '{file_path}': {e}"
 
@@ -161,9 +195,20 @@ def append_to_file(file_path: str, content: str) -> str:
             
         content = _maybe_unescape_content(content)
 
+        # Separate the append from what is already there, but only when it is
+        # not already separated. The old code wrote \n unconditionally, so a
+        # file that ended in a newline — nearly all of them — gained a blank
+        # line per call, and a large file produced through repeated salvage
+        # continuations ended up with one at every seam.
+        needs_newline = False
+        if path.exists() and path.stat().st_size and not content.startswith("\n"):
+            with open(path, "rb") as probe:
+                probe.seek(-1, os.SEEK_END)
+                needs_newline = probe.read(1) not in (b"\n", b"\r")
+
         with open(path, "a", encoding="utf-8") as f:
-            if not content.startswith('\n'):
-                f.write('\n')
+            if needs_newline:
+                f.write("\n")
             f.write(content)
             
         try:
