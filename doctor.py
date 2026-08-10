@@ -190,6 +190,24 @@ def _check_mcp():
     return (OK, f"{len(servers)} configured: {names}")
 
 
+def _check_lsp():
+    """LSP (multilspy) provides instant diagnostics after edits and cross-
+    language find_definition / find_references. Without it, Argent falls back
+    to Jedi (Python only) and the model discovers errors only at runtime."""
+    if not _module_available("multilspy"):
+        return (WARN, "multilspy not installed — LSP diagnostics unavailable "
+                      "(pip install multilspy or pip install argent-coder[lsp])")
+    try:
+        from src.lsp.manager import lsp_manager
+        if lsp_manager.is_available():
+            exts = sorted(lsp_manager.supported_extensions())
+            return (OK, f"multilspy ready — {len(exts)} extensions: "
+                        + ", ".join(exts[:8]) + ("…" if len(exts) > 8 else ""))
+        return (WARN, "multilspy installed but no language server could start")
+    except Exception as e:
+        return (WARN, f"multilspy check failed: {e}")
+
+
 def _check_git():
     try:
         res = run_text(
@@ -232,6 +250,7 @@ CHECKS = [
     ("Web search engines", _check_web_search),
     ("Optional deps", _check_optional_deps),
     ("MCP servers", _check_mcp),
+    ("LSP diagnostics", _check_lsp),
     ("Git", _check_git),
     ("Plugins & skills", _check_extensions),
     ("Config file", _check_config),

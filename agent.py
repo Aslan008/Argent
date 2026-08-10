@@ -1364,6 +1364,28 @@ Example: {"tool": {"name": "read_file", "arguments": {"file_path": "main.py"}}}"
                     elif func_name in self._EDIT_TOOLS and result.startswith("Successfully"):
                         self._drop_read_cache(filtered_args)
 
+                        # ── LSP auto-diagnostics ──────────────────────────
+                        # After every successful edit, run the language server
+                        # on the just-modified file and append any errors /
+                        # warnings to the tool result.  This gives the model
+                        # instant feedback — it can fix a typo before moving
+                        # on, instead of discovering it ten calls later.
+                        # Non-blocking: any failure is swallowed silently.
+                        try:
+                            from src.lsp.manager import lsp_manager
+                            if lsp_manager.is_available():
+                                fp = filtered_args.get("file_path") or filtered_args.get("path")
+                                if fp:
+                                    language = lsp_manager.detect_language(fp)
+                                    if language:
+                                        diags = lsp_manager.get_diagnostics(fp, timeout=4.0)
+                                        if diags:
+                                            formatted = lsp_manager.format_diagnostics(fp, diags)
+                                            if formatted and "No issues" not in formatted:
+                                                result = result + "\n\n" + formatted
+                        except Exception:
+                            pass
+
                     # Diff cards: file editors queue the unified diff of what
                     # they changed — forward each as a structured chunk.
                     from tools._helpers import drain_diff_events

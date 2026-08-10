@@ -42,6 +42,7 @@ dependencies = [
 rag = ["chromadb", "sentence-transformers", "pypdf"]
 browser = ["playwright", "playwright-stealth"]
 research = ["crawl4ai"]
+lsp = ["multilspy"]
 # Backend for the Tauri/web GUI (the terminal version needs none of these).
 server = ["fastapi", "uvicorn", "websockets"]
 dev = ["pytest"]
