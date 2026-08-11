@@ -676,3 +676,71 @@ class TestPollClamping:
         )
         assert result["met"] is True
         assert sleeps == [0.5]
+class TestPollZeroClamp:
+    """Kill ONE_TO_ZERO @ pos 6039: ``max(0.1, ...)`` → ``max(0, ...)``.
+
+    With poll_seconds=0, the original clamps to 0.1 and sleeps 0.1.
+    The mutant clamps to 0.0 and sleeps 0.0 (busy-wait).
+    """
+
+    def test_poll_zero_sleeps_0_1_not_0(self, monkeypatch):
+        """poll_seconds=0 must sleep 0.1, not 0.0."""
+        t = [0.0]
+
+        def clock():
+            return t[0]
+
+        sleeps = []
+
+        def sleep(s):
+            sleeps.append(s)
+            t[0] += s
+
+        call_count = [0]
+
+        def my_evaluate(condition):
+            call_count[0] += 1
+            return call_count[0] >= 2
+
+        monkeypatch.setattr("src.agent.wait_conditions.evaluate", my_evaluate)
+        result = wait_for(
+            "dummy",
+            timeout=10,
+            poll_seconds=0,
+            sleep=sleep,
+            clock=clock,
+        )
+        assert result["met"] is True
+        # Original: max(0.1, 0) = 0.1 → sleeps [0.1]
+        # Mutant:   max(0,   0) = 0.0 → sleeps [0.0]
+        assert sleeps == [0.1]
+
+    def test_poll_negative_sleeps_0_1_not_0(self, monkeypatch):
+        """poll_seconds=-5 must also clamp to 0.1."""
+        t = [0.0]
+
+        def clock():
+            return t[0]
+
+        sleeps = []
+
+        def sleep(s):
+            sleeps.append(s)
+            t[0] += s
+
+        call_count = [0]
+
+        def my_evaluate(condition):
+            call_count[0] += 1
+            return call_count[0] >= 2
+
+        monkeypatch.setattr("src.agent.wait_conditions.evaluate", my_evaluate)
+        result = wait_for(
+            "dummy",
+            timeout=10,
+            poll_seconds=-5,
+            sleep=sleep,
+            clock=clock,
+        )
+        assert result["met"] is True
+        assert sleeps == [0.1]

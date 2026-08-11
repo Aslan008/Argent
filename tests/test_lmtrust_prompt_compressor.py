@@ -551,3 +551,35 @@ class TestGetAdaptiveContextWindow:
         # large recommendation == base_window, so result is base_window.
         cat("large")
         assert get_adaptive_context_window("m", base_window=8192) == 8192
+class TestStripSectionExactOutput:
+    """Kill ADD_TO_SUB @ pos 3687: ``nxt + 1`` → ``nxt - 1`` in _strip_section.
+
+    The ``+1`` skips the ``\\n`` before the next ``## `` heading.
+    With ``-1``, two extra characters leak into the output.
+    """
+
+    def test_strip_middle_exact_output(self):
+        """Exact output for stripping a middle section.
+
+        prompt = "## 1. FIRST\nA.\n## 2. MID\nB.\n## 3. LAST\nC.\n"
+        Stripping "## 2. MID" should give:
+            "## 1. FIRST\nA.\n## 3. LAST\nC.\n"
+        The mutant (nxt-1) would include an extra ".\n" before "## 3.".
+        """
+        prompt = "## 1. FIRST\nA.\n## 2. MID\nB.\n## 3. LAST\nC.\n"
+        out = _strip_section(prompt, "## 2. MID")
+        assert out == "## 1. FIRST\nA.\n## 3. LAST\nC.\n"
+
+    def test_strip_first_section_exact(self):
+        """Exact output for stripping the first section."""
+        prompt = "## 1. GONE\nBad.\n## 2. KEEP\nGood.\n"
+        out = _strip_section(prompt, "## 1. GONE")
+        assert out == "## 2. KEEP\nGood.\n"
+
+    def test_strip_no_extra_char_before_next_heading(self):
+        """The character before \\n## must NOT appear in output."""
+        prompt = "## 1. KEEP\nX.\n## 2. GONE\nY.\n## 3. LAST\nZ.\n"
+        out = _strip_section(prompt, "## 2. GONE")
+        # The "Y." line ends with ".\n## 3." — the "." before \n must not leak
+        assert out == "## 1. KEEP\nX.\n## 3. LAST\nZ.\n"
+        assert "Y." not in out  # stripped content must not leak

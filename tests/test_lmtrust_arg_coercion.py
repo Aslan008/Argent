@@ -539,3 +539,23 @@ class TestCoerceAndLogDeep:
         with caplog.at_level(logging.INFO, logger=arg_coercion.log.name):
             coerce_and_log("write_file", None)
         assert "coerced" not in caplog.text
+class TestNewlineArrayDidFlag:
+    """Kill TRUE_TO_FALSE @ pos 3785: ``return lines, True`` → ``return lines, False``.
+
+    When a newline-separated string is coerced to an array, the ``did`` flag
+    must be ``True`` so that ``coerce_arguments`` logs the change.
+    """
+
+    def test_newline_string_did_is_true(self):
+        """Direct _to_array call: did must be True for newline split."""
+        val, did = _to_array("alpha\nbeta\ngamma")
+        assert val == ["alpha", "beta", "gamma"]
+        assert did is True
+
+    def test_newline_string_changed_logged(self, monkeypatch):
+        """Through coerce_arguments: changed list must include the coercion."""
+        _make_schema(monkeypatch, "test_tool", {"items": "array"})
+        coerced, changed = coerce_arguments("test_tool", {"items": "a\nb"})
+        assert coerced["items"] == ["a", "b"]
+        assert len(changed) == 1
+        assert "items" in changed[0]

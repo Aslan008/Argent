@@ -1011,3 +1011,130 @@ class TestBM25ExactScores:
         idx = self._build_index()
         results = idx.search("apple banana", top_k=10)
         assert results[0][0] == "d1"  # has both terms
+class TestBM25ExactScoreCapture:
+    """Kill 6 surviving BM25 formula mutations by asserting exact scores.
+
+    Mutations targeted:
+    - ADD_TO_SUB @ pos 2199: k1+1 → k1-1 (numerator changes)
+    - SUB_TO_ADD @ pos 2101: 1-b → 1+b (denom changes)
+    - MUL_TO_DIV @ pos 2188: freq*(k1+1) → freq/(k1+1) (numerator changes)
+    - DIV_TO_MUL @ pos 2124: dl/avgdl → dl*avgdl (denom changes)
+    - OR_TO_AND @ pos 2052: doc_len or 1 → doc_len and 1 (dl becomes 1)
+    - OR_TO_AND @ pos 2138: avgdl or 1 → avgdl and 1 (avgdl becomes 1)
+
+    Strategy: intercept builtins.sorted inside search() to capture the scores
+    dict before it's discarded, then assert exact values.
+    """
+
+    def _build_index(self):
+        return BM25Index(
+            ids=["d0", "d1", "d2"],
+            docs=["apple apple apple", "apple banana", "banana cherry"],
+            metas=[{}, {}, {}],
+            k1=1.5,
+            b=0.75,
+        )
+
+    def _capture_scores(self, idx, query, top_k=10):
+        """Run search() with sorted monkey-patched to capture scores."""
+        import builtins
+        captured = {}
+        real_sorted = builtins.sorted
+
+        def capturing_sorted(items, key=None, reverse=False):
+            for k, v in items:
+                captured[k] = v
+            return real_sorted(items, key=key, reverse=reverse)
+
+        builtins.sorted = capturing_sorted
+        try:
+            idx.search(query, top_k=top_k)
+        finally:
+            builtins.sorted = real_sorted
+        return captured
+
+    def test_apple_doc0_exact_score(self):
+        """Exact score for 'apple' in doc0 (freq=3, dl=3).
+
+        score = idf * freq * (k1+1) / (freq + k1*(1 - b + b*dl/avgdl))
+        = log(1.6) * 3 * 2.5 / (3 + 1.5*(0.25 + 0.75*3/(7/3)))
+        ≈ 0.7311167566044777
+        """
+        import math
+        idx = self._build_index()
+        scores = self._capture_scores(idx, "apple")
+        expected = math.log(1.6) * 3 * 2.5 / (3 + 1.5 * (0.25 + 0.75 * 3 / (7 / 3)))
+        assert scores[0] == pytest.approx(expected, rel=1e-10)
+
+    def test_apple_doc1_exact_score(self):
+        """Exact score for 'apple' in doc1 (freq=1, dl=2).
+
+        score = log(1.6) * 1 * 2.5 / (1 + 1.5*(0.25 + 0.75*2/(7/3)))
+        ≈ 0.5022939549191067
+        """
+        import math
+        idx = self._build_index()
+        scores = self._capture_scores(idx, "apple")
+        expected = math.log(1.6) * 1 * 2.5 / (1 + 1.5 * (0.25 + 0.75 * 2 / (7 / 3)))
+        assert scores[1] == pytest.approx(expected, rel=1e-10)
+
+    def test_banana_doc1_exact_score(self):
+        """Exact score for 'banana' in doc1 (freq=1, dl=2).
+
+        idf_banana = log(1.6) (df=2, N=3)
+        score = log(1.6) * 1 * 2.5 / (1 + 1.5*(0.25 + 0.75*2/(7/3)))
+        ≈ 0.5022939549191067
+        """
+        import math
+        idx = self._build_index()
+        scores = self._capture_scores(idx, "banana")
+        expected = math.log(1.6) * 1 * 2.5 / (1 + 1.5 * (0.25 + 0.75 * 2 / (7 / 3)))
+        assert scores[1] == pytest.approx(expected, rel=1e-10)
+
+    def test_banana_doc2_exact_score(self):
+        """Exact score for 'banana' in doc2 (freq=1, dl=2).
+
+        Same as doc1 since both have freq=1, dl=2.
+        """
+        import math
+        idx = self._build_index()
+        scores = self._capture_scores(idx, "banana")
+        expected = math.log(1.6) * 1 * 2.5 / (1 + 1.5 * (0.25 + 0.75 * 2 / (7 / 3)))
+        assert scores[2] == pytest.approx(expected, rel=1e-10)
+
+    def test_cherry_doc2_exact_score(self):
+        """Exact score for 'cherry' in doc2 (freq=1, dl=2, df=1).
+
+        idf_cherry = log(1 + (3-1+0.5)/(1+0.5)) = log(8/3)
+        score = log(8/3) * 1 * 2.5 / (1 + 1.5*(0.25 + 0.75*2/(7/3)))
+        """
+        import math
+        idx = self._build_index()
+        scores = self._capture_scores(idx, "cherry")
+        idf = math.log(1 + (3 - 1 + 0.5) / (1 + 0.5))
+        expected = idf * 1 * 2.5 / (1 + 1.5 * (0.25 + 0.75 * 2 / (7 / 3)))
+        assert scores[2] == pytest.approx(expected, rel=1e-10)
+
+    def test_apple_scores_distinct(self):
+        """doc0 score must differ from doc1 score for 'apple'.
+        This kills mutations that make scores equal (e.g. OR_TO_AND on doc_len
+        making dl=1 for all docs).
+        """
+        idx = self._build_index()
+        scores = self._capture_scores(idx, "apple")
+        assert scores[0] != scores[1]
+
+    def test_combined_query_scores_additive(self):
+        """'apple banana' in doc1: scores from both terms must add up.
+
+        doc1 has freq_apple=1, freq_banana=1, dl=2.
+        score = idf_apple * 1 * 2.5 / denom + idf_banana * 1 * 2.5 / denom
+        where denom = 1 + 1.5*(0.25 + 0.75*2/(7/3))
+        """
+        import math
+        idx = self._build_index()
+        scores = self._capture_scores(idx, "apple banana")
+        idf = math.log(1.6)
+        denom = 1 + 1.5 * (0.25 + 0.75 * 2 / (7 / 3))
+        expected = 2 * idf * 1 * 2.5 / denom
+        assert scores[1] == pytest.approx(expected, rel=1e-10)
