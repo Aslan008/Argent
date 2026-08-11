@@ -192,6 +192,17 @@ def mutate_module(module_path: str, test_files: list[str], max_mutations: int = 
 
 def main():
     modules = [
+        # ── Tier 1: new deep-analysis modules ──────────────────────────
+        ("src/agent/arg_coercion.py", ["tests/test_lmtrust_arg_coercion.py", "tests/test_arg_coercion.py"]),
+        ("src/agent/loop_guard.py", ["tests/test_lmtrust_loop_guard.py", "tests/test_loop_guard.py"]),
+        ("src/agent/wait_conditions.py", ["tests/test_lmtrust_wait_conditions.py", "tests/test_wait_conditions.py"]),
+        ("src/agent/parser.py", ["tests/test_lmtrust_parser.py", "tests/test_agent_parser.py"]),
+        ("prompt_compressor.py", ["tests/test_lmtrust_prompt_compressor.py", "tests/test_prompt_compressor.py"]),
+        ("src/rag/keyword_index.py", ["tests/test_lmtrust_keyword_index.py", "tests/test_keyword_index.py"]),
+        ("error_help.py", ["tests/test_lmtrust_error_help.py"]),
+        ("tool_profiles.py", ["tests/test_lmtrust_tool_profiles.py", "tests/test_tool_profiles.py"]),
+        ("project_paths.py", ["tests/test_lmtrust_project_paths.py", "tests/test_project_paths.py"]),
+        # ── Previously tested (keep for regression) ────────────────────
         ("usage_tracker.py", ["tests/test_lmtrust_usage_tracker.py", "tests/test_usage_tracker.py"]),
         ("text_safety.py", ["tests/test_lmtrust_text_safety.py", "tests/test_text_safety.py"]),
         ("tool_recovery.py", ["tests/test_lmtrust_tool_recovery.py", "tests/test_tool_registry_consistency.py"]),
