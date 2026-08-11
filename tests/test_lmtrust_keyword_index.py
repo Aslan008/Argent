@@ -511,3 +511,333 @@ class TestClearCache:
         clear_cache()
         clear_cache()
         assert _CACHE == {}
+# ---------------------------------------------------------------------------
+# BM25 exact score assertions (kills 9 surviving arithmetic mutations)
+# ---------------------------------------------------------------------------
+
+class TestBM25ExactScores:
+    """Assert exact BM25 scores to kill 9 surviving arithmetic mutations
+    in the IDF calculation (line 46) and scoring formula (lines 58-60).
+
+    Mutations targeted:
+      1. ADD_TO_SUB: freq + k1*... -> freq - k1*...  (denom, line 59)
+      2. ADD_TO_SUB: freq * (k1+1) -> freq - (k1+1)  (numerator, line 60)
+      3. SUB_TO_ADD: (N - d + 0.5) -> (N + d + 0.5)  (IDF, line 46)
+      4. SUB_TO_ADD: (1 - b + ...) -> (1 + b + ...)  (denom, line 59)
+      5. MUL_TO_DIV: freq * (k1+1) -> freq / (k1+1)  (numerator, line 60)
+      6. DIV_TO_MUL: dl / avgdl   -> dl * avgdl      (denom, line 59)
+      7. OR_TO_AND:  doc_len or 1 -> doc_len and 1   (line 58)
+      8. OR_TO_AND:  avgdl or 1   -> avgdl and 1     (line 59)
+      9. OR_TO_AND:  denom or 1   -> denom and 1     (line 60)
+
+    Strategy: compute expected scores with the CORRECT formula independently
+    of BM25Index, then capture actual scores from search() via a patched
+    ``sorted`` and assert they match exactly.  Any mutation in the formula
+    produces a different actual score that fails the assertion.
+    """
+
+    # -- test corpus --------------------------------------------------
+    # doc0: "apple apple apple banana cherry"  -> dl=5, apple=3, banana=1, cherry=1
+    # doc1: "apple banana"                      -> dl=2, apple=1, banana=1
+    # doc2: "apple apple date elderberry fig grape" -> dl=6, apple=2, date=1, ...
+    IDS = ["a", "b", "c"]
+    DOCS = [
+        "apple apple apple banana cherry",
+        "apple banana",
+        "apple apple date elderberry fig grape",
+    ]
+    METAS = [{"i": 0}, {"i": 1}, {"i": 2}]
+    K1 = 1.5
+    B = 0.75
+    N = 3
+    DOC_LENS = [5, 2, 6]
+    AVGDL = 13.0 / 3.0  # (5 + 2 + 6) / 3
+    DF = {
+        "apple": 3, "banana": 2, "cherry": 1, "date": 1,
+        "elderberry": 1, "fig": 1, "grape": 1,
+    }
+    FREQS = {
+        "apple": {0: 3, 1: 1, 2: 2},
+        "banana": {0: 1, 1: 1},
+        "cherry": {0: 1},
+        "date": {2: 1},
+        "elderberry": {2: 1},
+        "fig": {2: 1},
+        "grape": {2: 1},
+    }
+
+    # -- helpers ------------------------------------------------------
+    def _build(self):
+        return BM25Index(self.IDS, self.DOCS, self.METAS,
+                         k1=self.K1, b=self.B)
+
+    def _expected_idf(self, term):
+        """Compute IDF with the CORRECT formula (independent of BM25Index)."""
+        d = self.DF[term]
+        return math.log(1 + (self.N - d + 0.5) / (d + 0.5))
+
+    def _expected_term_score(self, term, doc_idx):
+        """Compute expected BM25 score for a single term in a single doc
+        using the CORRECT formula (not calling search())."""
+        freq = self.FREQS.get(term, {}).get(doc_idx)
+        if freq is None:
+            return 0.0
+        idf = self._expected_idf(term)
+        dl = self.DOC_LENS[doc_idx]
+        avgdl = self.AVGDL
+        denom = freq + self.K1 * (1 - self.B + self.B * dl / avgdl)
+        return idf * (freq * (self.K1 + 1)) / denom
+
+    def _expected_total_score(self, query, doc_idx):
+        """Expected total BM25 score for a multi-term query in one doc."""
+        return sum(
+            self._expected_term_score(term, doc_idx)
+            for term in set(tokenize(query))
+        )
+
+    @staticmethod
+    def _search_and_capture(idx, query, top_k=10):
+        """Call idx.search() and capture the internal scores dict by
+        temporarily patching ``builtins.sorted``.
+
+        search() calls ``sorted(scores.items(), ...)`` exactly once, so the
+        captured dict maps doc_idx -> BM25 score for every matching doc.
+        """
+        captured = {}
+        _real_sorted = sorted
+
+        def _capturing_sorted(iterable, **kwargs):
+            items = list(iterable)
+            try:
+                for k, v in items:
+                    captured[k] = v
+            except (ValueError, TypeError):
+                pass  # not a (idx, score) iterable
+            return _real_sorted(items, **kwargs)
+
+        import builtins
+        orig = builtins.sorted
+        builtins.sorted = _capturing_sorted
+        try:
+            results = idx.search(query, top_k=top_k)
+        finally:
+            builtins.sorted = orig
+        return results, captured
+
+    # -- IDF exact values (kills mutation 3: SUB_TO_ADD in IDF) -------
+    def test_idf_exact_all_terms(self):
+        """IDF values must match log(1 + (N - d + 0.5)/(d + 0.5))."""
+        idx = self._build()
+        for term, df in self.DF.items():
+            expected = self._expected_idf(term)
+            assert math.isclose(idx.idf[term], expected, rel_tol=1e-12), (
+                f"IDF[{term}] (df={df}): expected {expected!r}, "
+                f"got {idx.idf[term]!r}"
+            )
+
+    def test_idf_apple_exact(self):
+        """IDF[apple] = log(1 + (3-3+0.5)/(3+0.5)) = log(8/7)."""
+        idx = self._build()
+        assert math.isclose(idx.idf["apple"], math.log(8 / 7), rel_tol=1e-12)
+
+    def test_idf_banana_exact(self):
+        """IDF[banana] = log(1 + (3-2+0.5)/(2+0.5)) = log(8/5)."""
+        idx = self._build()
+        assert math.isclose(idx.idf["banana"], math.log(8 / 5), rel_tol=1e-12)
+
+    def test_idf_rare_term_exact(self):
+        """IDF[cherry] (df=1) = log(1 + (3-1+0.5)/(1+0.5)) = log(8/3)."""
+        idx = self._build()
+        assert math.isclose(idx.idf["cherry"], math.log(8 / 3), rel_tol=1e-12)
+
+    # -- structural values --------------------------------------------
+    def test_avgdl_exact(self):
+        idx = self._build()
+        assert math.isclose(idx.avgdl, self.AVGDL, rel_tol=1e-12)
+
+    def test_doc_len_exact(self):
+        idx = self._build()
+        assert idx.doc_len == self.DOC_LENS
+
+    # -- single-term exact scores (kills mutations 1,2,4,5,6,7,8,9) ---
+    def test_single_term_apple_exact_scores(self):
+        """Assert exact BM25 scores for 'apple' across all 3 docs.
+
+        Expected scores are computed with the correct formula independently
+        of the BM25Index implementation, so any mutation in lines 58-60
+        produces a mismatched actual score.
+        """
+        idx = self._build()
+        _, captured = self._search_and_capture(idx, "apple", top_k=10)
+        for doc_idx in range(3):
+            expected = self._expected_term_score("apple", doc_idx)
+            assert doc_idx in captured, f"doc {doc_idx} missing from scores"
+            assert math.isclose(captured[doc_idx], expected, rel_tol=1e-12), (
+                f"doc {doc_idx}: expected {expected!r}, "
+                f"got {captured[doc_idx]!r}"
+            )
+
+    def test_single_term_apple_score_values(self):
+        """Hardcoded expected score values (computed by hand) to ensure
+        the formula is exactly right.
+
+        doc0: idf * 130/81  (freq=3, dl=5,  avgdl=13/3)
+        doc1: idf * 260/197 (freq=1, dl=2,  avgdl=13/3)
+        doc2: idf * 520/409 (freq=2, dl=6,  avgdl=13/3)
+        """
+        idx = self._build()
+        _, captured = self._search_and_capture(idx, "apple", top_k=10)
+        idf = math.log(8 / 7)
+        assert math.isclose(captured[0], idf * 130 / 81, rel_tol=1e-12)
+        assert math.isclose(captured[1], idf * 260 / 197, rel_tol=1e-12)
+        assert math.isclose(captured[2], idf * 520 / 409, rel_tol=1e-12)
+
+    def test_single_term_apple_ordering(self):
+        """Correct ordering for 'apple' is doc0 > doc1 > doc2."""
+        idx = self._build()
+        results, _ = self._search_and_capture(idx, "apple", top_k=10)
+        ids = [r[0] for r in results]
+        assert ids == ["a", "b", "c"]
+
+    # -- multi-term exact scores --------------------------------------
+    def test_multi_term_apple_banana_exact_scores(self):
+        """Assert exact scores for multi-term query 'apple banana'."""
+        idx = self._build()
+        _, captured = self._search_and_capture(idx, "apple banana", top_k=10)
+        for doc_idx in range(3):
+            expected = self._expected_total_score("apple banana", doc_idx)
+            if expected == 0.0:
+                continue  # doc doesn't match any term
+            assert doc_idx in captured, f"doc {doc_idx} missing from scores"
+            assert math.isclose(captured[doc_idx], expected, rel_tol=1e-12), (
+                f"doc {doc_idx}: expected {expected!r}, "
+                f"got {captured[doc_idx]!r}"
+            )
+
+    def test_multi_term_apple_banana_hardcoded(self):
+        """Hardcoded multi-term scores.
+
+        doc0: log(8/7)*130/81 + log(8/5)*130/139
+        doc1: log(8/7)*260/197 + log(8/5)*260/197
+        doc2: log(8/7)*520/409  (no banana)
+        """
+        idx = self._build()
+        _, captured = self._search_and_capture(idx, "apple banana", top_k=10)
+        idf_a = math.log(8 / 7)
+        idf_b = math.log(8 / 5)
+        assert math.isclose(
+            captured[0], idf_a * 130 / 81 + idf_b * 130 / 139, rel_tol=1e-12
+        )
+        assert math.isclose(
+            captured[1], idf_a * 260 / 197 + idf_b * 260 / 197, rel_tol=1e-12
+        )
+        assert math.isclose(captured[2], idf_a * 520 / 409, rel_tol=1e-12)
+
+    # -- length normalisation: kills DIV_TO_MUL & OR_TO_AND(avgdl) ----
+    def test_length_normalization_exact_scores(self):
+        """Use docs with very different lengths to ensure the dl/avgdl
+        term is exercised with large values, killing DIV_TO_MUL (mutation 6)
+        and OR_TO_AND(avgdl) (mutation 8)."""
+        docs = [
+            "apple apple apple apple apple apple apple apple apple apple "
+            "elderberry fig grape hazel iris",
+            "apple",
+        ]
+        idx = BM25Index(["a", "b"], docs, [{}, {}], k1=1.5, b=0.75)
+        # N=2, dl=[14, 1], avgdl=7.5, df[apple]=2
+        idf = math.log(1.2)  # log(1 + 0.5/2.5)
+        avgdl = 7.5
+        # doc0: freq=10, dl=14
+        expected_0 = idf * 25 / (10 + 1.5 * (0.25 + 0.75 * 14 / avgdl))
+        # doc1: freq=1, dl=1
+        expected_1 = idf * 2.5 / (1 + 1.5 * (0.25 + 0.75 * 1 / avgdl))
+        _, captured = self._search_and_capture(idx, "apple", top_k=10)
+        assert math.isclose(captured[0], expected_0, rel_tol=1e-12), (
+            f"doc0: expected {expected_0!r}, got {captured[0]!r}"
+        )
+        assert math.isclose(captured[1], expected_1, rel_tol=1e-12), (
+            f"doc1: expected {expected_1!r}, got {captured[1]!r}"
+        )
+
+    def test_length_normalization_ordering(self):
+        """With the correct formula, the high-freq long doc (freq=10, dl=14)
+        outranks the low-freq short doc (freq=1, dl=1).
+
+        With DIV_TO_MUL (dl*avgdl instead of dl/avgdl) the length penalty
+        becomes so extreme that the ordering flips.
+        """
+        docs = [
+            "apple apple apple apple apple apple apple apple apple apple "
+            "elderberry fig grape hazel iris",
+            "apple",
+        ]
+        idx = BM25Index(["a", "b"], docs, [{}, {}], k1=1.5, b=0.75)
+        results = idx.search("apple", top_k=2)
+        assert results[0][0] == "a"  # high-freq doc wins
+        assert results[1][0] == "b"
+
+    # -- numerator formula: kills MUL_TO_DIV & ADD_TO_SUB -------------
+    def test_numerator_formula_exact(self):
+        """Verify numerator freq*(k1+1) by checking score scales correctly
+        with freq for same-length docs (kills mutations 2 and 5)."""
+        docs = ["apple banana cherry", "apple apple banana"]
+        idx = BM25Index(["x", "y"], docs, [{}, {}], k1=1.5, b=0.75)
+        # N=2, dl=[3, 3], avgdl=3, df[apple]=2
+        idf = math.log(1.2)
+        # doc0: freq=1, denom = 1 + 1.5*(0.25+0.75) = 2.5
+        #   score = idf * 2.5 / 2.5 = idf
+        # doc1: freq=2, denom = 2 + 1.5*(0.25+0.75) = 3.5
+        #   score = idf * 5 / 3.5
+        _, captured = self._search_and_capture(idx, "apple", top_k=10)
+        assert math.isclose(captured[0], idf * 1.0, rel_tol=1e-12)
+        assert math.isclose(captured[1], idf * 5.0 / 3.5, rel_tol=1e-12)
+
+    # -- denom or 1 fallback: kills OR_TO_AND(denom) -----------------
+    def test_denom_not_replaced_by_one(self):
+        """If ``denom or 1`` were mutated to ``denom and 1``, the score
+        would become ``idf * numerator`` (dividing by 1 instead of denom).
+        Assert the actual score is much smaller than that wrong value."""
+        idx = self._build()
+        _, captured = self._search_and_capture(idx, "apple", top_k=10)
+        idf = math.log(8 / 7)
+        # Wrong score if denom and 1 were used: idf * 7.5 for doc0
+        wrong_0 = idf * 7.5
+        assert not math.isclose(captured[0], wrong_0, rel_tol=1e-3)
+        assert captured[0] < wrong_0  # correct score is much smaller
+
+    # -- doc_len or 1: kills OR_TO_AND(doc_len) ----------------------
+    def test_doc_len_not_replaced_by_one(self):
+        """If ``doc_len[idx] or 1`` were mutated to ``doc_len[idx] and 1``,
+        every dl would become 1, collapsing length normalisation.
+
+        With dl=1 for all docs, doc1 (freq=1, dl=2) and doc2 (freq=2, dl=6)
+        would get different scores than the correct formula produces.
+        """
+        idx = self._build()
+        _, captured = self._search_and_capture(idx, "apple", top_k=10)
+        # Compute what the score would be if dl were always 1
+        idf = math.log(8 / 7)
+        avgdl = self.AVGDL
+        wrong_denom_1 = 1 + 1.5 * (0.25 + 0.75 * 1 / avgdl)
+        wrong_score_1 = idf * 2.5 / wrong_denom_1  # for doc1 (freq=1)
+        # The correct score for doc1 uses dl=2, not dl=1
+        assert not math.isclose(captured[1], wrong_score_1, rel_tol=1e-6), (
+            f"doc1 score {captured[1]} matches dl=1 mutation {wrong_score_1}"
+        )
+
+    # -- avgdl or 1: kills OR_TO_AND(avgdl) --------------------------
+    def test_avgdl_not_replaced_by_one(self):
+        """If ``avgdl or 1`` were mutated to ``avgdl and 1``, avgdl would
+        become 1 (since avgdl=13/3 is truthy, ``13/3 and 1`` returns 1).
+
+        This changes every score because dl/avgdl becomes dl/1 = dl.
+        """
+        idx = self._build()
+        _, captured = self._search_and_capture(idx, "apple", top_k=10)
+        idf = math.log(8 / 7)
+        # Compute what the score would be if avgdl were 1
+        wrong_denom_0 = 3 + 1.5 * (0.25 + 0.75 * 5 / 1)
+        wrong_score_0 = idf * 7.5 / wrong_denom_0
+        assert not math.isclose(captured[0], wrong_score_0, rel_tol=1e-6), (
+            f"doc0 score {captured[0]} matches avgdl=1 mutation {wrong_score_0}"
+        )
