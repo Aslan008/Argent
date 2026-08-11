@@ -588,3 +588,49 @@ class TestProjectRootOrCwd:
         result = project_root_or_cwd(str(plain))
         assert result == plain.resolve()
         assert result.is_absolute()
+# ---------------------------------------------------------------------------
+# find_project_root — OSError handling (return None, not 0)
+# ---------------------------------------------------------------------------
+
+class TestOSErrorReturn:
+    """When Path.home() or Path.cwd() raises OSError, find_project_root must
+    return ``None`` — never ``0`` (which is falsy but not ``None``).
+
+    These tests kill the ``return None`` → ``return 0`` mutation on line 27
+    by using ``is None`` identity checks instead of truthiness.
+    """
+
+    def test_find_project_root_oserror_returns_none(self, monkeypatch):
+        """Path.home() raising OSError → find_project_root returns None."""
+        def _raise_oserror(cls):
+            raise OSError("home unavailable")
+
+        monkeypatch.setattr("pathlib.Path.home", classmethod(_raise_oserror))
+        result = find_project_root()
+        assert result is None
+
+    def test_find_project_root_oserror_is_not_falsy_zero(self, monkeypatch):
+        """The return value must be None, not 0 (both are falsy)."""
+        def _raise_oserror(cls):
+            raise OSError("home unavailable")
+
+        monkeypatch.setattr("pathlib.Path.home", classmethod(_raise_oserror))
+        result = find_project_root()
+        assert result is None
+        assert result != 0
+        assert not (result is None and result == 0)
+
+    def test_project_root_or_cwd_oserror_falls_back(self, monkeypatch, tmp_path):
+        """project_root_or_cwd must fall back to cwd when home() raises.
+
+        find_project_root returns None on OSError, so project_root_or_cwd
+        uses its ``or`` fallback to Path.cwd().
+        """
+        def _raise_oserror(cls):
+            raise OSError("home unavailable")
+
+        monkeypatch.setattr("pathlib.Path.home", classmethod(_raise_oserror))
+        monkeypatch.chdir(tmp_path)
+        result = project_root_or_cwd()
+        assert result is not None
+        assert result == tmp_path.resolve()
