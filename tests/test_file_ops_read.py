@@ -23,12 +23,8 @@ class FakeMemory:
 
 
 import file_tracker
-file_tracker.snapshot = lambda *a, **k: None
 
 import config
-config.get_current_model = lambda: 'test-model'
-config.get_model_size_category = lambda m: 'default'
-
 from tools import file_ops
 
 

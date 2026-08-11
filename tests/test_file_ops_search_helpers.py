@@ -41,6 +41,23 @@ def _chdir_tmp(monkeypatch, tmp_path):
     yield
 
 
+@pytest.fixture
+def search_tmp(tmp_path_factory):
+    """A temp dir NOT under Windows Temp\\ — search_files/_python_grep_search
+    skip any path containing 'Temp' (a Unity dir name), which on Windows includes
+    the system temp where pytest's tmp_path lives."""
+    import tempfile
+    # Use a dir under the user's home, not under AppData/Local/Temp.
+    # Must NOT start with '.' — search_files skips hidden dirs.
+    base = Path.home() / "argent_test_tmp"
+    base.mkdir(exist_ok=True)
+    d = base / tempfile.mkdtemp(dir=str(base))
+    yield d
+    # Cleanup
+    import shutil
+    shutil.rmtree(d, ignore_errors=True)
+
+
 from tools.search_ops import search_files, grep_search, _python_grep_search
 from tools._helpers import (
     _maybe_unescape_content,
@@ -68,58 +85,58 @@ def _force_python_fallback(monkeypatch):
 # 1. search_files
 # ===========================================================================
 class TestSearchFiles:
-    def test_find_files_by_pattern(self, tmp_path):
-        (tmp_path / "a.py").write_text("x = 1\n", encoding="utf-8")
-        (tmp_path / "b.py").write_text("y = 2\n", encoding="utf-8")
-        (tmp_path / "c.txt").write_text("z = 3\n", encoding="utf-8")
-        result = search_files(str(tmp_path), pattern="*.py")
+    def test_find_files_by_pattern(self, search_tmp):
+        (search_tmp / "a.py").write_text("x = 1\n", encoding="utf-8")
+        (search_tmp / "b.py").write_text("y = 2\n", encoding="utf-8")
+        (search_tmp / "c.txt").write_text("z = 3\n", encoding="utf-8")
+        result = search_files(str(search_tmp), pattern="*.py")
         assert "Found 2 file(s):" in result
         assert "a.py" in result
         assert "b.py" in result
         assert "c.txt" not in result
 
-    def test_find_files_by_name_contains(self, tmp_path):
-        (tmp_path / "alpha_model.py").write_text("x\n", encoding="utf-8")
-        (tmp_path / "beta_view.py").write_text("y\n", encoding="utf-8")
-        (tmp_path / "gamma_model.py").write_text("z\n", encoding="utf-8")
-        result = search_files(str(tmp_path), pattern="*.py", name_contains="model")
+    def test_find_files_by_name_contains(self, search_tmp):
+        (search_tmp / "alpha_model.py").write_text("x\n", encoding="utf-8")
+        (search_tmp / "beta_view.py").write_text("y\n", encoding="utf-8")
+        (search_tmp / "gamma_model.py").write_text("z\n", encoding="utf-8")
+        result = search_files(str(search_tmp), pattern="*.py", name_contains="model")
         assert "Found 2 file(s):" in result
         assert "alpha_model.py" in result
         assert "gamma_model.py" in result
         assert "beta_view.py" not in result
 
-    def test_name_contains_is_case_insensitive(self, tmp_path):
-        (tmp_path / "MyModule.py").write_text("x\n", encoding="utf-8")
-        result = search_files(str(tmp_path), pattern="*.py", name_contains="mymodule")
+    def test_name_contains_is_case_insensitive(self, search_tmp):
+        (search_tmp / "MyModule.py").write_text("x\n", encoding="utf-8")
+        result = search_files(str(search_tmp), pattern="*.py", name_contains="mymodule")
         assert "Found 1 file(s):" in result
         assert "MyModule.py" in result
 
-    def test_find_files_by_content_contains(self, tmp_path):
-        (tmp_path / "a.py").write_text("def hello():\n    pass\n", encoding="utf-8")
-        (tmp_path / "b.py").write_text("def world():\n    pass\n", encoding="utf-8")
-        result = search_files(str(tmp_path), pattern="*.py", content_contains="hello")
+    def test_find_files_by_content_contains(self, search_tmp):
+        (search_tmp / "a.py").write_text("def hello():\n    pass\n", encoding="utf-8")
+        (search_tmp / "b.py").write_text("def world():\n    pass\n", encoding="utf-8")
+        result = search_files(str(search_tmp), pattern="*.py", content_contains="hello")
         assert "Found 1 file(s):" in result
         assert "a.py" in result
         assert "b.py" not in result
         assert ">>" in result  # snippet marker
 
-    def test_content_contains_is_case_insensitive(self, tmp_path):
-        (tmp_path / "a.py").write_text("IMPORTANT NOTE\n", encoding="utf-8")
-        result = search_files(str(tmp_path), pattern="*.py", content_contains="important")
+    def test_content_contains_is_case_insensitive(self, search_tmp):
+        (search_tmp / "a.py").write_text("IMPORTANT NOTE\n", encoding="utf-8")
+        result = search_files(str(search_tmp), pattern="*.py", content_contains="important")
         assert "Found 1 file(s):" in result
         assert "a.py" in result
 
-    def test_max_results_limits_output(self, tmp_path):
+    def test_max_results_limits_output(self, search_tmp):
         for i in range(10):
-            (tmp_path / f"f{i}.py").write_text("x\n", encoding="utf-8")
-        result = search_files(str(tmp_path), pattern="*.py", max_results=3)
+            (search_tmp / f"f{i}.py").write_text("x\n", encoding="utf-8")
+        result = search_files(str(search_tmp), pattern="*.py", max_results=3)
         assert "Found 3 file(s):" in result
         assert "Results limited to 3" in result
 
-    def test_max_results_one(self, tmp_path):
+    def test_max_results_one(self, search_tmp):
         for i in range(5):
-            (tmp_path / f"f{i}.py").write_text("x\n", encoding="utf-8")
-        result = search_files(str(tmp_path), pattern="*.py", max_results=1)
+            (search_tmp / f"f{i}.py").write_text("x\n", encoding="utf-8")
+        result = search_files(str(search_tmp), pattern="*.py", max_results=1)
         assert "Found 1 file(s):" in result
         assert "Results limited to 1" in result
 
@@ -128,114 +145,114 @@ class TestSearchFiles:
         assert "Error: Directory" in result
         assert "does not exist" in result
 
-    def test_path_is_a_file_not_dir(self, tmp_path):
-        f = tmp_path / "afile.txt"
+    def test_path_is_a_file_not_dir(self, search_tmp):
+        f = search_tmp / "afile.txt"
         f.write_text("x\n", encoding="utf-8")
         result = search_files(str(f))
         assert "Error:" in result
         assert "is not a directory" in result
 
-    def test_empty_directory(self, tmp_path):
-        empty = tmp_path / "emptydir"
+    def test_empty_directory(self, search_tmp):
+        empty = search_tmp / "emptydir"
         empty.mkdir()
         result = search_files(str(empty))
         assert "No files found matching: any file" in result
 
-    def test_content_snippet_has_context_around_match(self, tmp_path):
+    def test_content_snippet_has_context_around_match(self, search_tmp):
         padding_before = "A" * 50
         padding_after = "B" * 70
         content = f"{padding_before}NEEDLE{padding_after}"
-        (tmp_path / "a.py").write_text(content, encoding="utf-8")
-        result = search_files(str(tmp_path), pattern="*.py", content_contains="NEEDLE")
+        (search_tmp / "a.py").write_text(content, encoding="utf-8")
+        result = search_files(str(search_tmp), pattern="*.py", content_contains="NEEDLE")
         assert "Found 1 file(s):" in result
         # The snippet should contain the search term and surrounding context
         assert "NEEDLE" in result
         # Should have ... prefix because start > 0
         assert "..." in result
 
-    def test_content_snippet_prefix_when_start_gt_zero(self, tmp_path):
+    def test_content_snippet_prefix_when_start_gt_zero(self, search_tmp):
         # Put the term far enough that start > 0
         content = "X" * 100 + "TARGET" + "Y" * 100
-        (tmp_path / "a.py").write_text(content, encoding="utf-8")
-        result = search_files(str(tmp_path), pattern="*.py", content_contains="TARGET")
+        (search_tmp / "a.py").write_text(content, encoding="utf-8")
+        result = search_files(str(search_tmp), pattern="*.py", content_contains="TARGET")
         snippet_line = [l for l in result.splitlines() if ">>" in l][0]
         assert snippet_line.startswith("  >> ...")  # prefix because start > 0
 
-    def test_content_snippet_suffix_when_end_lt_len(self, tmp_path):
+    def test_content_snippet_suffix_when_end_lt_len(self, search_tmp):
         content = "X" * 100 + "TARGET" + "Y" * 100
-        (tmp_path / "a.py").write_text(content, encoding="utf-8")
-        result = search_files(str(tmp_path), pattern="*.py", content_contains="TARGET")
+        (search_tmp / "a.py").write_text(content, encoding="utf-8")
+        result = search_files(str(search_tmp), pattern="*.py", content_contains="TARGET")
         snippet_line = [l for l in result.splitlines() if ">>" in l][0]
         assert snippet_line.rstrip().endswith("...")  # suffix because end < len
 
-    def test_content_snippet_no_prefix_when_start_is_zero(self, tmp_path):
+    def test_content_snippet_no_prefix_when_start_is_zero(self, search_tmp):
         # Term at the very beginning → start = 0 → no prefix
         content = "TARGET" + "Y" * 100
-        (tmp_path / "a.py").write_text(content, encoding="utf-8")
-        result = search_files(str(tmp_path), pattern="*.py", content_contains="TARGET")
+        (search_tmp / "a.py").write_text(content, encoding="utf-8")
+        result = search_files(str(search_tmp), pattern="*.py", content_contains="TARGET")
         snippet_line = [l for l in result.splitlines() if ">>" in l][0]
         assert not snippet_line.startswith("  >> ...")
 
-    def test_skips_hidden_directories(self, tmp_path):
-        hidden = tmp_path / ".hidden"
+    def test_skips_hidden_directories(self, search_tmp):
+        hidden = search_tmp / ".hidden"
         hidden.mkdir()
         (hidden / "secret.py").write_text("x\n", encoding="utf-8")
-        (tmp_path / "visible.py").write_text("y\n", encoding="utf-8")
-        result = search_files(str(tmp_path), pattern="*.py")
+        (search_tmp / "visible.py").write_text("y\n", encoding="utf-8")
+        result = search_files(str(search_tmp), pattern="*.py")
         assert "visible.py" in result
         assert "secret.py" not in result
 
-    def test_skips_git_directory(self, tmp_path):
-        gitdir = tmp_path / ".git"
+    def test_skips_git_directory(self, search_tmp):
+        gitdir = search_tmp / ".git"
         gitdir.mkdir()
         (gitdir / "config").write_text("x\n", encoding="utf-8")
-        result = search_files(str(tmp_path), pattern="*")
+        result = search_files(str(search_tmp), pattern="*")
         assert "config" not in result
 
-    def test_skips_node_modules(self, tmp_path):
-        nm = tmp_path / "node_modules"
+    def test_skips_node_modules(self, search_tmp):
+        nm = search_tmp / "node_modules"
         nm.mkdir()
         (nm / "lib.js").write_text("x\n", encoding="utf-8")
-        result = search_files(str(tmp_path), pattern="*")
+        result = search_files(str(search_tmp), pattern="*")
         assert "lib.js" not in result
 
-    def test_skips_pycache(self, tmp_path):
-        pc = tmp_path / "__pycache__"
+    def test_skips_pycache(self, search_tmp):
+        pc = search_tmp / "__pycache__"
         pc.mkdir()
         (pc / "mod.cpython.pyc").write_text("x\n", encoding="utf-8")
-        result = search_files(str(tmp_path), pattern="*")
+        result = search_files(str(search_tmp), pattern="*")
         assert "mod.cpython.pyc" not in result
 
-    def test_skips_binary_files_in_content_search(self, tmp_path):
-        (tmp_path / "a.png").write_text("NEEDLE\n", encoding="utf-8")
-        (tmp_path / "b.py").write_text("NEEDLE\n", encoding="utf-8")
-        result = search_files(str(tmp_path), pattern="*", content_contains="NEEDLE")
+    def test_skips_binary_files_in_content_search(self, search_tmp):
+        (search_tmp / "a.png").write_text("NEEDLE\n", encoding="utf-8")
+        (search_tmp / "b.py").write_text("NEEDLE\n", encoding="utf-8")
+        result = search_files(str(search_tmp), pattern="*", content_contains="NEEDLE")
         assert "b.py" in result
         assert "a.png" not in result
 
-    def test_utf8_content_search(self, tmp_path):
-        (tmp_path / "a.py").write_text("# café résumé naïve\n", encoding="utf-8")
-        result = search_files(str(tmp_path), pattern="*.py", content_contains="café")
+    def test_utf8_content_search(self, search_tmp):
+        (search_tmp / "a.py").write_text("# café résumé naïve\n", encoding="utf-8")
+        result = search_files(str(search_tmp), pattern="*.py", content_contains="café")
         assert "Found 1 file(s):" in result
         assert "a.py" in result
 
-    def test_pattern_star_returns_all_non_hidden(self, tmp_path):
-        (tmp_path / "a.py").write_text("x\n", encoding="utf-8")
-        (tmp_path / "b.txt").write_text("y\n", encoding="utf-8")
-        result = search_files(str(tmp_path), pattern="*")
+    def test_pattern_star_returns_all_non_hidden(self, search_tmp):
+        (search_tmp / "a.py").write_text("x\n", encoding="utf-8")
+        (search_tmp / "b.txt").write_text("y\n", encoding="utf-8")
+        result = search_files(str(search_tmp), pattern="*")
         assert "Found 2 file(s):" in result
         assert "a.py" in result
         assert "b.txt" in result
 
-    def test_no_filters_returns_all_non_hidden_files(self, tmp_path):
-        (tmp_path / "x.py").write_text("x\n", encoding="utf-8")
-        (tmp_path / "y.txt").write_text("y\n", encoding="utf-8")
-        result = search_files(str(tmp_path))
+    def test_no_filters_returns_all_non_hidden_files(self, search_tmp):
+        (search_tmp / "x.py").write_text("x\n", encoding="utf-8")
+        (search_tmp / "y.txt").write_text("y\n", encoding="utf-8")
+        result = search_files(str(search_tmp))
         assert "Found 2 file(s):" in result
 
-    def test_content_contains_no_match(self, tmp_path):
-        (tmp_path / "a.py").write_text("nothing here\n", encoding="utf-8")
-        result = search_files(str(tmp_path), pattern="*.py", content_contains="NEEDLE")
+    def test_content_contains_no_match(self, search_tmp):
+        (search_tmp / "a.py").write_text("nothing here\n", encoding="utf-8")
+        result = search_files(str(search_tmp), pattern="*.py", content_contains="NEEDLE")
         assert "No files found matching:" in result
         assert "content contains" in result
 
@@ -244,37 +261,39 @@ class TestSearchFiles:
 # 2. grep_search
 # ===========================================================================
 class TestGrepSearch:
-    def test_search_existing_pattern_python_fallback(self, tmp_path, monkeypatch):
+    def test_search_existing_pattern_python_fallback(self, search_tmp, monkeypatch):
         _force_python_fallback(monkeypatch)
-        (tmp_path / "a.py").write_text("def hello():\n    pass\n", encoding="utf-8")
-        result = grep_search(str(tmp_path), "hello")
+        (search_tmp / "a.py").write_text("def hello():\n    pass\n", encoding="utf-8")
+        result = grep_search(str(search_tmp), "hello")
         assert "Found" in result
         assert "match(es)" in result
         assert "(via Python)" in result
         assert "hello" in result
 
-    def test_search_existing_pattern_ripgrep(self, tmp_path, monkeypatch):
-        # Simulate ripgrep being available and returning matches
+    def test_search_existing_pattern_ripgrep(self, search_tmp, monkeypatch):
+        # Simulate ripgrep being available and returning matches.
+        # Use a fake path without drive letter — grep_search splits on ':'
+        # and Windows drive letters (C:) break the split.
         import subprocess
 
         class FakeResult:
             returncode = 0
-            stdout = f"{tmp_path / 'a.py'}:1:def hello():\n"
+            stdout = "/fake/path/a.py:1:def hello():\n"
             stderr = ""
 
         def _fake_run(cmd, *a, **k):
             return FakeResult()
 
         monkeypatch.setattr(subprocess, "run", _fake_run)
-        result = grep_search(str(tmp_path), "hello")
+        result = grep_search(str(search_tmp), "hello")
         assert "(via ripgrep)" in result
         assert "hello" in result
 
-    def test_search_with_file_pattern_filter(self, tmp_path, monkeypatch):
+    def test_search_with_file_pattern_filter(self, search_tmp, monkeypatch):
         _force_python_fallback(monkeypatch)
-        (tmp_path / "a.py").write_text("needle\n", encoding="utf-8")
-        (tmp_path / "b.txt").write_text("needle\n", encoding="utf-8")
-        result = grep_search(str(tmp_path), "needle", file_pattern="*.py")
+        (search_tmp / "a.py").write_text("needle\n", encoding="utf-8")
+        (search_tmp / "b.txt").write_text("needle\n", encoding="utf-8")
+        result = grep_search(str(search_tmp), "needle", file_pattern="*.py")
         assert "Found" in result
         assert "a.py" in result
         assert "b.txt" not in result
@@ -291,13 +310,13 @@ class TestGrepSearch:
         assert "Error:" in result
         assert "is not a directory" in result
 
-    def test_no_matches(self, tmp_path, monkeypatch):
+    def test_no_matches(self, search_tmp, monkeypatch):
         _force_python_fallback(monkeypatch)
-        (tmp_path / "a.py").write_text("nothing here\n", encoding="utf-8")
-        result = grep_search(str(tmp_path), "NEEDLE")
+        (search_tmp / "a.py").write_text("nothing here\n", encoding="utf-8")
+        result = grep_search(str(search_tmp), "NEEDLE")
         assert "No matches found for pattern" in result
 
-    def test_no_matches_ripgrep(self, tmp_path, monkeypatch):
+    def test_no_matches_ripgrep(self, search_tmp, monkeypatch):
         import subprocess
 
         class FakeResult:
@@ -306,54 +325,56 @@ class TestGrepSearch:
             stderr = ""
 
         monkeypatch.setattr(subprocess, "run", lambda *a, **k: FakeResult())
-        result = grep_search(str(tmp_path), "NEEDLE")
+        result = grep_search(str(search_tmp), "NEEDLE")
         assert "No matches found for pattern" in result
 
-    def test_max_results_limits_output(self, tmp_path, monkeypatch):
+    def test_max_results_limits_output(self, search_tmp, monkeypatch):
         _force_python_fallback(monkeypatch)
         content = "\n".join(f"needle line {i}" for i in range(20)) + "\n"
-        (tmp_path / "a.py").write_text(content, encoding="utf-8")
-        result = grep_search(str(tmp_path), "needle", max_results=3)
+        (search_tmp / "a.py").write_text(content, encoding="utf-8")
+        result = grep_search(str(search_tmp), "needle", max_results=3)
         assert "Found 3 match(es)" in result
         assert "Results limited to 3" in result
 
-    def test_invalid_regex_python_fallback(self, tmp_path, monkeypatch):
+    def test_invalid_regex_python_fallback(self, search_tmp, monkeypatch):
         _force_python_fallback(monkeypatch)
-        (tmp_path / "a.py").write_text("x\n", encoding="utf-8")
-        result = grep_search(str(tmp_path), "[invalid")
+        (search_tmp / "a.py").write_text("x\n", encoding="utf-8")
+        result = grep_search(str(search_tmp), "[invalid")
         assert "Error" in result
         assert "Invalid regex" in result or "regex" in result.lower()
 
-    def test_case_insensitive_search(self, tmp_path, monkeypatch):
+    def test_case_insensitive_search(self, search_tmp, monkeypatch):
         _force_python_fallback(monkeypatch)
-        (tmp_path / "a.py").write_text("Hello World\nHELLO AGAIN\n", encoding="utf-8")
-        result = grep_search(str(tmp_path), "hello")
+        (search_tmp / "a.py").write_text("Hello World\nHELLO AGAIN\n", encoding="utf-8")
+        result = grep_search(str(search_tmp), "hello")
         assert "Found 2 match(es)" in result
 
-    def test_utf8_content_search(self, tmp_path, monkeypatch):
+    def test_utf8_content_search(self, search_tmp, monkeypatch):
         _force_python_fallback(monkeypatch)
-        (tmp_path / "a.py").write_text("# café résumé\n", encoding="utf-8")
-        result = grep_search(str(tmp_path), "café")
+        (search_tmp / "a.py").write_text("# café résumé\n", encoding="utf-8")
+        result = grep_search(str(search_tmp), "café")
         assert "Found" in result
         assert "café" in result
 
-    def test_line_numbers_correct_in_results(self, tmp_path, monkeypatch):
+    def test_line_numbers_correct_in_results(self, search_tmp, monkeypatch):
         _force_python_fallback(monkeypatch)
-        (tmp_path / "a.py").write_text("line1\nneedle\nline3\nneedle\n", encoding="utf-8")
-        result = grep_search(str(tmp_path), "needle")
+        (search_tmp / "a.py").write_text("line1\nneedle\nline3\nneedle\n", encoding="utf-8")
+        result = grep_search(str(search_tmp), "needle")
         assert "  2: needle" in result
         assert "  4: needle" in result
 
-    def test_ripgrep_line_numbers_correct(self, tmp_path, monkeypatch):
+    def test_ripgrep_line_numbers_correct(self, search_tmp, monkeypatch):
         import subprocess
 
         class FakeResult:
             returncode = 0
-            stdout = f"{tmp_path / 'a.py'}:2:needle\n{tmp_path / 'a.py'}:4:needle\n"
+            # Use fake paths without drive letters — grep_search splits
+            # on ':' and Windows drive letters (C:) break the parsing.
+            stdout = "/fake/path/a.py:2:needle\n/fake/path/a.py:4:needle\n"
             stderr = ""
 
         monkeypatch.setattr(subprocess, "run", lambda *a, **k: FakeResult())
-        result = grep_search(str(tmp_path), "needle")
+        result = grep_search(str(search_tmp), "needle")
         assert "  2: needle" in result
         assert "  4: needle" in result
 
@@ -362,60 +383,60 @@ class TestGrepSearch:
 # 3. _python_grep_search
 # ===========================================================================
 class TestPythonGrepSearch:
-    def test_search_existing_pattern(self, tmp_path):
-        (tmp_path / "a.py").write_text("def hello():\n    pass\n", encoding="utf-8")
-        result = _python_grep_search(str(tmp_path), "hello")
+    def test_search_existing_pattern(self, search_tmp):
+        (search_tmp / "a.py").write_text("def hello():\n    pass\n", encoding="utf-8")
+        result = _python_grep_search(str(search_tmp), "hello")
         assert "Found" in result
         assert "(via Python)" in result
         assert "hello" in result
 
-    def test_invalid_regex(self, tmp_path):
-        (tmp_path / "a.py").write_text("x\n", encoding="utf-8")
-        result = _python_grep_search(str(tmp_path), "[invalid")
+    def test_invalid_regex(self, search_tmp):
+        (search_tmp / "a.py").write_text("x\n", encoding="utf-8")
+        result = _python_grep_search(str(search_tmp), "[invalid")
         assert "Error: Invalid regex pattern" in result
 
-    def test_file_pattern_filter(self, tmp_path):
-        (tmp_path / "a.py").write_text("needle\n", encoding="utf-8")
-        (tmp_path / "b.txt").write_text("needle\n", encoding="utf-8")
-        result = _python_grep_search(str(tmp_path), "needle", file_pattern="*.py")
+    def test_file_pattern_filter(self, search_tmp):
+        (search_tmp / "a.py").write_text("needle\n", encoding="utf-8")
+        (search_tmp / "b.txt").write_text("needle\n", encoding="utf-8")
+        result = _python_grep_search(str(search_tmp), "needle", file_pattern="*.py")
         assert "a.py" in result
         assert "b.txt" not in result
 
-    def test_no_matches(self, tmp_path):
-        (tmp_path / "a.py").write_text("nothing here\n", encoding="utf-8")
-        result = _python_grep_search(str(tmp_path), "NEEDLE")
+    def test_no_matches(self, search_tmp):
+        (search_tmp / "a.py").write_text("nothing here\n", encoding="utf-8")
+        result = _python_grep_search(str(search_tmp), "NEEDLE")
         assert "No matches found for pattern" in result
 
-    def test_skips_hidden_dirs(self, tmp_path):
-        hidden = tmp_path / ".hidden"
+    def test_skips_hidden_dirs(self, search_tmp):
+        hidden = search_tmp / ".hidden"
         hidden.mkdir()
         (hidden / "a.py").write_text("needle\n", encoding="utf-8")
-        (tmp_path / "b.py").write_text("needle\n", encoding="utf-8")
-        result = _python_grep_search(str(tmp_path), "needle")
+        (search_tmp / "b.py").write_text("needle\n", encoding="utf-8")
+        result = _python_grep_search(str(search_tmp), "needle")
         assert "b.py" in result
         assert ".hidden" not in result
 
-    def test_skips_binary_files(self, tmp_path):
-        (tmp_path / "a.exe").write_text("needle\n", encoding="utf-8")
-        (tmp_path / "b.py").write_text("needle\n", encoding="utf-8")
-        result = _python_grep_search(str(tmp_path), "needle")
+    def test_skips_binary_files(self, search_tmp):
+        (search_tmp / "a.exe").write_text("needle\n", encoding="utf-8")
+        (search_tmp / "b.py").write_text("needle\n", encoding="utf-8")
+        result = _python_grep_search(str(search_tmp), "needle")
         assert "b.py" in result
         assert "a.exe" not in result
 
-    def test_skips_pdb_obj_bin(self, tmp_path):
+    def test_skips_pdb_obj_bin(self, search_tmp):
         for ext in [".pdb", ".obj", ".bin"]:
-            (tmp_path / f"f{ext}").write_text("needle\n", encoding="utf-8")
-        (tmp_path / "real.py").write_text("needle\n", encoding="utf-8")
-        result = _python_grep_search(str(tmp_path), "needle")
+            (search_tmp / f"f{ext}").write_text("needle\n", encoding="utf-8")
+        (search_tmp / "real.py").write_text("needle\n", encoding="utf-8")
+        result = _python_grep_search(str(search_tmp), "needle")
         assert "real.py" in result
         assert ".pdb" not in result
         assert ".obj" not in result
         assert ".bin" not in result
 
-    def test_max_results_one(self, tmp_path):
+    def test_max_results_one(self, search_tmp):
         content = "\n".join(f"needle {i}" for i in range(10)) + "\n"
-        (tmp_path / "a.py").write_text(content, encoding="utf-8")
-        result = _python_grep_search(str(tmp_path), "needle", max_results=1)
+        (search_tmp / "a.py").write_text(content, encoding="utf-8")
+        result = _python_grep_search(str(search_tmp), "needle", max_results=1)
         assert "Found 1 match(es)" in result
         assert "Results limited to 1" in result
 
@@ -424,16 +445,16 @@ class TestPythonGrepSearch:
         assert "Error: Directory" in result
         assert "does not exist" in result
 
-    def test_directory_is_a_file(self, tmp_path):
-        f = tmp_path / "afile.txt"
+    def test_directory_is_a_file(self, search_tmp):
+        f = search_tmp / "afile.txt"
         f.write_text("x\n", encoding="utf-8")
         result = _python_grep_search(str(f), "pattern")
         assert "Error:" in result
         assert "is not a directory" in result
 
-    def test_case_insensitive(self, tmp_path):
-        (tmp_path / "a.py").write_text("Hello\nHELLO\nhello\n", encoding="utf-8")
-        result = _python_grep_search(str(tmp_path), "hello")
+    def test_case_insensitive(self, search_tmp):
+        (search_tmp / "a.py").write_text("Hello\nHELLO\nhello\n", encoding="utf-8")
+        result = _python_grep_search(str(search_tmp), "hello")
         assert "Found 3 match(es)" in result
 
 
@@ -536,41 +557,41 @@ class TestStripReadLineNumbers:
 # ===========================================================================
 class TestShiftIndent:
     def test_shift_4_to_8_spaces(self):
-        text = "    x = 1\n    y = 2\n"
+        text = "    x = 1\n    y = 2"
         result = _shift_indent(text, "    ", "        ")
-        assert result == "        x = 1\n        y = 2\n"
+        assert result == "        x = 1\n        y = 2"
 
     def test_old_equals_new_unchanged(self):
-        text = "    x = 1\n"
+        text = "    x = 1"
         assert _shift_indent(text, "    ", "    ") == text
 
     def test_empty_text(self):
         assert _shift_indent("", "    ", "  ") == ""
 
     def test_blank_lines_become_empty(self):
-        text = "    x = 1\n\n    y = 2\n"
+        text = "    x = 1\n\n    y = 2"
         result = _shift_indent(text, "    ", "  ")
-        assert result == "  x = 1\n\n  y = 2\n"
+        assert result == "  x = 1\n\n  y = 2"
 
     def test_lines_not_starting_with_old_indent_unchanged(self):
-        text = "no indent\n    indented\n"
+        text = "no indent\n    indented"
         result = _shift_indent(text, "    ", "  ")
-        assert result == "no indent\n  indented\n"
+        assert result == "no indent\n  indented"
 
     def test_shift_2_to_4_spaces_relative_depth(self):
-        text = "  a\n    b\n"
+        text = "  a\n    b"
         result = _shift_indent(text, "  ", "    ")
-        assert result == "    a\n      b\n"
+        assert result == "    a\n      b"
 
     def test_shift_tab_to_spaces(self):
-        text = "\tx = 1\n"
+        text = "\tx = 1"
         result = _shift_indent(text, "\t", "    ")
-        assert result == "    x = 1\n"
+        assert result == "    x = 1"
 
     def test_mixed_lines(self):
-        text = "def f():\n    x = 1\n    return x\n"
+        text = "def f():\n    x = 1\n    return x"
         result = _shift_indent(text, "    ", "        ")
-        assert result == "def f():\n        x = 1\n        return x\n"
+        assert result == "def f():\n        x = 1\n        return x"
 
 
 # ===========================================================================
@@ -586,8 +607,12 @@ class TestBuildMatchHint:
         assert "def hello()" in result
 
     def test_first_line_not_found_but_partial_match(self):
-        target = "def hello():\n    XTRA STUFF\n"
-        content = "import os\n\ndef hello():\n    pass\n\n# end\n"
+        # The "similar" path triggers when first_line is NOT in content
+        # but start_snippet (first 30 chars stripped) IS a substring of a line.
+        content = "def hello_world_long_func_xyz_abc():\n    pass\n"
+        target = "def hello_world_long_func_xyz_xyz():\n    pass\n"
+        # first_line = "def hello_world_long_func_xyz_xyz():" — NOT in content
+        # start_snippet = "def hello_world_long_func_xyz_x" (29 chars) — IS in content line
         result = _build_match_hint(target, content)
         assert result != ""
         assert "Found something similar around line" in result
@@ -624,10 +649,14 @@ class TestBuildMatchHint:
         assert "EXACT text from the file" in result
 
     def test_partial_match_context_line_number(self):
-        target = "def hello():\n    XTRA\n"
-        content = "line0\nline1\ndef hello():\n    pass\n"
+        # Use a long name where first 30 chars match a content line
+        # but the full first_line does NOT.
+        content = "line0\nline1\ndef hello_world_long_func_xyz_abc():\n    pass\n"
+        target = "def hello_world_long_func_xyz_xyz():\n    XTRA\n"
+        # first_line = "def hello_world_long_func_xyz_xyz():" — NOT in content
+        # start_snippet = "def hello_world_long_func_xyz_x" (29 chars) — IS in content line 3
         result = _build_match_hint(target, content)
-        # "def hello():" is on line 3 (1-indexed)
+        assert result != ""
         assert "line 3" in result
 
 

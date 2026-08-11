@@ -24,7 +24,14 @@ def search_files(directory: str = ".", pattern: str = "*", name_contains: str = 
             
             if any(part.startswith('.') for part in file_path.parts):
                 continue
-            if any(part in ['node_modules', '__pycache__', 'Library', 'Temp', 'obj', 'bin'] for part in file_path.parts):
+            # 'Temp' alone matches the Windows system temp (C:\...\Temp\),
+            # so only skip it when 'Assets' is also in the path — a reliable
+            # Unity project marker that distinguishes Unity's Temp/ from the OS.
+            parts_lower = [p.lower() for p in file_path.parts]
+            skip_dirs = {'node_modules', '__pycache__', 'library', 'obj', 'bin'}
+            if any(p in skip_dirs for p in parts_lower):
+                continue
+            if 'temp' in parts_lower and 'assets' in parts_lower:
                 continue
             
             if name_filter and name_filter not in file_path.name.lower():
@@ -100,14 +107,19 @@ def _python_grep_search(directory: str, pattern: str, file_pattern: str = None, 
         results = []
         glob_pattern = file_pattern or "*"
         skip_ext = {'.exe', '.dll', '.png', '.jpg', '.jpeg', '.gif', '.pdf', '.zip', '.mp3', '.mp4', '.wav', '.asset', '.meta', '.prefab', '.unity', '.pdb', '.obj', '.bin'}
-        skip_dirs = {'.git', '.argent', 'node_modules', '__pycache__', 'venv', 'env', 'Library', 'Temp', 'obj', 'bin', '.venv'}
+        # 'Temp' alone matches the Windows system temp (C:\...\Temp\),
+        # so only skip it when 'Assets' is also in the path (Unity marker).
+        skip_dirs = {'.git', '.argent', 'node_modules', '__pycache__', 'venv', 'env', 'Library', 'obj', 'bin', '.venv'}
         
         for file_path in start_path.rglob(glob_pattern):
             if not file_path.is_file():
                 continue
             if any(part.startswith('.') for part in file_path.parts):
                 continue
-            if any(part in skip_dirs for part in file_path.parts):
+            parts_lower = [p.lower() for p in file_path.parts]
+            if any(p.lower() in {d.lower() for d in skip_dirs} for p in file_path.parts):
+                continue
+            if 'temp' in parts_lower and 'assets' in parts_lower:
                 continue
             if file_path.suffix.lower() in skip_ext:
                 continue
@@ -180,11 +192,16 @@ def grep_search(directory: str, pattern: str, file_pattern: str = None, max_resu
                 
             results = []
             for line in lines:
-                parts = line.split(":", 2)
-                if len(parts) >= 3:
-                    file_p = parts[0]
-                    line_num = parts[1]
-                    text = parts[2].strip()
+                # ripgrep output: filepath:linenum:text
+                # On Windows, filepath contains ':' (drive letter C:), so
+                # a naive split(":", 2) puts the drive letter as file_p.
+                # Use a regex with non-greedy filepath + \d+ linenum to find
+                # the correct split point on both platforms.
+                m = re.match(r'^(.+?):(\d+):(.*)$', line)
+                if m:
+                    file_p = m.group(1)
+                    line_num = m.group(2)
+                    text = m.group(3).strip()
                     results.append({'file': file_p, 'line': line_num, 'text': text})
                     if len(results) >= max_results:
                         break
