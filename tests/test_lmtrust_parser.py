@@ -19,6 +19,7 @@ from src.agent.parser import (
     extract_balanced_json,
     decode_json_escapes,
     parse_fenced_write,
+    parse_raw_tool_call,
     repair_json_strings,
     fix_common_json_errors,
     try_parse_json_tool,
@@ -495,3 +496,166 @@ class TestTryRecoverMalformedTool:
         result = try_recover_malformed_tool(raw, "write_file")
         assert result is not None
         assert "\n" in result["parsed"]["arguments"]["content"]
+# ---------------------------------------------------------------------------
+# Surrogate-pair edge cases for decode_json_escapes
+# ---------------------------------------------------------------------------
+class TestDecodeJsonEscapesSurrogatePairs:
+    """Tests targeting the surrogate-pair combination logic (lines 145-149).
+
+    The mutations ADD_TO_SUB on ``s[i + 6:i + 8]`` and ``s[i + 8:i + 12]``
+    and SUB_TO_ADD on ``(cp - 0xD800)`` all silently disable the in-line
+    surrogate-pair combination.  ``repair_surrogates`` at the end of the
+    function recombines adjacent lone surrogates, so these mutations are
+    near-equivalent — but we still assert exact output strings so that any
+    subtle difference (e.g. non-adjacent surrogates, wrong codepoint) is
+    caught.
+    """
+
+    def test_surrogate_pair_d83d_de00_exact(self):
+        # U+1F600 GRINNING FACE — the canonical surrogate pair test.
+        assert decode_json_escapes(r"\ud83d\ude00") == "\U0001F600"
+
+    def test_surrogate_pair_d83d_dc4d_exact(self):
+        # U+1F44D THUMBS UP SIGN
+        assert decode_json_escapes(r"\ud83d\udc4d") == "\U0001F44D"
+
+    def test_surrogate_pair_d83c_df89_exact(self):
+        # U+1F389 PARTY POPPER — different high surrogate base (0xD83C)
+        assert decode_json_escapes(r"\ud83c\udf89") == "\U0001F389"
+
+    def test_surrogate_pair_with_surrounding_text(self):
+        # Text before and after the surrogate pair must be preserved exactly.
+        assert decode_json_escapes(r"hello\ud83d\ude00world") == "hello\U0001F600world"
+
+    def test_two_consecutive_surrogate_pairs(self):
+        # Two emoji back-to-back — both must be decoded correctly.
+        assert decode_json_escapes(r"\ud83d\ude00\ud83d\udc4d") == "\U0001F600\U0001F44D"
+
+    def test_surrogate_pair_then_regular_unicode(self):
+        # A surrogate pair followed by a regular \u escape.
+        assert decode_json_escapes(r"\ud83d\ude00\u0041") == "\U0001F600A"
+
+    def test_regular_unicode_then_surrogate_pair(self):
+        # A regular \u escape followed by a surrogate pair.
+        assert decode_json_escapes(r"\u0041\ud83d\ude00") == "A\U0001F600"
+
+    def test_surrogate_pair_in_longer_string_at_offset(self):
+        # The surrogate pair starts at a non-zero offset (i > 0), which
+        # changes the mutated slice indices ``s[i-6:i-8]`` / ``s[i-8:i-12]``.
+        prefix = "x" * 20
+        assert decode_json_escapes(prefix + r"\ud83d\ude00") == prefix + "\U0001F600"
+
+
+# ---------------------------------------------------------------------------
+# parse_raw_tool_call — mutations in the markdown / brace extraction paths
+# ---------------------------------------------------------------------------
+class TestParseRawToolCallMarkdown:
+    """Tests for ``parse_raw_tool_call`` that kill ADD_TO_SUB and SUB_TO_ADD
+    mutations in the markdown code-block extraction and bare-brace fallback
+    paths (lines 222-237)."""
+
+    def test_markdown_block_with_backticks_inside_json_match_str(self):
+        """Kill mutation 5 (inner_start + len → inner_start - len) and
+        mutation 7 (closing + 3 → closing - 3).
+
+        The JSON value contains a literal ````` ```` triple-backtick inside
+        a string.  When ``end_pos`` is computed correctly (``inner_start +
+        len(json_candidate)``), ``clean.find('```', end_pos)`` skips past
+        the inner backticks and finds the *closing* fence.  When the
+        mutation flips ``+`` to ``-``, ``end_pos`` becomes negative, Python
+        adjusts it to a position *before* the inner backticks, and
+        ``find`` returns the position of the inner ````` ```` — producing a
+        truncated ``match_str``.
+
+        Similarly, ``closing + 3`` → ``closing - 3`` truncates the
+        ``match_str`` by 6 characters, dropping the closing fence.
+        """
+        content = '```json\n{"name":"read_file","arguments":{"content":"```"}}\n```'
+        result = parse_raw_tool_call(content)
+        assert result is not None
+        assert result["parsed"]["name"] == "read_file"
+        assert result["parsed"]["arguments"]["content"] == "```"
+        # The match_str must be the ENTIRE input — including the closing ``` fence.
+        assert result["match_str"] == content
+
+    def test_markdown_block_without_closing_fence_match_str(self):
+        """Kill mutation 6 (``closing != -1`` → ``closing != 1``).
+
+        When there is no closing ````` ```` fence, ``closing = -1``.
+        Original: ``if closing != -1`` → False → else branch →
+        ``match_str = clean[md_match.start():end_pos]``.
+        Mutated:  ``if closing != 1``  → True  → if branch →
+        ``match_str = clean[md_match.start():closing + 3]`` =
+        ``clean[md_match.start():2]`` — a 2-char string ``"``"``.
+
+        Asserting the exact ``match_str`` distinguishes the two.
+        """
+        content = '```json\n{"name": "read_file", "arguments": {"file_path": "a.txt"}}'
+        result = parse_raw_tool_call(content)
+        assert result is not None
+        assert result["parsed"]["name"] == "read_file"
+        assert result["parsed"]["arguments"]["file_path"] == "a.txt"
+        # With no closing fence, match_str is the prefix + JSON (no trailing ```).
+        assert result["match_str"] == content
+
+    def test_markdown_block_simple_match_str(self):
+        """A simple markdown JSON block — match_str must include the closing fence."""
+        content = '```json\n{"name": "read_file", "arguments": {"file_path": "a.txt"}}\n```'
+        result = parse_raw_tool_call(content)
+        assert result is not None
+        assert result["match_str"] == content
+
+    def test_markdown_block_no_json_prefix_match_str(self):
+        """Markdown block without 'json' label — match_str must still be exact."""
+        content = '```\n{"name": "read_file", "arguments": {"file_path": "a.txt"}}\n```'
+        result = parse_raw_tool_call(content)
+        assert result is not None
+        assert result["match_str"] == content
+
+
+class TestParseRawToolCallBraceFallback:
+    """Tests for the bare-brace fallback path (line 237: ``brace_pos != -1``)."""
+
+    def test_brace_at_position_one(self, monkeypatch):
+        """Kill mutation 9 (``brace_pos != -1`` → ``brace_pos != 1``).
+
+        When the first ``{`` is at position 1, ``brace_pos = 1``.
+        Original: ``if 1 != -1`` → True  → extracts JSON from pos 1 → returns result.
+        Mutated:  ``if 1 != 1``  → False → skips to LAST RESORT → returns None
+        (because no tool name matches in the last-resort regex path when
+        ``get_available_tools`` is empty).
+
+        Asserting ``result is not None`` and the exact ``match_str``
+        distinguishes the two.
+        """
+        monkeypatch.setattr("src.agent.parser.get_available_tools", lambda: set())
+        content = 'A{"name": "read_file", "arguments": {"file_path": "a.txt"}}'
+        result = parse_raw_tool_call(content)
+        assert result is not None
+        assert result["parsed"]["name"] == "read_file"
+        assert result["parsed"]["arguments"]["file_path"] == "a.txt"
+        assert result["match_str"] == '{"name": "read_file", "arguments": {"file_path": "a.txt"}}'
+
+    def test_brace_at_position_zero(self, monkeypatch):
+        """When ``{`` is at position 0, ``brace_pos = 0`` — both original
+        (``0 != -1`` → True) and mutated (``0 != 1`` → True) enter the if
+        block, so this test alone does NOT kill the mutation.  It is here
+        for coverage of the normal path."""
+        monkeypatch.setattr("src.agent.parser.get_available_tools", lambda: set())
+        content = '{"name": "read_file", "arguments": {"file_path": "a.txt"}}'
+        result = parse_raw_tool_call(content)
+        assert result is not None
+        assert result["parsed"]["name"] == "read_file"
+
+    def test_no_brace_returns_none(self, monkeypatch):
+        """When there is no ``{`` at all, ``brace_pos = -1``.
+        Original: ``if -1 != -1`` → False → skips.
+        Mutated:  ``if -1 != 1``  → True  → calls ``extract_balanced_json(clean, -1)``
+        which checks ``text[-1] != '{'`` → True → returns None.
+        Both paths then fall through to LAST RESORT, which also returns None
+        when ``get_available_tools`` is empty.  So this test does NOT kill
+        the mutation but documents the no-brace behaviour."""
+        monkeypatch.setattr("src.agent.parser.get_available_tools", lambda: set())
+        content = "no json here at all"
+        result = parse_raw_tool_call(content)
+        assert result is None
