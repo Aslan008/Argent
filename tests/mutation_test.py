@@ -10,6 +10,7 @@ import ast
 import io
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tokenize
@@ -119,9 +120,11 @@ def _is_in_skip(pos: int, skip_ranges: list[tuple[int, int]]) -> bool:
 
 def run_tests(test_files: list[str]) -> bool:
     """Run pytest on the given test files. Returns True if all pass."""
-    cmd = [sys.executable, "-m", "pytest"] + test_files + ["-x", "-q", "--tb=no", "--no-header", "-p", "no:cacheprovider"]
+    cmd = [sys.executable, "-B", "-m", "pytest"] + test_files + ["-x", "-q", "--tb=no", "--no-header", "-p", "no:cacheprovider"]
+    env = dict(os.environ)
+    env["PYTHONDONTWRITEBYTECODE"] = "1"
     result = subprocess.run(cmd, capture_output=True, text=True, timeout=30,
-                            cwd=os.getcwd())
+                            cwd=os.getcwd(), env=env)
     return result.returncode == 0
 
 
@@ -168,6 +171,12 @@ def mutate_module(module_path: str, test_files: list[str], max_mutations: int = 
 
             # Write mutated source
             Path(module_path).write_text(mutated, encoding="utf-8")
+
+            # Delete stale .pyc for this module so Python recompiles from source
+            pycache = Path(module_path).parent / "__pycache__"
+            if pycache.exists():
+                for pyc in pycache.glob(f"{Path(module_path).stem}.*.pyc"):
+                    pyc.unlink(missing_ok=True)
 
             total += 1
             desc = f"{op_name} @ pos {m.start()} (match: {m.group()!r} -> {new_text!r})"

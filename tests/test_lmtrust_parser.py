@@ -659,3 +659,112 @@ class TestParseRawToolCallBraceFallback:
         content = "no json here at all"
         result = parse_raw_tool_call(content)
         assert result is None
+# ─── Surrogate pair handling (kills ADD_TO_SUB/SUB_TO_ADD in decode_json_escapes) ──
+
+class TestSurrogatePairExact:
+    """Test that decode_json_escapes correctly combines UTF-16 surrogate pairs.
+
+    Kills: ADD_TO_SUB @ pos 4335,4341 (i+6:i+8 → i-6:i-8),
+           ADD_TO_SUB @ pos 4410,4416 (i+8:i+12 → i-8:i-12),
+           SUB_TO_ADD @ pos 4528 (cp-0xD800 → cp+0xD800).
+    """
+
+    def test_emoji_surrogate_pair(self):
+        """\\uD83D\\uDE00 should decode to U+1F600 (😀)."""
+        result = decode_json_escapes('hello \\uD83D\\uDE00 world')
+        assert result == 'hello \U0001F600 world'
+
+    def test_emoji_exact_codepoint(self):
+        """The combined codepoint must be exactly 0x1F600."""
+        result = decode_json_escapes('\\uD83D\\uDE00')
+        assert len(result) == 1
+        assert ord(result) == 0x1F600
+
+    def test_emoji_not_lone_high_surrogate(self):
+        """Mutant (cp+0xD800) would overflow chr() → ValueError → lone surrogate.
+        Original produces a single emoji character, not a lone high surrogate."""
+        result = decode_json_escapes('\\uD83D\\uDE00')
+        assert ord(result[0]) >= 0x10000  # supplementary plane, not BMP surrogate
+
+    def test_multiple_surrogate_pairs(self):
+        """Two emoji in sequence: \\uD83D\\uDE00\\uD83D\\uDC4D (😀👍)."""
+        result = decode_json_escapes('\\uD83D\\uDE00\\uD83D\\uDC4D')
+        assert result == '\U0001F600\U0001F44D'
+
+    def test_surrogate_pair_preserves_surrounding_text(self):
+        """Text before and after surrogate pair is preserved exactly."""
+        result = decode_json_escapes('A\\uD83D\\uDE00B')
+        assert result == 'A\U0001F600B'
+        assert len(result) == 3  # A + emoji + B
+
+    def test_high_surrogate_without_low(self):
+        """A high surrogate not followed by \\u low surrogate → repair_surrogates
+        replaces the lone surrogate with U+FFFD."""
+        result = decode_json_escapes('\\uD83D alone')
+        # Lone surrogates are replaced by repair_surrogates → U+FFFD
+        assert result[0] == '\ufffd'
+
+    def test_surrogate_pair_with_escapes_between(self):
+        """\\uD83D\\n\\uDE00 — the \\n breaks the pair, no combination."""
+        result = decode_json_escapes('\\uD83D\\n\\uDE00')
+        # Should decode \\n to newline, not combine surrogates
+        assert '\\u' not in result
+        assert '\n' in result
+
+
+# ─── Markdown code fence extraction (kills ADD_TO_SUB/SUB_TO_ADD in parse_raw_tool_call) ──
+
+class TestMarkdownFenceExact:
+    """Test exact match_str from markdown code fence extraction.
+
+    Kills: ADD_TO_SUB @ pos 7567 (inner_start+len → inner_start-len),
+           SUB_TO_ADD @ pos 7664 (closing != -1 → closing != 1),
+           ADD_TO_SUB @ pos 7727 (closing+3 → closing-3).
+    """
+
+    def test_match_str_includes_closing_fence(self, monkeypatch):
+        """match_str should include the closing ``` (closing+3)."""
+        monkeypatch.setattr("src.agent.parser.get_available_tools", lambda: set())
+        content = '```json\n{"name": "read_file", "arguments": {"file_path": "a.txt"}}\n```'
+        result = parse_raw_tool_call(content)
+        assert result is not None
+        assert result["match_str"].endswith('```')
+
+    def test_match_str_exact_full_block(self, monkeypatch):
+        """match_str should be the exact full markdown block."""
+        monkeypatch.setattr("src.agent.parser.get_available_tools", lambda: set())
+        content = '```json\n{"name": "read_file", "arguments": {"file_path": "a.txt"}}\n```'
+        result = parse_raw_tool_call(content)
+        assert result is not None
+        assert result["match_str"] == content
+
+    def test_match_str_without_closing_fence(self, monkeypatch):
+        """When there's no closing ```, match_str should end at the JSON, not include closing+3."""
+        monkeypatch.setattr("src.agent.parser.get_available_tools", lambda: set())
+        content = '```json\n{"name": "read_file", "arguments": {"file_path": "a.txt"}}'
+        result = parse_raw_tool_call(content)
+        assert result is not None
+        # No closing ``` → match_str should NOT end with ```
+        assert not result["match_str"].endswith('```')
+
+    def test_match_str_closing_plus_3_exact(self, monkeypatch):
+        """Verify closing+3 captures exactly the closing fence, not more."""
+        monkeypatch.setattr("src.agent.parser.get_available_tools", lambda: set())
+        content = '```json\n{"name": "read_file", "arguments": {"file_path": "a.txt"}}\n```\nextra text'
+        result = parse_raw_tool_call(content)
+        assert result is not None
+        # match_str should end at ``` not include 'extra text'
+        assert result["match_str"].endswith('```')
+        assert 'extra text' not in result["match_str"]
+
+    def test_no_closing_fence_does_not_crash(self, monkeypatch):
+        """When closing ``` is not found (closing=-1), should use end_pos path.
+        Mutant (closing != 1) would enter the block with closing=-1 and
+        try clean[md_match.start():-1+3] = clean[...:2], wrong match_str."""
+        monkeypatch.setattr("src.agent.parser.get_available_tools", lambda: set())
+        content = '```json\n{"name": "read_file", "arguments": {"file_path": "a.txt"}}'
+        result = parse_raw_tool_call(content)
+        assert result is not None
+        assert result["parsed"]["name"] == "read_file"
+        # match_str should contain the JSON, not a truncated 2-char string
+        assert len(result["match_str"]) > 10
