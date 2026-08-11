@@ -1205,6 +1205,7 @@ Example: {"tool": {"name": "read_file", "arguments": {"file_path": "main.py"}}}"
                     tool_calls_accumulator, current_tools, dedup=self._read_dedup_note
                 ) or {}
 
+                has_auto_signal = False
                 for _tc_index, tool_call in enumerate(tool_calls_accumulator):
                     func_name = tool_call["function"]["name"]
                     arguments = tool_call["function"].get("arguments", {})
@@ -1393,6 +1394,10 @@ Example: {"tool": {"name": "read_file", "arguments": {"file_path": "main.py"}}}"
                         yield {"type": "diff", "file": _d["file"], "diff": _d["diff"]}
 
                     yield {"type": "tool_end", "name": func_name, "result": result}
+                    
+                    if isinstance(result, str) and ("[HEARTBEAT_REQUEST:" in result or "[END_AUTO_MODE]" in result):
+                        has_auto_signal = True
+
                     self._turn_tool_calls += 1
                     if self._turn_tool_calls % TURN_PROGRESS_EVERY == 0:
                         mins = (time.monotonic() - self._turn_started) / 60
@@ -1414,6 +1419,11 @@ Example: {"tool": {"name": "read_file", "arguments": {"file_path": "main.py"}}}"
                             "Вот запрошенное изображение: "
                             + ", ".join(img["label"] for img in queued)))
                         yield {"type": "content_stream", "content": ""}
+                
+                if has_auto_signal:
+                    self._log_turn_end("auto_signal", "heartbeat or end_auto_mode requested")
+                    break
+
                 if loop_guard_stop:
                     self._log_turn_end("loop guard", "a tool call repeated verbatim")
                     yield {"type": "error", "content": "\n[Loop Guard]: повторяющийся цикл инструментов остановлен — ход завершён принудительно."}

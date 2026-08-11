@@ -589,6 +589,23 @@ def main():
             
             if is_auto_mode:
                 from src.cli.interruptible import interruptible_sleep
+                import queue
+                from src.agent.events import EVENT_QUEUE
+                
+                class EventInterruptedException(Exception):
+                    def __init__(self, event):
+                        self.event = event
+
+                def sleep_with_events(secs):
+                    import time
+                    end = time.time() + secs
+                    while time.time() < end:
+                        try:
+                            ev = EVENT_QUEUE.get(timeout=min(0.5, max(0.1, end - time.time())))
+                            if ev.get("type") == "bg_done":
+                                raise EventInterruptedException(ev)
+                        except queue.Empty:
+                            pass
 
                 # Waiting ON a condition: poll locally instead of waking the
                 # model to look. Each wake costs a full turn, so a ten-poll
@@ -600,7 +617,12 @@ def main():
                     from src.agent.wait_conditions import wait_for
                     try:
                         outcome = wait_for(spec["until"], timeout=spec["timeout"],
-                                           sleep=interruptible_sleep)
+                                           sleep=sleep_with_events)
+                    except EventInterruptedException as e:
+                        ev = e.event
+                        print_system(f"*[Событие] Фоновая команда {ev['pid']} завершилась. Ожидание прервано.*")
+                        auto_wake_context = f"[Heartbeat прерван] Фоновая команда {ev['pid']} завершилась с кодом {ev['exit_code']}. Проверьте её вывод с помощью read_background_command."
+                        auto_sleep_time = 0
                     except KeyboardInterrupt:
                         print_system("Ожидание прервано. Выход из автоматического режима.")
                         is_auto_mode = False
@@ -623,11 +645,15 @@ def main():
                     )
 
                 if auto_sleep_time > 0:
-                    print_system(f"*[Heartbeat] Переход в сон на {auto_sleep_time} сек. (Ctrl+C для прерывания)*")
+                    print_system(f"*[Heartbeat] Переход в сон на {auto_sleep_time} сек. (может быть прерван событиями, Ctrl+C для отмены)*")
                     try:
                         # Chunked sleep so Ctrl+C aborts within a tick, not after
                         # the full (possibly very long) heartbeat delay.
-                        interruptible_sleep(auto_sleep_time)
+                        sleep_with_events(auto_sleep_time)
+                    except EventInterruptedException as e:
+                        ev = e.event
+                        print_system(f"*[Событие] Фоновая команда {ev['pid']} завершилась. Ожидание прервано.*")
+                        auto_wake_context = f"[Heartbeat прерван] Фоновая команда {ev['pid']} завершилась с кодом {ev['exit_code']}. Проверьте её вывод с помощью read_background_command."
                     except KeyboardInterrupt:
                         print_system("Состояние Heartbeat прервано. Выход из автоматического режима.")
                         is_auto_mode = False

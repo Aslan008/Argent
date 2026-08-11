@@ -151,6 +151,30 @@ class TestAcceptsNoArgs:
         assert _accepts_args(func, None) is True
 
 
+class TestAcceptsSignatureError:
+    """L4×D7 — when inspect.signature raises TypeError/ValueError, _accepts_args
+    returns True (don't guess). Kills TRUE_TO_FALSE mutation on the exception handler."""
+
+    def test_typeerror_returns_true(self, monkeypatch):
+        import inspect as _inspect
+        def boom(func):
+            raise TypeError("no signature")
+        monkeypatch.setattr(_inspect, "signature", boom)
+        def func(a, b):
+            pass
+        # Code: 'except (TypeError, ValueError): return True'
+        assert _accepts_args(func, {'x': 1}) is True
+
+    def test_valueerror_returns_true(self, monkeypatch):
+        import inspect as _inspect
+        def boom(func):
+            raise ValueError("no signature")
+        monkeypatch.setattr(_inspect, "signature", boom)
+        def func(a, b):
+            pass
+        assert _accepts_args(func, {'x': 1}) is True
+
+
 # ---------------------------------------------------------------------------
 # recover_tool_call
 # ---------------------------------------------------------------------------
@@ -194,3 +218,94 @@ class TestRecoverToolCallNonStrNonDictArgs:
         # Code: 'else: recovered_args = {}'
         assert result is not None
         assert result['function']['arguments'] == {}
+
+
+# ---------------------------------------------------------------------------
+# Fragment extraction (third try block) — kills mutations on the
+# `start != -1 and end != -1 and end > start` condition and `text[start:end+1]` slice.
+# Key insight: the regex fallback only captures string values `"([^"]*)"` —
+# it silently drops numbers, booleans, and null. So fragment extraction with
+# non-string values produces different results than the regex fallback.
+# ---------------------------------------------------------------------------
+
+class TestFragmentNumericValue:
+    """Fragment extraction must capture numeric values that regex fallback misses.
+    Kills: SUB_TO_ADD @ start!=-1 → start!=1 (when { is at position 1)."""
+
+    def test_brace_at_position_1_with_number(self):
+        # '{' at index 1 → start=1. Mutated `start != 1` is False → skips block.
+        # Regex fallback misses numeric 'count' → returns {'name': 'test'} not full dict.
+        result = recover_json_arguments('x{"count": 42, "name": "test"}')
+        assert result == {'count': 42, 'name': 'test'}
+
+    def test_brace_at_position_0_with_number(self):
+        # Control: '{' at index 0 → start=0. Both original and mutated enter block.
+        result = recover_json_arguments('{"count": 42, "name": "test"} extra')
+        assert result == {'count': 42, 'name': 'test'}
+
+
+class TestFragmentEmptyJson:
+    """Empty JSON object extracted from surrounding text.
+    Kills: SUB_TO_ADD @ end!=-1 → end!=1 (when } is at position 1)."""
+
+    def test_empty_json_with_trailing_text(self):
+        # '{}' at positions 0,1 → start=0, end=1. Mutated `end != 1` is False.
+        # Fragment: json.loads('{}') → {}. Regex: no kv pairs → None.
+        result = recover_json_arguments('{} extra text')
+        assert result == {}
+
+
+class TestFragmentBooleanValue:
+    """Fragment extraction must capture boolean values that regex misses.
+    Kills: GT_TO_LTE @ end>start → end<=start, NE_TO_EQ @ end!=-1 → end==-1."""
+
+    def test_fragment_with_boolean(self):
+        # Regex can't capture `true` (not in quotes) → would return {'name': 'test'} only.
+        result = recover_json_arguments('prefix {"flag": true, "name": "test"} suffix')
+        assert result == {'flag': True, 'name': 'test'}
+
+    def test_fragment_with_null(self):
+        # Regex can't capture `null` → would return {'name': 'test'} only.
+        result = recover_json_arguments('prefix {"data": null, "name": "test"} suffix')
+        assert result == {'data': None, 'name': 'test'}
+
+
+class TestFragmentSliceEndPlusOne:
+    """The slice text[start:end+1] must include the closing brace.
+    Kills: ADD_TO_SUB @ end+1 → end-1, ONE_TO_ZERO @ end+1 → end+0."""
+
+    def test_slice_includes_closing_brace_with_number(self):
+        # Without +1: text[1:13] = '{"count": 42' → json.loads fails → regex → None.
+        # With +1: text[1:14] = '{"count": 42}' → json.loads → {'count': 42}.
+        result = recover_json_arguments('x{"count": 42}')
+        assert result == {'count': 42}
+
+    def test_slice_includes_closing_brace_with_boolean(self):
+        result = recover_json_arguments('x{"flag": true}')
+        assert result == {'flag': True}
+
+
+class TestFuzzyRejectionLogging:
+    """Verify that rejected fuzzy matches log the actual args (not empty).
+    Kills: OR_TO_AND @ sorted(args or ()) → sorted(args and ())."""
+
+    def test_rejection_log_shows_args(self, caplog):
+        def writer(file_path, content):
+            pass
+
+        def reader(file_path):
+            pass
+
+        available_tools = {'write_file': writer, 'read_file': reader}
+        # 'read_fil' is closest to 'read_file' (0.94), which doesn't accept 'content'.
+        # read_file is rejected → log should show actual args.
+        # write_file accepts 'content' → returned as fallback.
+        import logging
+        with caplog.at_level(logging.INFO, logger='tool_recovery'):
+            result = fuzzy_match_tool('read_fil', available_tools, args={'content': 'x'})
+        # Verify the rejection happened (read_file was skipped)
+        rejection_logs = [r for r in caplog.records if 'Rejected' in r.getMessage()]
+        assert rejection_logs, "Expected at least one rejection log"
+        # The log message should contain the actual arg names, not an empty tuple.
+        # Mutation: sorted(args or ()) → sorted(args and ()) → sorted(()) → '[]'
+        assert 'content' in rejection_logs[0].getMessage()

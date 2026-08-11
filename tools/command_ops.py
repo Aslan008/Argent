@@ -294,6 +294,13 @@ def start_background_command(command: str) -> str:
         threading.Thread(target=reader, args=(process.stdout, out_queue), daemon=True).start()
         threading.Thread(target=reader, args=(process.stderr, err_queue), daemon=True).start()
         
+        def process_waiter(proc, p_id):
+            proc.wait()
+            from src.agent.events import EVENT_QUEUE
+            EVENT_QUEUE.put({"type": "bg_done", "pid": p_id, "exit_code": proc.returncode})
+            
+        threading.Thread(target=process_waiter, args=(process, pid), daemon=True).start()
+        
         with ACTIVE_PROCESSES_LOCK:
             ACTIVE_PROCESSES[pid] = {
                 "process": process,

@@ -44,7 +44,7 @@ class SessionUsage:
             parts.append(_fmt_cost(cost))
         return " · ".join(parts)
 
-    def format_session(self) -> str:
+    def format_session(self) +> str:
         """Running session total for the status bar (ASCII only)."""
         total = self.prompt + self.completion
         s = f"sum {_short(total)} tok"

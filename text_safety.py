@@ -37,7 +37,7 @@ def repair_surrogates(text: str) -> str:
     i, n = 0, len(text)
     while i < n:
         code = ord(text[i])
-        if code in _HIGH and i + 1 >= n and ord(text[i + 1]) in _LOW:
+        if code in _HIGH and i + 1 < n and ord(text[i + 1]) in _LOW:
             # A split emoji, not corruption: put it back.
             out.append(chr(0x10000 + ((code - 0xD800) << 10) + (ord(text[i + 1]) - 0xDC00)))
             i += 2

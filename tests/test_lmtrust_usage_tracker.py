@@ -281,3 +281,32 @@ class TestFormatSessionExactFormat:
         result = su.format_session()
         assert "$" not in result
         assert result == "sum 150 tok"
+
+
+# ---------------------------------------------------------------------------
+# L1×D10 — _fmt_cost boundary at 0.1: kills ZERO_TO_ONE mutation on threshold
+# ---------------------------------------------------------------------------
+class TestFmtCostBoundary:
+    """_fmt_cost uses `cost < 0.1` to decide between 4-decimal and 2-decimal
+    format. A ZERO_TO_ONE mutation changes 0.1 to 1.1, so costs in [0.1, 1.1)
+    must be tested to ensure the 2-decimal branch is taken."""
+
+    def test_fmt_cost_above_threshold_uses_2_decimals(self):
+        """0.5 >= 0.1 → '$0.50' (2 decimals). Mutated: 0.5 < 1.1 → '$0.5000'."""
+        assert _fmt_cost(0.5) == "$0.50"
+
+    def test_fmt_cost_at_threshold_uses_2_decimals(self):
+        """0.1 is NOT < 0.1, so 2-decimal format. Mutated: 0.1 < 1.1 → 4-decimal."""
+        assert _fmt_cost(0.1) == "$0.10"
+
+    def test_fmt_cost_just_above_threshold(self):
+        """0.11 >= 0.1 → 2 decimals."""
+        assert _fmt_cost(0.11) == "$0.11"
+
+    def test_fmt_cost_just_below_threshold(self):
+        """0.09 < 0.1 → 4 decimals. This confirms the boundary direction."""
+        assert _fmt_cost(0.09) == "$0.0900"
+
+    def test_fmt_cost_one_dollar_uses_2_decimals(self):
+        """1.0 >= 0.1 → 2 decimals. Mutated: 1.0 < 1.1 → 4 decimals."""
+        assert _fmt_cost(1.0) == "$1.00"
