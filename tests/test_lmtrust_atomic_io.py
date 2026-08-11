@@ -139,3 +139,32 @@ class TestEncodingParameter:
         assert target.read_text(encoding="cp1251") == text
         # And confirm the raw bytes are cp1251-encoded, not utf-8
         assert target.read_bytes() == text.encode("cp1251")
+# ---------------------------------------------------------------------------
+# L4×D7 — _atomic_write with default encoding (None)
+# ---------------------------------------------------------------------------
+class TestDefaultEncoding:
+    """_atomic_write with encoding=None (default) uses platform default.
+    This kills mutations that change the None default to 0 (which would
+    cause TypeError in open())."""
+
+    def test_atomic_write_text_default_encoding(self, tmp_path):
+        """atomic_write_text with explicit encoding=None path via _atomic_write."""
+        from atomic_io import _atomic_write
+        target = tmp_path / "default_enc.txt"
+        # Call _atomic_write directly with mode="w" and no encoding (defaults to None)
+        _atomic_write(target, lambda f: f.write("hello world"), "w")
+        assert target.read_text() == "hello world"
+
+    def test_atomic_write_bytes_no_encoding_param(self, tmp_path):
+        """atomic_write_bytes passes no encoding — _atomic_write uses None default.
+        Binary mode ignores encoding, so this works regardless."""
+        from atomic_io import _atomic_write
+        target = tmp_path / "binary.bin"
+        _atomic_write(target, lambda f: f.write(b"\x00\xff"), "wb")
+        assert target.read_bytes() == b"\x00\xff"
+
+    def test_atomic_write_text_explicit_none_encoding(self, tmp_path):
+        """Passing encoding=None explicitly to atomic_write_text."""
+        target = tmp_path / "none_enc.txt"
+        atomic_write_text(target, "test content", encoding=None)
+        assert target.read_text() == "test content"

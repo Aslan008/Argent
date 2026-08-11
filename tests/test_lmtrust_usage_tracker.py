@@ -217,3 +217,67 @@ class TestResetClearsAll:
         assert su.completion == 5
         assert su.cost == 0.1
         assert su.requests == 1
+# ---------------------------------------------------------------------------
+# L1×D10 — Exact format string: '->' arrow must be preserved
+# ---------------------------------------------------------------------------
+class TestFormatLastExactFormat:
+    """The format string uses '->' between prompt and completion counts.
+    Mutations that change '-' or '>' inside the f-string alter the output
+    and must be caught by exact-format assertions."""
+
+    def test_format_last_arrow_preserved(self):
+        """format_last must produce 'X->Y tok' with a literal '->' arrow."""
+        result = SessionUsage.format_last({"prompt": 24, "completion": 20})
+        assert "->" in result
+        assert result == "24->20 tok"
+
+    def test_format_last_arrow_with_cost(self):
+        """format_last with cost: 'X->Y tok · $Z.ZZZZ'."""
+        result = SessionUsage.format_last({"prompt": 100, "completion": 50, "cost": 0.05})
+        assert "->" in result
+        assert "$0.0500" in result
+
+    def test_format_last_zero_zero(self):
+        """format_last with zero prompt and completion."""
+        result = SessionUsage.format_last({"prompt": 0, "completion": 0})
+        assert result == "0->0 tok"
+
+    def test_format_last_large_numbers_short(self):
+        """format_last applies _short to both prompt and completion."""
+        result = SessionUsage.format_last({"prompt": 1500, "completion": 750})
+        assert "->" in result
+        assert "1.5k" in result
+        assert "750" in result
+
+
+# ---------------------------------------------------------------------------
+# L1×D10 — format_session exact format
+# ---------------------------------------------------------------------------
+class TestFormatSessionExactFormat:
+    """format_session must produce 'sum Xk tok · $Y.YY' with exact formatting."""
+
+    def test_format_session_no_cost(self):
+        su = SessionUsage()
+        su.add({"prompt": 500, "completion": 300})
+        result = su.format_session()
+        assert result == "sum 800 tok"
+
+    def test_format_session_with_cost(self):
+        su = SessionUsage()
+        su.add({"prompt": 500, "completion": 300, "cost": 1.50})
+        result = su.format_session()
+        assert "sum 800 tok" in result
+        assert "$1.50" in result
+
+    def test_format_session_zero_usage(self):
+        su = SessionUsage()
+        result = su.format_session()
+        assert result == "sum 0 tok"
+
+    def test_format_session_cost_zero_not_shown(self):
+        """When cost is exactly 0, the cost portion must NOT appear."""
+        su = SessionUsage()
+        su.add({"prompt": 100, "completion": 50, "cost": 0.0})
+        result = su.format_session()
+        assert "$" not in result
+        assert result == "sum 150 tok"

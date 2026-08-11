@@ -2,15 +2,17 @@
 
 Applies common mutations to a source file, runs the associated tests,
 and reports which mutations survived (not caught by tests).
+
+AST-aware: skips mutations inside docstrings, string literals, comments,
+and return type annotations to avoid false positives.
 """
-import importlib
-import itertools
+import ast
+import io
 import os
 import re
-import shutil
 import subprocess
 import sys
-import tempfile
+import tokenize
 from pathlib import Path
 
 # --- Mutation operators ---
@@ -55,26 +57,57 @@ MUTATIONS = [
 ]
 
 
-def apply_mutation(source: str, pattern, replacement) -> tuple[str, str] | None:
-    """Try to apply one mutation. Returns (mutated_source, description) or None."""
-    if callable(replacement):
-        matches = list(re.finditer(pattern, source))
-        if not matches:
-            return None
-        # Apply only the first match to keep mutations isolated
-        m = matches[0]
-        new_text = replacement(m) if not callable(replacement) else replacement(m)
-        mutated = source[:m.start()] + new_text + source[m.end():]
-        desc = f"{pattern} at pos {m.start()}"
-        return mutated, desc
-    else:
-        matches = list(re.finditer(pattern, source))
-        if not matches:
-            return None
-        m = matches[0]
-        mutated = source[:m.start()] + replacement + source[m.end():]
-        desc = f"{pattern} -> {replacement} at pos {m.start()}"
-        return mutated, desc
+def _pos_to_offset(source: str, pos: tuple[int, int]) -> int:
+    """Convert (row, col) — 1-indexed row, 0-indexed col — to character offset."""
+    row, col = pos
+    offset = 0
+    for i in range(row - 1):
+        nl = source.find('\n', offset)
+        offset = nl + 1
+    return offset + col
+
+
+def compute_skip_ranges(source: str) -> list[tuple[int, int]]:
+    """Find character ranges that should NOT be mutated.
+
+    Covers: string literals (incl. docstrings), comments, and return type
+    annotations.  Mutations inside these are false positives — they change
+    text that has no runtime effect.
+    """
+    skip: list[tuple[int, int]] = []
+
+    # --- Strings & comments via tokenize ---
+    try:
+        tokens = tokenize.tokenize(io.BytesIO(source.encode("utf-8")).readline)
+        for tok in tokens:
+            if tok.type in (tokenize.STRING, tokenize.COMMENT):
+                start = _pos_to_offset(source, tok.start)
+                end = _pos_to_offset(source, tok.end)
+                skip.append((start, end))
+    except tokenize.TokenError:
+        pass
+
+    # --- Return annotations via ast ---
+    try:
+        tree = ast.parse(source)
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                if node.returns is not None:
+                    start = _pos_to_offset(source, (node.returns.lineno, node.returns.col_offset))
+                    end = _pos_to_offset(source, (node.returns.end_lineno, node.returns.end_col_offset))
+                    skip.append((start, end))
+    except SyntaxError:
+        pass
+
+    return skip
+
+
+def _is_in_skip(pos: int, skip_ranges: list[tuple[int, int]]) -> bool:
+    """True if *pos* falls inside any skip range."""
+    for s, e in skip_ranges:
+        if s <= pos < e:
+            return True
+    return False
 
 
 def run_tests(test_files: list[str]) -> bool:
@@ -91,7 +124,9 @@ def mutate_module(module_path: str, test_files: list[str], max_mutations: int = 
     Returns (killed, survived, total, details).
     """
     source = Path(module_path).read_text(encoding="utf-8")
-    backup = source  # we'll restore by rewriting
+
+    # Compute skip ranges once — AST-aware false-positive filtering
+    skip_ranges = compute_skip_ranges(source)
 
     killed = 0
     survived = 0
@@ -107,6 +142,10 @@ def mutate_module(module_path: str, test_files: list[str], max_mutations: int = 
         for i, m in enumerate(matches):
             if total >= max_mutations:
                 break
+
+            # Skip mutations inside strings, comments, and return annotations
+            if _is_in_skip(m.start(), skip_ranges):
+                continue
 
             # Apply mutation at this specific position
             if callable(replacement):
@@ -176,7 +215,7 @@ def main():
             print(f"    ⚠ BASELINE FAILS — skipping {module_path}")
             continue
 
-        killed, survived, total, details = mutate_module(module_path, test_files, max_mutations=20)
+        killed, survived, total, details = mutate_module(module_path, test_files, max_mutations=30)
 
         kill_rate = (killed / total * 100) if total > 0 else 0
         total_killed += killed
