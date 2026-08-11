@@ -587,8 +587,7 @@ def main():
         try:
             print() # Visual spacing
             
-            if is_auto_mode:
-                from src.cli.interruptible import interruptible_sleep
+            if auto_sleep_time > 0 or isinstance(auto_wake_context, dict):
                 import queue
                 from src.agent.events import EVENT_QUEUE
                 
@@ -624,25 +623,28 @@ def main():
                         auto_wake_context = f"[Heartbeat прерван] Фоновая команда {ev['pid']} завершилась с кодом {ev['exit_code']}. Проверьте её вывод с помощью read_background_command."
                         auto_sleep_time = 0
                     except KeyboardInterrupt:
-                        print_system("Ожидание прервано. Выход из автоматического режима.")
-                        is_auto_mode = False
+                        print_system("Ожидание прервано.")
+                        auto_sleep_time = 0
+                        auto_wake_context = ""
                         continue
-                    auto_sleep_time = 0
-                    verdict = "ВЫПОЛНЕНО" if outcome["met"] else "НЕ выполнено"
-                    print_system(f"*[Heartbeat] {verdict}: {outcome['reason']} "
-                                 f"({outcome['waited']} сек.)*")
-                    # Hand the verdict to the normal wake path as ordinary text.
-                    # The model must know whether the thing it waited for
-                    # actually happened — a timeout is not a success.
-                    auto_wake_context = (
-                        f"[Heartbeat пробуждение] Ожидалось условие: {spec['until']}\n"
-                        f"Результат: {outcome['reason']} (ждали {outcome['waited']} сек.).\n"
-                        f"Исходная причина ожидания: {spec['reason']}\n"
-                        + ("Условие выполнено — продолжай." if outcome["met"] else
-                           "Условие НЕ выполнено. Не считай ожидаемое событие произошедшим: "
-                           "проверь состояние сам и реши, ждать ли дальше, "
-                           "действовать иначе или завершить работу через `end_auto_mode`.")
-                    )
+                    
+                    if not auto_wake_context: # If not interrupted by event
+                        auto_sleep_time = 0
+                        verdict = "ВЫПОЛНЕНО" if outcome["met"] else "НЕ выполнено"
+                        print_system(f"*[Heartbeat] {verdict}: {outcome['reason']} "
+                                     f"({outcome['waited']} сек.)*")
+                        # Hand the verdict to the normal wake path as ordinary text.
+                        # The model must know whether the thing it waited for
+                        # actually happened — a timeout is not a success.
+                        auto_wake_context = (
+                            f"[Heartbeat пробуждение] Ожидалось условие: {spec['until']}\n"
+                            f"Результат: {outcome['reason']} (ждали {outcome['waited']} сек.).\n"
+                            f"Исходная причина ожидания: {spec['reason']}\n"
+                            + ("Условие выполнено — продолжай." if outcome["met"] else
+                               "Условие НЕ выполнено. Не считай ожидаемое событие произошедшим: "
+                               "проверь состояние сам и реши, ждать ли дальше, "
+                               "действовать иначе или завершить работу через `end_auto_mode`.")
+                        )
 
                 if auto_sleep_time > 0:
                     print_system(f"*[Heartbeat] Переход в сон на {auto_sleep_time} сек. (может быть прерван событиями, Ctrl+C для отмены)*")
@@ -655,11 +657,17 @@ def main():
                         print_system(f"*[Событие] Фоновая команда {ev['pid']} завершилась. Ожидание прервано.*")
                         auto_wake_context = f"[Heartbeat прерван] Фоновая команда {ev['pid']} завершилась с кодом {ev['exit_code']}. Проверьте её вывод с помощью read_background_command."
                     except KeyboardInterrupt:
-                        print_system("Состояние Heartbeat прервано. Выход из автоматического режима.")
-                        is_auto_mode = False
+                        print_system("Состояние Heartbeat прервано.")
+                        auto_sleep_time = 0
+                        auto_wake_context = ""
                         continue
                     auto_sleep_time = 0
+                
+                if not is_auto_mode:
+                    auto_continue_input = auto_wake_context if auto_wake_context else "[Heartbeat завершен] Продолжай."
+                    auto_wake_context = ""
 
+            if is_auto_mode:
                 user_input = auto_wake_context if auto_wake_context else "[Режим Автоматизма] Продолжай автономную работу. Анализируй результат предыдущего шага. Если нужно подождать — используй `wait_heartbeat`. Если глобальная задача завершена — вызови `end_auto_mode`."
                 auto_wake_context = ""
                 print_system("\n❯ [Автономный импульс]")

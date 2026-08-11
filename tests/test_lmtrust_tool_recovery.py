@@ -309,3 +309,36 @@ class TestFuzzyRejectionLogging:
         # The log message should contain the actual arg names, not an empty tuple.
         # Mutation: sorted(args or ()) → sorted(args and ()) → sorted(()) → '[]'
         assert 'content' in rejection_logs[0].getMessage()
+class TestRecoverToolCallNoneArgs:
+    """When recover_json_arguments returns None, recover_tool_call must
+    replace it with {} (not leave None). Kills NONE_TO_ZERO @ pos 5814
+    which changes 'is None' to 'is 0' (always False for dict/None)."""
+
+    def test_unparseable_args_become_empty_dict(self):
+        """If raw_args is a string that can't be parsed as JSON, the recovered
+        tool call should have 'arguments': {} (not None)."""
+        def my_tool(x):
+            pass
+
+        func = {
+            "name": "my_tool",
+            "arguments": "not json at all {{{",
+        }
+        result = recover_tool_call(func, {"my_tool": my_tool})
+        assert result is not None
+        assert result["function"]["arguments"] == {}
+
+    def test_unparseable_args_become_empty_dict_explicit(self):
+        """Another unparseable string — verify arguments is exactly {}."""
+        def my_tool(x):
+            pass
+
+        func = {
+            "name": "my_tool",
+            "arguments": "garbage}}}{{{",
+        }
+        result = recover_tool_call(func, {"my_tool": my_tool})
+        assert result is not None
+        # Mutation: 'is None' → 'is 0' → None is 0 is False → arguments stays None
+        assert result["function"]["arguments"] is not None
+        assert result["function"]["arguments"] == {}

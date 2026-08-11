@@ -154,27 +154,27 @@ def _handle_tool_generating(first_chunk, chunk_iterator):
 
 def _check_auto_signals(res, is_auto, sleep_t, wake_ctx):
     """Check tool result for auto-mode control signals."""
-    if is_auto:
-        if "[END_AUTO_MODE]" in str(res):
+    if "[END_AUTO_MODE]" in str(res):
+        if is_auto:
             is_auto = False
             print_system("🏁 Автоматический режим завершен агентом.")
-        elif "[HEARTBEAT_REQUEST:" in str(res):
-            # Two forms: a plain delay, or a delay plus a condition to wait on.
-            # The optional tail keeps the original signal readable by itself.
-            match = re.search(
-                r"\[HEARTBEAT_REQUEST:\s*(\d+)\s*\|\s*([^|\]]*?)\s*"
-                r"(?:\|\s*until=(.*?)\s*\|\s*timeout=(\d+)\s*)?\]",
-                str(res)
-            )
-            if match:
-                sleep_t = int(match.group(1))
-                wake_ctx = f"[Heartbeat пробуждение] Причина: {match.group(2)}"
-                if match.group(3):
-                    wake_ctx = {
-                        "reason": match.group(2),
-                        "until": match.group(3),
-                        "timeout": int(match.group(4) or 600),
-                    }
+    elif "[HEARTBEAT_REQUEST:" in str(res):
+        # Two forms: a plain delay, or a delay plus a condition to wait on.
+        # The optional tail keeps the original signal readable by itself.
+        match = re.search(
+            r"\[HEARTBEAT_REQUEST:\s*(\d+)\s*\|\s*([^|\]]*?)\s*"
+            r"(?:\|\s*until=(.*?)\s*\|\s*timeout=(\d+)\s*)?\]",
+            str(res)
+        )
+        if match:
+            sleep_t = int(match.group(1))
+            wake_ctx = f"[Heartbeat пробуждение] Причина: {match.group(2)}"
+            if match.group(3):
+                wake_ctx = {
+                    "reason": match.group(2),
+                    "until": match.group(3),
+                    "timeout": int(match.group(4) or 600),
+                }
     return is_auto, sleep_t, wake_ctx
 
 
