@@ -467,3 +467,212 @@ class TestWaitFor:
 
     def test_default_poll_is_5(self):
         assert DEFAULT_POLL_SECONDS == 5
+# ─── error handlers (OSError in _resolve) ────────────────────────────────────
+
+class TestErrorHandlers:
+    """Tests that OSError handlers in _file_exists/_file_contains return False.
+
+    Kills FALSE_TO_TRUE mutations that flip ``return False`` to ``return True``
+    in the except-OSError branches (lines 48 and 64).
+    """
+
+    def test_file_exists_oserror_returns_false(self, monkeypatch):
+        """_file_exists must return False (not True) when _resolve raises OSError."""
+        def raise_oserror(path):
+            raise OSError("permission denied")
+        monkeypatch.setattr("src.agent.wait_conditions._resolve", raise_oserror)
+        assert _file_exists("/some/path") is False
+
+    def test_file_contains_oserror_returns_false(self, monkeypatch):
+        """_file_contains must return False (not True) when _resolve raises OSError."""
+        def raise_oserror(path):
+            raise OSError("permission denied")
+        monkeypatch.setattr("src.agent.wait_conditions._resolve", raise_oserror)
+        assert _file_contains("/some/path", "text") is False
+
+
+# ─── waited precision (non-zero clock) ────────────────────────────────────────
+
+class TestWaitedPrecision:
+    """Tests that ``waited`` is computed as ``clock() - started`` (not ``+``)
+    and rounded to 1 decimal (not 0).
+
+    Kills:
+    * SUB_TO_ADD @ lines 172, 175, 177, 181 (``clock()-started`` → ``clock()+started``,
+      ``timeout-waited`` → ``timeout+waited``).
+    * ONE_TO_ZERO @ round(x, 1) → round(x, 0) on the same lines.
+
+    Strategy: use a clock that starts at a NON-ZERO value so that
+    ``clock() + started`` differs from ``clock() - started``.
+    """
+
+    def test_waited_nonzero_clock_met(self):
+        """Condition met: waited = round(105.3 - 100.0, 1) == 5.3.
+
+        SUB_TO_ADD mutant: round(105.3 + 100.0, 1) == 205.3.
+        ONE_TO_ZERO mutant: round(5.3, 0) == 5.0.
+        """
+        clocks = iter([100.0, 105.3])
+        result = wait_for(
+            "True",
+            sleep=lambda s: None,
+            clock=lambda: next(clocks),
+        )
+        assert result["met"] is True
+        assert result["waited"] == 5.3
+
+    def test_waited_nonzero_clock_timeout(self):
+        """Timeout: waited = round(105.3 - 100.0, 1) == 5.3.
+
+        SUB_TO_ADD mutant at line 177: waited = 105.3 + 100.0 = 205.3.
+        ONE_TO_ZERO mutant at line 180: round(5.3, 0) == 5.0.
+        """
+        clocks = iter([100.0, 105.3])
+        result = wait_for(
+            "False",
+            timeout=1.0,
+            poll_seconds=5,
+            sleep=lambda s: None,
+            clock=lambda: next(clocks),
+        )
+        assert result["met"] is False
+        assert "timed out" in result["reason"]
+        assert result["waited"] == 5.3
+
+    def test_waited_nonzero_clock_invalid_condition(self):
+        """Invalid condition: waited = round(105.3 - 100.0, 1) == 5.3.
+
+        Kills SUB_TO_ADD @ line 175 and ONE_TO_ZERO on that line.
+        """
+        clocks = iter([100.0, 105.3])
+        result = wait_for(
+            "bogus_predicate('x')",
+            sleep=lambda s: None,
+            clock=lambda: next(clocks),
+        )
+        assert result["met"] is False
+        assert "invalid condition" in result["reason"]
+        assert result["waited"] == 5.3
+
+    def test_sleep_uses_timeout_minus_waited(self):
+        """sleep(min(poll, timeout - waited)) must subtract, not add.
+
+        Kills SUB_TO_ADD @ line 181 (``timeout - waited`` → ``timeout + waited``).
+
+        started=100.0, first eval: waited=2.0 < 5.0 → sleep(min(10, 3)) = 3.0.
+        Mutant would sleep(min(10, 7)) = 7.0.
+        """
+        clocks = iter([100.0, 102.0, 105.0])
+        sleeps = []
+        result = wait_for(
+            "False",
+            timeout=5.0,
+            poll_seconds=10.0,
+            sleep=lambda s: sleeps.append(s),
+            clock=lambda: next(clocks),
+        )
+        assert result["met"] is False
+        assert sleeps == [3.0]
+
+
+# ─── timeout clamping ─────────────────────────────────────────────────────────
+
+class TestTimeoutClamping:
+    """Tests that ``timeout`` is clamped with ``max(1.0, ...)``.
+
+    Kills:
+    * ONE_TO_ZERO @ pos 5940: ``max(1.0, ...)`` → ``max(0.0, ...)``.
+    * ZERO_TO_ONE @ pos 5942: ``max(1.0, ...)`` → ``max(1.1, ...)``.
+    """
+
+    def test_timeout_clamp_1_0_vs_0_0(self):
+        """timeout=0.5 clamped to 1.0 (not 0.0).
+
+        Original: clamped to 1.0 → first eval waited=0.6 < 1.0 → sleep,
+        second eval waited=1.2 >= 1.0 → timeout. len(sleeps)==1.
+        Mutant max(0.0,...): clamped to 0.5 → waited=0.6 >= 0.5 → timeout
+        immediately. len(sleeps)==0.
+        """
+        t = [0.0]
+
+        def clock():
+            t[0] += 0.6
+            return t[0]
+
+        sleeps = []
+        result = wait_for(
+            "False",
+            timeout=0.5,
+            poll_seconds=5,
+            sleep=lambda s: sleeps.append(s),
+            clock=clock,
+        )
+        assert result["met"] is False
+        assert "timed out" in result["reason"]
+        assert len(sleeps) == 1
+
+    def test_timeout_clamp_1_0_vs_1_1(self):
+        """timeout=1.05 clamped to 1.05 (not 1.1).
+
+        Original: max(1.0, 1.05) = 1.05 → waited=1.07 >= 1.05 → timeout
+        immediately, 0 sleeps, waited=round(1.07, 1)=1.1.
+        Mutant max(1.1,...): max(1.1, 1.05) = 1.1 → waited=1.07 < 1.1 → sleep,
+        then waited=1.2 >= 1.1 → timeout, 1 sleep, waited=1.2.
+        """
+        clocks = iter([0.0, 1.07, 1.2])
+        sleeps = []
+        result = wait_for(
+            "False",
+            timeout=1.05,
+            poll_seconds=5,
+            sleep=lambda s: sleeps.append(s),
+            clock=lambda: next(clocks),
+        )
+        assert result["met"] is False
+        assert "timed out" in result["reason"]
+        assert len(sleeps) == 0
+        assert result["waited"] == 1.1
+
+
+# ─── poll clamping ────────────────────────────────────────────────────────────
+
+class TestPollClamping:
+    """Tests that ``poll_seconds`` is clamped with ``max(0.1, ...)``.
+
+    Kills:
+    * ZERO_TO_ONE @ pos 6037: ``max(0.1, ...)`` → ``max(1.1, ...)``.
+    """
+
+    def test_poll_clamp_0_1_vs_1_1(self, monkeypatch):
+        """poll_seconds=0.5 should sleep 0.5, not 1.1.
+
+        Original: max(0.1, 0.5) = 0.5 → sleeps [0.5].
+        Mutant max(1.1,...): max(1.1, 0.5) = 1.1 → sleeps [1.1].
+        """
+        t = [0.0]
+
+        def clock():
+            return t[0]
+
+        sleeps = []
+
+        def sleep(s):
+            sleeps.append(s)
+            t[0] += s
+
+        call_count = [0]
+
+        def my_evaluate(condition):
+            call_count[0] += 1
+            return call_count[0] >= 2
+
+        monkeypatch.setattr("src.agent.wait_conditions.evaluate", my_evaluate)
+        result = wait_for(
+            "dummy",
+            timeout=10,
+            poll_seconds=0.5,
+            sleep=sleep,
+            clock=clock,
+        )
+        assert result["met"] is True
+        assert sleeps == [0.5]
