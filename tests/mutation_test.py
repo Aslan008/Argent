@@ -88,14 +88,21 @@ def compute_skip_ranges(source: str) -> list[tuple[int, int]]:
         pass
 
     # --- Return annotations via ast ---
+    # Skip both the -> arrow AND the annotation itself.
+    # The AST node.returns starts at the type (e.g. 'str'), not at '->',
+    # so we must manually find the arrow and add it to skip ranges.
     try:
         tree = ast.parse(source)
         for node in ast.walk(tree):
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 if node.returns is not None:
-                    start = _pos_to_offset(source, (node.returns.lineno, node.returns.col_offset))
+                    ret_start = _pos_to_offset(source, (node.returns.lineno, node.returns.col_offset))
+                    # Find the '->' arrow before the return annotation
+                    arrow_pos = source.rfind('->', 0, ret_start)
+                    if arrow_pos != -1:
+                        skip.append((arrow_pos, arrow_pos + 2))
                     end = _pos_to_offset(source, (node.returns.end_lineno, node.returns.end_col_offset))
-                    skip.append((start, end))
+                    skip.append((ret_start, end))
     except SyntaxError:
         pass
 
