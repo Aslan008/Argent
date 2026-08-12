@@ -352,3 +352,48 @@ class TestEdgeCases:
         ]
         levels = [g.record("run_command", {"command": "x"}, o) for o in outs]
         assert levels[-1] == "stop"
+class TestEnsureAsciiFalse:
+    """Kill FALSE_TO_TRUE @ pos 2708 (ensure_ascii=False → True).
+
+    With ensure_ascii=False, Cyrillic arguments stay as raw UTF-8 in the JSON
+    string.  With ensure_ascii=True (mutant), they become \\uXXXX escapes.
+    This changes the SHA1 hash, so asserting the exact hash with
+    ensure_ascii=False kills the mutation.
+    """
+
+    def test_cyrillic_args_exact_hash(self):
+        """_signature with Cyrillic args must match ensure_ascii=False hash."""
+        args = {"name": "Алексей"}
+        args_part = json.dumps(args, sort_keys=True, ensure_ascii=False, default=str)
+        raw = f"tool|{args_part}|result"
+        expected = hashlib.sha1(raw.encode("utf-8", errors="replace")).hexdigest()
+        assert _sig("tool", args, "result") == expected
+
+    def test_cyrillic_vs_ascii_escaped_different(self):
+        """Raw Cyrillic and \\u-escaped Cyrillic must produce different sigs.
+
+        With ensure_ascii=False: '{"name": "Алексей"}' (raw)
+        With ensure_ascii=True:  '{"name": "\\u0410\\u043b..."}' (escaped)
+
+        These are different strings → different hashes.
+        A mutant (ensure_ascii=True) would escape both to the same string,
+        making them equal — but the *correct* code keeps them distinct.
+        """
+        raw_args = {"name": "Алексей"}
+        # Manually build what ensure_ascii=True would produce
+        escaped_args = {"name": "Алексей"}
+        sig_raw = _sig("tool", raw_args, "result")
+        # Compute what the mutant would produce (ensure_ascii=True)
+        mutant_args_part = json.dumps(escaped_args, sort_keys=True, ensure_ascii=True, default=str)
+        mutant_raw = f"tool|{mutant_args_part}|result"
+        mutant_hash = hashlib.sha1(mutant_raw.encode("utf-8", errors="replace")).hexdigest()
+        # The real signature (ensure_ascii=False) must differ from the mutant's
+        assert sig_raw != mutant_hash
+
+    def test_emoji_args_exact_hash(self):
+        """Emoji in arguments must use ensure_ascii=False (raw UTF-8)."""
+        args = {"msg": "😀 hello"}
+        args_part = json.dumps(args, sort_keys=True, ensure_ascii=False, default=str)
+        raw = f"f|{args_part}|r"
+        expected = hashlib.sha1(raw.encode("utf-8", errors="replace")).hexdigest()
+        assert _sig("f", args, "r") == expected

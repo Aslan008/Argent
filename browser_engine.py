@@ -43,7 +43,9 @@ _ALLOWED_URL_SCHEMES = {"http", "https"}
 def _blocked_url_reason(url: str) -> str | None:
     """Error string when this URL must not be opened, else None."""
     import urllib.parse
-    if not url or not str(url).strip():
+    if not isinstance(url, str):
+        return f"Error: URL must be a string, got {type(url).__name__}"
+    if not url:
         return "Error: no URL provided."
     raw = str(url).strip()
     if raw.lower() in ("about:blank", "about:"):
@@ -63,6 +65,9 @@ def _html_to_markdown(html: str) -> str:
     try:
         from bs4 import BeautifulSoup
     except ImportError:
+        import re
+        html = re.sub(r'<script[^>]*>.*?</script>', '', html, flags=re.IGNORECASE | re.DOTALL)
+        html = re.sub(r'<style[^>]*>.*?</style>', '', html, flags=re.IGNORECASE | re.DOTALL)
         return html
 
     soup = BeautifulSoup(html, "html.parser")
@@ -595,17 +600,31 @@ class BrowserEngine:
 
     @staticmethod
     def _is_browser_running(exe_name: str) -> bool:
-        """Check if a browser process is already running (Windows)."""
+        """Check if a browser process is already running."""
+        import platform
         from src.agent.shell import run_text
+        if platform.system() != "Windows":
+            try:
+                result = run_text(["pgrep", "-f", exe_name], capture_output=True)
+                return result.returncode == 0
+            except Exception:
+                return False
+        
         try:
-            result = run_text(
-                ["tasklist", "/FI", f"IMAGENAME eq {exe_name}", "/NH"],
-                capture_output=True, timeout=5,
-            )
-            # tasklist returns the process name if found, otherwise "INFO: No tasks..."
-            return exe_name.lower() in result.stdout.lower()
-        except Exception:
+            import psutil
+            for proc in psutil.process_iter(['name']):
+                if proc.info['name'] and proc.info['name'].lower() == exe_name.lower():
+                    return True
             return False
+        except ImportError:
+            try:
+                result = run_text(
+                    ["tasklist", "/FI", f"IMAGENAME eq {exe_name}", "/NH"],
+                    capture_output=True, timeout=5,
+                )
+                return exe_name.lower() in result.stdout.lower()
+            except Exception:
+                return False
 
     async def _connect_user_browser(self, headed: bool = False) -> None:
         """Connect to the user's real browser via Chrome DevTools Protocol.

@@ -27,7 +27,9 @@ class ProviderError(Exception):
 
 
 def with_retry(fn, max_retries=3, base_delay=1.0):
-    retryable_codes = (429, 500, 502, 503)
+    max_retries = max(1, max_retries)
+    base_delay = max(0.0, base_delay)
+    retryable_codes = ("429", "500", "502", "503", "408")
     last_error = None
     for attempt in range(max_retries):
         try:
@@ -41,7 +43,7 @@ def with_retry(fn, max_retries=3, base_delay=1.0):
             time.sleep(delay)
         except Exception as e:
             error_str = str(e)
-            is_retryable = any(str(c) in error_str for c in retryable_codes)
+            is_retryable = any(c in error_str for c in retryable_codes)
             if not is_retryable or attempt == max_retries - 1:
                 raise ProviderError(str(e), retryable=is_retryable, original_error=e)
             last_error = e
@@ -49,6 +51,8 @@ def with_retry(fn, max_retries=3, base_delay=1.0):
             logger.warning("Retrying in %.1fs (attempt %d/%d): %s", delay, attempt + 1, max_retries, e)
             time.sleep(delay)
     if last_error:
+        if not isinstance(last_error, ProviderError):
+            raise ProviderError(str(last_error), retryable=False, original_error=last_error)
         raise last_error
 
 
@@ -58,6 +62,8 @@ def _parse_openai_usage(usage) -> dict:
     cost is non-standard: OpenRouter returns it (when requested) on the usage
     object, surfaced by the SDK via model_extra.
     """
+    if usage is None:
+        return {}
     d = {
         "prompt": getattr(usage, "prompt_tokens", 0) or 0,
         "completion": getattr(usage, "completion_tokens", 0) or 0,
@@ -69,7 +75,10 @@ def _parse_openai_usage(usage) -> dict:
         if isinstance(extra, dict):
             cost = extra.get("cost")
     if cost is not None:
-        d["cost"] = cost
+        try:
+            d["cost"] = max(0.0, float(cost))
+        except (ValueError, TypeError):
+            pass
     return d
 
 
@@ -747,7 +756,10 @@ def create_provider(provider_name: str = None) -> LLMProvider:
         return KoboldCPPProvider(base_url=get_koboldcpp_url())
     elif name == "openrouter":
         return OpenRouterProvider(api_key=get_openrouter_api_key(), base_url=get_openrouter_url())
-    return OllamaProvider()
+    elif name == "ollama":
+        return OllamaProvider()
+    else:
+        raise ValueError(f"Unknown provider: {name}")
 
 
 def create_service_provider():

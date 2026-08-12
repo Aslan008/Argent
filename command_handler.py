@@ -95,6 +95,10 @@ def export_chat_history(agent: ArgentAgent, filename: str = None, auto: bool = F
                 if role == "system" or not content:
                     continue
                     
+                if isinstance(content, list):
+                    text_parts = [p.get("text", "") for p in content if p.get("type") == "text"]
+                    content = "\n".join(text_parts) + "\n*[Вложение: медиа]*"
+                    
                 if role == "user":
                     f.write(f"### 👤 Пользователь\n{content}\n\n")
                 elif role in ("assistant", "model"):
@@ -113,6 +117,8 @@ def export_chat_history(agent: ArgentAgent, filename: str = None, auto: bool = F
 
 def handle_slash_command(command: str, agent: ArgentAgent) -> bool:
     """Handle slash commands. Returns True if REPL should exit."""
+    if not isinstance(command, str):
+        return False
     cmd = command.lower().strip()
     if cmd in ("/exit", "/quit"):
         export_chat_history(agent, auto=True)
@@ -687,6 +693,11 @@ def _mcp_add(parts: list):
         return
 
     name = parts[2]
+    import re
+    if not re.match(r"^[a-zA-Z0-9_-]+$", name):
+        print_error("Имя сервера может содержать только буквы, цифры, дефис и подчеркивание.")
+        return
+        
     flag = parts[3].lower()
 
     if flag == "--stdio":

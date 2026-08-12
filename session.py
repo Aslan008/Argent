@@ -23,6 +23,8 @@ Three things here are less obvious than they look:
 import gzip
 import json
 import os
+import threading
+import uuid
 from datetime import datetime
 from pathlib import Path
 
@@ -45,13 +47,18 @@ _SUFFIX = ".json.gz"
 _META_FIELDS = ("id", "saved_at", "model", "provider", "message_count",
                 "preview", "cwd", "label")
 
+_SESSION_LOCK = threading.RLock()
+
 
 def _session_path(session_id: str) -> Path:
     return SESSIONS_DIR / f"{session_id}{_SUFFIX}"
 
 
 def _session_id_from_path(path: Path) -> str:
-    return path.name[:-len(_SUFFIX)]
+    name = path.name
+    if name.endswith(_SUFFIX):
+        return name[:-len(_SUFFIX)]
+    return name
 
 
 def _sanitize_for_filename(name: str) -> str:
@@ -61,26 +68,21 @@ def _sanitize_for_filename(name: str) -> str:
 
 
 def _new_session_id(model: str) -> str:
-    """A fresh id that is not already taken.
-
-    The timestamp has one-second resolution, so two conversations saved in the
-    same second used to produce the same id — and the second one silently
-    overwrote the first. Rare in a terminal, certain in a test or a script.
-    """
+    """A fresh id that is not already taken."""
     base = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{_sanitize_for_filename(model)}"
-    if not _session_path(base).exists():
-        return base
-    for n in range(2, 100):
-        candidate = f"{base}-{n}"
-        if not _session_path(candidate).exists():
-            return candidate
-    return f"{base}-{os.getpid()}"
+    with _SESSION_LOCK:
+        if not _session_path(base).exists():
+            return base
+        # Fallback if multiple generated in the same second
+        return f"{base}-{uuid.uuid4().hex[:6]}"
 
 
-def _make_serializable(messages: list) -> list:
+def _make_serializable(messages) -> list:
     """Deep-copy messages and ensure all values are JSON-serializable."""
+    if not messages:
+        return []
     clean = []
-    for m in messages:
+    for m in list(messages):
         entry = {}
         for k, v in m.items():
             try:
@@ -93,20 +95,22 @@ def _make_serializable(messages: list) -> list:
 
 
 def _first_user_message(messages: list) -> str | None:
-    """The first thing the human actually said, or None if they never did.
-
-    Argent injects user-role messages of its own (continuation nudges, wake-up
-    context), so "has a user role" is not the same as "has a conversation".
-    """
+    """The first thing the human actually said, or None if they never did."""
     for m in messages:
         if m.get("role") != "user":
             continue
         content = m.get("content")
         if not isinstance(content, str) or not content.strip():
             continue
-        if content.startswith(("You are", "Please act", "You stopped after",
-                               "Your file write was cut off",
-                               "Your tool call was cut off")):
+        # Check against common injected system/tool messages masquerading as user
+        lower_content = content.lower().strip()
+        if lower_content.startswith((
+            "you are", 
+            "please act", 
+            "you stopped after",
+            "your file write was cut off",
+            "your tool call was cut off"
+        )):
             continue
         return content.strip()
     return None
@@ -119,15 +123,16 @@ def _read_index() -> dict:
         return {}
     try:
         data = json.loads(INDEX_PATH.read_text(encoding="utf-8"))
+        if isinstance(data, dict):
+            return data
     except Exception as e:
         log.warning("session index unreadable (%s); rebuilding", e)
-        return {}
-    return data if isinstance(data, dict) else {}
+    return {}
 
 
 def _write_index(index: dict) -> None:
-    from atomic_io import atomic_write_text
     try:
+        from atomic_io import atomic_write_text
         atomic_write_text(INDEX_PATH, json.dumps(index, ensure_ascii=False, indent=1))
     except Exception as e:
         log.warning("could not write session index: %s", e)
@@ -141,98 +146,102 @@ def _meta_from_file(path: Path) -> dict:
             data = json.load(f)
         return {k: data.get(k) for k in _META_FIELDS} | {"id": data.get("id", session_id)}
     except Exception:
-        return {"id": session_id, "saved_at": "", "model": "", "provider": "",
+        # If the file is corrupt or empty, use its creation time
+        try:
+            mtime = os.path.getmtime(path)
+            saved_at = datetime.fromtimestamp(mtime).isoformat()
+        except OSError:
+            saved_at = ""
+            
+        return {"id": session_id, "saved_at": saved_at, "model": "", "provider": "",
                 "message_count": 0, "preview": "[corrupted session]", "cwd": "",
                 "label": ""}
 
 
 def _sync_index() -> dict:
-    """Reconcile the index with what is on disk, decompressing only newcomers.
+    """Reconcile the index with what is on disk, decompressing only newcomers."""
+    with _SESSION_LOCK:
+        index = _read_index()
+        on_disk = {_session_id_from_path(p): p for p in SESSIONS_DIR.glob(f"*{_SUFFIX}")}
 
-    The index is a cache, not the truth: files can be deleted by hand or arrive
-    from a backup, and a listing that trusted it blindly would show sessions
-    that no longer exist.
-    """
-    index = _read_index()
-    on_disk = {_session_id_from_path(p): p for p in SESSIONS_DIR.glob(f"*{_SUFFIX}")}
-
-    changed = False
-    for stale in [k for k in index if k not in on_disk]:
-        index.pop(stale)
-        changed = True
-    for new_id, path in on_disk.items():
-        if new_id not in index:
-            index[new_id] = _meta_from_file(path)
+        changed = False
+        for stale in [k for k in index if k not in on_disk]:
+            index.pop(stale)
             changed = True
+        for new_id, path in on_disk.items():
+            if new_id not in index:
+                index[new_id] = _meta_from_file(path)
+                changed = True
 
-    if changed:
-        _write_index(index)
-    return index
+        if changed:
+            _write_index(index)
+        return index
 
 
 # --- the operations ---------------------------------------------------------
 
 def save_session(messages: list, metadata: dict = None, session_id: str = None,
                  label: str = None) -> str | None:
-    """Save a session, returning its id — or None if there was nothing to save.
-
-    Pass the id you got back to keep updating the SAME session instead of
-    filing another snapshot of it.
-    """
+    """Save a session, returning its id — or None if there was nothing to save."""
     metadata = metadata or {}
 
     first_user = _first_user_message(messages)
     if first_user is None:
-        # A history with no human turn is a system prompt and nothing else.
-        # Four of the user's fifty stored sessions were exactly that.
         log.info("not saving a session with no user message")
         return None
 
-    if not session_id:
-        session_id = _new_session_id(metadata.get("model", "unknown"))
+    with _SESSION_LOCK:
+        if not session_id:
+            session_id = _new_session_id(metadata.get("model", "unknown"))
 
-    safe_messages = _make_serializable(messages)
-    data = {
-        "id": session_id,
-        "saved_at": datetime.now().isoformat(),
-        "model": metadata.get("model", "unknown"),
-        "provider": metadata.get("provider", "ollama"),
-        # Where this conversation happened. Everything it says about file paths
-        # is relative to this, and the working memory lives under it.
-        "cwd": metadata.get("cwd") or os.getcwd(),
-        "label": label or metadata.get("label") or "",
-        "message_count": len(safe_messages),
-        "preview": first_user[:80],
-        "messages": safe_messages,
-    }
+        safe_messages = _make_serializable(messages)
+        
+        try:
+            cwd = metadata.get("cwd") or os.getcwd()
+        except OSError:
+            cwd = ""
+            
+        clean_label = str(label or metadata.get("label") or "")[:500]
+        
+        data = {
+            "id": session_id,
+            "saved_at": datetime.now().isoformat(),
+            "model": metadata.get("model", "unknown"),
+            "provider": metadata.get("provider", "unknown"),
+            "cwd": cwd,
+            "label": clean_label,
+            "message_count": len(safe_messages),
+            "preview": first_user[:80],
+            "messages": safe_messages,
+        }
 
-    path = _session_path(session_id)
-    try:
-        from atomic_io import atomic_write_bytes
+        path = _session_path(session_id)
+        try:
+            from atomic_io import atomic_write_bytes
 
-        def _write(fh):
-            # One guard, over the finished payload: a lone surrogate anywhere —
-            # a message, the preview, a label — survives json.dumps and only
-            # explodes at .encode(), and the moment the history most needs to be
-            # written is not the moment to lose all of it.
-            from text_safety import repair_surrogates
-            payload = repair_surrogates(
-                json.dumps(data, ensure_ascii=False, default=str))
-            with gzip.GzipFile(fileobj=fh, mode="wb") as gz:
-                gz.write(payload.encode("utf-8"))
+            def _write(fh):
+                from text_safety import repair_surrogates
+                payload = repair_surrogates(
+                    json.dumps(data, ensure_ascii=False, default=str))
+                with gzip.GzipFile(fileobj=fh, mode="wb") as gz:
+                    gz.write(payload.encode("utf-8"))
 
-        atomic_write_bytes(path, _write)
-    except Exception as e:
-        log.error("Failed to save session %s: %s", session_id, e)
-        raise
+            atomic_write_bytes(path, _write)
+        except Exception as e:
+            log.error("Failed to save session %s: %s", session_id, e)
+            return None
 
-    index = _read_index()
-    index[session_id] = {k: data.get(k) for k in _META_FIELDS}
-    _write_index(index)
+        try:
+            # Sync index instead of trusting the read, to prevent losing other entries if corrupt
+            index = _sync_index()
+            index[session_id] = {k: data.get(k) for k in _META_FIELDS}
+            _write_index(index)
+        except Exception as e:
+            log.error("Failed to update index for session %s: %s", session_id, e)
 
-    _cleanup_old_sessions()
-    log.info("Session saved: %s (%d messages)", session_id, len(safe_messages))
-    return session_id
+        _cleanup_old_sessions()
+        log.info("Session saved: %s (%d messages)", session_id, len(safe_messages))
+        return session_id
 
 
 def load_session(session_id: str) -> dict | None:
@@ -249,11 +258,7 @@ def load_session(session_id: str) -> dict | None:
 
 
 def list_sessions(query: str = None) -> list[dict]:
-    """Saved sessions, newest first, optionally filtered.
-
-    The filter matches the label, the preview and the id — enough to find "that
-    conversation about shaders" without opening five of them.
-    """
+    """Saved sessions, newest first, optionally filtered."""
     sessions = list(_sync_index().values())
     if query and query.strip():
         needle = query.strip().lower()
@@ -266,41 +271,54 @@ def list_sessions(query: str = None) -> list[dict]:
 
 
 def find_session(reference: str, sessions: list = None) -> dict | None:
-    """Resolve what the user typed after /load: a position, or any substring.
-
-    A position alone was the only way to say which session you meant, and it
-    shifts every time anything is saved — so the number you read a minute ago
-    can point somewhere else by the time you type it.
-    """
+    """Resolve what the user typed after /load: a position, or any substring."""
     reference = (reference or "").strip()
     if not reference:
         return None
-    sessions = list_sessions() if sessions is None else sessions
+
+    if sessions is None:
+        matches = list_sessions(reference)
+        # For positional lookup
+        sorted_sessions = list_sessions()
+    else:
+        needle = reference.lower()
+        matches = [s for s in sessions
+                   if needle in " ".join(str(s.get(k) or "")
+                                         for k in ("id", "label", "preview",
+                                                   "model", "cwd")).lower()]
+        # We assume `sessions` is already sorted newest-first by the caller.
+        sorted_sessions = sessions
 
     if reference.isdigit():
         idx = int(reference) - 1
-        return sessions[idx] if 0 <= idx < len(sessions) else None
+        return sorted_sessions[idx] if 0 <= idx < len(sorted_sessions) else None
 
-    matches = list_sessions(reference)
     if not matches:
         return None
     if len(matches) > 1:
         exact = [m for m in matches if (m.get("label") or "").lower() == reference.lower()]
         if exact:
             return exact[0]
-    return matches[0]                 # newest wins; the list is sorted
+    return matches[0]
 
 
 def delete_session(session_id: str) -> bool:
     """Delete a session by ID."""
-    path = _session_path(session_id)
-    existed = path.exists()
-    if existed:
-        path.unlink()
-    index = _read_index()
-    if index.pop(session_id, None) is not None:
-        _write_index(index)
-    return existed
+    with _SESSION_LOCK:
+        path = _session_path(session_id)
+        existed = path.exists()
+        if existed:
+            try:
+                path.unlink()
+            except OSError as e:
+                log.warning("could not delete session file: %s", e)
+                return False
+        
+        # Always try to remove from index even if file didn't exist (cleanup zombie index entry)
+        index = _read_index()
+        if index.pop(session_id, None) is not None:
+            _write_index(index)
+        return existed
 
 
 def get_last_session() -> dict | None:
@@ -311,5 +329,7 @@ def get_last_session() -> dict | None:
 
 def _cleanup_old_sessions():
     """Remove oldest sessions if exceeding MAX_SESSIONS."""
-    for s in list_sessions()[MAX_SESSIONS:]:
-        delete_session(s["id"])
+    max_count = max(1, MAX_SESSIONS)
+    with _SESSION_LOCK:
+        for s in list_sessions()[max_count:]:
+            delete_session(s["id"])

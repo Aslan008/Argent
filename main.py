@@ -64,14 +64,10 @@ CHAT_DENIED_TOOLS = {
 
 
 def chat_allowed_tools() -> list:
-    """The toolset for a regular chat turn: everything real, minus the modes.
-
-    Derived from the live registry so it cannot drift, and it also drops names
-    the user disabled via /tools — the old list still contained six tools that
-    no longer resolved.
-    """
+    """The toolset for a regular chat turn: everything real, minus the modes."""
     from tools.schemas import get_available_tools
-    return [name for name in get_available_tools() if name not in CHAT_DENIED_TOOLS]
+    avail = get_available_tools() or []
+    return [name for name in avail if name not in CHAT_DENIED_TOOLS]
 
 
 
@@ -82,10 +78,10 @@ def offer_safety_checkpoint(task: str) -> None:
     try:
         is_git = run_text("git rev-parse --is-inside-work-tree",
                           shell=True, capture_output=True)
-        if is_git.returncode != 0:
+        if not is_git or getattr(is_git, "returncode", -1) != 0:
             return
-        dirty = run_text("git status --porcelain",
-                        shell=True, capture_output=True).stdout.strip()
+        dirty_res = run_text("git status --porcelain", shell=True, capture_output=True)
+        dirty = getattr(dirty_res, "stdout", "").strip() if dirty_res else ""
         if not dirty:
             return
         approved = questionary.confirm(
@@ -116,7 +112,7 @@ def _parse_task_tools(spec: str):
     if spec.lower().startswith("tools:"):
         spec = spec.split(":", 1)[1]
     names = [n.strip() for n in spec.replace(";", ",").split(",") if n.strip()]
-    unknown = [n for n in names if n not in AVAILABLE_TOOLS]
+    unknown = [n for n in names if not isinstance(AVAILABLE_TOOLS, dict) or n not in AVAILABLE_TOOLS]
     return names, unknown
 
 
@@ -167,8 +163,9 @@ def offer_previous_context(agent) -> None:
         same_place = (where and os.path.normcase(os.path.abspath(where))
                       == os.path.normcase(os.getcwd()))
         suffix = "" if same_place else f" [в {Path(where).name}]" if where else ""
-        print_system(f"Прошлая сессия ({last['saved_at'][:16]}){suffix}: "
-                     f"\"{last['preview']}\"")
+        saved_time = (last.get("saved_at") or "")[:16]
+        print_system(f"Прошлая сессия ({saved_time}){suffix}: "
+                     f"\"{last.get('preview', '')}\"")
     if carried:
         # Named out loud: this is the part that used to arrive uninvited.
         print_system(f"[dim]Рабочая память проекта: {', '.join(carried)}.[/dim]")
@@ -206,13 +203,15 @@ def restore_session(agent, meta: dict) -> bool:
 
     agent.messages = data["messages"]
     agent.session_id = data.get("id") or meta["id"]
+    saved_time = (data.get("saved_at") or "")[:16]
     print_system(f"Восстановлено {len(data['messages'])} сообщений "
-                 f"({data.get('saved_at', '')[:16]}).")
+                 f"({saved_time}).")
 
     saved_model = data.get("model") or ""
-    if saved_model and saved_model != agent.model_name:
+    current_model = getattr(agent, "model_name", "")
+    if saved_model and saved_model != current_model:
         print_system(f"[yellow]⚠ Сессия велась на '{saved_model}', сейчас активна "
-                     f"'{agent.model_name}'.[/yellow] История содержит вызовы "
+                     f"'{current_model}'.[/yellow] История содержит вызовы "
                      f"инструментов, которые текущая модель может не повторить — "
                      f"смените модель через /model, если это важно.")
 
@@ -256,6 +255,12 @@ def handle_tasks_command(user_input: str, agent) -> None:
     sub = parts[1] if len(parts) > 1 else "list"
     arg = parts[2] if len(parts) > 2 else ""
 
+    if sub not in ("list", "add", "on", "off", "rm", "remove", "delete", "run", "runs", "memory", "forget"):
+        print_error("Команды: /tasks list | add <имя> | <расписание> | <задача> | "
+                    "on <имя> | off <имя> | rm <имя> | run <имя> | runs | "
+                    "memory [имя] | forget <имя>")
+        return
+
     if sub == "list":
         items = load_automations()
         if not items:
@@ -290,7 +295,10 @@ def handle_tasks_command(user_input: str, agent) -> None:
         # The toolset is the capability boundary of an unattended run, so it has
         # to be reachable from here — a limit you can only set by hand-editing
         # JSON is a limit nobody sets.
-        tools, unknown = _parse_task_tools(pieces[3] if len(pieces) > 3 else "")
+        tools_part = pieces[3] if len(pieces) > 3 else ""
+        if tools_part.strip().lower().startswith("tools:") and not tools_part.split(":", 1)[1].strip():
+            print_error("Предупреждение: блок tools пуст (вы указали '| tools:', но не перечислили инструменты).")
+        tools, unknown = _parse_task_tools(tools_part)
         if unknown:
             print_error(f"Неизвестные инструменты: {', '.join(unknown)}. "
                         f"Список — /tools.")
@@ -395,7 +403,8 @@ def toggle_vibe_mode(vibe_mode: bool) -> bool:
     """The vibecoder switch. Curates EXISTING knobs — no new machinery:
     auto-approve safe actions (destructive ones still prompt) and guarantee
     per-turn checkpoints, so every step stays rewindable via /rewind."""
-    vibe_mode = not vibe_mode
+    current_policy = getattr(approval, "get_policy", lambda: approval.POLICY_ASK)()
+    vibe_mode = (current_policy != approval.POLICY_AUTO)
     from src.agent.checkpoints import set_auto_checkpoint
     if vibe_mode:
         set_auto_checkpoint(True)
@@ -425,8 +434,10 @@ def main():
         # Stop background command processes
         try:
             from tools import ACTIVE_PROCESSES
-            for pid, proc_info in list(ACTIVE_PROCESSES.items()):
+            items = list(ACTIVE_PROCESSES.items()) if isinstance(ACTIVE_PROCESSES, dict) else list(ACTIVE_PROCESSES)
+            for item in items:
                 try:
+                    proc_info = item[1] if isinstance(item, tuple) else item
                     proc_info["process"].terminate()
                 except Exception:
                     pass
@@ -597,10 +608,14 @@ def main():
 
                 def sleep_with_events(secs):
                     import time
-                    end = time.time() + secs
-                    while time.time() < end:
+                    end = time.monotonic() + secs
+                    while time.monotonic() < end:
                         try:
-                            ev = EVENT_QUEUE.get(timeout=min(0.5, max(0.1, end - time.time())))
+                            if EVENT_QUEUE is not None:
+                                ev = EVENT_QUEUE.get(timeout=min(0.5, max(0.1, end - time.monotonic())))
+                            else:
+                                time.sleep(0.1)
+                                continue
                             if ev.get("type") == "bg_done":
                                 raise EventInterruptedException(ev)
                         except queue.Empty:
@@ -611,16 +626,19 @@ def main():
                 # "is it done yet?" loop becomes one sleep and one wake.
                 if isinstance(auto_wake_context, dict):
                     spec, auto_wake_context = auto_wake_context, ""
-                    print_system(f"*[Heartbeat] Жду условие: {spec['until']} "
-                                 f"(до {spec['timeout']} сек., Ctrl+C для прерывания)*")
+                    until = spec.get("until", "condition")
+                    timeout = spec.get("timeout", 60)
+                    reason = spec.get("reason", "no reason")
+                    print_system(f"*[Heartbeat] Жду условие: {until} "
+                                 f"(до {timeout} сек., Ctrl+C для прерывания)*")
                     from src.agent.wait_conditions import wait_for
                     try:
-                        outcome = wait_for(spec["until"], timeout=spec["timeout"],
+                        outcome = wait_for(until, timeout=timeout,
                                            sleep=sleep_with_events)
                     except EventInterruptedException as e:
                         ev = e.event
-                        print_system(f"*[Событие] Фоновая команда {ev['pid']} завершилась. Ожидание прервано.*")
-                        auto_wake_context = f"[Heartbeat прерван] Фоновая команда {ev['pid']} завершилась с кодом {ev['exit_code']}. Проверьте её вывод с помощью read_background_command."
+                        print_system(f"*[Событие] Фоновая команда {ev.get('pid', '?')} завершилась. Ожидание прервано.*")
+                        auto_wake_context = f"[Heartbeat прерван] Фоновая команда {ev.get('pid', '?')} завершилась с кодом {ev.get('exit_code', '?')}. Проверьте её вывод с помощью read_background_command."
                         auto_sleep_time = 0
                     except KeyboardInterrupt:
                         print_system("Ожидание прервано.")
@@ -630,21 +648,24 @@ def main():
                     
                     if not auto_wake_context: # If not interrupted by event
                         auto_sleep_time = 0
-                        verdict = "ВЫПОЛНЕНО" if outcome["met"] else "НЕ выполнено"
-                        print_system(f"*[Heartbeat] {verdict}: {outcome['reason']} "
-                                     f"({outcome['waited']} сек.)*")
-                        # Hand the verdict to the normal wake path as ordinary text.
-                        # The model must know whether the thing it waited for
-                        # actually happened — a timeout is not a success.
-                        auto_wake_context = (
-                            f"[Heartbeat пробуждение] Ожидалось условие: {spec['until']}\n"
-                            f"Результат: {outcome['reason']} (ждали {outcome['waited']} сек.).\n"
-                            f"Исходная причина ожидания: {spec['reason']}\n"
-                            + ("Условие выполнено — продолжай." if outcome["met"] else
-                               "Условие НЕ выполнено. Не считай ожидаемое событие произошедшим: "
-                               "проверь состояние сам и реши, ждать ли дальше, "
-                               "действовать иначе или завершить работу через `end_auto_mode`.")
-                        )
+                        if outcome and isinstance(outcome, dict) and "met" in outcome:
+                            verdict = "ВЫПОЛНЕНО" if outcome["met"] else "НЕ выполнено"
+                            out_reason = outcome.get("reason", "unknown")
+                            waited = outcome.get("waited", 0)
+                            print_system(f"*[Heartbeat] {verdict}: {out_reason} "
+                                         f"({waited} сек.)*")
+                            auto_wake_context = (
+                                f"[Heartbeat пробуждение] Ожидалось условие: {until}\n"
+                                f"Результат: {out_reason} (ждали {waited} сек.).\n"
+                                f"Исходная причина ожидания: {reason}\n"
+                                + ("Условие выполнено — продолжай." if outcome["met"] else
+                                   "Условие НЕ выполнено. Не считай ожидаемое событие произошедшим: "
+                                   "проверь состояние сам и реши, ждать ли дальше, "
+                                   "действовать иначе или завершить работу через `end_auto_mode`.")
+                            )
+                        else:
+                            print_error("Ошибка wait_for: возвращен неверный формат")
+                            auto_wake_context = "[Heartbeat пробуждение] Ошибка: проверка условия вернула неверный формат. Проверьте результат сами."
 
                 if auto_sleep_time > 0:
                     print_system(f"*[Heartbeat] Переход в сон на {auto_sleep_time} сек. (может быть прерван событиями, Ctrl+C для отмены)*")
@@ -869,10 +890,10 @@ def main():
                 from memory_manager import memory
                 arg = user_input[len("/goal"):].strip()
                 if not arg:
-                    obj = memory.data.get("objective") or "[not set]"
-                    task = memory.data.get("current_task") or "[not set]"
-                    done = memory.data.get("completed") or []
-                    files = memory.data.get("files_modified") or []
+                    obj = (memory.data or {}).get("objective") or "[not set]"
+                    task = (memory.data or {}).get("current_task") or "[not set]"
+                    done = (memory.data or {}).get("completed") or []
+                    files = (memory.data or {}).get("files_modified") or []
                     print_system("[bold cyan]Goal[/bold cyan]")
                     print_system(f"  OBJECTIVE: {obj}")
                     print_system(f"  ТЕКУЩАЯ ЗАДАЧА: {task}")
@@ -994,7 +1015,7 @@ def main():
                     what = "plan / idea"
                     if not target:
                         target = next(
-                            (m.get("content") for m in reversed(agent.messages)
+                            (m.get("content") for m in reversed(getattr(agent, "messages", []) or [])
                              if m.get("role") == "assistant" and (m.get("content") or "").strip()),
                             "",
                         ).strip()
@@ -1170,7 +1191,11 @@ def main():
                 continue
 
             elif user_input.startswith("/copy"):
-                import pyperclip
+                try:
+                    import pyperclip
+                except ImportError:
+                    print_error("Модуль pyperclip не установлен (возможно это headless/SSH среда).")
+                    continue
                 blocks = get_code_blocks()
                 parts = user_input.strip().split()
                 if not blocks:
@@ -1192,7 +1217,11 @@ def main():
                 continue
 
             elif user_input.startswith("/logs"):
-                log_dir = Path.home() / ".argent" / "logs"
+                try:
+                    log_dir = Path.home() / ".argent" / "logs"
+                except Exception as e:
+                    print_error(f"Не удалось определить домашнюю директорию: {e}")
+                    continue
                 parts = user_input.strip().split()
                 
                 if len(parts) > 1 and parts[1] == "clear":
@@ -1259,16 +1288,16 @@ def main():
                 model = get_current_model()
                 provider = get_provider()
                 ctx = get_context_window()
-                msg_count = len(agent.messages)
+                msg_count = len(getattr(agent, "messages", []) or [])
                 
                 category = get_model_size_category(model)
                 override = get_model_category_override()
                 cat_source = "manual" if override else "auto"
                 
                 mcp_servers = mcp_client.get_servers()
-                active_mcp = [s['name'] for s in mcp_servers if s['running']]
+                active_mcp = [s.get('name') for s in mcp_servers if s.get('running') and s.get('name')]
                 
-                plugins = list(hook_manager.plugins.keys())
+                plugins = list(hook_manager.plugins.keys()) if isinstance(getattr(hook_manager, "plugins", None), dict) else []
                 
                 stats_msg = (
                     f"[bold cyan]Argent Diagnostics:[/bold cyan]\n"
@@ -1282,12 +1311,13 @@ def main():
                 # Context budget breakdown — where the prompt tokens go.
                 try:
                     b = agent.get_context_breakdown()
-                    tools_note = f" ({b['tool_count']} tools)" if b['tool_count'] else " (in-prompt catalog)"
+                    tools_note = f" ({b.get('tool_count', 0)} tools)" if b.get('tool_count') else " (in-prompt catalog)"
+                    percent = b.get('percent', 0)
                     stats_msg += (
-                        f"  [dim]Context budget:[/dim] {b['total']}/{b['max']} tokens ({b['percent']:.0f}%)\n"
-                        f"    [dim]- system prompt:[/dim] {b['system']} tok\n"
-                        f"    [dim]- tool schemas:[/dim] {b['tools']} tok{tools_note}\n"
-                        f"    [dim]- history:[/dim] {b['history']} tok\n"
+                        f"  [dim]Context budget:[/dim] {b.get('total', 0)}/{b.get('max', 0)} tokens ({percent:.0f}%)\n"
+                        f"    [dim]- system prompt:[/dim] {b.get('system', 0)} tok\n"
+                        f"    [dim]- tool schemas:[/dim] {b.get('tools', 0)} tok{tools_note}\n"
+                        f"    [dim]- history:[/dim] {b.get('history', 0)} tok\n"
                     )
                 except Exception:
                     pass
@@ -1450,10 +1480,16 @@ def main():
                     try:
                         from providers import create_service_provider
                         provider, svc_model = create_service_provider()
-                        gen_message = provider.sync_chat(
+                        res = provider.sync_chat(
                             model=svc_model,
                             messages=[{"role": "user", "content": commit_prompt}]
-                        ).strip().strip('"').strip("'")
+                        )
+                        if isinstance(res, str):
+                            gen_message = res.strip().strip('"').strip("'")
+                        elif isinstance(res, dict):
+                            gen_message = res.get("text", str(res))
+                        elif res:
+                            gen_message = str(res)
                     except Exception as e:
                         print_error(f"Не удалось сгенерировать сообщение коммита: {e}")
                         continue
@@ -1476,6 +1512,8 @@ def main():
                         else:
                             print_system("Commit aborted.")
                             
+                except FileNotFoundError:
+                    print_error("Git не установлен или не найден в PATH.")
                 except Exception as e:
                     print_error(f"Ошибка при коммите: {e}")
                 continue
@@ -1529,11 +1567,12 @@ def main():
                     print_error(f"Не удалось выполнить команду: {e}")
                     continue
                 
-            if is_project_mode:
-                active_tools = orchestrator.get_active_tools() or chat_allowed_tools()
-            else:
-                # Regular chat mode
-                active_tools = chat_allowed_tools()
+            if active_tools is None:
+                if is_project_mode:
+                    active_tools = orchestrator.get_active_tools() or chat_allowed_tools()
+                else:
+                    # Regular chat mode
+                    active_tools = chat_allowed_tools()
 
             # Sync the approval policy with the current mode: in autonomous and
             # vibe modes safe actions are auto-approved, destructive ones still prompt.
@@ -1546,9 +1585,15 @@ def main():
                                 else "CHAT")
 
             response_chunks = agent.process_user_input(user_input, allowed_tools=active_tools)
-            streamed_text, is_auto_mode, auto_sleep_time, auto_wake_context = render_response_stream(
+            stream_res = render_response_stream(
                 agent, response_chunks, is_auto_mode=is_auto_mode
             )
+            if isinstance(stream_res, tuple) and len(stream_res) >= 4:
+                streamed_text, is_auto_mode, auto_sleep_time, auto_wake_context = stream_res[:4]
+            else:
+                streamed_text = str(stream_res)
+                auto_sleep_time = 0
+                auto_wake_context = ""
             
             # Show context usage after response
             usage = agent.get_context_usage()
@@ -1560,29 +1605,34 @@ def main():
             turn_counter += 1
             if turn_counter % 5 == 0:
                 try:
-                    agent.session_id = save_session(agent.messages, {
-                        "model": agent.model_name,
+                    saved_id = save_session(getattr(agent, "messages", []), {
+                        "model": getattr(agent, "model_name", "unknown"),
                         "provider": get_provider(),
-                    }, session_id=agent.session_id) or agent.session_id
+                    }, session_id=getattr(agent, "session_id", None))
+                    if saved_id:
+                        agent.session_id = saved_id
                 except Exception as e:
                     from logger import get_logger
                     get_logger("session").warning("auto-save failed: %s", e)
             
             # Trigger Post Response Hook
-            if agent.messages and agent.messages[-1].get("role") in ("assistant", "model"):
+            if getattr(agent, "messages", None) and agent.messages[-1].get("role") in ("assistant", "model"):
                 hook_manager.call_hook("post_response", agent.messages[-1].get("content", ""))
                     
             # === Project Brain: State Machine ===
             if is_project_mode:
-                is_project_mode, auto_continue_input = orchestrator.step()
+                step_res = orchestrator.step()
+                if isinstance(step_res, tuple) and len(step_res) == 2:
+                    is_project_mode, auto_continue_input = step_res
             
         except KeyboardInterrupt:
             # Heal the history: an interrupted turn may have left tool_calls
             # without matching tool results, which would poison the next request.
             try:
-                agent.repair_history()
-            except Exception:
-                pass
+                if hasattr(agent, "repair_history"):
+                    agent.repair_history()
+            except Exception as e:
+                print_error(f"Не удалось восстановить историю: {e}")
             if is_auto_mode:
                 is_auto_mode = False
                 print_system("\n[bold yellow]Выполнение прервано пользователем (Ctrl+C). Выход из автоматического режима.[/bold yellow]")

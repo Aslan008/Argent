@@ -5,14 +5,18 @@ Small models get shorter prompts to stay within context limits.
 """
 
 import re
+import threading
 
 from config import get_model_size_category
+from logger import get_logger
+
+log = get_logger("agent")
 
 # A line that names a tool but is not an instruction to call one. Headings and
 # blank lines carry no tool dependency, so they must never be dropped on their
 # own account — only when the whole section around them empties out.
 _HEADING = re.compile(r"^\s*#{1,6}\s")
-_WORD = re.compile(r"[a-z_]{4,}")
+_WORD = re.compile(r"[a-z0-9_-]{2,}")
 
 
 def drop_unavailable_tool_lines(prompt: str, available: set) -> str:
@@ -30,7 +34,9 @@ def drop_unavailable_tool_lines(prompt: str, available: set) -> str:
     with them.
     """
     if not available:
-        return prompt
+        # If no tools are available, we must process the prompt to strip ALL tool lines,
+        # not just short-circuit and return the whole prompt!
+        pass
 
     kept, section, section_has_content = [], None, False
 
@@ -59,6 +65,7 @@ def drop_unavailable_tool_lines(prompt: str, available: set) -> str:
 
 
 _TOOL_NAME_CACHE = None
+_CACHE_LOCK = threading.Lock()
 
 
 def _ALL_TOOL_NAMES() -> set:
@@ -67,11 +74,20 @@ def _ALL_TOOL_NAMES() -> set:
     must not depend on this module at import time."""
     global _TOOL_NAME_CACHE
     if _TOOL_NAME_CACHE is None:
-        try:
-            from tools.schemas import TOOL_SCHEMAS
-            _TOOL_NAME_CACHE = {t["function"]["name"] for t in TOOL_SCHEMAS} | {"semantic_search"}
-        except Exception:
-            _TOOL_NAME_CACHE = set()
+        with _CACHE_LOCK:
+            if _TOOL_NAME_CACHE is None:
+                try:
+                    from tools.schemas import TOOL_SCHEMAS
+                    _TOOL_NAME_CACHE = {t["function"]["name"] for t in TOOL_SCHEMAS} | {"semantic_search"}
+                except ImportError as e:
+                    log.error(f"Failed to load tools schemas due to import error: {e}")
+                    raise
+                except (KeyError, TypeError) as e:
+                    log.error(f"Malformed TOOL_SCHEMAS: {e}")
+                    raise
+                except Exception as e:
+                    log.error(f"Unexpected error loading tools schemas: {e}")
+                    raise
     return _TOOL_NAME_CACHE
 
 _MINI_SYSTEM_SUFFIX = """
@@ -96,11 +112,21 @@ _TINY_SECTIONS_TO_STRIP = [
 
 
 def _strip_section(prompt: str, heading: str) -> str:
-    idx = prompt.find(heading)
-    if idx == -1:
-        return prompt
-    nxt = prompt.find("\n## ", idx + len(heading))
-    return prompt[:idx] + (prompt[nxt + 1:] if nxt != -1 else "")
+    # Find the heading case-insensitively, and ensure we only drop that section
+    pattern = re.compile(r"^" + re.escape(heading) + r"\b.*$", re.IGNORECASE | re.MULTILINE)
+    while True:
+        match = pattern.search(prompt)
+        if not match:
+            break
+        idx = match.start()
+        # Find the next section (any heading level)
+        next_match = re.search(r"^#+\s", prompt[match.end():], re.MULTILINE)
+        if next_match:
+            nxt = match.end() + next_match.start()
+        else:
+            nxt = -1
+        prompt = prompt[:idx] + (prompt[nxt:] if nxt != -1 else "")
+    return prompt
 
 
 def compress_system_prompt(full_prompt: str, model_name: str, category: str = None) -> str:
@@ -115,6 +141,10 @@ def compress_system_prompt(full_prompt: str, model_name: str, category: str = No
     when a caller's tier was stubbed but this module's was not.
     """
     category = category or get_model_size_category(model_name)
+
+    if category not in ("tiny", "small", "medium", "large", "cloud"):
+        log.warning(f"Unknown model category '{category}', falling back to full prompt")
+        return full_prompt
 
     if category in ("medium", "large", "cloud"):
         return full_prompt
@@ -134,19 +164,15 @@ def compress_system_prompt(full_prompt: str, model_name: str, category: str = No
 
 def compress_tool_result(result: str, model_name: str,
                          max_lines: int = None, max_chars: int = None) -> str:
-    """Compress tool output to prevent context window explosion.
-
-    Two independent budgets, because a line count alone is blind to line width:
-      * a **line budget** catches the many-normal-lines case (head/tail by line);
-      * a **character budget** catches the few-but-enormous-lines case — minified
-        bundles, single-line JSON, base64 blobs, no-newline command output —
-        which slip past the line count entirely (1 line ≤ 40) yet can be
-        hundreds of KB and blow the whole window on their own.
-    Both keep the beginning and the end. Applies to all models; thresholds
-    scale with model size.
-    """
+    """Compress tool output to prevent context window explosion."""
     if not isinstance(result, str):
-        result = str(result)
+        try:
+            result = str(result)
+        except Exception:
+            try:
+                result = repr(result)
+            except Exception:
+                result = f"<Unrepresentable object: {type(result).__name__}>"
 
     category = get_model_size_category(model_name)
 
@@ -161,28 +187,42 @@ def compress_tool_result(result: str, model_name: str,
         # net for pathologically wide lines, not a second, tighter limit.
         max_chars = max_lines * 120
 
+    max_lines = max(1, int(max_lines))
+    max_chars = max(1, int(max_chars))
+
     lines = result.splitlines()
     if len(lines) > max_lines:
-        half = max_lines // 2
-        head = lines[:half]
-        tail = lines[-half:]
-        separator = f"\n... [{len(lines) - max_lines} lines truncated to protect context window] ...\n"
+        if max_lines == 1:
+            head = [lines[0]] if lines else []
+            tail = []
+        else:
+            half = max_lines // 2
+            head = lines[:half]
+            tail = lines[-half:] if half > 0 else []
+        separator = f"\n... [{len(lines) - len(head) - len(tail)} lines truncated to protect context window] ...\n"
         result = "\n".join(head) + separator + "\n".join(tail)
 
     # Second pass: even within the line budget, a handful of huge lines (or the
     # wide head/tail we just kept) can still overflow. Trim by characters.
     # str slicing is per code point, so this never splits a multi-byte char.
     if len(result) > max_chars:
-        half = max_chars // 2
         removed = len(result) - max_chars
         separator = f"\n... [{removed} characters truncated to protect context window] ...\n"
-        result = result[:half] + separator + result[-half:]
+        if len(separator) >= max_chars:
+            result = result[:max_chars]
+        else:
+            half = (max_chars - len(separator)) // 2
+            tail_len = max_chars - len(separator) - half
+            result = result[:half] + separator + (result[-tail_len:] if tail_len > 0 else "")
 
     return result
 
 
 def get_adaptive_context_window(model_name: str, base_window: int) -> int:
     """Suggest optimal context window based on model size."""
+    if base_window <= 0:
+        base_window = 4096
+        
     category = get_model_size_category(model_name)
     
     recommendations = {

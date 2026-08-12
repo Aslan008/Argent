@@ -39,9 +39,12 @@ class OllamaEmbeddingFunction:
             return []
 
         from config import get_embedding_batch_size
-        embeddings: list[list[float]] = [[0.0] * 768] * len(input)
+        embeddings: list[list[float]] = [[0.0] * 768 for _ in range(len(input))]
         ollama_host = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
-        batch_size = max(1, get_embedding_batch_size())
+        try:
+            batch_size = max(1, int(get_embedding_batch_size()))
+        except (ValueError, TypeError):
+            batch_size = 50
 
         for start in range(0, len(input), batch_size):
             chunk = input[start:start + batch_size]
@@ -87,12 +90,17 @@ class OllamaEmbeddingFunction:
                 return [0.0] * 768
 
         from config import get_embedding_concurrency
-        workers = max(1, min(get_embedding_concurrency(), len(texts)))
+        try:
+            workers = max(1, min(int(get_embedding_concurrency()), len(texts)))
+        except (ValueError, TypeError):
+            workers = 1
+            
         with ThreadPoolExecutor(max_workers=workers) as executor:
             return list(executor.map(fetch_embedding, texts))
 
     def embed_query(self, query: str) -> list[float]:
-        return self.__call__([query])[0]
+        res = self.__call__([query])
+        return res[0] if res else []
 
     def embed_documents(self, documents: list[str]) -> list[list[float]]:
         return self.__call__(documents)
@@ -645,6 +653,7 @@ def update_file_index(file_path: str):
         if not path.exists() or not path.is_file():
             _COLLECTION.delete(where={"file": rel_path})
             _clear_keyword_cache()
+            _SEARCH_CACHE.clear()
             log.info("RAG: dropped chunks for missing file %s", rel_path)
             return
 
@@ -659,7 +668,7 @@ def update_file_index(file_path: str):
         if docs:
             # Generate new IDs based on timestamp/filename to avoid collisions
             import time
-            ts = int(time.time())
+            ts = time.time_ns()
             ids = [f"upd_{ts}_{i}" for i in range(len(docs))]
             _COLLECTION.upsert(
                 documents=docs,
@@ -667,12 +676,15 @@ def update_file_index(file_path: str):
                 ids=ids
             )
             _clear_keyword_cache()
+            _SEARCH_CACHE.clear()
     except Exception as e:
         print(f"[WARN] Failed to update RAG for {file_path}: {e}")
 
 def semantic_search(query: str, n_results: int = 5, target_kb: str = "all") -> str:
     """Tool for the LLM to search the vector database for code snippets using Hybrid Search + RRF."""
-    global _RAG_ENABLED, _COLLECTION, _ACTIVE_KB_COLLECTIONS
+    global _RAG_ENABLED, _COLLECTION, _ACTIVE_KB_COLLECTIONS, _SEARCH_CACHE
+    
+    n_results = max(1, n_results)
     
     if not _RAG_ENABLED and len(_ACTIVE_KB_COLLECTIONS) == 0:
         return "Error: RAG and Knowledge Bases are disabled. Cannot perform semantic search."
@@ -712,7 +724,7 @@ def semantic_search(query: str, n_results: int = 5, target_kb: str = "all") -> s
             try:
                 # 1. Semantic (Vector) search
                 v_res = col.query(query_texts=[query], n_results=n_results * 2)
-                if v_res.get('documents') and v_res['documents'][0]:
+                if v_res.get('documents') and len(v_res['documents']) > 0 and v_res['documents'][0]:
                     for rank, i in enumerate(range(len(v_res['documents'][0]))):
                         doc = v_res['documents'][0][i]
                         meta = v_res['metadatas'][0][i]
@@ -753,8 +765,11 @@ def semantic_search(query: str, n_results: int = 5, target_kb: str = "all") -> s
         _SEARCH_CACHE[cache_key] = (now, result)
         
         if len(_SEARCH_CACHE) > 100:
-            oldest_key = min(_SEARCH_CACHE, key=lambda k: _SEARCH_CACHE[k][0])
-            del _SEARCH_CACHE[oldest_key]
+            try:
+                oldest_key = min(_SEARCH_CACHE, key=lambda k: _SEARCH_CACHE[k][0])
+                del _SEARCH_CACHE[oldest_key]
+            except Exception:
+                pass
         
         return result
     except Exception as e:
