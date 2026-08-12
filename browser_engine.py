@@ -62,10 +62,11 @@ def _blocked_url_reason(url: str) -> str | None:
 def _html_to_markdown(html: str) -> str:
     """Convert HTML to readable Markdown using BeautifulSoup.
     Strips scripts/styles and converts common tags to Markdown equivalents."""
+    import re  # needed for whitespace cleanup at the end regardless of bs4 availability
+
     try:
         from bs4 import BeautifulSoup
     except ImportError:
-        import re
         html = re.sub(r'<script[^>]*>.*?</script>', '', html, flags=re.IGNORECASE | re.DOTALL)
         html = re.sub(r'<style[^>]*>.*?</style>', '', html, flags=re.IGNORECASE | re.DOTALL)
         return html
@@ -1771,11 +1772,18 @@ new Promise(resolve => {
             except Exception as e:
                 return f"Error getting page text: {e}"
 
-    async def get_markdown(self, session: str = "default") -> str:
-        """Get page content converted to Markdown."""
+    async def get_markdown(self, selector: str = None, session: str = "default") -> str:
+        """Get page content (or a specific element) converted to Markdown."""
         sc = await self._get_session(session)
         try:
-            html = await sc.page.content()
+            if selector is not None:
+                el = sc.page.locator(selector)
+                count = await el.count()
+                if count == 0:
+                    return f"Error: No elements found for selector '{selector}'."
+                html = await el.first.inner_html()
+            else:
+                html = await sc.page.content()
             # BeautifulSoup parsing of a large DOM is CPU-bound and synchronous;
             # run it off the event loop so it can't stall the browser loop.
             import asyncio
@@ -1786,11 +1794,18 @@ new Promise(resolve => {
         except Exception as e:
             return f"Error converting page to markdown: {e}"
 
-    async def get_html(self, session: str = "default") -> str:
-        """Get raw HTML of the page."""
+    async def get_html(self, selector: str = None, session: str = "default") -> str:
+        """Get raw HTML of the page or a specific element matched by CSS selector."""
         sc = await self._get_session(session)
         try:
-            html = await sc.page.content()
+            if selector is not None:
+                el = sc.page.locator(selector)
+                count = await el.count()
+                if count == 0:
+                    return f"Error: No elements found for selector '{selector}'."
+                html = await el.first.inner_html()
+            else:
+                html = await sc.page.content()
             if len(html) > 20000:
                 html = html[:20000] + "\n... [Content Truncated]"
             return html

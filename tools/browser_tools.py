@@ -95,9 +95,9 @@ def browser_get_content(content_type: str = "text", index: int = None, selector:
     """Extract content from the page. content_type: 'text', 'markdown', or 'html'. Use selector for CSS targeting."""
     try:
         if content_type == "markdown":
-            return browser_engine.run(browser_engine.get_markdown(session))
+            return browser_engine.run(browser_engine.get_markdown(selector, session))
         elif content_type == "html":
-            return browser_engine.run(browser_engine.get_html(session))
+            return browser_engine.run(browser_engine.get_html(selector, session))
         else:
             return browser_engine.run(browser_engine.get_text(index, selector, session))
     except KeyError as e:
