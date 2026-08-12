@@ -273,7 +273,7 @@ def handle_slash_command(command: str, agent: ArgentAgent) -> bool:
             "- `/hooks [путь]` — Каталог плагинов\n"
             "- `/plugin [auto on|off]` — Плагины: список и авто-создание их самим ИИ\n"
             "- `/mcp` — MCP-серверы (add/remove/start/stop/test)\n"
-            "- `/browser [режим|браузер]` — Автоматизация браузера\n"
+            "- `/browser [режим|браузер|a11y|dom]` — Автоматизация браузера (a11y/dom — режим state extraction)\n"
             "\n**Фон и диагностика**\n"
             "- `/jobs` · `/stop <pid>` — Фоновые процессы\n"
             "- `/doctor` — Самодиагностика окружения\n"

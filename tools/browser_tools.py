@@ -36,10 +36,15 @@ def browser_open(url: str, session: str = "default", headed: bool = False) -> st
         log.error("browser_open error: %s", e)
         return f"Error opening browser: {e}"
 
-def browser_state(session: str = "default", query: str = None, scroll_depth: int = 0) -> str:
-    """Get the current page state: numbered list of interactive elements, optionally filtered by query."""
+def browser_state(session: str = "default", query: str = None, scroll_depth: int = 0, mode: str = None) -> str:
+    """Get the current page state: numbered list of interactive elements, optionally filtered by query.
+
+    By default uses the accessibility tree (semantic roles, hierarchy, structural
+    context) for richer page understanding. Set mode='dom' for a compact flat
+    list of interactive elements only — useful for quick checks after an action.
+    """
     try:
-        return browser_engine.run(browser_engine.get_state(session, query, scroll_depth))
+        return browser_engine.run(browser_engine.get_state(session, query, scroll_depth, mode))
     except KeyError as e:
         return str(e)
     except Exception as e:
@@ -100,22 +105,6 @@ def browser_get_content(content_type: str = "text", index: int = None, selector:
     except Exception as e:
         log.error("browser_get_content error: %s", e)
         return f"Error getting content: {e}"
-
-def browser_accessibility_tree(session: str = "default", query: str = None, scroll_depth: int = 0) -> str:
-    """Get the browser's accessibility tree as structured text with numbered indices.
-
-    Returns the semantic tree (roles, names, states, hierarchy) that the browser
-    builds for screen readers. Interactive elements get [idx] prefixes compatible
-    with browser_click(index) and browser_input(index). Structural nodes
-    (headings, landmarks) appear without an index if they couldn't be tagged.
-    """
-    try:
-        return browser_engine.run(browser_engine.get_accessibility_tree(session, query, scroll_depth))
-    except KeyError as e:
-        return str(e)
-    except Exception as e:
-        log.error("browser_accessibility_tree error: %s", e)
-        return f"Error getting accessibility tree: {e}"
 
 def browser_close(session: str = "default") -> str:
     """Close a browser session."""

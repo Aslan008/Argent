@@ -1,10 +1,10 @@
 """
-Test: Accessibility Tree (browser_accessibility_tree)
+Test: Accessibility Tree (browser_state with mode='a11y')
 
 Tests the CDP-based accessibility tree extraction:
 1. Unit test: node filtering logic with mock AX data
-2. Integration test: open a page, get a11y tree, verify structure
-3. Fallback test: CDP failure delegates to get_state
+2. Integration test: open a page, get a11y tree via get_state(mode='a11y'), verify structure
+3. Fallback test: CDP failure delegates to _get_dom_state (not get_state — no recursion)
 """
 
 import asyncio
@@ -164,8 +164,8 @@ class TestA11yTreeIntegration:
             if "Error" in result:
                 pytest.skip("Browser not available or page didn't load")
 
-            # Get accessibility tree
-            tree = engine.run(engine.get_accessibility_tree("test_a11y"))
+            # Get accessibility tree via get_state dispatcher with mode='a11y'
+            tree = engine.run(engine.get_state("test_a11y", mode="a11y"))
 
             # Verify basic structure
             assert "Page:" in tree
@@ -179,7 +179,7 @@ class TestA11yTreeIntegration:
             pytest.skip(f"Browser test skipped: {e}")
 
     def test_a11y_tree_fallback_on_cdp_error(self, engine):
-        """If CDP fails, get_accessibility_tree should fall back to get_state."""
+        """If CDP fails, get_accessibility_tree should fall back to _get_dom_state."""
         try:
             engine.run(engine.open_page("https://example.com", "test_fallback"))
         except Exception as e:
@@ -202,9 +202,10 @@ class TestA11yTreeIntegration:
 
         try:
             engine._get_session = mock_get_session_with_bad_cdp
-            result = engine.run(engine.get_accessibility_tree("test_fallback"))
+            # Use get_state with mode='a11y' — should fall back to _get_dom_state
+            result = engine.run(engine.get_state("test_fallback", mode="a11y"))
 
-            # Should fall back to get_state output format
+            # Should fall back to DOM extraction output format
             assert "Page:" in result or "Error" in result
         finally:
             engine._get_session = original_get_session

@@ -485,7 +485,7 @@ def main():
         # Subcommands and parameter variations
         '/mcp list', '/mcp add', '/mcp remove', '/mcp test', '/mcp start', '/mcp stop',
         '/kb list', '/kb add', '/kb remove', '/kb toggle', '/kb index',
-        '/browser user', '/browser isolated', '/browser chrome', '/browser yandex', '/browser edge', '/browser brave', '/browser auto',
+        '/browser user', '/browser isolated', '/browser chrome', '/browser yandex', '/browser edge', '/browser brave', '/browser auto', '/browser a11y', '/browser dom',
         '/hooks auto', '/plugin auto',
         '/temp 0.2', '/temp 0.7', '/temp 1.0',
         '/temperature 0.2', '/temperature 0.7', '/temperature 1.0',
@@ -785,20 +785,24 @@ def main():
                 parts = user_input.strip().split()
                 if len(parts) == 1:
                     # Show current status and detected browsers
-                    from config import get_browser_mode, get_browser_name
+                    from config import get_browser_mode, get_browser_name, get_browser_state_mode, get_effective_browser_state_mode
                     from browser_detect import detect_browsers
                     mode = get_browser_mode()
                     name = get_browser_name()
+                    state_mode = get_browser_state_mode()
+                    effective = get_effective_browser_state_mode()
                     browsers = detect_browsers()
                     print_system(f"Режим браузера: [bold cyan]{mode}[/bold cyan]")
                     print_system(f"Selected Browser: [bold cyan]{name}[/bold cyan]")
+                    state_label = state_mode if state_mode != "auto" else f"auto → {effective}"
+                    print_system(f"State extraction: [bold cyan]{state_label}[/bold cyan]")
                     if browsers:
                         print_system("Detected browsers:")
                         for b in browsers:
                             print_system(f"  - [bold yellow]{b.key}[/bold yellow]: {b.exe_path}")
                     else:
                         print_system("[dim]Браузеров на основе Chromium не найдено.[/dim]")
-                    print_system("\nUsage: /browser user | isolated | chrome | yandex | edge | brave | auto")
+                    print_system("\nUsage: /browser user | isolated | chrome | yandex | edge | brave | auto | a11y | dom")
                 elif parts[1] in ("user", "isolated"):
                     from config import set_browser_mode
                     set_browser_mode(parts[1])
@@ -806,13 +810,22 @@ def main():
                         print_system("Режим браузера: [bold green]ВАШ[/bold green] — модель работает в вашем браузере через CDP.")
                     else:
                         print_system("Режим браузера: [bold yellow]ИЗОЛИРОВАННЫЙ[/bold yellow] — модель работает в Playwright Chromium.")
-                elif parts[1] in ("chrome", "yandex", "edge", "brave", "auto"):
+                elif parts[1] in ("chrome", "yandex", "edge", "brave"):
                     from config import set_browser_name, set_browser_mode
                     set_browser_name(parts[1])
                     set_browser_mode("user")
                     print_system(f"Браузер: [bold green]{parts[1]}[/bold green] (режим «ваш браузер» включён).")
+                elif parts[1] in ("a11y", "dom"):
+                    from config import set_browser_state_mode
+                    set_browser_state_mode(parts[1])
+                    label = "Accessibility Tree (семантическое дерево)" if parts[1] == "a11y" else "DOM (плоский список элементов)"
+                    print_system(f"State extraction: [bold green]{parts[1]}[/bold green] — {label}")
+                elif parts[1] == "auto":
+                    from config import set_browser_state_mode
+                    set_browser_state_mode("auto")
+                    print_system("State extraction: [bold green]auto[/bold green] — выбирается по tier модели (a11y для крупных, dom для мелких).")
                 else:
-                    print_error(f"Неизвестный вариант: {parts[1]}. Допустимые: user, isolated, chrome, yandex, edge, brave, auto")
+                    print_error(f"Неизвестный вариант: {parts[1]}. Допустимые: user, isolated, chrome, yandex, edge, brave, auto, a11y, dom")
                 continue
 
             elif user_input.strip() == "/rag_toggle":

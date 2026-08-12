@@ -61,7 +61,7 @@ class TestBrowserEnhancements(unittest.TestCase):
         browser_engine.run(sc.page.wait_for_timeout(2000))
 
         # 2. Get state and verify iframe button is indexed
-        state = browser_engine.run(browser_engine.get_state(session="test_iframe"))
+        state = browser_engine.run(browser_engine.get_state(session="test_iframe", mode="dom"))
         self.assertIn("button \"Inside Frame\"", state)
 
         # 3. Verify we mapped the element to the iframe
@@ -90,7 +90,7 @@ class TestBrowserEnhancements(unittest.TestCase):
         browser_engine.run(sc.page.wait_for_timeout(1000))
 
         # 2. Extract state to map the element
-        state = browser_engine.run(browser_engine.get_state(session="test_scroll"))
+        state = browser_engine.run(browser_engine.get_state(session="test_scroll", mode="dom"))
         self.assertIn("bot-btn", state)
 
         # Get its index
@@ -145,28 +145,28 @@ class TestBrowserEnhancements(unittest.TestCase):
         browser_engine.run(browser_engine.open_page(html, session="test_filter"))
 
         # 2. Get state without filter (verify all elements are shown)
-        state_all = browser_engine.run(browser_engine.get_state(session="test_filter"))
+        state_all = browser_engine.run(browser_engine.get_state(session="test_filter", mode="dom"))
         elements_all = state_all.split("---")[1]
         self.assertIn("button \"Submit Form\"", elements_all)
         self.assertIn("a \"Cancel Link\"", elements_all)
         self.assertIn('input[type=text] "Email Address"', elements_all)
 
         # 3. Get state with filter 'Submit'
-        state_submit = browser_engine.run(browser_engine.get_state(session="test_filter", query="Submit"))
+        state_submit = browser_engine.run(browser_engine.get_state(session="test_filter", query="Submit", mode="dom"))
         elements_submit = state_submit.split("---")[1]
         self.assertIn("button \"Submit Form\"", elements_submit)
         self.assertNotIn("Cancel Link", elements_submit)
         self.assertNotIn("Email Address", elements_submit)
 
         # 4. Get state with filter 'Email'
-        state_email = browser_engine.run(browser_engine.get_state(session="test_filter", query="Email"))
+        state_email = browser_engine.run(browser_engine.get_state(session="test_filter", query="Email", mode="dom"))
         elements_email = state_email.split("---")[1]
         self.assertNotIn("Submit Form", elements_email)
         self.assertNotIn("Cancel Link", elements_email)
         self.assertIn('input[type=text] "Email Address"', elements_email)
 
         # 5. Get state with multi-word filter 'Submit, Email' (should match both)
-        state_multi = browser_engine.run(browser_engine.get_state(session="test_filter", query="Submit, Email"))
+        state_multi = browser_engine.run(browser_engine.get_state(session="test_filter", query="Submit, Email", mode="dom"))
         elements_multi = state_multi.split("---")[1]
         self.assertIn("button \"Submit Form\"", elements_multi)
         self.assertNotIn("Cancel Link", elements_multi)
@@ -178,7 +178,7 @@ class TestBrowserEnhancements(unittest.TestCase):
         browser_engine.run(browser_engine.open_page(html, session="test_pointer"))
         
         # 2. Get state and verify the custom div is indexed
-        state = browser_engine.run(browser_engine.get_state(session="test_pointer"))
+        state = browser_engine.run(browser_engine.get_state(session="test_pointer", mode="dom"))
         self.assertIn("div \"Custom Clickable Div\"", state)
 
     def test_deduplication(self):
@@ -187,7 +187,7 @@ class TestBrowserEnhancements(unittest.TestCase):
         browser_engine.run(browser_engine.open_page(html, session="test_dedup"))
         
         # 2. Get state and verify only the button is indexed, not the span
-        state = browser_engine.run(browser_engine.get_state(session="test_dedup"))
+        state = browser_engine.run(browser_engine.get_state(session="test_dedup", mode="dom"))
         elements_part = state.split("---")[1]
         self.assertIn("button \"Nested Text\"", elements_part)
         self.assertNotIn("span", elements_part)
@@ -202,7 +202,7 @@ class TestBrowserEnhancements(unittest.TestCase):
         browser_engine.run(browser_engine.open_page(html, session="test_labels"))
         
         # 2. Get state and verify label extraction
-        state = browser_engine.run(browser_engine.get_state(session="test_labels"))
+        state = browser_engine.run(browser_engine.get_state(session="test_labels", mode="dom"))
         elements_part = state.split("---")[1]
         self.assertIn("Close Modal", elements_part)
         self.assertIn("Parent Container Label (parent)", elements_part)
@@ -221,7 +221,7 @@ class TestBrowserEnhancements(unittest.TestCase):
         browser_engine.run(sc.page.wait_for_timeout(1000))
         
         # 2. Extract state
-        state = browser_engine.run(browser_engine.get_state(session="test_viewport"))
+        state = browser_engine.run(browser_engine.get_state(session="test_viewport", mode="dom"))
         elements_part = state.split("---")[1]
         
         # Verify both are present

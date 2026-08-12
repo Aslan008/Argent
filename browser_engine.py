@@ -1020,10 +1020,31 @@ class BrowserEngine:
     # Public API: State Extraction (the key BrowserAct-like feature)
     # -----------------------------------------------------------------------
 
-    async def get_state(self, session: str = "default", query: str = None, scroll_depth: int = 0) -> str:
+    async def get_state(self, session: str = "default", query: str = None,
+                        scroll_depth: int = 0, mode: str = None) -> str:
         """
-        Extract interactive elements from the page with numbered indices.
-        
+        Dispatcher: extract page state as numbered interactive elements.
+
+        mode=None (default) resolves via get_effective_browser_state_mode():
+            'a11y' → accessibility tree (semantic roles, hierarchy, structural context)
+            'dom'  → flat JS-extraction of interactive elements only
+
+        Both modes produce [idx]-prefixed lines compatible with browser_click,
+        browser_input, and browser_scroll. Falls back to _get_dom_state() on
+        CDP failure (when mode='a11y').
+        """
+        if mode is None:
+            from config import get_effective_browser_state_mode
+            mode = get_effective_browser_state_mode()
+        if mode == "a11y":
+            return await self.get_accessibility_tree(session, query, scroll_depth)
+        return await self._get_dom_state(session, query, scroll_depth)
+
+    async def _get_dom_state(self, session: str = "default", query: str = None,
+                             scroll_depth: int = 0) -> str:
+        """
+        Extract interactive elements from the DOM via JS injection.
+
         Returns a text representation optimized for LLM consumption:
             Page: https://example.com | Title: Example
             ---
@@ -1285,13 +1306,13 @@ new Promise(resolve => {
             client = await sc.context.new_cdp_session(sc.page)
             ax_result = await client.send("Accessibility.getFullAXTree")
         except Exception as e:
-            log.warning("CDP Accessibility.getFullAXTree failed: %s — falling back to get_state", e)
+            log.warning("CDP Accessibility.getFullAXTree failed: %s — falling back to DOM extraction", e)
             if client:
                 try:
                     await client.detach()
                 except Exception:
                     pass
-            return await self.get_state(session, query, scroll_depth)
+            return await self._get_dom_state(session, query, scroll_depth)
 
         nodes = ax_result.get("nodes", [])
         if not nodes:
@@ -1300,7 +1321,7 @@ new Promise(resolve => {
                     await client.detach()
                 except Exception:
                     pass
-            return await self.get_state(session, query, scroll_depth)
+            return await self._get_dom_state(session, query, scroll_depth)
 
         # Build node-id → node map
         node_map = {}
@@ -1358,7 +1379,7 @@ new Promise(resolve => {
                     await client.detach()
                 except Exception:
                     pass
-            return await self.get_state(session, query, scroll_depth)
+            return await self._get_dom_state(session, query, scroll_depth)
 
         # --- Tag DOM elements with data-argent-idx via CDP ---
         # 1. Collect backendDOMNodeIds (only for nodes that have one)
