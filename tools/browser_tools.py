@@ -101,6 +101,22 @@ def browser_get_content(content_type: str = "text", index: int = None, selector:
         log.error("browser_get_content error: %s", e)
         return f"Error getting content: {e}"
 
+def browser_accessibility_tree(session: str = "default", query: str = None, scroll_depth: int = 0) -> str:
+    """Get the browser's accessibility tree as structured text with numbered indices.
+
+    Returns the semantic tree (roles, names, states, hierarchy) that the browser
+    builds for screen readers. Interactive elements get [idx] prefixes compatible
+    with browser_click(index) and browser_input(index). Structural nodes
+    (headings, landmarks) appear without an index if they couldn't be tagged.
+    """
+    try:
+        return browser_engine.run(browser_engine.get_accessibility_tree(session, query, scroll_depth))
+    except KeyError as e:
+        return str(e)
+    except Exception as e:
+        log.error("browser_accessibility_tree error: %s", e)
+        return f"Error getting accessibility tree: {e}"
+
 def browser_close(session: str = "default") -> str:
     """Close a browser session."""
     try:

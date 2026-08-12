@@ -91,6 +91,7 @@ from tools.browser_tools import (
     browser_scroll,
     browser_get_content,
     browser_close,
+    browser_accessibility_tree,
 )
 from tools.lsp_tools import (
     check_code, find_implementations,

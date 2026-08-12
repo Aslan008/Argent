@@ -647,6 +647,30 @@ def set_browser_mode(mode: str):
     _set("browser_mode", mode)
 
 
+def get_browser_state_mode() -> str:
+    """State extraction mode: 'auto' (tier-based), 'a11y', or 'dom'."""
+    return _get("browser_state_mode", "auto")
+
+
+def set_browser_state_mode(mode: str):
+    _set("browser_state_mode", mode)
+
+
+def get_effective_browser_state_mode() -> str:
+    """Resolve 'auto' to 'a11y' or 'dom' based on current model tier.
+
+    tiny/small models get 'dom' (compact, saves tokens);
+    medium/large/cloud get 'a11y' (richer semantics).
+    """
+    mode = get_browser_state_mode()
+    if mode == "auto":
+        category = get_model_size_category(get_current_model())
+        if category in ("tiny", "small"):
+            return "dom"
+        return "a11y"
+    return mode
+
+
 def get_browser_name() -> str:
     """Which browser to use in 'user' mode: 'auto', 'chrome', 'yandex', 'edge', 'brave'."""
     return _get("browser_name", "auto")

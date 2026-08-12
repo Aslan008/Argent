@@ -37,7 +37,7 @@ from tools.swarm_tools import run_swarm_workers
 from tools.browser_tools import (
     run_browser_task, browser_open, browser_state, browser_click, browser_input,
     browser_screenshot, browser_scroll, browser_get_content, browser_close,
-    browser_switch_tab,
+    browser_switch_tab, browser_accessibility_tree,
 )
 
 AVAILABLE_TOOLS = {
@@ -115,6 +115,7 @@ AVAILABLE_TOOLS = {
     "browser_get_content": browser_get_content,
     "browser_close": browser_close,
     "browser_switch_tab": browser_switch_tab,
+    "browser_accessibility_tree": browser_accessibility_tree,
     "check_code": check_code,
     "find_implementations": find_implementations,
     "search_workspace_symbols": search_workspace_symbols,
@@ -1700,6 +1701,30 @@ TOOL_SCHEMAS = [
     {
         "type": "function",
         "function": {
+            "name": "browser_accessibility_tree",
+            "description": "Get the browser's accessibility tree — the semantic tree the browser builds for screen readers. Returns roles, names, states, and hierarchy as indented text with numbered indices for interactive elements. Indices are compatible with browser_click(index) and browser_input(index). Structural nodes (headings, landmarks) appear for context even if not clickable. Use this when browser_state doesn't capture enough semantic detail or when you need to understand page structure.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "session": {
+                        "type": "string",
+                        "description": "Browser session name. Default: 'default'."
+                    },
+                    "query": {
+                        "type": "string",
+                        "description": "Optional. Keyword to filter nodes by (case-insensitive match against role, name, and value). Supports comma-separated list."
+                    },
+                    "scroll_depth": {
+                        "type": "integer",
+                        "description": "Optional. Number of viewport heights to pre-scroll down the page to trigger lazy-loaded / infinite scroll elements before extracting the tree. Default: 0."
+                    }
+                }
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "run_browser_task",
             "description": "Delegate a browser automation task (like searching the web, logging in, or scraping) to an autonomous headless sub-agent. The sub-agent will automatically navigate, click, type, and extract the final information for you.",
             "parameters": {
@@ -1830,7 +1855,7 @@ def get_tool_schemas(include_hidden: bool = False) -> list[dict]:
     hidden_tools = {
         "browser_open", "browser_state", "browser_click", "browser_input", 
         "browser_screenshot", "browser_scroll", "browser_get_content", 
-        "browser_close", "browser_switch_tab"
+        "browser_close", "browser_switch_tab", "browser_accessibility_tree"
     }
     
     schemas = []

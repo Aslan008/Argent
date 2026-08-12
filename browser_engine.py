@@ -1127,6 +1127,385 @@ class BrowserEngine:
         return "\n".join(lines)
 
     # -----------------------------------------------------------------------
+    # Public API: Accessibility Tree
+    # -----------------------------------------------------------------------
+
+    # Roles that are always excluded from the a11y tree output — they are
+    # DOM-internal noise (div wrappers, text leaf nodes, etc.).
+    _NOISE_A11Y_ROLES = frozenset({
+        "generic", "InlineTextBox", "line break", "none", "LineBreak",
+    })
+
+    # Roles that are excluded only when they have no accessible name and no
+    # interesting properties — they add visual noise without semantic value.
+    _NOISE_IF_UNNAMED_A11Y_ROLES = frozenset({
+        "list", "listitem", "paragraph", "strong", "LabelText", "Legend",
+        "div", "span", "group",
+    })
+
+    # Roles that are always included regardless of name/properties.
+    _INTERACTIVE_A11Y_ROLES = frozenset({
+        "link", "button", "textbox", "checkbox", "radio", "combobox",
+        "listbox", "menuitem", "menuitemcheckbox", "menuitemradio",
+        "option", "switch", "tab", "slider", "spinbutton", "searchbox",
+        "menu", "menubar", "treeitem", "tree", "treegrid",
+    })
+
+    # Properties worth showing in the text output.
+    _INTERESTING_A11Y_PROPS = frozenset({
+        "checked", "selected", "expanded", "level", "disabled", "pressed",
+        "readonly", "required", "invalid",
+    })
+
+    # JS: wait for two animation frames so the browser finishes layout/paint
+    # after a scroll before we snapshot the AX tree.
+    _WAIT_RAF_JS = """
+new Promise(resolve => {
+    requestAnimationFrame(() => requestAnimationFrame(resolve));
+})
+"""
+
+    # JS: clear all data-argent-idx markers in the document (and shadow roots).
+    _CLEAR_MARKERS_JS = """
+() => {
+    function clear(root) {
+        try {
+            root.querySelectorAll('[data-argent-idx]').forEach(el => {
+                el.removeAttribute('data-argent-idx');
+            });
+            root.querySelectorAll('*').forEach(el => {
+                if (el.shadowRoot) clear(el.shadowRoot);
+            });
+        } catch(e) {}
+    }
+    clear(document);
+}
+"""
+
+    # JS: collect all data-argent-idx values present in this frame's document.
+    _COLLECT_IDX_JS = """
+() => {
+    return Array.from(document.querySelectorAll('[data-argent-idx]'))
+        .map(el => parseInt(el.getAttribute('data-argent-idx'), 10))
+        .filter(n => !isNaN(n));
+}
+"""
+
+    @staticmethod
+    def _a11y_node_name(node: dict) -> str:
+        """Extract the accessible name from an AX node."""
+        name = node.get("name")
+        if name and isinstance(name, dict):
+            return name.get("value", "")
+        return ""
+
+    @staticmethod
+    def _a11y_node_role(node: dict) -> str:
+        """Extract the role from an AX node."""
+        role = node.get("role")
+        if role and isinstance(role, dict):
+            return role.get("value", "")
+        return ""
+
+    @staticmethod
+    def _a11y_node_value(node: dict) -> str:
+        """Extract the value from an AX node."""
+        val = node.get("value")
+        if val and isinstance(val, dict):
+            v = val.get("value")
+            return "" if v is None else str(v)
+        return ""
+
+    @staticmethod
+    def _a11y_interesting_props(node: dict) -> list:
+        """Extract interesting properties (checked, level, etc.) from an AX node."""
+        props = []
+        for prop in node.get("properties", []):
+            pname = prop.get("name", "")
+            if pname in BrowserEngine._INTERESTING_A11Y_PROPS:
+                pval = prop.get("value", {})
+                pval_v = pval.get("value", "") if isinstance(pval, dict) else ""
+                props.append((pname, pval_v))
+        return props
+
+    def _a11y_is_interesting(self, role: str, name: str, props: list) -> bool:
+        """Determine whether an AX node should appear in the output tree."""
+        if role in self._NOISE_A11Y_ROLES:
+            return False
+        if role in self._INTERACTIVE_A11Y_ROLES:
+            return True
+        if role in ("heading", "img", "image"):
+            return True
+        if role in self._NOISE_IF_UNNAMED_A11Y_ROLES:
+            return bool(name) or bool(props)
+        # Everything else: include if it has a name or interesting properties
+        return bool(name) or bool(props)
+
+    async def get_accessibility_tree(self, session: str = "default",
+                                     query: str = None,
+                                     scroll_depth: int = 0) -> str:
+        """
+        Extract the browser's accessibility tree and return it as indented text
+        with numbered indices for interactive elements.
+
+        Indices are compatible with browser_click(index), browser_input(index),
+        and browser_scroll(index) — DOM elements are tagged with data-argent-idx
+        via CDP, and the existing click mechanism works unchanged.
+
+        Falls back to get_state() if CDP or the Accessibility domain is
+        unavailable.
+        """
+        sc = await self._get_session(session)
+
+        # --- Pre-scroll with RAF-based stability wait ---
+        if scroll_depth > 0:
+            log.info("Pre-scrolling page for a11y tree, depth %d", scroll_depth)
+            for _ in range(scroll_depth):
+                try:
+                    await sc.page.evaluate("window.scrollBy(0, window.innerHeight);")
+                    await sc.page.wait_for_timeout(400)
+                except Exception:
+                    break
+            # Wait for two animation frames so layout/paint settles
+            try:
+                await sc.page.evaluate(self._WAIT_RAF_JS)
+            except Exception:
+                pass
+
+        # --- Clear previous data-argent-idx markers ---
+        try:
+            await sc.page.evaluate(self._CLEAR_MARKERS_JS)
+        except Exception:
+            pass
+        self._element_frames.clear()
+
+        # --- Get the AX tree via CDP ---
+        client = None
+        try:
+            client = await sc.context.new_cdp_session(sc.page)
+            ax_result = await client.send("Accessibility.getFullAXTree")
+        except Exception as e:
+            log.warning("CDP Accessibility.getFullAXTree failed: %s — falling back to get_state", e)
+            if client:
+                try:
+                    await client.detach()
+                except Exception:
+                    pass
+            return await self.get_state(session, query, scroll_depth)
+
+        nodes = ax_result.get("nodes", [])
+        if not nodes:
+            if client:
+                try:
+                    await client.detach()
+                except Exception:
+                    pass
+            return await self.get_state(session, query, scroll_depth)
+
+        # Build node-id → node map
+        node_map = {}
+        for n in nodes:
+            node_map[n["nodeId"]] = n
+
+        # Find root: the node whose parentId is not in the map (or first node)
+        root_id = nodes[0]["nodeId"]
+        for n in nodes:
+            pid = n.get("parentId")
+            if pid and pid not in node_map:
+                root_id = n["nodeId"]
+                break
+
+        # --- Recursive walk: filter + assign candidate indices ---
+        candidates = []  # list of dicts: {idx, role, name, value, props, depth, backend_dom_node_id}
+        idx_counter = [1]  # mutable counter for closure
+        MAX_NODES = 600
+
+        def walk(node_id: str, depth: int):
+            if len(candidates) >= MAX_NODES:
+                return
+            node = node_map.get(node_id)
+            if not node:
+                return
+
+            role = self._a11y_node_role(node)
+            name = self._a11y_node_name(node)
+            value = self._a11y_node_value(node)
+            props = self._a11y_interesting_props(node)
+            backend_id = node.get("backendDOMNodeId")
+
+            is_interesting = self._a11y_is_interesting(role, name, props)
+
+            if is_interesting:
+                candidates.append({
+                    "idx": idx_counter[0],
+                    "role": role,
+                    "name": name,
+                    "value": value,
+                    "props": props,
+                    "depth": depth,
+                    "backend_dom_node_id": backend_id,
+                })
+                idx_counter[0] += 1
+
+            for child_id in node.get("childIds", []):
+                walk(child_id, depth + 1 if is_interesting else depth)
+
+        walk(root_id, 0)
+
+        if not candidates:
+            if client:
+                try:
+                    await client.detach()
+                except Exception:
+                    pass
+            return await self.get_state(session, query, scroll_depth)
+
+        # --- Tag DOM elements with data-argent-idx via CDP ---
+        # 1. Collect backendDOMNodeIds (only for nodes that have one)
+        taggable = [c for c in candidates if c["backend_dom_node_id"]]
+        backend_ids = [c["backend_dom_node_id"] for c in taggable]
+
+        tagged_indices = set()  # indices that were successfully tagged
+
+        if backend_ids:
+            try:
+                # 2. Batch-resolve: backendDOMNodeIds → nodeIds (single CDP call)
+                push_result = await client.send(
+                    "DOM.pushNodesByBackendIdsToFrontend",
+                    {"backendNodeIds": backend_ids},
+                )
+                dom_nodes = push_result.get("nodes", [])
+
+                # 3. Map: backendNodeId → nodeId, filtering out dead nodes (nodeId == 0)
+                bid_to_nid = {}
+                for dn in dom_nodes:
+                    nid = dn.get("nodeId", 0)
+                    bid = dn.get("backendNodeId")
+                    if nid and nid != 0 and bid is not None:
+                        bid_to_nid[bid] = nid
+
+                # 4. setAttributeValue in batches of 50
+                tag_tasks = []
+                for c in taggable:
+                    nid = bid_to_nid.get(c["backend_dom_node_id"])
+                    if nid is None:
+                        continue
+                    tag_tasks.append((c["idx"], nid))
+
+                BATCH_SIZE = 50
+                for i in range(0, len(tag_tasks), BATCH_SIZE):
+                    batch = tag_tasks[i:i + BATCH_SIZE]
+
+                    async def tag_one(idx_val, node_id_val):
+                        try:
+                            await client.send("DOM.setAttributeValue", {
+                                "nodeId": node_id_val,
+                                "name": "data-argent-idx",
+                                "value": str(idx_val),
+                            })
+                            return idx_val
+                        except Exception:
+                            return None
+
+                    results = await asyncio.gather(
+                        *[tag_one(idx_val, nid_val) for idx_val, nid_val in batch]
+                    )
+                    for r in results:
+                        if r is not None:
+                            tagged_indices.add(r)
+
+            except Exception as e:
+                log.warning("CDP DOM tagging failed: %s — some elements may not be clickable", e)
+
+        # --- Map indices to frames ---
+        try:
+            for frame in sc.page.frames:
+                try:
+                    found_indices = await frame.evaluate(self._COLLECT_IDX_JS)
+                    for fi in found_indices:
+                        if fi not in self._element_frames:
+                            self._element_frames[fi] = frame
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+        # --- Build text output ---
+        # IMPORTANT: nodes stay in the tree for structural context even if they
+        # weren't tagged. Only the [idx] prefix is omitted for untagged nodes.
+        # Apply query filter on the text representation.
+        query_keywords = []
+        if query:
+            query_keywords = [q.strip().lower() for q in query.split(",") if q.strip()]
+
+        # Build open tabs list
+        tabs_list = []
+        try:
+            pages = sc.context.pages
+            for i, p in enumerate(pages):
+                active_mark = " (active)" if p == sc.page else ""
+                try:
+                    t_title = await p.title()
+                except Exception:
+                    t_title = "Untitled"
+                tabs_list.append(f"[{i+1}] {p.url} ({t_title}){active_mark}")
+        except Exception:
+            pass
+
+        lines = [f"Page: {sc.page.url} | Title: {await sc.page.title() if sc.page else '?'}"]
+        if tabs_list:
+            lines.append("Open Tabs: " + ", ".join(tabs_list))
+        lines.append("---")
+
+        total_filtered_by_query = 0
+
+        for c in candidates:
+            # Query filtering
+            if query_keywords:
+                haystack = " ".join([
+                    c["role"].lower(),
+                    c["name"].lower(),
+                    c["value"].lower(),
+                ])
+                if not any(kw in haystack for kw in query_keywords):
+                    total_filtered_by_query += 1
+                    continue
+
+            indent = "  " * c["depth"]
+            is_tagged = c["idx"] in tagged_indices or c["idx"] in self._element_frames
+
+            # Build the line: [idx] role "name" props...
+            # If the node wasn't tagged, omit the [idx] — it's not clickable
+            idx_prefix = f"[{c['idx']}]" if is_tagged else "   "
+            parts = [f"{indent}{idx_prefix}", c["role"]]
+
+            if c["name"]:
+                parts.append(f'"{c["name"][:60]}"')
+
+            if c["value"]:
+                parts.append(f'value="{c["value"][:50]}"')
+
+            for pname, pval in c["props"]:
+                parts.append(f"{pname}={pval}")
+
+            lines.append(" ".join(parts))
+
+        if query and total_filtered_by_query > 0:
+            lines.append(
+                f"\n(Note: {total_filtered_by_query} nodes were filtered out by query '{query}'. "
+                "Call without a query to see the full tree.)"
+            )
+
+        # Detach CDP session
+        if client:
+            try:
+                await client.detach()
+            except Exception:
+                pass
+
+        return "\n".join(lines)
+
+    # -----------------------------------------------------------------------
     # Public API: Interaction
     # -----------------------------------------------------------------------
 
