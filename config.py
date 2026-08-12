@@ -653,6 +653,8 @@ def get_browser_state_mode() -> str:
 
 
 def set_browser_state_mode(mode: str):
+    if mode not in ("auto", "a11y", "dom"):
+        raise ValueError(f"Invalid browser_state_mode: {mode!r}. Must be 'auto', 'a11y', or 'dom'.")
     _set("browser_state_mode", mode)
 
 
