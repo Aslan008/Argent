@@ -838,7 +838,23 @@ class BrowserEngine:
         raise KeyError(f"Session '{session}' does not exist. Use browser_open first.")
 
     async def _create_session(self, session: str, headed: bool = False) -> _SessionContext:
-        """Create a new named browser session."""
+        """Create a new named browser session.
+
+        If the Playwright driver has died (stale singleton), a connection error
+        will be raised on new_context(). We catch it, force a full shutdown, and
+        retry once with a fresh Playwright instance.
+        """
+        try:
+            return await self._create_session_inner(session, headed)
+        except Exception as e:
+            if "Connection closed" in str(e) or "Target closed" in str(e):
+                log.warning("Playwright driver appears dead (%s), restarting...", e)
+                await self.shutdown()
+                return await self._create_session_inner(session, headed)
+            raise
+
+    async def _create_session_inner(self, session: str, headed: bool = False) -> _SessionContext:
+        """Inner session creation logic (called by _create_session, may retry)."""
         await self._ensure_browser(headed)
 
         if self._cdp_mode:
@@ -1384,53 +1400,48 @@ new Promise(resolve => {
         # --- Tag DOM elements with data-argent-idx via CDP ---
         # 1. Collect backendDOMNodeIds (only for nodes that have one)
         taggable = [c for c in candidates if c["backend_dom_node_id"]]
-        backend_ids = [c["backend_dom_node_id"] for c in taggable]
 
         tagged_indices = set()  # indices that were successfully tagged
 
-        if backend_ids:
+        if taggable:
             try:
-                # 2. Batch-resolve: backendDOMNodeIds → nodeIds (single CDP call)
-                push_result = await client.send(
-                    "DOM.pushNodesByBackendIdsToFrontend",
-                    {"backendNodeIds": backend_ids},
-                )
-                dom_nodes = push_result.get("nodes", [])
+                # Enable DOM + Runtime domains — required for resolveNode + callFunctionOn
+                await client.send("DOM.enable")
+                await client.send("Runtime.enable")
 
-                # 3. Map: backendNodeId → nodeId, filtering out dead nodes (nodeId == 0)
-                bid_to_nid = {}
-                for dn in dom_nodes:
-                    nid = dn.get("nodeId", 0)
-                    bid = dn.get("backendNodeId")
-                    if nid and nid != 0 and bid is not None:
-                        bid_to_nid[bid] = nid
-
-                # 4. setAttributeValue in batches of 50
-                tag_tasks = []
-                for c in taggable:
-                    nid = bid_to_nid.get(c["backend_dom_node_id"])
-                    if nid is None:
-                        continue
-                    tag_tasks.append((c["idx"], nid))
-
+                # 2. For each candidate: resolveNode(backendNodeId) → objectId,
+                #    then callFunctionOn to set data-argent-idx attribute.
+                #    This is more reliable than pushNodesByBackendIdsToFrontend,
+                #    which can return 0 nodes in certain CDP session contexts.
                 BATCH_SIZE = 50
-                for i in range(0, len(tag_tasks), BATCH_SIZE):
-                    batch = tag_tasks[i:i + BATCH_SIZE]
 
-                    async def tag_one(idx_val, node_id_val):
-                        try:
-                            await client.send("DOM.setAttributeValue", {
-                                "nodeId": node_id_val,
-                                "name": "data-argent-idx",
-                                "value": str(idx_val),
-                            })
-                            return idx_val
-                        except Exception:
+                async def tag_one(cand):
+                    try:
+                        resolve_result = await client.send(
+                            "DOM.resolveNode",
+                            {"backendNodeId": cand["backend_dom_node_id"]},
+                        )
+                        object_id = resolve_result.get("object", {}).get("objectId")
+                        if not object_id:
                             return None
+                        await client.send("Runtime.callFunctionOn", {
+                            "objectId": object_id,
+                            "functionDeclaration": (
+                                "function(idx) { "
+                                "this.setAttribute('data-argent-idx', String(idx)); "
+                                "return this.getAttribute('data-argent-idx'); "
+                                "}"
+                            ),
+                            "arguments": [{"value": cand["idx"]}],
+                            "returnByValue": True,
+                        })
+                        return cand["idx"]
+                    except Exception:
+                        return None
 
-                    results = await asyncio.gather(
-                        *[tag_one(idx_val, nid_val) for idx_val, nid_val in batch]
-                    )
+                for i in range(0, len(taggable), BATCH_SIZE):
+                    batch = taggable[i:i + BATCH_SIZE]
+                    results = await asyncio.gather(*[tag_one(c) for c in batch])
                     for r in results:
                         if r is not None:
                             tagged_indices.add(r)
