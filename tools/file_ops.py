@@ -667,6 +667,23 @@ def get_file_outline(file_path: str) -> str:
                 return '    ' * (node.col_offset // 4)
             return ''
 
+        def _walk_body(body, indent_level=0):
+            """Recursively walk a class/function body, collecting defs and classes.
+
+            Nested classes (Outer.Inner) and their methods were silently skipped
+            by the old single-level loop — the model got an incomplete outline
+            and could not locate methods inside nested classes."""
+            prefix = '    ' * indent_level
+            for item in body:
+                if isinstance(item, ast.FunctionDef):
+                    outline.append(f"{prefix}    def {item.name}(...): (line {item.lineno})")
+                elif isinstance(item, ast.AsyncFunctionDef):
+                    outline.append(f"{prefix}    async def {item.name}(...): (line {item.lineno})")
+                elif isinstance(item, ast.ClassDef):
+                    bases = [b.id if isinstance(b, ast.Name) else '...' for b in item.bases]
+                    outline.append(f"{prefix}    class {item.name}({', '.join(bases)}): (line {item.lineno})")
+                    _walk_body(item.body, indent_level + 1)
+
         for node in ast.iter_child_nodes(tree):
             if isinstance(node, ast.FunctionDef):
                 outline.append(f"{_get_indent(node)}def {node.name}(...): (line {node.lineno})")
@@ -675,11 +692,7 @@ def get_file_outline(file_path: str) -> str:
             elif isinstance(node, ast.ClassDef):
                 bases = [b.id if isinstance(b, ast.Name) else '...' for b in node.bases]
                 outline.append(f"{_get_indent(node)}class {node.name}({', '.join(bases)}): (line {node.lineno})")
-                for item in ast.iter_child_nodes(node):
-                    if isinstance(item, ast.FunctionDef):
-                        outline.append(f"{_get_indent(item)}    def {item.name}(...): (line {item.lineno})")
-                    elif isinstance(item, ast.AsyncFunctionDef):
-                        outline.append(f"{_get_indent(item)}    async def {item.name}(...): (line {item.lineno})")
+                _walk_body(node.body, 1)
             elif isinstance(node, (ast.Import, ast.ImportFrom)):
                 module_name = node.module if isinstance(node, ast.ImportFrom) else ''
                 names = ', '.join([n.name for n in node.names])

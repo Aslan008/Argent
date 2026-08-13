@@ -258,9 +258,9 @@ class TestGetFileOutlineEdgeCases:
         result = get_file_outline(str(f))
         assert "No significant structures" in result
 
-    def test_nested_classes_not_shown(self, tmp_path):
-        """The outline only descends one level into a class; a nested class
-        and its methods must NOT appear (this is the blind spot)."""
+    def test_nested_classes_shown(self, tmp_path):
+        """The outline now descends recursively into nested classes.
+        Inner and its methods should appear (fix for the former blind spot)."""
         f = tmp_path / "nested.py"
         f.write_text(
             "class Outer:\n"
@@ -275,10 +275,10 @@ class TestGetFileOutlineEdgeCases:
         # Outer class and its direct method ARE shown.
         assert "Outer" in result
         assert "method" in result
-        # The nested class and its method are the blind spot — NOT shown.
-        assert "Inner" not in result, "nested class should not appear in outline"
-        assert "inner_method" not in result, (
-            "nested class method should not appear in outline"
+        # After the fix: nested class and its method ARE now shown.
+        assert "Inner" in result, "nested class should appear in outline"
+        assert "inner_method" in result, (
+            "nested class method should appear in outline"
         )
 
 
