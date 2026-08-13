@@ -178,7 +178,8 @@ You are an autonomous AI software engineer. You design, build, and debug softwar
 - **File Editing**: NEVER use write_file to overwrite existing large files (>150 lines). You MUST use replace_in_file or multi_replace_in_file_chunk to apply targeted patches. If you ALREADY have the file's current content in context (you just read it, or just proposed edits for it) and nothing changed it since, apply the edit DIRECTLY — do NOT read_file again first. Re-read only if the file may have changed.
 - **Proactive Search**: Use `search_web` for technical info.
 - **Persistence**: Do NOT stop after a single tool call. If the task requires multiple steps (read → edit → verify), execute ALL steps in a single response. Keep calling tools until the task is FULLY complete.
-- **Strict Environment**: Use {platform.system()}-native commands. On Windows the default shell is PowerShell — `&&`/`||` chains are auto-routed to cmd, so prefer `;` or separate calls. If a command fails, read the [DIAGNOSIS] line in the output.""")
+- **Strict Environment**: Use {platform.system()}-native commands. On Windows the default shell is PowerShell — `&&`/`||` chains are auto-routed to cmd, so prefer `;` or separate calls. If a command fails, read the [DIAGNOSIS] line in the output.
+- **File Paths**: Use forward slashes (/) in file paths — they work on Windows and avoid JSON backslash escaping. Example: `C:/Users/name/project/file.py`.""")
         else:
             add(f"""## 1. OPERATIONAL PROTOCOL
 - **Tool-First**: YOU are the only one with tool access. Invoke tools immediately via JSON.
@@ -190,7 +191,8 @@ You are an autonomous AI software engineer. You design, build, and debug softwar
 - **Persistence**: Do NOT stop after a single tool call. If the task requires multiple steps (read → edit → verify), execute ALL steps in a single response without waiting for user input. Keep calling tools until the task is FULLY complete.
 - **Testing**: NEVER test logic or GUI apps by running `python app.py` via `run_command` (it will block). You MUST write and run `pytest` tests, or use `start_background_command`.
 - **Self-Correction**: If a tool fails, analyze the error and fix it proactively. Do not apologize.
-- **Strict Environment**: Use {platform.system()}-native commands ONLY (NOT unix commands like 'ls' or 'grep'). On Windows the default shell is **PowerShell** (so `Select-Object`, `Get-ChildItem`, `$env:` work); `&&`/`||` chains are auto-routed to cmd, but prefer `;` or separate commands. If a command fails, READ the `[DIAGNOSIS]` line in its output before assuming the cause.""")
+- **Strict Environment**: Use {platform.system()}-native commands ONLY (NOT unix commands like 'ls' or 'grep'). On Windows the default shell is **PowerShell** (so `Select-Object`, `Get-ChildItem`, `$env:` work); `&&`/`||` chains are auto-routed to cmd, but prefer `;` or separate commands. If a command fails, READ the `[DIAGNOSIS]` line in its output before assuming the cause.
+- **File Paths**: Use forward slashes (/) in file paths — they work on Windows and avoid JSON backslash escaping. Example: `C:/Users/name/project/file.py`.""")
 
         if category == "tiny" and self.provider == "ollama":
             add("""## RESPONSE FORMAT (STRICT JSON STEPS)
@@ -404,7 +406,7 @@ Example: {"tool": {"name": "read_file", "arguments": {"file_path": "main.py"}}}"
                 map_str += f"\n- ... and {len(all_items) - 30} more items. Use list_directory to see all."
             else:
                 map_str = "\n".join(f"- {x}" for x in all_items)
-            parts.append(f"## REPOSITORY MAP (Current Directory: {cwd})\n{map_str}")
+            parts.append(f"## REPOSITORY MAP (Current Directory: {cwd.as_posix()})\n{map_str}")
         except Exception:
             pass
 
