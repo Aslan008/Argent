@@ -4,6 +4,7 @@ import json
 import inspect
 import platform
 import time
+from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Any, Generator
 
@@ -306,6 +307,12 @@ Example: {"tool": {"name": "read_file", "arguments": {"file_path": "main.py"}}}"
                     )
         except Exception:
             pass
+
+        # Current date — stable within a day, so it lives in the system prompt
+        # (cache-friendly: invalidates once at midnight, not per-turn). Gives every
+        # tier, including tiny models, day/month/year/weekday awareness for ~6 tokens.
+        _now = datetime.now()
+        add(f"## CURRENT DATE\nToday: {_now.strftime('%Y-%m-%d')} ({_now.strftime('%a')})")
 
         full_prompt = "\n\n".join(prompt_parts)
         # Pass the tier resolved above: building for one tier and compressing

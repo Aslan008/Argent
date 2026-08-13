@@ -632,6 +632,7 @@ class BrowserEngine:
         Assumes self._playwright is already started.
 
         Strategy:
+        0. If headless was requested, skip CDP entirely (CDP is always visible)
         1. Try connecting to an already-running CDP endpoint (localhost:9222)
         2. If not available, check if browser is running (profile lock risk)
         3. If browser is NOT running, launch it with CDP
@@ -640,6 +641,18 @@ class BrowserEngine:
         from config import get_browser_name
         from browser_detect import find_browser, get_default_browser
         import os
+
+        # 0. CDP mode always shows a visible browser window. If the caller
+        #    requested headless (background) operation, skip CDP entirely
+        #    and use isolated headless mode instead — otherwise we'd silently
+        #    ignore headed=False and open tabs in the user's visible browser.
+        if not headed:
+            log.info(
+                "Headless requested in user mode — CDP requires a visible "
+                "browser window, falling back to isolated headless"
+            )
+            await self._launch_isolated(headed)
+            return
 
         # 1. Try connecting to an already-running CDP endpoint
         try:

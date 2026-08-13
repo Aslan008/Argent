@@ -1483,7 +1483,7 @@ TOOL_SCHEMAS = [
                     },
                     "headed": {
                         "type": "boolean",
-                        "description": "If true, shows the browser window (for debugging). Default: false (headless)."
+                        "description": "If true, shows the browser window. WARNING: DO NOT set this to true unless the user EXPLICITLY asks to see the browser or watch you work. MUST be false (headless) by default to run quietly in the background."
                     }
                 },
                 "required": ["url"]
