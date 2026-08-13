@@ -35,7 +35,16 @@ def _clean_registry():
     with command_ops.ACTIVE_PROCESSES_LOCK:
         command_ops.ACTIVE_PROCESSES.clear()
     yield
+    # Close any leftover process pipes before clearing the registry.
     with command_ops.ACTIVE_PROCESSES_LOCK:
+        for info in command_ops.ACTIVE_PROCESSES.values():
+            proc = info.get("process")
+            if proc is not None:
+                try:
+                    proc.terminate()
+                except Exception:
+                    pass
+                command_ops._close_proc_pipes(proc)
         command_ops.ACTIVE_PROCESSES.clear()
 
 

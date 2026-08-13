@@ -249,6 +249,16 @@ def run_admin_command(command: str) -> str:
         except Exception:
             pass
 
+def _close_proc_pipes(process):
+    """Close all stdio pipes of a subprocess to avoid ResourceWarning leaks."""
+    for pipe in (process.stdout, process.stderr, process.stdin):
+        try:
+            if pipe:
+                pipe.close()
+        except Exception:
+            pass
+
+
 def start_background_command(command: str) -> str:
     """Launch a command in the background and return its PID."""
     with ACTIVE_PROCESSES_LOCK:
@@ -351,6 +361,7 @@ def read_background_command(pid: str) -> str:
         with ACTIVE_PROCESSES_LOCK:
             if pid in ACTIVE_PROCESSES:
                 del ACTIVE_PROCESSES[pid]
+        _close_proc_pipes(process)
     else:
         # Include elapsed runtime so repeated polls of a still-running process
         # produce DISTINCT results — otherwise the loop guard sees identical
@@ -378,6 +389,9 @@ def send_background_command(pid: str, input_string: str) -> str:
         process = ACTIVE_PROCESSES[pid]["process"]
         
     if process.poll() is not None:
+        with ACTIVE_PROCESSES_LOCK:
+            ACTIVE_PROCESSES.pop(pid, None)
+        _close_proc_pipes(process)
         return f"Error: Process {pid} has already exited."
         
     try:
@@ -399,6 +413,7 @@ def stop_background_command(pid: str) -> str:
         try:
             process.terminate()
             del ACTIVE_PROCESSES[pid]
+            _close_proc_pipes(process)
             return f"Terminated background process PID {pid}."
         except Exception as e:
             return f"Error terminating PID {pid}: {e}"
