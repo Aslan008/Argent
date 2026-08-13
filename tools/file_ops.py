@@ -315,6 +315,7 @@ def replace_python_function(file_path: str, function_name: str, new_code: str) -
         prefix = lines[:start_line]
         suffix = lines[end_line:] if end_line is not None and end_line < len(lines) else []
 
+        new_code = _maybe_unescape_content(new_code)
         new_lines = new_code.strip('\n').split('\n')
         
         original_first_line = lines[start_line]
@@ -711,7 +712,7 @@ def create_directory(dir_path: str) -> str:
 
 def move_file(source: str, destination: str) -> str:
     """Move or rename a file from source to destination."""
-    restriction_error = _is_plugin_path_restricted(source)
+    restriction_error = _is_plugin_path_restricted(source) or _is_plugin_path_restricted(destination)
     if restriction_error:
         return restriction_error
     try:
@@ -724,7 +725,14 @@ def move_file(source: str, destination: str) -> str:
         dst.parent.mkdir(parents=True, exist_ok=True)
         if dst.exists():
             return f"Error: Destination '{destination}' already exists."
+        snapshot(str(src))
         shutil.move(str(src), str(dst))
+        try:
+            from rag_engine import remove_file_index, update_file_index
+            remove_file_index(str(src))
+            update_file_index(str(dst))
+        except ImportError:
+            pass
         log.info("move_file: %s -> %s", source, destination)
         memory.add_completed(f"Moved {source} -> {destination}")
         return f"Successfully moved '{source}' to '{destination}'."
@@ -734,6 +742,9 @@ def move_file(source: str, destination: str) -> str:
 
 def copy_file(source: str, destination: str) -> str:
     """Copy a file from source to destination. Creates parent directories if needed."""
+    restriction_error = _is_plugin_path_restricted(source) or _is_plugin_path_restricted(destination)
+    if restriction_error:
+        return restriction_error
     try:
         src = _resolve_path(source)
         dst = Path(destination).expanduser().resolve()
@@ -745,6 +756,11 @@ def copy_file(source: str, destination: str) -> str:
         if dst.exists():
             return f"Error: Destination '{destination}' already exists."
         shutil.copy2(str(src), str(dst))
+        try:
+            from rag_engine import update_file_index
+            update_file_index(str(dst))
+        except ImportError:
+            pass
         log.info("copy_file: %s -> %s", source, destination)
         memory.add_completed(f"Copied {source} -> {destination}")
         return f"Successfully copied '{source}' to '{destination}'."
