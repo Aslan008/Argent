@@ -386,7 +386,8 @@ Example: {"tool": {"name": "read_file", "arguments": {"file_path": "main.py"}}}"
         # ephemeral tail (not the cached system prompt prefix).
         if get_model_size_category(self.model_name) in ("large", "cloud"):
             _now = datetime.now()
-            _tz = _now.astimezone().strftime('%Z') or 'local'
+            _offset = _now.astimezone().strftime('%z')  # e.g. '+0500'
+            _tz = f"UTC{_offset[:3]}:{_offset[3:]}" if _offset else 'local'
             parts.append(f"## CURRENT TIME\n{_now.strftime('%H:%M:%S')} {_tz}")
 
         try:

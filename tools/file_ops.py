@@ -564,7 +564,7 @@ def multi_replace_in_file_chunk(file_path: str, changes_json: str) -> str:
             actual_target = "".join(actual_target_lines)
             
             def normalize(t):
-                return t.replace("\\n", "\n").replace("\\t", "\t").strip()
+                return _strip_read_line_numbers(_maybe_unescape_content(t)).strip()
                 
             norm_target = normalize(target)
             norm_actual = normalize(actual_target)

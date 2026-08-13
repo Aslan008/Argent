@@ -269,11 +269,31 @@ def _maybe_unescape_content(text: str) -> str:
     The reliable fingerprint of a leaked-escaping payload is: NO real line breaks
     yet literal \n / \t markers present. If real newlines already exist the
     content is decoded — leave every literal \n untouched.
+
+    Auto-detect: after unescaping, if any resulting line has an odd number of
+    unescaped quotes, the \n markers are likely literal code inside a string
+    (e.g. print("a\nb")), not leaked JSON escaping — leave them alone.
     """
     if not text or "\n" in text or "\r" in text:
         return text
     if "\\n" in text or "\\t" in text:
-        return text.replace("\\n", "\n").replace("\\t", "\t").replace("\\\\", "\\")
+        candidate = text.replace("\\n", "\n").replace("\\t", "\t").replace("\\\\", "\\")
+        # Auto-detect: if unescaping would split a string literal across lines
+        # (any resulting line has an odd number of unescaped quotes), the \n
+        # markers are literal code, not leaked JSON escaping — leave them alone.
+        for line in candidate.splitlines():
+            quotes = 0
+            i = 0
+            while i < len(line):
+                if line[i] == '\\' and i + 1 < len(line):
+                    i += 2
+                    continue
+                if line[i] in ('"', "'"):
+                    quotes += 1
+                i += 1
+            if quotes % 2 != 0:
+                return text
+        return candidate
     return text
 
 
