@@ -55,6 +55,32 @@ class TestStableSystemPrompt:
         finally:
             tools.ACTIVE_PROCESSES.pop("99", None)
 
+    # --- Time & Date injection (two-layer, tier-scaled) ---
+
+    def test_date_in_system_prompt(self, agent):
+        """Layer 1: date lives in the system prompt for ALL tiers."""
+        prompt = agent.build_system_prompt()
+        assert "CURRENT DATE" in prompt
+        assert "Today:" in prompt
+
+    def test_time_not_in_system_prompt(self, agent):
+        """Volatile time must NOT be in the cached system prompt prefix."""
+        prompt = agent.build_system_prompt()
+        assert "CURRENT TIME" not in prompt
+
+    def test_time_in_ephemeral_for_cloud(self, agent):
+        """Layer 2: precise time in ephemeral tail for large/cloud models."""
+        eph = agent._build_ephemeral_context()
+        assert eph is not None
+        assert "CURRENT TIME" in eph
+
+    def test_time_absent_for_small(self, monkeypatch):
+        """Small models get date only — no per-turn time pollution."""
+        monkeypatch.setattr(agent_module, "get_model_size_category", lambda name: "small")
+        a = ArgentAgent()
+        eph = a._build_ephemeral_context()
+        assert "CURRENT TIME" not in (eph or "")
+
 
 class TestTrimHysteresis:
     def _fill(self, agent, n):

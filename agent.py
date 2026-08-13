@@ -378,6 +378,15 @@ Example: {"tool": {"name": "read_file", "arguments": {"file_path": "main.py"}}}"
         Tail position keeps the request prefix stable for the KV cache — and is
         where small models attend best anyway."""
         parts = []
+        # Precise time for large/cloud models only — small models get the date
+        # from the system prompt and don't need per-turn time polluting their
+        # limited context. Time changes every second, so it lives in the
+        # ephemeral tail (not the cached system prompt prefix).
+        if get_model_size_category(self.model_name) in ("large", "cloud"):
+            _now = datetime.now()
+            _tz = _now.astimezone().strftime('%Z') or 'local'
+            parts.append(f"## CURRENT TIME\n{_now.strftime('%H:%M:%S')} {_tz}")
+
         try:
             cwd = Path.cwd()
             dirs, files = [], []
