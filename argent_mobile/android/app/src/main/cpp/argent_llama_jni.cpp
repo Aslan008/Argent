@@ -47,9 +47,8 @@ Java_com_argent_mobile_llama_ArgentLlamaPlugin_nativeLoadModel(
         g_vocab = nullptr;
     }
 
-    // Инициализация параметров модели
+    // Инициализация параметров модели (mmap включен по умолчанию)
     struct llama_model_params model_params = llama_model_default_params();
-    model_params.use_mmap = true; // Прямое чтение через mmap для экономии RAM на Android
 
     g_model = llama_model_load_from_file(model_path, model_params);
     env->ReleaseStringUTFChars(jModelPath, model_path);
@@ -117,8 +116,8 @@ Java_com_argent_mobile_llama_ArgentLlamaPlugin_nativeGenerate(
     }
     prompt_tokens.resize(n_prompt_tokens);
 
-    // Очищаем состояние KV-кэша перед новым запросом
-    llama_kv_cache_clear(g_ctx);
+    // Очищаем состояние памяти/KV-кэша перед новым запросом
+    llama_memory_clear(llama_get_memory(g_ctx), true);
 
     // Инициализация сэмплера
     struct llama_sampler * smpl = llama_sampler_chain_init(llama_sampler_chain_default_params());
