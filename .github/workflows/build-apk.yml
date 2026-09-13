@@ -25,6 +25,11 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
+      - name: Pre-install Android 35 SDK
+        run: |
+          yes | sdkmanager --licenses || true
+          sdkmanager "platforms;android-35" "build-tools;35.0.0" || true
+
       - name: Set up Node.js 20
         uses: actions/setup-node@v4
         with:
@@ -56,3 +61,12 @@ jobs:
           name: ArgentMobile-debug
           path: argent_mobile/android/app/build/outputs/apk/debug/app-debug.apk
           retention-days: 14
+
+      - name: Upload Build Reports on Failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-failure-reports
+          path: |
+            argent_mobile/android/app/build/reports/
+          retention-days: 3
