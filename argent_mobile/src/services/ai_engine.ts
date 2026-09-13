@@ -162,22 +162,37 @@ export class AIEngine {
     if (targetModel.endsWith('.gguf') || targetModel.endsWith('.bin')) {
       if (LlamaNativeService.isAvailable()) {
         if (onProgress) {
-          onProgress({ progress: 15, text: `Инициализация нативного llama.cpp для ${targetModel}...` });
+          onProgress({ progress: 10, text: `Проверка доступа к памяти устройства...` });
         }
 
         const hasPerm = await LlamaNativeService.checkStoragePermission();
         if (!hasPerm) {
           await LlamaNativeService.requestStoragePermission();
+          throw new Error(
+            '⚠️ Требуется доступ к файлам телефона:\n\n' +
+            'Для чтения модели GGUF из памяти Android требует системное разрешение "Доступ ко всем файлам".\n' +
+            'Мы открыли настройки Android. Пожалуйста, включите переключатель "Разрешить доступ к управлению всеми файлами" для Argent Mobile, затем вернитесь в приложение и повторите отправку.'
+          );
         }
 
         if (onProgress) {
-          onProgress({ progress: 60, text: `Загрузка ${targetModel} в память через mmap...` });
+          onProgress({ progress: 25, text: `Поиск файла модели ${targetModel}...` });
         }
 
-        await LlamaNativeService.loadModel(targetModel, 4, 2048);
+        let pathToLoad = targetModel;
+        const resolved = await LlamaNativeService.resolvePath(targetModel);
+        if (resolved.found && resolved.path) {
+          pathToLoad = resolved.path;
+        }
 
         if (onProgress) {
-          onProgress({ progress: 100, text: 'Модель готова' });
+          onProgress({ progress: 60, text: `Загрузка модели через llama.cpp (ARM NEON)...` });
+        }
+
+        await LlamaNativeService.loadModel(pathToLoad, 4, 2048);
+
+        if (onProgress) {
+          onProgress({ progress: 100, text: 'Модель готова к работе' });
         }
 
         let chatmlPrompt = '';

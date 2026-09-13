@@ -3,6 +3,7 @@ import hljs from 'highlight.js';
 import { StorageService } from './services/storage';
 import { AIEngine } from './services/ai_engine';
 import { AutopilotService } from './services/autopilot';
+import { LlamaNativeService } from './services/llama_native';
 import { AppSettings, ChatMessage, ChatSession, VirtualFile } from './types';
 
 // Конфигурация Markdown рендерера с подсветкой синтаксиса
@@ -657,16 +658,36 @@ class ArgentMobileApp {
 
     // Обработка выбора локального файла модели с накопителя телефона
     const btnPickLocal = document.getElementById('btn-pick-local-file');
+    const btnScanModels = document.getElementById('btn-scan-models');
     const inputLocalFile = document.getElementById('input-local-model-file') as HTMLInputElement;
     const localFileInfo = document.getElementById('local-model-file-info');
     const optCustomLocal = document.getElementById('opt-custom-local') as HTMLOptionElement;
     const selectOfflineModel = document.getElementById('setting-offline-model') as HTMLSelectElement;
+    const manualPathInput = document.getElementById('setting-manual-model-path') as HTMLInputElement;
 
     btnPickLocal?.addEventListener('click', () => {
       inputLocalFile?.click();
     });
 
-    inputLocalFile?.addEventListener('change', () => {
+    btnScanModels?.addEventListener('click', () => {
+      this.scanAndPopulateGgufModels(true);
+    });
+
+    manualPathInput?.addEventListener('input', () => {
+      const val = manualPathInput.value.trim();
+      if (val) {
+        this.settings.offline.model = val;
+        this.settings.offline.localFileName = val.split('/').pop() || val;
+        if (optCustomLocal) {
+          optCustomLocal.style.display = 'block';
+          optCustomLocal.textContent = `⚡ ${this.settings.offline.localFileName}`;
+          optCustomLocal.value = val;
+        }
+        if (selectOfflineModel) selectOfflineModel.value = val;
+      }
+    });
+
+    inputLocalFile?.addEventListener('change', async () => {
       if (inputLocalFile.files && inputLocalFile.files[0]) {
         const file = inputLocalFile.files[0];
         const sizeMb = (file.size / (1024 * 1024)).toFixed(1);
@@ -678,18 +699,35 @@ class ArgentMobileApp {
         this.settings.offline.localFileSize = sizeStr;
         this.settings.offline.model = file.name;
 
+        if (manualPathInput) {
+          manualPathInput.value = file.name;
+        }
+
+        // Проверяем, может ли нативный движок найти абсолютный путь прямо сейчас
+        if (LlamaNativeService.isAvailable()) {
+          try {
+            const res = await LlamaNativeService.resolvePath(file.name);
+            if (res.found && res.path) {
+              this.settings.offline.model = res.path;
+              if (manualPathInput) manualPathInput.value = res.path;
+            }
+          } catch (e) {
+            console.warn('resolvePath error:', e);
+          }
+        }
+
         if (optCustomLocal) {
           optCustomLocal.style.display = 'block';
-          optCustomLocal.textContent = `⚡ ${file.name} (llama.cpp ARM NEON)`;
-          optCustomLocal.value = file.name;
+          optCustomLocal.textContent = `⚡ ${file.name} (${sizeStr})`;
+          optCustomLocal.value = this.settings.offline.model;
         }
         if (selectOfflineModel) {
-          selectOfflineModel.value = file.name;
+          selectOfflineModel.value = this.settings.offline.model;
         }
         if (localFileInfo) {
           localFileInfo.style.display = 'block';
           localFileInfo.style.color = '#10b981';
-          localFileInfo.innerHTML = `✅ <b>${file.name}</b> (${sizeStr}) выбран для нативного движка llama.cpp.<br>` +
+          localFileInfo.innerHTML = `✅ <b>${this.escapeHtml(file.name)}</b> (${sizeStr}) выбран для нативного движка llama.cpp.<br>` +
             `Модель будет загружена напрямую из памяти устройства с ускорением ARM NEON.`;
         }
       }
@@ -845,20 +883,54 @@ class ArgentMobileApp {
     const localFileInfo = document.getElementById('local-model-file-info');
     const customOfflineInput = document.getElementById('setting-custom-offline-id') as HTMLInputElement;
 
+    const manualInput = document.getElementById('setting-manual-model-path') as HTMLInputElement;
+    if (manualInput) {
+      manualInput.value = this.settings.offline.localFileName || this.settings.offline.model || '';
+    }
+
     if (this.settings.offline.localFileName) {
       if (optCustomLocal) {
         optCustomLocal.style.display = 'block';
         optCustomLocal.textContent = `⚡ ${this.settings.offline.localFileName} (${this.settings.offline.localFileSize || 'llama.cpp'})`;
-        optCustomLocal.value = this.settings.offline.localFileName;
+        optCustomLocal.value = this.settings.offline.model;
       }
-      if (offlineModel) offlineModel.value = this.settings.offline.localFileName;
+      if (offlineModel) offlineModel.value = this.settings.offline.model;
       if (localFileInfo) {
         localFileInfo.style.display = 'block';
         localFileInfo.style.color = '#10b981';
-        localFileInfo.innerHTML = `✅ Выбран файл: <b>${this.settings.offline.localFileName}</b> (${this.settings.offline.localFileSize || ''}) для нативного llama.cpp`;
+        localFileInfo.innerHTML = `✅ Выбран файл: <b>${this.escapeHtml(this.settings.offline.localFileName)}</b> (${this.settings.offline.localFileSize || ''}) для нативного llama.cpp`;
       }
     } else {
       if (offlineModel) offlineModel.value = this.settings.offline.model;
+    }
+
+    // Проверка разрешений на файлы и автосканирование моделей
+    const permBanner = document.getElementById('storage-perm-banner');
+    const permStatus = document.getElementById('storage-perm-status');
+    const btnReqPerm = document.getElementById('btn-request-storage-perm');
+
+    if (LlamaNativeService.isAvailable()) {
+      LlamaNativeService.checkStoragePermission().then((granted) => {
+        if (permBanner && permStatus && btnReqPerm) {
+          permBanner.style.display = 'block';
+          if (granted) {
+            permBanner.style.background = 'rgba(16, 185, 129, 0.1)';
+            permBanner.style.border = '1px solid rgba(16, 185, 129, 0.3)';
+            permStatus.innerHTML = '<b style="color:#10b981;">✅ Доступ к памяти телефона включен.</b> Нативный движок готов читать .gguf модели.';
+            btnReqPerm.style.display = 'none';
+          } else {
+            permBanner.style.background = 'rgba(245, 158, 11, 0.1)';
+            permBanner.style.border = '1px solid rgba(245, 158, 11, 0.3)';
+            permStatus.innerHTML = '<b style="color:#f59e0b;">⚠️ Доступ ко всем файлам не предоставлен.</b> Android блокирует чтение файлов из папки Загрузки.';
+            btnReqPerm.style.display = 'inline-block';
+            btnReqPerm.onclick = async () => {
+              await LlamaNativeService.requestStoragePermission();
+            };
+          }
+        }
+      });
+
+      this.scanAndPopulateGgufModels(false);
     }
 
     if (customOfflineInput) {
@@ -887,6 +959,65 @@ class ArgentMobileApp {
     });
   }
 
+  private async scanAndPopulateGgufModels(userTriggered = false): Promise<void> {
+    if (!LlamaNativeService.isAvailable()) return;
+    const localFileInfo = document.getElementById('local-model-file-info');
+    const selectOfflineModel = document.getElementById('setting-offline-model') as HTMLSelectElement;
+    const manualInput = document.getElementById('setting-manual-model-path') as HTMLInputElement;
+
+    if (userTriggered && localFileInfo) {
+      localFileInfo.style.display = 'block';
+      localFileInfo.style.color = '#3b82f6';
+      localFileInfo.textContent = '🔍 Сканирование памяти устройства на наличие .gguf моделей...';
+    }
+
+    try {
+      const res = await LlamaNativeService.scanForModels();
+      if (res.permissionRequired) {
+        if (localFileInfo) {
+          localFileInfo.style.display = 'block';
+          localFileInfo.style.color = '#f59e0b';
+          localFileInfo.innerHTML = '⚠️ Требуется включить "Доступ ко всем файлам" в настройках телефона, чтобы найти модели.';
+        }
+        return;
+      }
+
+      if (res.models && res.models.length > 0) {
+        for (const m of res.models) {
+          let opt = selectOfflineModel.querySelector(`option[value="${m.path}"]`) as HTMLOptionElement;
+          if (!opt) {
+            opt = document.createElement('option');
+            opt.value = m.path;
+            selectOfflineModel.appendChild(opt);
+          }
+          opt.textContent = `⚡ ${m.name} (${m.sizeFormatted}, Найдено)`;
+        }
+
+        if (userTriggered || !this.settings.offline.model.endsWith('.gguf')) {
+          const first = res.models[0];
+          this.settings.offline.localFileName = first.name;
+          this.settings.offline.localFileSize = first.sizeFormatted;
+          this.settings.offline.model = first.path;
+          selectOfflineModel.value = first.path;
+          if (manualInput) manualInput.value = first.path;
+        }
+
+        if (localFileInfo) {
+          localFileInfo.style.display = 'block';
+          localFileInfo.style.color = '#10b981';
+          localFileInfo.innerHTML = `✅ Найдено моделей на телефоне: <b>${res.models.length}</b>.<br>` +
+            res.models.map(m => `• <b>${this.escapeHtml(m.name)}</b> (${m.sizeFormatted})`).join('<br>');
+        }
+      } else if (userTriggered && localFileInfo) {
+        localFileInfo.style.display = 'block';
+        localFileInfo.style.color = '#f59e0b';
+        localFileInfo.innerHTML = '⚠️ Файлы .gguf не найдены в папках Загрузки (Download), Документы или Telegram. Проверьте, что файл сохранён.';
+      }
+    } catch (e) {
+      console.warn('Ошибка scanAndPopulateGgufModels:', e);
+    }
+  }
+
   private saveSettingsFromForm(): void {
     const provider = (document.getElementById('setting-provider') as HTMLSelectElement)?.value as any;
     const endpoint = (document.getElementById('setting-endpoint') as HTMLInputElement)?.value;
@@ -894,21 +1025,30 @@ class ArgentMobileApp {
     const model = (document.getElementById('setting-model') as HTMLInputElement)?.value;
     const offlineModel = (document.getElementById('setting-offline-model') as HTMLSelectElement)?.value;
     const customOfflineInput = document.getElementById('setting-custom-offline-id') as HTMLInputElement;
+    const manualPath = (document.getElementById('setting-manual-model-path') as HTMLInputElement)?.value?.trim();
     const temp = parseFloat((document.getElementById('setting-temp') as HTMLInputElement)?.value || '0.6');
 
     this.settings.online.provider = provider || 'deepseek';
     this.settings.online.endpoint = endpoint || 'https://api.deepseek.com/v1';
     this.settings.online.apiKey = apiKey || '';
     this.settings.online.model = model || 'deepseek-chat';
-    
-    const customId = customOfflineInput?.value?.trim();
-    if (customId) {
-      this.settings.offline.customModelId = customId;
-      if (!this.settings.offline.localFileName) {
-        this.settings.offline.model = customId;
+
+    if (manualPath && (manualPath.endsWith('.gguf') || manualPath.endsWith('.bin'))) {
+      this.settings.offline.model = manualPath;
+      this.settings.offline.localFileName = manualPath.split('/').pop() || manualPath;
+    } else {
+      const customId = customOfflineInput?.value?.trim();
+      if (customId) {
+        this.settings.offline.customModelId = customId;
+        if (!this.settings.offline.localFileName) {
+          this.settings.offline.model = customId;
+        }
+      } else if (offlineModel) {
+        this.settings.offline.model = offlineModel;
+        if (offlineModel.endsWith('.gguf') || offlineModel.endsWith('.bin')) {
+          this.settings.offline.localFileName = offlineModel.split('/').pop() || offlineModel;
+        }
       }
-    } else if (offlineModel) {
-      this.settings.offline.model = offlineModel;
     }
 
     this.settings.temperature = temp;

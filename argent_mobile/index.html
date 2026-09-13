@@ -221,14 +221,30 @@
               </select>
             </div>
 
+            <!-- Статус доступа к файлам устройства -->
+            <div id="storage-perm-banner" style="margin-bottom: 12px; padding: 10px; border-radius: 8px; font-size: 0.78rem; display: none;">
+              <div id="storage-perm-status" style="margin-bottom: 6px;"></div>
+              <button type="button" id="btn-request-storage-perm" class="action-btn-sm" style="background: #3b82f6; color: #fff; border: none; padding: 6px 12px; border-radius: 6px; font-size: 0.76rem; cursor: pointer; display: none;">
+                ⚙️ Разрешить доступ в настройках
+              </button>
+            </div>
+
             <!-- Выбор локального файла .gguf с накопителя телефона -->
             <div class="form-group" style="margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--border-subtle);">
               <label>Локальная модель из памяти телефона (.gguf)</label>
+              <div style="display: flex; gap: 8px; margin-top: 4px;">
+                <button type="button" id="btn-scan-models" class="secondary-btn" style="flex: 1; display: flex; align-items: center; justify-content: center; gap: 4px; font-weight: 500; font-size: 0.78rem; padding: 8px;">
+                  <span>🔍</span> Найти модели на телефоне
+                </button>
+                <button type="button" id="btn-pick-local-file" class="secondary-btn" style="flex: 1; display: flex; align-items: center; justify-content: center; gap: 4px; font-weight: 500; font-size: 0.78rem; padding: 8px;">
+                  <span>📁</span> Выбрать из папки
+                </button>
+              </div>
               <input type="file" id="input-local-model-file" accept=".gguf,.bin" style="display: none;" />
-              <button type="button" id="btn-pick-local-file" class="secondary-btn" style="width: 100%; display: flex; align-items: center; justify-content: center; gap: 6px; font-weight: 500;">
-                <span>📁</span> Выбрать .gguf файл (Nanbeige, Qwen и др.)
-              </button>
               <div id="local-model-file-info" style="font-size: 0.76rem; color: #10b981; margin-top: 6px; line-height: 1.35; display: none;"></div>
+              <div style="margin-top: 6px;">
+                <input type="text" id="setting-manual-model-path" placeholder="Имя файла или путь: Nanbeige4.2-3B-Q4_K_M.gguf" style="width: 100%; font-size: 0.75rem; padding: 6px 10px; border-radius: 6px; border: 1px solid var(--border-subtle); background: var(--bg-surface); color: var(--text-primary);" />
+              </div>
               <p class="hint-text" style="margin-top: 4px; font-size: 0.72rem;">⚡ Файлы .gguf запускаются нативно через движок llama.cpp с ускорением ARM NEON прямо на процессоре смартфона.</p>
             </div>
 

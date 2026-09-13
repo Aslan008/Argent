@@ -1,8 +1,17 @@
 import { registerPlugin, Capacitor, PluginListenerHandle } from '@capacitor/core';
 
+export interface ScannedModel {
+  name: string;
+  path: string;
+  size: number;
+  sizeFormatted: string;
+}
+
 export interface ArgentLlamaPluginInterface {
   checkStoragePermission(): Promise<{ granted: boolean }>;
   requestStoragePermission(): Promise<{ opened: boolean }>;
+  scanForModels(): Promise<{ models: ScannedModel[]; permissionRequired?: boolean }>;
+  resolvePath(options: { path: string }): Promise<{ found: boolean; path: string; name?: string; size?: number }>;
   loadModel(options: { path: string; threads?: number; context?: number }): Promise<{ success: boolean; path: string; reused?: boolean }>;
   generateStream(options: { prompt: string; temperature?: number; max_tokens?: number }): Promise<{ success: boolean }>;
   stopGeneration(): Promise<{ stopped: boolean }>;
@@ -36,6 +45,25 @@ export class LlamaNativeService {
       await ArgentLlama.requestStoragePermission();
     } catch (err) {
       console.warn('Ошибка вызова requestStoragePermission:', err);
+    }
+  }
+
+  public static async scanForModels(): Promise<{ models: ScannedModel[]; permissionRequired?: boolean }> {
+    if (!this.isAvailable()) return { models: [] };
+    try {
+      return await ArgentLlama.scanForModels();
+    } catch (err) {
+      console.warn('Ошибка scanForModels:', err);
+      return { models: [] };
+    }
+  }
+
+  public static async resolvePath(path: string): Promise<{ found: boolean; path: string; name?: string; size?: number }> {
+    if (!this.isAvailable()) return { found: false, path };
+    try {
+      return await ArgentLlama.resolvePath({ path });
+    } catch {
+      return { found: false, path };
     }
   }
 
