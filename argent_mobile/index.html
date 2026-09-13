@@ -217,19 +217,19 @@
                 <option value="Qwen2.5-3B-Instruct-q4f16_1-MLC">Qwen 2.5 3B (~2.0 ГБ, умная)</option>
                 <option value="Llama-3.2-1B-Instruct-q4f16_1-MLC">Llama 3.2 1B (~0.8 ГБ, Meta)</option>
                 <option value="SmolLM2-1.7B-Instruct-q4f16_1-MLC">SmolLM2 1.7B (~1.1 ГБ)</option>
-                <option value="custom_local" id="opt-custom-local" style="display:none;">📂 Файл с телефона</option>
+                <option value="custom_local" id="opt-custom-local" style="display:none;">⚡ Локальный файл (.gguf)</option>
               </select>
             </div>
 
             <!-- Выбор локального файла .gguf с накопителя телефона -->
             <div class="form-group" style="margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--border-subtle);">
-              <label>Локальный файл (.gguf)</label>
+              <label>Локальная модель из памяти телефона (.gguf)</label>
               <input type="file" id="input-local-model-file" accept=".gguf,.bin" style="display: none;" />
               <button type="button" id="btn-pick-local-file" class="secondary-btn" style="width: 100%; display: flex; align-items: center; justify-content: center; gap: 6px; font-weight: 500;">
-                <span>📁</span> Выбрать .gguf файл из памяти телефона
+                <span>📁</span> Выбрать .gguf файл (Nanbeige, Qwen и др.)
               </button>
-              <div id="local-model-file-info" style="font-size: 0.76rem; color: #67e8f9; margin-top: 6px; line-height: 1.35; display: none;"></div>
-              <p class="hint-text" style="margin-top: 4px; font-size: 0.72rem;">ℹ️ На чипе смартфона автономно работают модели WebGPU из списка выше (Qwen 2.5 и др.). Файлы формата .gguf запускаются через домашнюю Ollama на ПК.</p>
+              <div id="local-model-file-info" style="font-size: 0.76rem; color: #10b981; margin-top: 6px; line-height: 1.35; display: none;"></div>
+              <p class="hint-text" style="margin-top: 4px; font-size: 0.72rem;">⚡ Файлы .gguf запускаются нативно через движок llama.cpp с ускорением ARM NEON прямо на процессоре смартфона.</p>
             </div>
 
             <div class="form-group" style="margin-top: 8px;">

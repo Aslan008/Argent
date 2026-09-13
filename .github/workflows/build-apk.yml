@@ -25,10 +25,14 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Pre-install Android 35 SDK
+      - name: Pre-install Android 35 SDK & NDK
         run: |
           yes | sdkmanager --licenses || true
-          sdkmanager "platforms;android-35" "build-tools;35.0.0" || true
+          sdkmanager "platforms;android-35" "build-tools;35.0.0" "ndk;26.1.10909125" "cmake;3.22.1" || true
+
+      - name: Checkout llama.cpp Core
+        run: |
+          git clone --depth 1 https://github.com/ggerganov/llama.cpp.git argent_mobile/android/app/src/main/cpp/llama.cpp
 
       - name: Set up Node.js 20
         uses: actions/setup-node@v4

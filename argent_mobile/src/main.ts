@@ -676,36 +676,21 @@ class ArgentMobileApp {
 
         this.settings.offline.localFileName = file.name;
         this.settings.offline.localFileSize = sizeStr;
+        this.settings.offline.model = file.name;
 
-        const isGguf = file.name.endsWith('.gguf') || file.name.endsWith('.bin');
-
-        if (isGguf) {
-          if (localFileInfo) {
-            localFileInfo.style.display = 'block';
-            localFileInfo.style.color = '#f59e0b';
-            localFileInfo.innerHTML = `⚠️ <b>${file.name}</b> (${sizeStr}) — формат GGUF (llama.cpp).<br>` +
-              `Встроенный оффлайн-движок телефона работает на WebGPU и использует модели из списка выше (например, <b>Qwen 2.5 1.5B</b>). ` +
-              `Файлы .gguf запускаются через Ollama на ПК (вкладка «🌐 Облачный режим»).`;
-          }
-          // Оставляем валидную WebGPU модель активной для движка
-          if (!this.settings.offline.model || this.settings.offline.model.endsWith('.gguf')) {
-            this.settings.offline.model = 'Qwen2.5-1.5B-Instruct-q4f16_1-MLC';
-          }
-        } else {
-          this.settings.offline.model = file.name;
-          if (optCustomLocal) {
-            optCustomLocal.style.display = 'block';
-            optCustomLocal.textContent = `📂 ${file.name} (${sizeStr})`;
-            optCustomLocal.value = file.name;
-          }
-          if (selectOfflineModel) {
-            selectOfflineModel.value = file.name;
-          }
-          if (localFileInfo) {
-            localFileInfo.style.display = 'block';
-            localFileInfo.style.color = '#67e8f9';
-            localFileInfo.textContent = `✓ Выбран файл модели: ${file.name} (${sizeStr})`;
-          }
+        if (optCustomLocal) {
+          optCustomLocal.style.display = 'block';
+          optCustomLocal.textContent = `⚡ ${file.name} (llama.cpp ARM NEON)`;
+          optCustomLocal.value = file.name;
+        }
+        if (selectOfflineModel) {
+          selectOfflineModel.value = file.name;
+        }
+        if (localFileInfo) {
+          localFileInfo.style.display = 'block';
+          localFileInfo.style.color = '#10b981';
+          localFileInfo.innerHTML = `✅ <b>${file.name}</b> (${sizeStr}) выбран для нативного движка llama.cpp.<br>` +
+            `Модель будет загружена напрямую из памяти устройства с ускорением ARM NEON.`;
         }
       }
     });
@@ -861,24 +846,16 @@ class ArgentMobileApp {
     const customOfflineInput = document.getElementById('setting-custom-offline-id') as HTMLInputElement;
 
     if (this.settings.offline.localFileName) {
-      const isGguf = this.settings.offline.localFileName.endsWith('.gguf') || this.settings.offline.localFileName.endsWith('.bin');
+      if (optCustomLocal) {
+        optCustomLocal.style.display = 'block';
+        optCustomLocal.textContent = `⚡ ${this.settings.offline.localFileName} (${this.settings.offline.localFileSize || 'llama.cpp'})`;
+        optCustomLocal.value = this.settings.offline.localFileName;
+      }
+      if (offlineModel) offlineModel.value = this.settings.offline.localFileName;
       if (localFileInfo) {
         localFileInfo.style.display = 'block';
-        if (isGguf) {
-          localFileInfo.style.color = '#f59e0b';
-          localFileInfo.innerHTML = `⚠️ <b>${this.settings.offline.localFileName}</b> — формат GGUF (llama.cpp). Для оффлайна на чипе смартфона выберите готовую WebGPU-модель из списка ниже (например, Qwen 2.5 1.5B).`;
-        } else {
-          localFileInfo.style.color = '#67e8f9';
-          localFileInfo.textContent = `✓ Выбран файл: ${this.settings.offline.localFileName} (${this.settings.offline.localFileSize || ''})`;
-        }
-      }
-      if (!isGguf && optCustomLocal) {
-        optCustomLocal.style.display = 'block';
-        optCustomLocal.textContent = `📂 ${this.settings.offline.localFileName} (${this.settings.offline.localFileSize || ''})`;
-        optCustomLocal.value = this.settings.offline.localFileName;
-        if (offlineModel) offlineModel.value = this.settings.offline.localFileName;
-      } else if (offlineModel) {
-        offlineModel.value = this.settings.offline.model;
+        localFileInfo.style.color = '#10b981';
+        localFileInfo.innerHTML = `✅ Выбран файл: <b>${this.settings.offline.localFileName}</b> (${this.settings.offline.localFileSize || ''}) для нативного llama.cpp`;
       }
     } else {
       if (offlineModel) offlineModel.value = this.settings.offline.model;
@@ -930,7 +907,7 @@ class ArgentMobileApp {
       if (!this.settings.offline.localFileName) {
         this.settings.offline.model = customId;
       }
-    } else if (offlineModel && !offlineModel.endsWith('.gguf') && !offlineModel.endsWith('.bin')) {
+    } else if (offlineModel) {
       this.settings.offline.model = offlineModel;
     }
 

@@ -1,5 +1,6 @@
 import { AppSettings, ChatMessage, StreamCallbacks, DownloadProgress } from '../types';
 import { StreamTagParser } from './fsm_parser';
+import { LlamaNativeService } from './llama_native';
 import * as webllm from '@mlc-ai/web-llm';
 
 export class AIEngine {
@@ -157,7 +158,51 @@ export class AIEngine {
   ): Promise<void> {
     const targetModel = settings.offline.model;
 
-    // Проверяем поддержку WebGPU на устройстве
+    // Если выбрана модель формата .gguf или .bin — используем нативный движок llama.cpp
+    if (targetModel.endsWith('.gguf') || targetModel.endsWith('.bin')) {
+      if (LlamaNativeService.isAvailable()) {
+        if (onProgress) {
+          onProgress({ progress: 15, text: `Инициализация нативного llama.cpp для ${targetModel}...` });
+        }
+
+        const hasPerm = await LlamaNativeService.checkStoragePermission();
+        if (!hasPerm) {
+          await LlamaNativeService.requestStoragePermission();
+        }
+
+        if (onProgress) {
+          onProgress({ progress: 60, text: `Загрузка ${targetModel} в память через mmap...` });
+        }
+
+        await LlamaNativeService.loadModel(targetModel, 4, 2048);
+
+        if (onProgress) {
+          onProgress({ progress: 100, text: 'Модель готова' });
+        }
+
+        let chatmlPrompt = '';
+        for (const msg of messages) {
+          chatmlPrompt += `<|im_start|>${msg.role}\n${msg.content}<|im_end|>\n`;
+        }
+        chatmlPrompt += '<|im_start|>assistant\n';
+
+        await LlamaNativeService.generateStream(
+          chatmlPrompt,
+          settings.temperature,
+          1024,
+          (delta) => parser.feed(delta),
+          abortController.signal
+        );
+        return;
+      } else {
+        throw new Error(
+          `Файл "${targetModel}" (.gguf) запускается через нативный движок llama.cpp внутри установленного приложения Android (APK).\n\n` +
+          `В браузере переключитесь на "🌐 Онлайн" (Ollama на ПК) или выберите модель из списка WebGPU.`
+        );
+      }
+    }
+
+    // Проверяем поддержку WebGPU на устройстве для моделей WebLLM
     if (typeof navigator === 'undefined' || !('gpu' in navigator)) {
       const isHttp = typeof window !== 'undefined' && window.location.protocol === 'http:';
       let msg = 'Оффлайн-режим на чипе телефона требует графического ускорения WebGPU.\n\n';
@@ -168,17 +213,6 @@ export class AIEngine {
         '1. Переключите тумблер вверху на "🌐 Онлайн" — там модель на вашем ПК (Ollama) ответит моментально без требований к WebGPU;\n' +
         '2. Либо для оффлайна откройте в Chrome на телефоне адрес chrome://flags/#enable-unsafe-webgpu и выберите "Enabled".';
       throw new Error(msg);
-    }
-
-    // Проверяем формат файла модели
-    if (targetModel.endsWith('.gguf') || targetModel.endsWith('.bin')) {
-      throw new Error(
-        `Файл "${targetModel}" имеет формат GGUF (движок llama.cpp / Ollama).\n\n` +
-        `Встроенный оффлайн-движок смартфона работает через графический чип WebGPU и использует оптимизированные модели WebLLM (например, Qwen 2.5 1.5B или Llama 3.2 1B).\n\n` +
-        `Как решить:\n` +
-        `1. В Настройках выберите из списка готовую оффлайн-модель (рекомендуется "Qwen 2.5 1.5B" — она отлично знает русский);\n` +
-        `2. Либо запустите этот .gguf файл на компьютере через Ollama и переключите тумблер вверху в "🌐 Онлайн".`
-      );
     }
 
     // Инициализируем или переиспользуем загруженную модель
