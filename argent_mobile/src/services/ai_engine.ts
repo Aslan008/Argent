@@ -170,6 +170,17 @@ export class AIEngine {
       throw new Error(msg);
     }
 
+    // Проверяем формат файла модели
+    if (targetModel.endsWith('.gguf') || targetModel.endsWith('.bin')) {
+      throw new Error(
+        `Файл "${targetModel}" имеет формат GGUF (движок llama.cpp / Ollama).\n\n` +
+        `Встроенный оффлайн-движок смартфона работает через графический чип WebGPU и использует оптимизированные модели WebLLM (например, Qwen 2.5 1.5B или Llama 3.2 1B).\n\n` +
+        `Как решить:\n` +
+        `1. В Настройках выберите из списка готовую оффлайн-модель (рекомендуется "Qwen 2.5 1.5B" — она отлично знает русский);\n` +
+        `2. Либо запустите этот .gguf файл на компьютере через Ollama и переключите тумблер вверху в "🌐 Онлайн".`
+      );
+    }
+
     // Инициализируем или переиспользуем загруженную модель
     if (!this.offlineEngine || this.currentModelName !== targetModel) {
       this.offlineEngine = await webllm.CreateMLCEngine(targetModel, {
@@ -206,6 +217,13 @@ export class AIEngine {
   ): Promise<void> {
     if (typeof navigator === 'undefined' || !('gpu' in navigator)) {
       throw new Error('WebGPU не поддерживается этим устройством.');
+    }
+
+    if (modelName.endsWith('.gguf') || modelName.endsWith('.bin')) {
+      throw new Error(
+        `Файл "${modelName}" имеет формат GGUF (для llama.cpp / Ollama).\n` +
+        `Для встроенного оффлайна на телефоне выберите модель из списка (например, Qwen 2.5 1.5B).`
+      );
     }
 
     this.offlineEngine = await webllm.CreateMLCEngine(modelName, {

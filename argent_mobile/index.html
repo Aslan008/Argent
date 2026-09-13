@@ -222,12 +222,13 @@
 
             <!-- Выбор локального файла .gguf с накопителя телефона -->
             <div class="form-group" style="margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--border-subtle);">
-              <label>Выбрать скачанный файл с телефона (.gguf)</label>
+              <label>Локальный файл (.gguf)</label>
               <input type="file" id="input-local-model-file" accept=".gguf,.bin" style="display: none;" />
               <button type="button" id="btn-pick-local-file" class="secondary-btn" style="width: 100%; display: flex; align-items: center; justify-content: center; gap: 6px; font-weight: 500;">
                 <span>📁</span> Выбрать .gguf файл из памяти телефона
               </button>
               <div id="local-model-file-info" style="font-size: 0.76rem; color: #67e8f9; margin-top: 6px; line-height: 1.35; display: none;"></div>
+              <p class="hint-text" style="margin-top: 4px; font-size: 0.72rem;">ℹ️ На чипе смартфона автономно работают модели WebGPU из списка выше (Qwen 2.5 и др.). Файлы формата .gguf запускаются через домашнюю Ollama на ПК.</p>
             </div>
 
             <div class="form-group" style="margin-top: 8px;">
