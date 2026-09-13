@@ -21,6 +21,9 @@ class ArgentMobileApp {
   private activeThinkingContent: HTMLElement | null = null;
   private activeRethinkContent: HTMLElement | null = null;
   private activeTextContent: HTMLElement | null = null;
+  private generationStartTime: number = 0;
+  private thinkingTimerInterval: any = null;
+  private hasReceivedFirstToken: boolean = false;
 
   constructor() {
     this.settings = StorageService.getSettings();
@@ -247,6 +250,9 @@ class ArgentMobileApp {
       }
     }
 
+    const startTime = Date.now();
+    this.generationStartTime = startTime;
+    this.hasReceivedFirstToken = false;
     this.setStreamingState(true);
     const banner = document.getElementById('model-download-banner');
     const bannerPercent = document.getElementById('banner-percent-text');
@@ -258,14 +264,33 @@ class ArgentMobileApp {
         this.currentSession.messages,
         this.settings,
         {
+          onPhase: (phase, detail) => {
+            const statusEl = this.activeAssistantBubble?.querySelector('#live-thinking-status');
+            const detailEl = this.activeAssistantBubble?.querySelector('#live-thinking-detail');
+            if (statusEl && phase) statusEl.textContent = phase;
+            if (detailEl && detail) detailEl.textContent = detail;
+          },
           onContent: (_delta, fullContent) => {
+            if (!this.hasReceivedFirstToken) {
+              this.hasReceivedFirstToken = true;
+              if (typeof navigator !== 'undefined' && 'vibrate' in navigator) {
+                try { navigator.vibrate(15); } catch {}
+              }
+            }
             if (this.activeTextContent) {
+              this.activeTextContent.classList.remove('is-generating');
               this.activeTextContent.innerHTML = this.renderMarkdown(fullContent);
               this.attachCodeActionListeners(this.activeTextContent);
               this.scrollToBottom();
             }
           },
           onThinking: (_delta, fullThinking) => {
+            if (!this.hasReceivedFirstToken) {
+              this.hasReceivedFirstToken = true;
+              if (typeof navigator !== 'undefined' && 'vibrate' in navigator) {
+                try { navigator.vibrate(15); } catch {}
+              }
+            }
             if (this.activeThinkingContent) {
               this.activeThinkingContent.textContent = fullThinking;
               const card = this.activeThinkingContent.closest('.thought-card');
@@ -282,13 +307,24 @@ class ArgentMobileApp {
             }
           },
           onDone: (fullContent, fullThinking, fullRethink) => {
+            if (this.thinkingTimerInterval) {
+              clearInterval(this.thinkingTimerInterval);
+              this.thinkingTimerInterval = null;
+            }
+            const durationMs = Date.now() - startTime;
+            const durationSec = (durationMs / 1000).toFixed(1);
+            const engineName = this.settings.mode === 'offline'
+              ? (this.settings.offline.localFileName || this.settings.offline.model)
+              : this.settings.online.model;
+
             const assistantMsg: ChatMessage = {
               id: assistantMsgId,
               role: 'assistant',
               content: fullContent,
               thinking: fullThinking || undefined,
               rethink: fullRethink || undefined,
-              timestamp: Date.now()
+              timestamp: Date.now(),
+              durationMs
             };
             this.currentSession.messages.push(assistantMsg);
             StorageService.updateSessionMessages(
@@ -296,11 +332,24 @@ class ArgentMobileApp {
               this.currentSession.messages,
               userMsg.content
             );
-            this.finalizeAssistantBubble();
+            this.finalizeAssistantBubble(durationSec, engineName);
+            if (typeof navigator !== 'undefined' && 'vibrate' in navigator) {
+              try { navigator.vibrate([15, 30, 15]); } catch {}
+            }
           },
           onError: (err) => {
+            if (this.thinkingTimerInterval) {
+              clearInterval(this.thinkingTimerInterval);
+              this.thinkingTimerInterval = null;
+            }
             if (this.activeTextContent) {
-              this.activeTextContent.innerHTML = `<div style="color: #ef4444; font-weight: 500;">⚠️ Ошибка: ${err.message}</div>`;
+              this.activeTextContent.classList.remove('is-generating');
+              this.activeTextContent.innerHTML = `
+                <div style="background: rgba(239, 68, 68, 0.1); border: 1px solid rgba(239, 68, 68, 0.3); border-radius: 10px; padding: 12px; color: #fca5a5;">
+                  <div style="font-weight: 600; margin-bottom: 4px; color: #ef4444;">⚠️ Ошибка:</div>
+                  <div style="font-size: 0.84rem; line-height: 1.4;">${this.escapeHtml(err.message)}</div>
+                </div>
+              `;
             }
           }
         },
@@ -319,7 +368,8 @@ class ArgentMobileApp {
       );
     } catch (err: any) {
       if (this.activeTextContent) {
-        this.activeTextContent.innerHTML = `<div style="color: #ef4444;">⚠️ Сбой: ${err.message}</div>`;
+        this.activeTextContent.classList.remove('is-generating');
+        this.activeTextContent.innerHTML = `<div style="color: #ef4444;">⚠️ Сбой: ${this.escapeHtml(err.message)}</div>`;
       }
     } finally {
       this.setStreamingState(false);
@@ -357,6 +407,21 @@ class ArgentMobileApp {
     item.className = 'message-item assistant';
     item.id = msgId;
 
+    const isOffline = this.settings.mode === 'offline';
+    const engineLabel = isOffline 
+      ? (this.settings.offline.model.endsWith('.gguf') || this.settings.offline.model.endsWith('.bin') 
+          ? '⚡ llama.cpp ARM NEON' 
+          : '⚡ WebLLM GPU')
+      : `🌐 ${this.settings.online.provider.toUpperCase()}`;
+
+    const initialPhase = isOffline
+      ? 'Запуск нативного C++ движка...'
+      : 'Соединение с облачным сервером...';
+
+    const initialDetail = isOffline
+      ? 'Вычисление на процессоре Helio G99'
+      : 'Ожидание ответа модели...';
+
     item.innerHTML = `
       <div class="assistant-body">
         <!-- Thinking Card -->
@@ -383,9 +448,27 @@ class ArgentMobileApp {
           <div class="thought-card-content rethink-content-text"></div>
         </div>
 
-        <!-- Main Answer Content -->
-        <div class="assistant-content">
-          <span style="color: var(--text-muted); font-size: 0.85rem;">Думаю над ответом...</span>
+        <!-- Main Answer Content with Animated Thinking State -->
+        <div class="assistant-content is-generating">
+          <div class="thinking-state-box">
+            <div class="thinking-top-row">
+              <div class="thinking-orbit">
+                <span class="thinking-orbit-icon">🧠</span>
+              </div>
+              <div class="thinking-info">
+                <div class="thinking-status-line">
+                  <span class="thinking-label" id="live-thinking-status">${initialPhase}</span>
+                  <span class="thinking-timer" id="live-thinking-timer">0.0с</span>
+                </div>
+                <div class="thinking-detail-row">
+                  <span class="thinking-chip-engine">${engineLabel}</span>
+                  <div class="thinking-dots"><span></span><span></span><span></span></div>
+                  <span class="thinking-detail-text" id="live-thinking-detail">${initialDetail}</span>
+                </div>
+              </div>
+            </div>
+            <div class="thinking-shimmer-bar"></div>
+          </div>
         </div>
       </div>
     `;
@@ -398,10 +481,32 @@ class ArgentMobileApp {
 
     this.attachThoughtCollapsers(item);
     this.scrollToBottom();
+
+    // Запуск живого таймера размышления (100 мс)
+    if (this.thinkingTimerInterval) clearInterval(this.thinkingTimerInterval);
+    const timerEl = item.querySelector('#live-thinking-timer');
+    this.thinkingTimerInterval = setInterval(() => {
+      if (timerEl) {
+        const elapsed = ((Date.now() - this.generationStartTime) / 1000).toFixed(1);
+        timerEl.textContent = `${elapsed}с`;
+      }
+    }, 100);
+
+    // Тактильный виброотклик при старте генерации
+    if (typeof navigator !== 'undefined' && 'vibrate' in navigator) {
+      try { navigator.vibrate(20); } catch {}
+    }
   }
 
-  private finalizeAssistantBubble(): void {
+  private finalizeAssistantBubble(durationSec?: string, engineName?: string): void {
+    if (this.thinkingTimerInterval) {
+      clearInterval(this.thinkingTimerInterval);
+      this.thinkingTimerInterval = null;
+    }
+
     if (this.activeAssistantBubble) {
+      this.activeTextContent?.classList.remove('is-generating');
+
       // Авто-сворачивание хода мыслей после завершения генерации
       const thinkingCard = this.activeAssistantBubble.querySelector('.thought-card.thinking');
       thinkingCard?.classList.add('collapsed');
@@ -411,6 +516,20 @@ class ArgentMobileApp {
       // Убираем пульсирующие точки
       const indicators = this.activeAssistantBubble.querySelectorAll('.thought-indicator');
       indicators.forEach(el => el.remove());
+
+      // Добавляем красивый мета-бейдж времени генерации и модели
+      if (durationSec && this.activeTextContent && !this.activeAssistantBubble.querySelector('.message-meta-badge')) {
+        const metaBadge = document.createElement('div');
+        metaBadge.className = 'message-meta-badge';
+        const isOffline = this.settings.mode === 'offline';
+        metaBadge.innerHTML = `
+          <span class="meta-icon">${isOffline ? '⚡' : '🌐'}</span>
+          <span>${durationSec}с</span>
+          <span>•</span>
+          <span>${this.escapeHtml(engineName || '')}</span>
+        `;
+        this.activeAssistantBubble.querySelector('.assistant-body')?.appendChild(metaBadge);
+      }
     }
   }
 
@@ -454,6 +573,7 @@ class ArgentMobileApp {
     } else {
       const hasThinking = Boolean(msg.thinking);
       const hasRethink = Boolean(msg.rethink);
+      const durationSec = msg.durationMs ? (msg.durationMs / 1000).toFixed(1) : '';
 
       item.innerHTML = `
         <div class="assistant-body">
@@ -478,6 +598,13 @@ class ArgentMobileApp {
           ` : ''}
 
           <div class="assistant-content">${this.renderMarkdown(msg.content)}</div>
+
+          ${durationSec ? `
+            <div class="message-meta-badge">
+              <span class="meta-icon">⚡</span>
+              <span>${durationSec}с</span>
+            </div>
+          ` : ''}
         </div>
       `;
 

@@ -7,6 +7,7 @@ export interface ChatMessage {
   thinking?: string;
   rethink?: string;
   timestamp: number;
+  durationMs?: number;
 }
 
 export interface ChatSession {
@@ -48,6 +49,7 @@ export interface StreamCallbacks {
   onRethink?: (rethinkDelta: string, fullRethink: string) => void;
   onDone: (fullContent: string, fullThinking: string, fullRethink: string) => void;
   onError: (err: Error) => void;
+  onPhase?: (phase: string, detail?: string) => void;
 }
 
 export interface DownloadProgress {

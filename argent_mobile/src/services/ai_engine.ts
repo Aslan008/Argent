@@ -48,10 +48,11 @@ export class AIEngine {
     ];
 
     try {
+      callbacks.onPhase?.('Подготовка запроса...', settings.mode === 'online' ? settings.online.model : settings.offline.model);
       if (settings.mode === 'online') {
         await this.generateOnline(formattedMessages, settings, parser, abortController, callbacks);
       } else {
-        await this.generateOffline(formattedMessages, settings, parser, abortController, onProgress);
+        await this.generateOffline(formattedMessages, settings, parser, abortController, callbacks, onProgress);
       }
 
       parser.flush();
@@ -78,6 +79,7 @@ export class AIEngine {
     abortController: AbortController,
     callbacks: StreamCallbacks
   ): Promise<void> {
+    callbacks.onPhase?.('Подключение к серверу...', `${settings.online.provider}: ${settings.online.model}`);
     let endpoint = settings.online.endpoint.trim();
     if (!endpoint.endsWith('/chat/completions')) {
       endpoint = endpoint.replace(/\/+$/, '') + '/chat/completions';
@@ -90,6 +92,8 @@ export class AIEngine {
     if (settings.online.apiKey.trim()) {
       headers['Authorization'] = `Bearer ${settings.online.apiKey.trim()}`;
     }
+
+    callbacks.onPhase?.('Отправка запроса в облако...', 'Ожидание первого токена ответа');
 
     const response = await fetch(endpoint, {
       method: 'POST',
@@ -154,6 +158,7 @@ export class AIEngine {
     settings: AppSettings,
     parser: StreamTagParser,
     abortController: AbortController,
+    callbacks: StreamCallbacks,
     onProgress?: (p: DownloadProgress) => void
   ): Promise<void> {
     const targetModel = settings.offline.model;
@@ -161,6 +166,7 @@ export class AIEngine {
     // Если выбрана модель формата .gguf или .bin — используем нативный движок llama.cpp
     if (targetModel.endsWith('.gguf') || targetModel.endsWith('.bin')) {
       if (LlamaNativeService.isAvailable()) {
+        callbacks.onPhase?.('Проверка доступа к памяти...', 'Системные разрешения Android');
         if (onProgress) {
           onProgress({ progress: 10, text: `Проверка доступа к памяти устройства...` });
         }
@@ -175,6 +181,7 @@ export class AIEngine {
           );
         }
 
+        callbacks.onPhase?.('Поиск файла модели на диске...', targetModel);
         if (onProgress) {
           onProgress({ progress: 25, text: `Поиск файла модели ${targetModel}...` });
         }
@@ -185,6 +192,7 @@ export class AIEngine {
           pathToLoad = resolved.path;
         }
 
+        callbacks.onPhase?.('Загрузка в память (mmap)...', `llama.cpp ARM NEON • ${resolved.name || targetModel}`);
         if (onProgress) {
           onProgress({ progress: 60, text: `Загрузка модели через llama.cpp (ARM NEON)...` });
         }
@@ -200,6 +208,8 @@ export class AIEngine {
           chatmlPrompt += `<|im_start|>${msg.role}\n${msg.content}<|im_end|>\n`;
         }
         chatmlPrompt += '<|im_start|>assistant\n';
+
+        callbacks.onPhase?.('Осмысление запроса на процессоре...', 'Helio G99 • 4 потока CPU (ARM NEON)');
 
         await LlamaNativeService.generateStream(
           chatmlPrompt,
