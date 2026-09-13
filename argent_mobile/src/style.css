@@ -582,9 +582,11 @@ pre code.hljs {
   font-family: var(--font-sans);
   font-size: 0.95rem;
   line-height: 1.4;
+  min-height: 38px;
   max-height: 120px;
   resize: none;
   padding: 8px 0;
+  box-sizing: border-box;
 }
 
 #user-input::placeholder {
