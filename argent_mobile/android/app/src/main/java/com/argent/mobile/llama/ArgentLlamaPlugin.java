@@ -51,7 +51,7 @@ public class ArgentLlamaPlugin extends Plugin {
     }
 
     private native boolean nativeLoadModel(String path, int threads, int ctx);
-    private native boolean nativeGenerate(String prompt, float temperature, int maxTokens, TokenCallback callback);
+    private native int nativeGenerate(String prompt, float temperature, int maxTokens, TokenCallback callback);
     private native void nativeStop();
     private native void nativeUnloadModel();
 
@@ -391,9 +391,22 @@ public class ArgentLlamaPlugin extends Plugin {
                     notifyListeners("token", data);
                 };
 
-                boolean ok = nativeGenerate(prompt, temperature, maxTokens, callback);
+                long genStart = System.currentTimeMillis();
+                int tokensCount = nativeGenerate(prompt, temperature, maxTokens, callback);
+                long genElapsed = System.currentTimeMillis() - genStart;
+                double tps = (tokensCount > 0 && genElapsed > 0) ? (tokensCount * 1000.0) / genElapsed : 0.0;
+                Log.i(TAG, String.format(Locale.US, "Генерация завершена: токенов=%d, время=%d мс (%.2f ток/с)", tokensCount, genElapsed, tps));
+
+                if (tokensCount < 0) {
+                    call.reject("Ошибка выполнения генерации в движке llama.cpp (декодирование прервано)");
+                    return;
+                }
+
                 JSObject ret = new JSObject();
-                ret.put("success", ok);
+                ret.put("success", true);
+                ret.put("tokensGenerated", tokensCount);
+                ret.put("durationMs", genElapsed);
+                ret.put("tokensPerSecond", tps);
                 call.resolve(ret);
             } catch (Exception e) {
                 Log.e(TAG, "Ошибка генерации: " + e.getMessage());

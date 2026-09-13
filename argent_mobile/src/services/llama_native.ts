@@ -13,7 +13,12 @@ export interface ArgentLlamaPluginInterface {
   scanForModels(): Promise<{ models: ScannedModel[]; permissionRequired?: boolean }>;
   resolvePath(options: { path: string }): Promise<{ found: boolean; path: string; name?: string; size?: number }>;
   loadModel(options: { path: string; threads?: number; context?: number }): Promise<{ success: boolean; path: string; reused?: boolean }>;
-  generateStream(options: { prompt: string; temperature?: number; max_tokens?: number }): Promise<{ success: boolean }>;
+  generateStream(options: { prompt: string; temperature?: number; max_tokens?: number }): Promise<{
+    success: boolean;
+    tokensGenerated?: number;
+    durationMs?: number;
+    tokensPerSecond?: number;
+  }>;
   stopGeneration(): Promise<{ stopped: boolean }>;
   unloadModel(): Promise<{ unloaded: boolean }>;
   addListener(eventName: 'token', listenerFunc: (data: { token: string }) => void): Promise<PluginListenerHandle>;
@@ -81,7 +86,7 @@ export class LlamaNativeService {
     maxTokens = 1024,
     onToken: (token: string) => void,
     abortSignal?: AbortSignal
-  ): Promise<void> {
+  ): Promise<{ tokensGenerated: number; durationMs: number; tokensPerSecond: number }> {
     if (!this.isAvailable()) {
       throw new Error('Нативный движок llama.cpp доступен только в скомпилированном APK.');
     }
@@ -114,11 +119,16 @@ export class LlamaNativeService {
     }
 
     try {
-      await ArgentLlama.generateStream({
+      const res = await ArgentLlama.generateStream({
         prompt,
         temperature,
         max_tokens: maxTokens
       });
+      return {
+        tokensGenerated: res.tokensGenerated || 0,
+        durationMs: res.durationMs || 0,
+        tokensPerSecond: res.tokensPerSecond || 0
+      };
     } finally {
       this.isCurrentlyGenerating = false;
       if (abortSignal) {

@@ -3,6 +3,7 @@
 #include <vector>
 #include <atomic>
 #include <mutex>
+#include <algorithm>
 #include <android/log.h>
 #include "llama.h"
 
@@ -28,6 +29,9 @@ Java_com_argent_mobile_llama_ArgentLlamaPlugin_nativeLoadModel(
 
     std::lock_guard<std::mutex> lock(g_mutex);
 
+    // Обязательная инициализация бэкендов llama.cpp (ARM NEON, CPU)
+    llama_backend_init();
+
     const char * model_path = env->GetStringUTFChars(jModelPath, nullptr);
     if (!model_path) {
         LOGE("Не удалось получить путь к модели из Java");
@@ -49,6 +53,7 @@ Java_com_argent_mobile_llama_ArgentLlamaPlugin_nativeLoadModel(
 
     // Инициализация параметров модели (mmap включен по умолчанию)
     struct llama_model_params model_params = llama_model_default_params();
+    model_params.use_mmap = true;
 
     g_model = llama_model_load_from_file(model_path, model_params);
     env->ReleaseStringUTFChars(jModelPath, model_path);
@@ -59,6 +64,12 @@ Java_com_argent_mobile_llama_ArgentLlamaPlugin_nativeLoadModel(
     }
 
     g_vocab = llama_model_get_vocab(g_model);
+    if (!g_vocab) {
+        LOGE("Ошибка: llama_model_get_vocab вернул null");
+        llama_model_free(g_model);
+        g_model = nullptr;
+        return JNI_FALSE;
+    }
 
     // Инициализация параметров контекста
     struct llama_context_params ctx_params = llama_context_default_params();
@@ -79,7 +90,7 @@ Java_com_argent_mobile_llama_ArgentLlamaPlugin_nativeLoadModel(
     return JNI_TRUE;
 }
 
-JNIEXPORT jboolean JNICALL
+JNIEXPORT jint JNICALL
 Java_com_argent_mobile_llama_ArgentLlamaPlugin_nativeGenerate(
         JNIEnv * env,
         jobject /* thiz */,
@@ -92,11 +103,11 @@ Java_com_argent_mobile_llama_ArgentLlamaPlugin_nativeGenerate(
 
     if (!g_model || !g_ctx || !g_vocab) {
         LOGE("Модель не загружена перед генерацией");
-        return JNI_FALSE;
+        return -1;
     }
 
     const char * prompt_text = env->GetStringUTFChars(jPrompt, nullptr);
-    if (!prompt_text) return JNI_FALSE;
+    if (!prompt_text) return -1;
 
     g_stop = false;
 
@@ -106,41 +117,27 @@ Java_com_argent_mobile_llama_ArgentLlamaPlugin_nativeGenerate(
 
     int n_prompt_tokens = -llama_tokenize(g_vocab, prompt_str.c_str(), prompt_str.length(), nullptr, 0, true, true);
     if (n_prompt_tokens <= 0) {
-        n_prompt_tokens = prompt_str.length() + 32;
+        n_prompt_tokens = prompt_str.length() + 64;
     }
     std::vector<llama_token> prompt_tokens(n_prompt_tokens);
     n_prompt_tokens = llama_tokenize(g_vocab, prompt_str.c_str(), prompt_str.length(), prompt_tokens.data(), prompt_tokens.size(), true, true);
     if (n_prompt_tokens < 0) {
         LOGE("Ошибка токенизации промпта");
-        return JNI_FALSE;
+        return -1;
     }
     prompt_tokens.resize(n_prompt_tokens);
+
+    LOGI("Промпт успешно токенизирован: %zu токенов", prompt_tokens.size());
 
     // Очищаем состояние памяти/KV-кэша перед новым запросом
     llama_memory_clear(llama_get_memory(g_ctx), true);
 
-    // Инициализация сэмплера
+    // Инициализация цепочки сэмплеров
     struct llama_sampler * smpl = llama_sampler_chain_init(llama_sampler_chain_default_params());
     llama_sampler_chain_add(smpl, llama_sampler_init_top_k(40));
     llama_sampler_chain_add(smpl, llama_sampler_init_top_p(0.9f, 1));
     llama_sampler_chain_add(smpl, llama_sampler_init_temp(temperature > 0.0f ? temperature : 0.6f));
     llama_sampler_chain_add(smpl, llama_sampler_init_dist(1234));
-
-    // Подача промпта в контекст пакетами (batch)
-    const int batch_size = 512;
-    for (int i = 0; i < (int)prompt_tokens.size(); i += batch_size) {
-        if (g_stop.load()) {
-            llama_sampler_free(smpl);
-            return JNI_TRUE;
-        }
-        int cur_batch = std::min(batch_size, (int)prompt_tokens.size() - i);
-        struct llama_batch batch = llama_batch_get_one(&prompt_tokens[i], cur_batch);
-        if (llama_decode(g_ctx, batch) != 0) {
-            LOGE("Ошибка при декодировании промпта в llama_decode");
-            llama_sampler_free(smpl);
-            return JNI_FALSE;
-        }
-    }
 
     // Поиск метода onToken в объекте callback
     jclass callbackClass = env->GetObjectClass(jCallback);
@@ -148,19 +145,60 @@ Java_com_argent_mobile_llama_ArgentLlamaPlugin_nativeGenerate(
     if (!onTokenMethod) {
         LOGE("Не найден метод onToken(String) в переданном callback");
         llama_sampler_free(smpl);
-        return JNI_FALSE;
+        return -1;
     }
 
+    const int n_prompt = (int)prompt_tokens.size();
+    const int batch_capacity = 512;
+    struct llama_batch batch = llama_batch_init(batch_capacity, 0, 1);
+
+    // Подача промпта в контекст пакетами (prefill)
+    for (int i = 0; i < n_prompt; i += batch_capacity) {
+        if (g_stop.load()) {
+            llama_batch_free(batch);
+            llama_sampler_free(smpl);
+            return 0;
+        }
+        int cur_batch = std::min(batch_capacity, n_prompt - i);
+        batch.n_tokens = 0;
+        for (int j = 0; j < cur_batch; j++) {
+            int token_idx = i + j;
+            batch.token[j] = prompt_tokens[token_idx];
+            batch.pos[j] = token_idx;
+            batch.n_seq_id[j] = 1;
+            batch.seq_id[j][0] = 0;
+            // ВАЖНО: вычисляем логиты только для последнего токена промпта для первого сэмплинга!
+            batch.logits[j] = (token_idx == n_prompt - 1);
+        }
+        batch.n_tokens = cur_batch;
+
+        if (llama_decode(g_ctx, batch) != 0) {
+            LOGE("Ошибка llama_decode при обработке пакета промпта (смещение %d)", i);
+            llama_batch_free(batch);
+            llama_sampler_free(smpl);
+            return -1;
+        }
+    }
+
+    int n_cur = n_prompt;
     int n_generated = 0;
     int limit = maxTokens > 0 ? maxTokens : 1024;
+
+    LOGI("Старт цикла авторегрессионной генерации (макс токенов: %d)...", limit);
 
     // Цикл пошаговой генерации токенов
     while (n_generated < limit && !g_stop.load()) {
         const llama_token id = llama_sampler_sample(smpl, g_ctx, -1);
         llama_sampler_accept(smpl, id);
 
+        if (id == LLAMA_TOKEN_NULL) {
+            LOGE("llama_sampler_sample вернул LLAMA_TOKEN_NULL на шаге %d", n_generated);
+            break;
+        }
+
         // Проверка на конец генерации (EOS / EOG)
         if (llama_vocab_is_eog(g_vocab, id)) {
+            LOGI("Встречен токен конца ответа EOG (%d). Генерация завершена.", id);
             break;
         }
 
@@ -170,24 +208,58 @@ Java_com_argent_mobile_llama_ArgentLlamaPlugin_nativeGenerate(
         if (n_piece > 0) {
             std::string piece_str(piece_buf, n_piece);
             jstring jPiece = env->NewStringUTF(piece_str.c_str());
-            env->CallVoidMethod(jCallback, onTokenMethod, jPiece);
-            env->DeleteLocalRef(jPiece);
+            if (jPiece) {
+                env->CallVoidMethod(jCallback, onTokenMethod, jPiece);
+                env->DeleteLocalRef(jPiece);
+                if (env->ExceptionCheck()) {
+                    LOGE("Исключение в Java callback onToken");
+                    env->ExceptionDescribe();
+                    env->ExceptionClear();
+                    break;
+                }
+            }
+        } else if (n_piece < 0) {
+            std::vector<char> big_buf(-n_piece);
+            int n_big = llama_token_to_piece(g_vocab, id, big_buf.data(), big_buf.size(), 0, false);
+            if (n_big > 0) {
+                std::string piece_str(big_buf.data(), n_big);
+                jstring jPiece = env->NewStringUTF(piece_str.c_str());
+                if (jPiece) {
+                    env->CallVoidMethod(jCallback, onTokenMethod, jPiece);
+                    env->DeleteLocalRef(jPiece);
+                    if (env->ExceptionCheck()) {
+                        LOGE("Исключение в Java callback onToken");
+                        env->ExceptionDescribe();
+                        env->ExceptionClear();
+                        break;
+                    }
+                }
+            }
         }
 
-        // Подготовка к декодированию следующего токена
-        llama_token next_token = id;
-        struct llama_batch next_batch = llama_batch_get_one(&next_token, 1);
-        if (llama_decode(g_ctx, next_batch) != 0) {
-            LOGE("Ошибка декодирования следующего токена");
+        // Подготовка пакета для следующего токена
+        batch.n_tokens = 0;
+        batch.token[0] = id;
+        batch.pos[0] = n_cur;
+        batch.n_seq_id[0] = 1;
+        batch.seq_id[0][0] = 0;
+        batch.logits[0] = true;
+        batch.n_tokens = 1;
+
+        n_cur++;
+        n_generated++;
+
+        if (llama_decode(g_ctx, batch) != 0) {
+            LOGE("Ошибка llama_decode при декодировании токена на шаге %d", n_generated);
             break;
         }
-
-        n_generated++;
     }
 
+    llama_batch_free(batch);
     llama_sampler_free(smpl);
-    LOGI("Генерация завершена. Сгенерировано токенов: %d", n_generated);
-    return JNI_TRUE;
+
+    LOGI("Генерация завершена. Успешно сгенерировано токенов: %d", n_generated);
+    return n_generated;
 }
 
 JNIEXPORT void JNICALL

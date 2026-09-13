@@ -311,6 +311,22 @@ class ArgentMobileApp {
               clearInterval(this.thinkingTimerInterval);
               this.thinkingTimerInterval = null;
             }
+
+            if (!fullContent.trim() && !fullThinking.trim()) {
+              if (this.activeTextContent) {
+                this.activeTextContent.classList.remove('is-generating');
+                this.activeTextContent.innerHTML = `
+                  <div style="background: rgba(239, 68, 68, 0.1); border: 1px solid rgba(239, 68, 68, 0.3); border-radius: 10px; padding: 12px; color: #fca5a5;">
+                    <div style="font-weight: 600; margin-bottom: 4px; color: #ef4444;">⚠️ Ответ не сгенерирован (0 токенов)</div>
+                    <div style="font-size: 0.84rem; line-height: 1.4;">
+                      Модель завершила вычисления, но не сформировала текст. Проверьте целостность файла модели (.gguf) или повторите отправку.
+                    </div>
+                  </div>
+                `;
+              }
+              return;
+            }
+
             const durationMs = Date.now() - startTime;
             const durationSec = (durationMs / 1000).toFixed(1);
             const engineName = this.settings.mode === 'offline'
@@ -805,6 +821,7 @@ class ArgentMobileApp {
       if (val) {
         this.settings.offline.model = val;
         this.settings.offline.localFileName = val.split('/').pop() || val;
+        this.switchMode('offline');
         if (optCustomLocal) {
           optCustomLocal.style.display = 'block';
           optCustomLocal.textContent = `⚡ ${this.settings.offline.localFileName}`;
@@ -825,6 +842,7 @@ class ArgentMobileApp {
         this.settings.offline.localFileName = file.name;
         this.settings.offline.localFileSize = sizeStr;
         this.settings.offline.model = file.name;
+        this.switchMode('offline');
 
         if (manualPathInput) {
           manualPathInput.value = file.name;
@@ -842,6 +860,8 @@ class ArgentMobileApp {
             console.warn('resolvePath error:', e);
           }
         }
+
+        StorageService.saveSettings(this.settings);
 
         if (optCustomLocal) {
           optCustomLocal.style.display = 'block';
@@ -1127,6 +1147,8 @@ class ArgentMobileApp {
           this.settings.offline.model = first.path;
           selectOfflineModel.value = first.path;
           if (manualInput) manualInput.value = first.path;
+          this.switchMode('offline');
+          StorageService.saveSettings(this.settings);
         }
 
         if (localFileInfo) {

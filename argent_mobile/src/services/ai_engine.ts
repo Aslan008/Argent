@@ -161,10 +161,20 @@ export class AIEngine {
     callbacks: StreamCallbacks,
     onProgress?: (p: DownloadProgress) => void
   ): Promise<void> {
-    const targetModel = settings.offline.model;
+    const targetModel = (settings.offline.model || '').trim();
+    const localFileName = (settings.offline.localFileName || '').trim();
 
-    // Если выбрана модель формата .gguf или .bin — используем нативный движок llama.cpp
-    if (targetModel.endsWith('.gguf') || targetModel.endsWith('.bin')) {
+    // Проверяем, является ли модель файлом GGUF/BIN или локальной моделью (Nanbeige и др.)
+    const isGgufOrLocal = targetModel.toLowerCase().endsWith('.gguf') ||
+                          targetModel.toLowerCase().endsWith('.bin') ||
+                          localFileName.toLowerCase().endsWith('.gguf') ||
+                          localFileName.toLowerCase().endsWith('.bin') ||
+                          targetModel.toLowerCase().includes('nanbeige') ||
+                          localFileName.toLowerCase().includes('nanbeige') ||
+                          targetModel.startsWith('/') ||
+                          targetModel.startsWith('file://');
+
+    if (isGgufOrLocal) {
       if (LlamaNativeService.isAvailable()) {
         callbacks.onPhase?.('Проверка доступа к памяти...', 'Системные разрешения Android');
         if (onProgress) {
@@ -181,18 +191,19 @@ export class AIEngine {
           );
         }
 
-        callbacks.onPhase?.('Поиск файла модели на диске...', targetModel);
+        const queryModelName = localFileName || targetModel;
+        callbacks.onPhase?.('Поиск файла модели на диске...', queryModelName);
         if (onProgress) {
-          onProgress({ progress: 25, text: `Поиск файла модели ${targetModel}...` });
+          onProgress({ progress: 25, text: `Поиск файла модели ${queryModelName}...` });
         }
 
         let pathToLoad = targetModel;
-        const resolved = await LlamaNativeService.resolvePath(targetModel);
+        const resolved = await LlamaNativeService.resolvePath(queryModelName);
         if (resolved.found && resolved.path) {
           pathToLoad = resolved.path;
         }
 
-        callbacks.onPhase?.('Загрузка в память (mmap)...', `llama.cpp ARM NEON • ${resolved.name || targetModel}`);
+        callbacks.onPhase?.('Загрузка в память (mmap)...', `llama.cpp ARM NEON • ${resolved.name || queryModelName}`);
         if (onProgress) {
           onProgress({ progress: 60, text: `Загрузка модели через llama.cpp (ARM NEON)...` });
         }
@@ -209,15 +220,21 @@ export class AIEngine {
         }
         chatmlPrompt += '<|im_start|>assistant\n';
 
-        callbacks.onPhase?.('Осмысление запроса на процессоре...', 'Helio G99 • 4 потока CPU (ARM NEON)');
+        callbacks.onPhase?.('Вычисление на процессоре...', 'Helio G99 (4 потока ARM NEON) • Ожидание первого токена');
 
-        await LlamaNativeService.generateStream(
+        const genResult = await LlamaNativeService.generateStream(
           chatmlPrompt,
           settings.temperature,
           1024,
           (delta) => parser.feed(delta),
           abortController.signal
         );
+
+        if (genResult.tokensGenerated === 0 && !parser.fullContent && !parser.fullThinking) {
+          throw new Error(
+            '⚠️ Модель не выдала ни одного токена ответа. Возможно, повреждён файл модели (.gguf) или не хватает свободной оперативной памяти устройства.'
+          );
+        }
         return;
       } else {
         throw new Error(
