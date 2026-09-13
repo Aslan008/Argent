@@ -53,7 +53,6 @@ Java_com_argent_mobile_llama_ArgentLlamaPlugin_nativeLoadModel(
 
     // Инициализация параметров модели (mmap включен по умолчанию)
     struct llama_model_params model_params = llama_model_default_params();
-    model_params.use_mmap = true;
 
     g_model = llama_model_load_from_file(model_path, model_params);
     env->ReleaseStringUTFChars(jModelPath, model_path);
