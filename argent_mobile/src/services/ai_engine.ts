@@ -216,7 +216,8 @@ export class AIEngine {
           onProgress({ progress: 60, text: `Загрузка модели через llama.cpp (ARM NEON)...` });
         }
 
-        await LlamaNativeService.loadModel(pathToLoad, 4, 2048);
+        const threadsCount = settings.offline.threads || 2;
+        await LlamaNativeService.loadModel(pathToLoad, threadsCount, 2048);
 
         if (onProgress) {
           onProgress({ progress: 100, text: 'Модель готова к работе' });
@@ -228,7 +229,7 @@ export class AIEngine {
         }
         chatmlPrompt += '<|im_start|>assistant\n';
 
-        callbacks.onPhase?.('Вычисление на процессоре...', 'Helio G99 (4 потока ARM NEON) • Ожидание первого токена');
+        callbacks.onPhase?.('Генерация ответа...', `llama.cpp ARM NEON • ${threadsCount} потока • Вычисление`);
 
         const genResult = await LlamaNativeService.generateStream(
           chatmlPrompt,
@@ -304,10 +305,18 @@ export class AIEngine {
       throw new Error('WebGPU не поддерживается этим устройством.');
     }
 
-    if (modelName.endsWith('.gguf') || modelName.endsWith('.bin')) {
+    const lowerName = (modelName || '').toLowerCase();
+    if (
+      modelName === 'custom_local' ||
+      lowerName.endsWith('.gguf') ||
+      lowerName.endsWith('.bin') ||
+      lowerName.includes('nanbeige') ||
+      modelName.startsWith('/') ||
+      modelName.startsWith('file://')
+    ) {
       throw new Error(
-        `Файл "${modelName}" имеет формат GGUF (для llama.cpp / Ollama).\n` +
-        `Для встроенного оффлайна на телефоне выберите модель из списка (например, Qwen 2.5 1.5B).`
+        `Файл "${modelName}" имеет формат GGUF (для llama.cpp ARM NEON).\n\n` +
+        `Модели формата .gguf запускаются нативно на процессоре смартфона напрямую из файлов устройства без интернета и не требуют загрузки в веб-кэш.`
       );
     }
 

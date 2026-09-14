@@ -296,6 +296,10 @@ class ArgentMobileApp {
               this.activeThinkingContent.textContent = fullThinking;
               const card = this.activeThinkingContent.closest('.thought-card');
               card?.classList.remove('hidden');
+              const statusEl = this.activeAssistantBubble?.querySelector('#live-thinking-status');
+              const detailEl = this.activeAssistantBubble?.querySelector('#live-thinking-detail');
+              if (statusEl) statusEl.textContent = 'Формирование хода мыслей...';
+              if (detailEl) detailEl.textContent = 'llama.cpp ARM NEON • Генерация рассуждений';
               this.scrollToBottom();
             }
           },
@@ -964,7 +968,60 @@ class ArgentMobileApp {
 
     btnPreloadModel?.addEventListener('click', async () => {
       const select = document.getElementById('setting-offline-model') as HTMLSelectElement;
-      const modelName = select.value;
+      const modelName = select?.value || '';
+      const manualInput = document.getElementById('setting-manual-model-path') as HTMLInputElement;
+      const manualPath = manualInput?.value?.trim() || '';
+      const customIdInput = document.getElementById('setting-custom-offline-id') as HTMLInputElement;
+      const customId = customIdInput?.value?.trim() || '';
+
+      const effectiveModel = manualPath || (modelName !== 'custom_local' ? modelName : '') || customId;
+      const lowerModel = effectiveModel.toLowerCase();
+
+      const isGgufOrLocal = modelName === 'custom_local' ||
+                            lowerModel.endsWith('.gguf') ||
+                            lowerModel.endsWith('.bin') ||
+                            lowerModel.includes('nanbeige') ||
+                            effectiveModel.startsWith('/') ||
+                            effectiveModel.startsWith('file://');
+
+      if (isGgufOrLocal) {
+        if (!LlamaNativeService.isAvailable()) {
+          alert('Файлы формата .gguf запускаются через нативный движок llama.cpp внутри установленного APK приложения.');
+          return;
+        }
+
+        const queryName = effectiveModel || this.settings.offline.localFileName || this.settings.offline.model || 'Nanbeige4.2-3B-Q4_K_M.gguf';
+        try {
+          const res = await LlamaNativeService.resolvePath(queryName);
+          if (res.found && res.path) {
+            const sizeGb = (res.size ? res.size / (1024 * 1024 * 1024) : 0).toFixed(2);
+            alert(
+              `✅ Локальная модель GGUF найдена на телефоне!\n\n` +
+              `Файл: ${res.name || queryName}\n` +
+              `Размер: ${sizeGb} ГБ\n` +
+              `Путь: ${res.path}\n\n` +
+              `Модель запускается нативно на процессоре смартфона с ускорением ARM NEON.\n` +
+              `Скачивание из интернета не требуется!`
+            );
+          } else {
+            alert(
+              `ℹ️ Файл модели "${queryName}" не найден в стандартных папках (Загрузки, Telegram, Documents).\n\n` +
+              `Нажмите кнопку "📁 Выбрать из папки" выше, чтобы указать файл .gguf с накопителя устройства.`
+            );
+          }
+        } catch (err: any) {
+          alert(`Ошибка проверки модели: ${err.message}`);
+        }
+        return;
+      }
+
+      // Для веб-моделей (WebLLM)
+      const targetWebModel = customId || modelName;
+      if (!targetWebModel || targetWebModel === 'custom_local') {
+        alert('Выберите модель WebLLM из списка или введите ID модели Hugging Face.');
+        return;
+      }
+
       const banner = document.getElementById('model-download-banner');
       const bannerPercent = document.getElementById('banner-percent-text');
       const bannerFill = document.getElementById('banner-progress-fill');
@@ -972,14 +1029,14 @@ class ArgentMobileApp {
 
       banner?.classList.remove('hidden');
       try {
-        await AIEngine.preloadOfflineModel(modelName, (p) => {
+        await AIEngine.preloadOfflineModel(targetWebModel, (p) => {
           if (bannerPercent && bannerFill && bannerText) {
             bannerPercent.textContent = `${p.progress}%`;
             bannerFill.style.width = `${p.progress}%`;
             bannerText.textContent = p.text;
           }
         });
-        alert('Модель успешно загружена в кэш устройства и готова к оффлайн работе!');
+        alert('Веб-модель успешно загружена в кэш устройства и готова к оффлайн работе!');
       } catch (err: any) {
         alert('Ошибка загрузки модели: ' + err.message);
       } finally {
@@ -1115,6 +1172,11 @@ class ArgentMobileApp {
     const manualInput = document.getElementById('setting-manual-model-path') as HTMLInputElement;
     if (manualInput) {
       manualInput.value = this.settings.offline.localFileName || this.settings.offline.model || '';
+    }
+
+    const threadsSelect = document.getElementById('setting-offline-threads') as HTMLSelectElement;
+    if (threadsSelect) {
+      threadsSelect.value = String(this.settings.offline.threads || 2);
     }
 
     if (this.settings.offline.localFileName) {
@@ -1264,7 +1326,11 @@ class ArgentMobileApp {
     this.settings.online.apiKey = apiKey || '';
     this.settings.online.model = model || 'deepseek-chat';
 
-    if (manualPath && (manualPath.endsWith('.gguf') || manualPath.endsWith('.bin'))) {
+    const threadsSelect = (document.getElementById('setting-offline-threads') as HTMLSelectElement)?.value;
+    const threadsVal = threadsSelect ? parseInt(threadsSelect, 10) : 2;
+    this.settings.offline.threads = isNaN(threadsVal) ? 2 : threadsVal;
+
+    if (manualPath) {
       this.settings.offline.model = manualPath;
       this.settings.offline.localFileName = manualPath.split('/').pop() || manualPath;
     } else {

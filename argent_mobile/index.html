@@ -248,12 +248,24 @@
             </div>
 
             <div class="form-group" style="margin-top: 8px;">
-              <label for="setting-custom-offline-id">Или имя модели на Hugging Face</label>
-              <input type="text" id="setting-custom-offline-id" placeholder="например: Nanbeige/Nanbeige4.2-3B-Chat" />
+              <label for="setting-offline-threads">Потоки процессора (CPU Threads)</label>
+              <select id="setting-offline-threads">
+                <option value="2">2 потока (рекомендуется для Helio G99 / 2 Performance ядра)</option>
+                <option value="4">4 потока (для 4+4 ядер)</option>
+                <option value="1">1 поток (энергосбережение)</option>
+              </select>
+              <p class="hint-text">Для архитектуры 2+6 ядер (Helio G99) 2 потока работают строго на ядрах Cortex-A76, устраняя простои.</p>
             </div>
 
-            <button id="btn-preload-model" class="secondary-btn" style="margin-top: 6px;">Загрузить / Обновить оффлайн-модель</button>
-            <p class="hint-text">Модель сохраняется в память устройства и работает без интернета.</p>
+            <div class="form-group" style="margin-top: 8px;">
+              <label for="setting-custom-offline-id">Или имя веб-модели на Hugging Face (WebLLM)</label>
+              <input type="text" id="setting-custom-offline-id" placeholder="например: Qwen/Qwen2.5-1.5B-Instruct-q4f16_1-MLC" />
+            </div>
+
+            <button id="btn-preload-model" class="secondary-btn" style="margin-top: 6px;">
+              <span>💾</span> Проверить модель / Скачать веб-веса
+            </button>
+            <p class="hint-text">Файлы .gguf запускаются напрямую с диска телефона. Для веб-моделей скачивает веса в кэш WebGPU.</p>
           </div>
 
           <div class="settings-section">

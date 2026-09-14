@@ -37,6 +37,7 @@ export interface AppSettings {
     localFileName?: string;
     localFileSize?: string;
     customModelId?: string;
+    threads?: number;
   };
   temperature: number;
   enableRethink: boolean;

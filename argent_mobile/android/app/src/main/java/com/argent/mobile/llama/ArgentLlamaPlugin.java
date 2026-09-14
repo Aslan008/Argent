@@ -6,6 +6,8 @@ import android.content.pm.PackageManager;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Environment;
+import android.os.Handler;
+import android.os.Looper;
 import android.provider.Settings;
 import android.util.Log;
 
@@ -34,6 +36,7 @@ public class ArgentLlamaPlugin extends Plugin {
     private static final String TAG = "ArgentLlamaPlugin";
 
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
+    private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private boolean isModelLoaded = false;
     private String currentLoadedPath = "";
 
@@ -337,7 +340,7 @@ public class ArgentLlamaPlugin extends Plugin {
         }
 
         final String finalPath = file.getAbsolutePath();
-        final int threads = call.getInt("threads", 4);
+        final int threads = call.getInt("threads", 2);
         final int context = call.getInt("context", 2048);
 
         Log.i(TAG, "Загрузка модели из: " + finalPath + " (размер: " + file.length() + " байт)");
@@ -386,9 +389,12 @@ public class ArgentLlamaPlugin extends Plugin {
         executor.execute(() -> {
             try {
                 TokenCallback callback = token -> {
-                    JSObject data = new JSObject();
-                    data.put("token", token);
-                    notifyListeners("token", data);
+                    if (token == null || token.isEmpty()) return;
+                    mainHandler.post(() -> {
+                        JSObject data = new JSObject();
+                        data.put("token", token);
+                        notifyListeners("token", data);
+                    });
                 };
 
                 long genStart = System.currentTimeMillis();

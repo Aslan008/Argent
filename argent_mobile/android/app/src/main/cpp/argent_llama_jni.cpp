@@ -17,6 +17,55 @@ static const struct llama_vocab * g_vocab = nullptr;
 static std::mutex g_mutex;
 static std::atomic<bool> g_stop{false};
 
+// Определяет длину префикса в строке, состоящего из полных, валидных UTF-8 символов.
+// Если в конце буфера осталась неполная многобайтовая последовательность (например, 1 байт кириллицы из 2-х),
+// функция возвращает позицию перед ней, чтобы не передавать неполный UTF-8 в env->NewStringUTF.
+static size_t get_valid_utf8_prefix_len(const std::string & str) {
+    if (str.empty()) return 0;
+    size_t i = 0;
+    size_t last_valid = 0;
+    const size_t len = str.length();
+
+    while (i < len) {
+        unsigned char c = static_cast<unsigned char>(str[i]);
+        size_t char_len = 0;
+        if ((c & 0x80) == 0x00) {
+            char_len = 1; // 1-byte ASCII
+        } else if ((c & 0xE0) == 0xC0) {
+            char_len = 2; // 2-byte UTF-8 (кириллица и др.)
+        } else if ((c & 0xF0) == 0xE0) {
+            char_len = 3; // 3-byte UTF-8 (азиатские языки и др.)
+        } else if ((c & 0xF8) == 0xF0) {
+            char_len = 4; // 4-byte UTF-8 (эмодзи и редкие символы)
+        } else {
+            i++;
+            last_valid = i;
+            continue;
+        }
+
+        if (i + char_len <= len) {
+            bool valid = true;
+            for (size_t k = 1; k < char_len; ++k) {
+                if ((static_cast<unsigned char>(str[i + k]) & 0xC0) != 0x80) {
+                    valid = false;
+                    break;
+                }
+            }
+            if (valid) {
+                i += char_len;
+                last_valid = i;
+            } else {
+                i++;
+                last_valid = i;
+            }
+        } else {
+            // Неполная последовательность на границе буфера
+            break;
+        }
+    }
+    return last_valid;
+}
+
 extern "C" {
 
 JNIEXPORT jboolean JNICALL
@@ -185,10 +234,30 @@ Java_com_argent_mobile_llama_ArgentLlamaPlugin_nativeGenerate(
 
     LOGI("Старт цикла авторегрессионной генерации (макс токенов: %d)...", limit);
 
+    // Буфер накопления байтов UTF-8 для безопасной передачи кириллицы и CJK в Java
+    std::string utf8_accum;
+    auto flush_utf8 = [&](bool force) {
+        if (utf8_accum.empty()) return;
+        size_t valid_len = force ? utf8_accum.length() : get_valid_utf8_prefix_len(utf8_accum);
+        if (valid_len > 0) {
+            std::string to_send = utf8_accum.substr(0, valid_len);
+            utf8_accum.erase(0, valid_len);
+            jstring jPiece = env->NewStringUTF(to_send.c_str());
+            if (jPiece) {
+                env->CallVoidMethod(jCallback, onTokenMethod, jPiece);
+                env->DeleteLocalRef(jPiece);
+                if (env->ExceptionCheck()) {
+                    LOGE("Исключение в Java callback onToken");
+                    env->ExceptionDescribe();
+                    env->ExceptionClear();
+                }
+            }
+        }
+    };
+
     // Цикл пошаговой генерации токенов
     while (n_generated < limit && !g_stop.load()) {
         const llama_token id = llama_sampler_sample(smpl, g_ctx, -1);
-        llama_sampler_accept(smpl, id);
 
         if (id == LLAMA_TOKEN_NULL) {
             LOGE("llama_sampler_sample вернул LLAMA_TOKEN_NULL на шаге %d", n_generated);
@@ -201,38 +270,30 @@ Java_com_argent_mobile_llama_ArgentLlamaPlugin_nativeGenerate(
             break;
         }
 
-        // Преобразование токена в строку
+        // Преобразование токена в строку с флагом special = true (для тегов рассуждений <think>, </think>)
         char piece_buf[256];
-        int n_piece = llama_token_to_piece(g_vocab, id, piece_buf, sizeof(piece_buf), 0, false);
+        int n_piece = llama_token_to_piece(g_vocab, id, piece_buf, sizeof(piece_buf), 0, true);
         if (n_piece > 0) {
             std::string piece_str(piece_buf, n_piece);
-            jstring jPiece = env->NewStringUTF(piece_str.c_str());
-            if (jPiece) {
-                env->CallVoidMethod(jCallback, onTokenMethod, jPiece);
-                env->DeleteLocalRef(jPiece);
-                if (env->ExceptionCheck()) {
-                    LOGE("Исключение в Java callback onToken");
-                    env->ExceptionDescribe();
-                    env->ExceptionClear();
-                    break;
-                }
+            if (piece_str.find("<|im_end|>") != std::string::npos ||
+                piece_str.find("<|endoftext|>") != std::string::npos) {
+                LOGI("Встречен маркер завершения диалога %s. Остановка генерации.", piece_str.c_str());
+                break;
             }
+            utf8_accum.append(piece_buf, n_piece);
+            flush_utf8(false);
         } else if (n_piece < 0) {
             std::vector<char> big_buf(-n_piece);
-            int n_big = llama_token_to_piece(g_vocab, id, big_buf.data(), big_buf.size(), 0, false);
+            int n_big = llama_token_to_piece(g_vocab, id, big_buf.data(), big_buf.size(), 0, true);
             if (n_big > 0) {
                 std::string piece_str(big_buf.data(), n_big);
-                jstring jPiece = env->NewStringUTF(piece_str.c_str());
-                if (jPiece) {
-                    env->CallVoidMethod(jCallback, onTokenMethod, jPiece);
-                    env->DeleteLocalRef(jPiece);
-                    if (env->ExceptionCheck()) {
-                        LOGE("Исключение в Java callback onToken");
-                        env->ExceptionDescribe();
-                        env->ExceptionClear();
-                        break;
-                    }
+                if (piece_str.find("<|im_end|>") != std::string::npos ||
+                    piece_str.find("<|endoftext|>") != std::string::npos) {
+                    LOGI("Встречен маркер завершения диалога %s. Остановка генерации.", piece_str.c_str());
+                    break;
                 }
+                utf8_accum.append(big_buf.data(), n_big);
+                flush_utf8(false);
             }
         }
 
@@ -253,6 +314,9 @@ Java_com_argent_mobile_llama_ArgentLlamaPlugin_nativeGenerate(
             break;
         }
     }
+
+    // Сбрасываем остаток буфера в UI
+    flush_utf8(true);
 
     llama_batch_free(batch);
     llama_sampler_free(smpl);
