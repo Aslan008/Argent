@@ -1,7 +1,8 @@
 /**
  * Детерминированный конечный автомат (FSM) для разбора потока токенов
  * с разделением на основной ответ, размышления (<think>) и перепроверку (<rethink>).
- * Защищен от разрыва токенов между чанками и ложных срабатываний математических символов '<'.
+ * Защищен от разрыва токенов между чанками, ложных срабатываний математических символов '<'
+ * и поддерживает прямой ввод reasoning_content (DeepSeek Reasoner).
  */
 
 export const STATE_CONTENT = 0;
@@ -35,13 +36,24 @@ export class StreamTagParser {
     this.onRethink = onRethink;
   }
 
+  /**
+   * Прямое добавление токенов рассуждений (для DeepSeek Reasoner reasoning_content)
+   */
+  public appendReasoning(delta: string): void {
+    if (!delta) return;
+    this.fullThinking += delta;
+    this.onThinking(delta);
+  }
+
   public feed(chunk: string): void {
     this.buffer += chunk;
 
     while (this.buffer.length > 0) {
+      const lower = this.buffer.toLowerCase();
+
       if (this.state === STATE_CONTENT) {
-        const idxThink = this.buffer.indexOf(this.TAG_OPEN_THINK);
-        const idxRethink = this.buffer.indexOf(this.TAG_OPEN_RETHINK);
+        const idxThink = lower.indexOf(this.TAG_OPEN_THINK);
+        const idxRethink = lower.indexOf(this.TAG_OPEN_RETHINK);
 
         let targetIdx = -1;
         let isRethink = false;
@@ -74,9 +86,9 @@ export class StreamTagParser {
         }
 
         // Проверяем возможность разрыва тега на границе буфера (<th... или <reth...)
-        const lastLt = this.buffer.lastIndexOf('<');
-        if (lastLt !== -1 && this.buffer.length - lastLt < this.MAX_LOOKAHEAD) {
-          const prefix = this.buffer.slice(lastLt);
+        const lastLt = lower.lastIndexOf('<');
+        if (lastLt !== -1 && lower.length - lastLt < this.MAX_LOOKAHEAD) {
+          const prefix = lower.slice(lastLt);
           if (
             this.TAG_OPEN_THINK.startsWith(prefix) ||
             this.TAG_OPEN_RETHINK.startsWith(prefix)
@@ -98,7 +110,7 @@ export class StreamTagParser {
         this.buffer = '';
 
       } else if (this.state === STATE_THINKING) {
-        const closeIdx = this.buffer.indexOf(this.TAG_CLOSE_THINK);
+        const closeIdx = lower.indexOf(this.TAG_CLOSE_THINK);
         if (closeIdx !== -1) {
           if (closeIdx > 0) {
             const thinkText = this.buffer.slice(0, closeIdx);
@@ -110,9 +122,9 @@ export class StreamTagParser {
           continue;
         }
 
-        const lastLt = this.buffer.lastIndexOf('<');
-        if (lastLt !== -1 && this.buffer.length - lastLt < this.MAX_LOOKAHEAD) {
-          const prefix = this.buffer.slice(lastLt);
+        const lastLt = lower.lastIndexOf('<');
+        if (lastLt !== -1 && lower.length - lastLt < this.MAX_LOOKAHEAD) {
+          const prefix = lower.slice(lastLt);
           if (this.TAG_CLOSE_THINK.startsWith(prefix)) {
             if (lastLt > 0) {
               const thinkText = this.buffer.slice(0, lastLt);
@@ -129,7 +141,7 @@ export class StreamTagParser {
         this.buffer = '';
 
       } else if (this.state === STATE_RETHINK) {
-        const closeIdx = this.buffer.indexOf(this.TAG_CLOSE_RETHINK);
+        const closeIdx = lower.indexOf(this.TAG_CLOSE_RETHINK);
         if (closeIdx !== -1) {
           if (closeIdx > 0) {
             const rethinkText = this.buffer.slice(0, closeIdx);
@@ -141,9 +153,9 @@ export class StreamTagParser {
           continue;
         }
 
-        const lastLt = this.buffer.lastIndexOf('<');
-        if (lastLt !== -1 && this.buffer.length - lastLt < this.MAX_LOOKAHEAD) {
-          const prefix = this.buffer.slice(lastLt);
+        const lastLt = lower.lastIndexOf('<');
+        if (lastLt !== -1 && lower.length - lastLt < this.MAX_LOOKAHEAD) {
+          const prefix = lower.slice(lastLt);
           if (this.TAG_CLOSE_RETHINK.startsWith(prefix)) {
             if (lastLt > 0) {
               const rethinkText = this.buffer.slice(0, lastLt);
@@ -176,5 +188,6 @@ export class StreamTagParser {
       }
       this.buffer = '';
     }
+    this.state = STATE_CONTENT;
   }
 }

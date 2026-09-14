@@ -4,11 +4,16 @@ echo ========================================================
 echo        Запуск Argent Mobile для Android
 echo ========================================================
 echo.
-echo Локальный адрес для компьютера: http://localhost:3000
-echo Адрес для открытия на телефоне: http://192.168.0.100:3000
+
+set LOCAL_IP=
+for /f "usebackq delims=" %%i in (`powershell -NoProfile -Command "(Test-Connection -ComputerName (hostname) -Count 1).IPV4Address.IPAddressToString"`) do set LOCAL_IP=%%i
+if "%LOCAL_IP%"=="" set LOCAL_IP=localhost
+
+echo [✓] Компьютер (localhost):  http://localhost:3000
+echo [✓] Смартфон в сети Wi-Fi:   http://%LOCAL_IP%:3000
 echo.
-echo Подключите телефон к тому же Wi-Fi и откройте адрес выше!
-echo В браузере телефона нажмите "Установить на главный экран".
+echo Подключите телефон к тому же Wi-Fi и откройте адрес выше.
+echo В меню браузера Chrome нажмите «Добавить на главный экран».
 echo.
-npm run preview
+npm run dev
 pause

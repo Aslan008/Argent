@@ -1,5 +1,6 @@
 import { marked } from 'marked';
 import hljs from 'highlight.js';
+import 'highlight.js/styles/atom-one-dark.min.css';
 import { StorageService } from './services/storage';
 import { AIEngine } from './services/ai_engine';
 import { AutopilotService } from './services/autopilot';
@@ -168,16 +169,16 @@ class ArgentMobileApp {
     this.prepareAssistantBubble(assistantMsgId);
 
     // Проверка команд автопилота телефона
-    const lowerText = text.toLowerCase();
-    const isAutopilotCommand = this.isAutopilotEnabled ||
-      lowerText.includes('автопилот') ||
-      lowerText.startsWith('открой ') ||
-      lowerText.startsWith('запусти ') ||
-      lowerText.includes('нажми домой') ||
-      lowerText === 'домой' ||
-      lowerText === 'назад';
+    const lowerText = text.toLowerCase().trim();
+    const isExplicitNavigation = lowerText === 'домой' || lowerText === 'назад' || lowerText.includes('нажми домой');
+    const isExplicitAppLaunch = lowerText.startsWith('открой приложение ') || 
+                                lowerText.startsWith('запусти приложение ') || 
+                                lowerText.includes('открой приложение на телефоне');
+    const hasAutopilotPrefix = lowerText.startsWith('🚀') || lowerText.startsWith('автопилот:') || lowerText.startsWith('автопилот,');
 
-    if (isAutopilotCommand) {
+    const shouldHandleWithAutopilot = isExplicitNavigation || isExplicitAppLaunch || (this.isAutopilotEnabled && hasAutopilotPrefix);
+
+    if (shouldHandleWithAutopilot) {
       const isRunning = await AutopilotService.isServiceEnabled();
       if (!isRunning) {
         if (this.activeTextContent) {
@@ -325,6 +326,17 @@ class ArgentMobileApp {
                 `;
               }
               return;
+            }
+
+            if (!fullContent.trim() && fullThinking.trim()) {
+              if (this.activeTextContent) {
+                this.activeTextContent.classList.remove('is-generating');
+                this.activeTextContent.innerHTML = `
+                  <div style="background: rgba(59, 130, 246, 0.1); border: 1px solid rgba(59, 130, 246, 0.3); border-radius: 10px; padding: 12px; color: #93c5fd; font-size: 0.84rem; line-height: 1.4;">
+                    🧠 <b>Рассуждения сформированы:</b> Модель завершила ход мыслей, но вывод текста был прерван. Вы можете раскрыть блок «Ход мыслей» выше для ознакомления.
+                  </div>
+                `;
+              }
             }
 
             const durationMs = Date.now() - startTime;
@@ -631,10 +643,80 @@ class ArgentMobileApp {
     list.appendChild(item);
   }
 
+  private sanitizeMarkdownHtml(html: string): string {
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(html, 'text/html');
+
+    const ALLOWED_TAGS = new Set([
+      'p', 'br', 'strong', 'em', 'b', 'i', 'u', 's', 'del', 'mark',
+      'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
+      'ul', 'ol', 'li', 'blockquote', 'pre', 'code', 'kbd',
+      'table', 'thead', 'tbody', 'tfoot', 'tr', 'th', 'td',
+      'hr', 'span', 'div', 'a'
+    ]);
+
+    const ALLOWED_PROTOCOLS = ['http:', 'https:', 'mailto:', 'tel:'];
+
+    const cleanNode = (node: Node) => {
+      const children = Array.from(node.childNodes);
+      for (const child of children) {
+        if (child.nodeType === Node.ELEMENT_NODE) {
+          const element = child as HTMLElement;
+          const tagName = element.tagName.toLowerCase();
+
+          if (!ALLOWED_TAGS.has(tagName)) {
+            if (['script', 'iframe', 'object', 'embed', 'style', 'svg', 'math', 'link', 'meta', 'base', 'form', 'input', 'textarea', 'button', 'img'].includes(tagName)) {
+              element.remove();
+              continue;
+            }
+            const textNode = doc.createTextNode(element.textContent || '');
+            node.replaceChild(textNode, element);
+            continue;
+          }
+
+          // Очистка опасных атрибутов (обработчики событий, inline стили, src)
+          const attrNames = element.getAttributeNames();
+          for (const attr of attrNames) {
+            const attrLower = attr.toLowerCase();
+            if (attrLower.startsWith('on') || attrLower === 'style' || attrLower === 'src' || attrLower === 'srcset') {
+              element.removeAttribute(attr);
+              continue;
+            }
+
+            if (tagName === 'a' && attrLower === 'href') {
+              const val = element.getAttribute('href') || '';
+              try {
+                const parsed = new URL(val, window.location.origin);
+                if (!ALLOWED_PROTOCOLS.includes(parsed.protocol) && !val.startsWith('#')) {
+                  element.removeAttribute('href');
+                } else {
+                  element.setAttribute('target', '_blank');
+                  element.setAttribute('rel', 'noopener noreferrer');
+                }
+              } catch {
+                if (!val.startsWith('#')) {
+                  element.removeAttribute('href');
+                }
+              }
+            } else if (attrLower !== 'class' && attrLower !== 'title') {
+              element.removeAttribute(attr);
+            }
+          }
+
+          cleanNode(element);
+        }
+      }
+    };
+
+    cleanNode(doc.body);
+    return doc.body.innerHTML;
+  }
+
   private renderMarkdown(raw: string): string {
-    const html = marked.parse(raw) as string;
+    const rawHtml = marked.parse(raw) as string;
+    const cleanHtml = this.sanitizeMarkdownHtml(rawHtml);
     const temp = document.createElement('div');
-    temp.innerHTML = html;
+    temp.innerHTML = cleanHtml;
 
     // Подсветка и обёртка блоков кода
     temp.querySelectorAll('pre code').forEach((codeBlock) => {

@@ -35,7 +35,11 @@ export class StorageService {
   }
 
   public static saveSettings(settings: AppSettings): void {
-    localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(settings));
+    try {
+      localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(settings));
+    } catch (e) {
+      console.warn('Не удалось сохранить настройки в localStorage:', e);
+    }
   }
 
   // Сессии диалогов
@@ -50,15 +54,40 @@ export class StorageService {
   }
 
   public static saveSessions(sessions: ChatSession[]): void {
-    localStorage.setItem(STORAGE_KEYS.SESSIONS, JSON.stringify(sessions));
+    try {
+      localStorage.setItem(STORAGE_KEYS.SESSIONS, JSON.stringify(sessions));
+    } catch (e) {
+      console.warn('Превышена квота localStorage. Оптимизация истории сообщений:', e);
+      try {
+        // Если квота превышена, сжимаем историю старых сессий
+        const trimmed = sessions.map((s, idx) => {
+          if (idx === 0) return s; // Активную сессию не обрезаем
+          return {
+            ...s,
+            messages: s.messages.slice(-20) // Оставляем последние 20 сообщений
+          };
+        });
+        localStorage.setItem(STORAGE_KEYS.SESSIONS, JSON.stringify(trimmed));
+      } catch (err) {
+        console.error('Критическая ошибка сохранения сессий:', err);
+      }
+    }
   }
 
   public static getCurrentSessionId(): string | null {
-    return localStorage.getItem(STORAGE_KEYS.CURRENT_SESSION_ID);
+    try {
+      return localStorage.getItem(STORAGE_KEYS.CURRENT_SESSION_ID);
+    } catch {
+      return null;
+    }
   }
 
   public static setCurrentSessionId(id: string): void {
-    localStorage.setItem(STORAGE_KEYS.CURRENT_SESSION_ID, id);
+    try {
+      localStorage.setItem(STORAGE_KEYS.CURRENT_SESSION_ID, id);
+    } catch (e) {
+      console.warn('Не удалось сохранить текущий ID сессии:', e);
+    }
   }
 
   public static getOrCreateActiveSession(): ChatSession {
@@ -105,19 +134,27 @@ export class StorageService {
   }
 
   public static saveFile(file: VirtualFile): void {
-    const files = this.getFiles();
-    const idx = files.findIndex(f => f.id === file.id);
-    if (idx !== -1) {
-      files[idx] = file;
-    } else {
-      files.push(file);
+    try {
+      const files = this.getFiles();
+      const idx = files.findIndex(f => f.id === file.id);
+      if (idx !== -1) {
+        files[idx] = file;
+      } else {
+        files.push(file);
+      }
+      localStorage.setItem(STORAGE_KEYS.FILES, JSON.stringify(files));
+    } catch (e) {
+      console.warn('Не удалось сохранить файл в хранилище:', e);
     }
-    localStorage.setItem(STORAGE_KEYS.FILES, JSON.stringify(files));
   }
 
   public static deleteFile(fileId: string): void {
-    const files = this.getFiles().filter(f => f.id !== fileId);
-    localStorage.setItem(STORAGE_KEYS.FILES, JSON.stringify(files));
+    try {
+      const files = this.getFiles().filter(f => f.id !== fileId);
+      localStorage.setItem(STORAGE_KEYS.FILES, JSON.stringify(files));
+    } catch (e) {
+      console.warn('Не удалось удалить файл из хранилища:', e);
+    }
   }
 
   // Скачивание файла на физический накопитель смартфона

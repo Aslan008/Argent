@@ -1,10 +1,17 @@
 import { AppSettings, ChatMessage, StreamCallbacks, DownloadProgress } from '../types';
 import { StreamTagParser } from './fsm_parser';
 import { LlamaNativeService } from './llama_native';
-import * as webllm from '@mlc-ai/web-llm';
+
+let webllmModule: typeof import('@mlc-ai/web-llm') | null = null;
+async function getWebLLM(): Promise<typeof import('@mlc-ai/web-llm')> {
+  if (!webllmModule) {
+    webllmModule = await import('@mlc-ai/web-llm');
+  }
+  return webllmModule;
+}
 
 export class AIEngine {
-  private static offlineEngine: webllm.MLCEngine | null = null;
+  private static offlineEngine: any = null;
   private static currentModelName: string = '';
   private static activeAbortController: AbortController | null = null;
 
@@ -139,8 +146,9 @@ export class AIEngine {
           
           // Некоторые провайдеры (DeepSeek reasoner) возвращают reasoning_content
           if (delta?.reasoning_content) {
-            callbacks.onThinking && callbacks.onThinking(delta.reasoning_content, parser.fullThinking + delta.reasoning_content);
-          } else if (delta?.content) {
+            parser.appendReasoning(delta.reasoning_content);
+          }
+          if (delta?.content) {
             parser.feed(delta.content);
           }
         } catch {
@@ -258,9 +266,10 @@ export class AIEngine {
     }
 
     // Инициализируем или переиспользуем загруженную модель
+    const webllm = await getWebLLM();
     if (!this.offlineEngine || this.currentModelName !== targetModel) {
       this.offlineEngine = await webllm.CreateMLCEngine(targetModel, {
-        initProgressCallback: (report) => {
+        initProgressCallback: (report: any) => {
           if (onProgress) {
             onProgress({
               progress: Math.round(report.progress * 100),
@@ -302,8 +311,9 @@ export class AIEngine {
       );
     }
 
+    const webllm = await getWebLLM();
     this.offlineEngine = await webllm.CreateMLCEngine(modelName, {
-      initProgressCallback: (report) => {
+      initProgressCallback: (report: any) => {
         onProgress({
           progress: Math.round(report.progress * 100),
           text: report.text

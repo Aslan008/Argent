@@ -4,7 +4,9 @@ const CACHE_NAME = 'argent-mobile-v1';
 const STATIC_PRECACHE = [
   '/',
   '/index.html',
-  '/manifest.json'
+  '/manifest.json',
+  '/icon-192.png',
+  '/icon-512.png'
 ];
 
 self.addEventListener('install', (event) => {
