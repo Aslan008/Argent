@@ -260,6 +260,8 @@ class ArgentMobileApp {
     const bannerFill = document.getElementById('banner-progress-fill');
     const bannerText = document.getElementById('banner-status-text');
 
+    let liveTokenCount = 0;
+
     try {
       await AIEngine.generate(
         this.currentSession.messages,
@@ -272,12 +274,22 @@ class ArgentMobileApp {
             if (detailEl && detail) detailEl.textContent = detail;
           },
           onContent: (_delta, fullContent) => {
+            liveTokenCount++;
+            const elapsedSec = Math.max(0.1, (Date.now() - startTime) / 1000);
+            const liveSpeed = (liveTokenCount / elapsedSec).toFixed(1);
+
             if (!this.hasReceivedFirstToken) {
               this.hasReceivedFirstToken = true;
               if (typeof navigator !== 'undefined' && 'vibrate' in navigator) {
                 try { navigator.vibrate(15); } catch {}
               }
             }
+
+            const statusEl = this.activeAssistantBubble?.querySelector('#live-thinking-status');
+            const detailEl = this.activeAssistantBubble?.querySelector('#live-thinking-detail');
+            if (statusEl) statusEl.textContent = 'Вывод ответа...';
+            if (detailEl) detailEl.textContent = `Токен #${liveTokenCount} (${liveSpeed} т/с) • Helio G99 ARM NEON`;
+
             if (this.activeTextContent) {
               this.activeTextContent.classList.remove('is-generating');
               this.activeTextContent.innerHTML = this.renderMarkdown(fullContent);
@@ -286,6 +298,10 @@ class ArgentMobileApp {
             }
           },
           onThinking: (_delta, fullThinking) => {
+            liveTokenCount++;
+            const elapsedSec = Math.max(0.1, (Date.now() - startTime) / 1000);
+            const liveSpeed = (liveTokenCount / elapsedSec).toFixed(1);
+
             if (!this.hasReceivedFirstToken) {
               this.hasReceivedFirstToken = true;
               if (typeof navigator !== 'undefined' && 'vibrate' in navigator) {
@@ -299,7 +315,7 @@ class ArgentMobileApp {
               const statusEl = this.activeAssistantBubble?.querySelector('#live-thinking-status');
               const detailEl = this.activeAssistantBubble?.querySelector('#live-thinking-detail');
               if (statusEl) statusEl.textContent = 'Формирование хода мыслей...';
-              if (detailEl) detailEl.textContent = 'llama.cpp ARM NEON • Генерация рассуждений';
+              if (detailEl) detailEl.textContent = `Мысль #${liveTokenCount} (${liveSpeed} т/с) • ARM NEON DotProd`;
               this.scrollToBottom();
             }
           },

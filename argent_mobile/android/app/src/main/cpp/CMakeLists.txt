@@ -4,6 +4,25 @@ project(argent_llama)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# Всегда форсируем максимальную скорость компиляции Release (-O3, NDEBUG) даже в Debug APK:
+set(CMAKE_BUILD_TYPE Release CACHE STRING "" FORCE)
+
+add_compile_options(
+    -O3
+    -DNDEBUG
+    -flto
+    -fvectorize
+    -ffast-math
+)
+
+if (${ANDROID_ABI} STREQUAL "arm64-v8a")
+    add_compile_options(
+        -march=armv8.2-a+dotprod+fp16
+    )
+endif()
+
+add_link_options(-flto -O3)
+
 # Отключаем ненужные части llama.cpp для быстрой сборки и минимального размера
 set(LLAMA_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(LLAMA_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)

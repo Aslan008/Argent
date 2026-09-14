@@ -122,7 +122,9 @@ Java_com_argent_mobile_llama_ArgentLlamaPlugin_nativeLoadModel(
     // Инициализация параметров контекста
     struct llama_context_params ctx_params = llama_context_default_params();
     ctx_params.n_ctx = nCtx > 0 ? nCtx : 2048;
-    ctx_params.n_threads = nThreads > 0 ? nThreads : 4;
+    ctx_params.n_batch = ctx_params.n_ctx;
+    ctx_params.n_ubatch = 512;
+    ctx_params.n_threads = nThreads > 0 ? nThreads : 2;
     ctx_params.n_threads_batch = ctx_params.n_threads;
 
     g_ctx = llama_init_from_model(g_model, ctx_params);
@@ -196,39 +198,9 @@ Java_com_argent_mobile_llama_ArgentLlamaPlugin_nativeGenerate(
         return -1;
     }
 
-    const int n_prompt = (int)prompt_tokens.size();
-    const int batch_capacity = 512;
-    struct llama_batch batch = llama_batch_init(batch_capacity, 0, 1);
+    llama_token new_token_id = LLAMA_TOKEN_NULL;
+    struct llama_batch batch = llama_batch_get_one(prompt_tokens.data(), prompt_tokens.size());
 
-    // Подача промпта в контекст пакетами (prefill)
-    for (int i = 0; i < n_prompt; i += batch_capacity) {
-        if (g_stop.load()) {
-            llama_batch_free(batch);
-            llama_sampler_free(smpl);
-            return 0;
-        }
-        int cur_batch = std::min(batch_capacity, n_prompt - i);
-        batch.n_tokens = 0;
-        for (int j = 0; j < cur_batch; j++) {
-            int token_idx = i + j;
-            batch.token[j] = prompt_tokens[token_idx];
-            batch.pos[j] = token_idx;
-            batch.n_seq_id[j] = 1;
-            batch.seq_id[j][0] = 0;
-            // ВАЖНО: вычисляем логиты только для последнего токена промпта для первого сэмплинга!
-            batch.logits[j] = (token_idx == n_prompt - 1);
-        }
-        batch.n_tokens = cur_batch;
-
-        if (llama_decode(g_ctx, batch) != 0) {
-            LOGE("Ошибка llama_decode при обработке пакета промпта (смещение %d)", i);
-            llama_batch_free(batch);
-            llama_sampler_free(smpl);
-            return -1;
-        }
-    }
-
-    int n_cur = n_prompt;
     int n_generated = 0;
     int limit = maxTokens > 0 ? maxTokens : 1024;
 
@@ -257,22 +229,28 @@ Java_com_argent_mobile_llama_ArgentLlamaPlugin_nativeGenerate(
 
     // Цикл пошаговой генерации токенов
     while (n_generated < limit && !g_stop.load()) {
-        const llama_token id = llama_sampler_sample(smpl, g_ctx, -1);
+        if (llama_decode(g_ctx, batch) != 0) {
+            LOGE("Ошибка llama_decode на шаге %d", n_generated);
+            break;
+        }
 
-        if (id == LLAMA_TOKEN_NULL) {
+        new_token_id = llama_sampler_sample(smpl, g_ctx, -1);
+        llama_sampler_accept(smpl, new_token_id);
+
+        if (new_token_id == LLAMA_TOKEN_NULL) {
             LOGE("llama_sampler_sample вернул LLAMA_TOKEN_NULL на шаге %d", n_generated);
             break;
         }
 
         // Проверка на конец генерации (EOS / EOG)
-        if (llama_vocab_is_eog(g_vocab, id)) {
-            LOGI("Встречен токен конца ответа EOG (%d). Генерация завершена.", id);
+        if (llama_vocab_is_eog(g_vocab, new_token_id)) {
+            LOGI("Встречен токен конца ответа EOG (%d). Генерация завершена.", new_token_id);
             break;
         }
 
         // Преобразование токена в строку с флагом special = true (для тегов рассуждений <think>, </think>)
         char piece_buf[256];
-        int n_piece = llama_token_to_piece(g_vocab, id, piece_buf, sizeof(piece_buf), 0, true);
+        int n_piece = llama_token_to_piece(g_vocab, new_token_id, piece_buf, sizeof(piece_buf), 0, true);
         if (n_piece > 0) {
             std::string piece_str(piece_buf, n_piece);
             if (piece_str.find("<|im_end|>") != std::string::npos ||
@@ -284,7 +262,7 @@ Java_com_argent_mobile_llama_ArgentLlamaPlugin_nativeGenerate(
             flush_utf8(false);
         } else if (n_piece < 0) {
             std::vector<char> big_buf(-n_piece);
-            int n_big = llama_token_to_piece(g_vocab, id, big_buf.data(), big_buf.size(), 0, true);
+            int n_big = llama_token_to_piece(g_vocab, new_token_id, big_buf.data(), big_buf.size(), 0, true);
             if (n_big > 0) {
                 std::string piece_str(big_buf.data(), n_big);
                 if (piece_str.find("<|im_end|>") != std::string::npos ||
@@ -298,27 +276,16 @@ Java_com_argent_mobile_llama_ArgentLlamaPlugin_nativeGenerate(
         }
 
         // Подготовка пакета для следующего токена
-        batch.n_tokens = 0;
-        batch.token[0] = id;
-        batch.pos[0] = n_cur;
-        batch.n_seq_id[0] = 1;
-        batch.seq_id[0][0] = 0;
-        batch.logits[0] = true;
-        batch.n_tokens = 1;
-
-        n_cur++;
+        batch = llama_batch_get_one(&new_token_id, 1);
         n_generated++;
 
-        if (llama_decode(g_ctx, batch) != 0) {
-            LOGE("Ошибка llama_decode при декодировании токена на шаге %d", n_generated);
-            break;
+        if (n_generated % 20 == 0) {
+            LOGI("Сгенерировано токенов: %d", n_generated);
         }
     }
 
     // Сбрасываем остаток буфера в UI
     flush_utf8(true);
-
-    llama_batch_free(batch);
     llama_sampler_free(smpl);
 
     LOGI("Генерация завершена. Успешно сгенерировано токенов: %d", n_generated);

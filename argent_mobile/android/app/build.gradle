@@ -20,7 +20,14 @@ android {
         }
         externalNativeBuild {
             cmake {
-                arguments "-DGGML_OPENMP=OFF", "-DGGML_LLAMAFILE=OFF", "-DANDROID_STL=c++_shared"
+                arguments "-DCMAKE_BUILD_TYPE=Release",
+                          "-DGGML_OPENMP=OFF",
+                          "-DGGML_LLAMAFILE=OFF",
+                          "-DANDROID_STL=c++_shared",
+                          "-DCMAKE_C_FLAGS_RELEASE=-O3 -DNDEBUG -march=armv8.2-a+dotprod+fp16",
+                          "-DCMAKE_CXX_FLAGS_RELEASE=-O3 -DNDEBUG -march=armv8.2-a+dotprod+fp16"
+                cFlags "-O3 -DNDEBUG -march=armv8.2-a+dotprod+fp16"
+                cppFlags "-O3 -DNDEBUG -march=armv8.2-a+dotprod+fp16"
             }
         }
     }
