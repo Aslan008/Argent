@@ -199,7 +199,7 @@ Java_com_argent_mobile_llama_ArgentLlamaPlugin_nativeGenerate(
     }
 
     llama_token new_token_id = LLAMA_TOKEN_NULL;
-    struct llama_batch batch = llama_batch_get_one(prompt_tokens.data(), prompt_tokens.size());
+    struct llama_batch batch = llama_batch_get_one(prompt_tokens.data(), (int)prompt_tokens.size());
 
     int n_generated = 0;
     int limit = maxTokens > 0 ? maxTokens : 1024;
