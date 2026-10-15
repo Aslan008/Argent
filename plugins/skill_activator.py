@@ -24,7 +24,7 @@ def pre_prompt(text: str) -> str:
         # Load the skill content
         skill_content = skill_manager.read_skill("ExpertArchitect")
         if skill_content:
-            console.print("[dim cyan]ℹ Active Skill Activated: Expert Architect[/dim cyan]")
+            console.print("[dim cyan]Active Skill Activated: Expert Architect[/dim cyan]")
             
             # Inject at the beginning of the prompt to set the context
             injection = (

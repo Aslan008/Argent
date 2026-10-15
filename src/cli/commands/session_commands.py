@@ -68,7 +68,7 @@ def restore_session(agent, meta: dict) -> bool:
     saved_model = data.get("model") or ""
     current_model = getattr(agent, "model_name", "")
     if saved_model and saved_model != current_model:
-        print_system(f"[yellow]⚠ Сессия велась на '{saved_model}', сейчас активна "
+        print_system(f"[yellow]Сессия велась на '{saved_model}', сейчас активна "
                      f"'{current_model}'.[/yellow] История содержит вызовы "
                      f"инструментов, которые текущая модель может не повторить — "
                      f"смените модель через /model, если это важно.")
@@ -76,7 +76,7 @@ def restore_session(agent, meta: dict) -> bool:
     saved_cwd = data.get("cwd") or ""
     current = os.getcwd()
     if saved_cwd and os.path.normcase(os.path.abspath(saved_cwd)) != os.path.normcase(current):
-        print_system(f"[yellow]⚠ Сессия сохранена в:[/yellow] {saved_cwd}\n"
+        print_system(f"[yellow]Сессия сохранена в:[/yellow] {saved_cwd}\n"
                      f"[yellow]   Вы сейчас в:       [/yellow] {current}")
         if not os.path.isdir(saved_cwd):
             print_system("[dim]Директории сессии больше нет — пути из истории "
@@ -204,7 +204,7 @@ def handle_sessions(ctx: CommandContext) -> CommandResult:
         lbl = s.get("label")
         prev = (s.get("preview") or "").replace("\n", " ").strip()
         if lbl:
-            label_prev = f"[bold #7ee787]🏷️ {escape(lbl)}[/bold #7ee787]\n[dim italic]{escape(prev[:40])}{'…' if len(prev) > 40 else ''}[/dim italic]"
+            label_prev = f"[bold #7ee787]{escape(lbl)}[/bold #7ee787]\n[dim italic]{escape(prev[:40])}{'…' if len(prev) > 40 else ''}[/dim italic]"
         else:
             label_prev = f"{escape(prev[:45])}{'…' if len(prev) > 45 else ''}"
 
@@ -212,7 +212,7 @@ def handle_sessions(ctx: CommandContext) -> CommandResult:
         if cwd and os.path.normcase(os.path.abspath(cwd)) == here:
             dir_str = f"[bold green]● здесь[/bold green]\n[dim]({escape(format_short_path(cwd))})[/dim]"
         elif cwd:
-            dir_str = f"[dim]📁 {escape(format_short_path(cwd))}[/dim]"
+            dir_str = f"[dim]{escape(format_short_path(cwd))}[/dim]"
         else:
             dir_str = "[dim]—[/dim]"
 
@@ -257,18 +257,18 @@ def handle_load(ctx: CommandContext) -> CommandResult:
         here = os.path.normcase(os.path.abspath(os.getcwd()))
         choices = []
         for i, s in enumerate(sessions[:25]):
-            lbl = f"🏷️ {s['label']} " if s.get("label") else ""
+            lbl = f"{s['label']} " if s.get("label") else ""
             cwd = s.get("cwd") or ""
-            is_here = "● здесь" if cwd and os.path.normcase(os.path.abspath(cwd)) == here else f"📁 {format_short_path(cwd)}"
+            is_here = "● здесь" if cwd and os.path.normcase(os.path.abspath(cwd)) == here else f"{format_short_path(cwd)}"
             time_str = format_relative_time(s.get("saved_at") or "")
             prev = (s.get("preview") or "").replace("\n", " ").strip()[:40]
             choices.append(f"[{i+1}] {lbl}{is_here} ({time_str}, {s.get('message_count', 0)} msgs) — \"{prev}\"")
-        choices.append("❌ Отмена")
+        choices.append("Отмена")
         try:
             sel = questionary.select("Выберите сессию для восстановления:", choices=choices).ask()
         except Exception:
             sel = None
-        if not sel or sel.startswith("❌"):
+        if not sel or sel == "Отмена":
             return CommandResult.continue_loop()
         idx = int(sel.split("]")[0].replace("[", "").strip())
         target = find_session(str(idx))
@@ -380,14 +380,14 @@ def handle_rewind(ctx: CommandContext) -> CommandResult:
             print_system("\n".join(lines))
             return CommandResult.continue_loop()
     else:
-        choices = [f"{c['sha']}  {c['label']}  ({c['age']})" for c in cps] + ["❌ Отмена"]
+        choices = [f"{c['sha']}  {c['label']}  ({c['age']})" for c in cps] + ["Отмена"]
         sel = None
         try:
             sel = questionary.select("Откатить рабочее дерево к какому чекпоинту?", choices=choices).ask()
         except Exception:
             pass
 
-        if not sel or sel.startswith("❌"):
+        if not sel or sel == "Отмена":
             return CommandResult.continue_loop()
         sel_sha = sel.split()[0]
         target_cp = next((c for c in cps if c["sha"] == sel_sha), None)
@@ -518,7 +518,7 @@ def handle_copy(ctx: CommandContext) -> CommandResult:
                 if blocks:
                     code_text = "\n\n".join(b.strip() for b in blocks if b.strip())
                     if set_clipboard_text(code_text):
-                        print_system(f"📋 Блоки кода ({len(code_text)} симв.) скопированы в буфер обмена.")
+                        print_system(f"Блоки кода ({len(code_text)} симв.) скопированы в буфер обмена.")
                     else:
                         print_error("Не удалось записать в буфер обмена.")
                     return CommandResult.continue_loop()
@@ -534,7 +534,7 @@ def handle_copy(ctx: CommandContext) -> CommandResult:
                 full.append(f"### {role.capitalize()}:\n{content}\n")
         all_text = "\n".join(full)
         if set_clipboard_text(all_text):
-            print_system(f"📋 Весь диалог ({len(all_text)} симв.) скопирован в буфер обмена.")
+            print_system(f"Весь диалог ({len(all_text)} симв.) скопирован в буфер обмена.")
         else:
             print_error("Не удалось записать в буфер обмена.")
         return CommandResult.continue_loop()
@@ -545,7 +545,7 @@ def handle_copy(ctx: CommandContext) -> CommandResult:
                 content = str(m.get("content") or "").strip()
                 if content:
                     if set_clipboard_text(content):
-                        print_system(f"📋 Ответ ассистента ({len(content)} симв.) скопирован в буфер обмена.")
+                        print_system(f"Ответ ассистента ({len(content)} симв.) скопирован в буфер обмена.")
                     else:
                         print_error("Не удалось записать в буфер обмена.")
                     return CommandResult.continue_loop()

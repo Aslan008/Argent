@@ -433,7 +433,7 @@ class ReplBridge:
                     from src.agent.mcp_prompt import model_access_warning
                     warning = model_access_warning()
                     if warning:
-                        self._emit({"type": "notice", "text": f"⚠ {warning}"})
+                        self._emit({"type": "notice", "text": f"{warning}"})
                 except Exception:
                     pass
             except Exception:
@@ -562,7 +562,7 @@ class ReplBridge:
                                     pid = ev.get("pid", "?")
                                     code = ev.get("exit_code", 0)
                                     status = "успешно" if code == 0 else f"код {code}"
-                                    self._emit({"type": "notice", "text": f"⚙ Фоновая команда {pid} завершена ({status})"})
+                                    self._emit({"type": "notice", "text": f"Фоновая команда {pid} завершена ({status})"})
                             except queue.Empty:
                                 pass
                         else:
@@ -671,7 +671,7 @@ class ReplBridge:
         """Runs on the watcher thread: wake the agent now if it is idle, else after its turn."""
         if self._shutting_down or ReplBridge.active_bridge is not self:
             return
-        self._emit({"type": "notice", "text": f"⏰ Ожидание #{watch.id} закончилось: {watch.describe()}"})
+        self._emit({"type": "notice", "text": f"Ожидание #{watch.id} закончилось: {watch.describe()}"})
         with self.session._lock:
             if self.session._turn_running:
                 self._pending_wakes.append(message)
@@ -834,7 +834,7 @@ class ReplBridge:
             expanded_input, attached_files = expand_file_mentions(user_input)
             if attached_files:
                 files_str = ", ".join("@" + f for f in attached_files)
-                self._emit({"type": "notice", "text": f"📎 Прикреплены файлы: {files_str}"})
+                self._emit({"type": "notice", "text": f"Прикреплены файлы: {files_str}"})
                 user_input = expanded_input
 
             # 3. Auto-save session periodically

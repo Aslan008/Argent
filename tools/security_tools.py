@@ -182,13 +182,13 @@ def audit_security(level: str = "standard") -> str:
     root = Path.cwd().resolve()
     
     report_lines = [
-        f"[bold cyan]🛡️ Argent Project Security Audit[/bold cyan] ([dim]{root}[/dim])",
+        f"[bold cyan]Argent Project Security Audit[/bold cyan] ([dim]{root}[/dim])",
         ""
     ]
     
     # 1. Dependencies
     dep_status, dep_findings = _check_dependencies()
-    status_icon = "✅" if dep_status == "OK" else "⚠️"
+    status_icon = "[green]+[/green]" if dep_status == "OK" else "[yellow]![/yellow]"
     report_lines.append(f"{status_icon} [bold]Dependencies & Packages:[/bold] {dep_status}")
     if dep_findings:
         for f in dep_findings[:8]:
@@ -200,7 +200,7 @@ def audit_security(level: str = "standard") -> str:
 
     # 2. Sensitive files & Git safety
     file_status, file_findings = _check_sensitive_files(root)
-    file_icon = "✅" if file_status == "OK" else ("❌" if file_status == "FAIL" else "⚠️")
+    file_icon = "[green]+[/green]" if file_status == "OK" else ("[red]x[/red]" if file_status == "FAIL" else "[yellow]![/yellow]")
     report_lines.append(f"{file_icon} [bold]Secrets & Sensitive Files:[/bold] {file_status}")
     if file_findings:
         for f in file_findings[:10]:
@@ -212,7 +212,7 @@ def audit_security(level: str = "standard") -> str:
 
     # 3. Static patterns in code
     code_status, code_findings = _check_code_patterns(root)
-    code_icon = "✅" if code_status == "OK" else "⚠️"
+    code_icon = "[green]+[/green]" if code_status == "OK" else "[yellow]![/yellow]"
     report_lines.append(f"{code_icon} [bold]Code Secrets & Patterns:[/bold] {code_status}")
     if code_findings:
         for f in code_findings[:8]:

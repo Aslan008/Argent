@@ -253,13 +253,13 @@ def handle_sound_command(command: str) -> None:
 
     if subcmd in ("on", "1", "true", "enable"):
         set_sound_notification(True)
-        print_system("🔔 Звуковые сигналы включены [bold green]ON[/bold green].")
+        print_system("Звуковые сигналы включены [bold green]ON[/bold green].")
         play_sound("done", force=True)
         return
 
     if subcmd in ("off", "0", "false", "disable"):
         set_sound_notification(False)
-        print_system("🔕 Звуковые сигналы отключены [bold red]OFF[/bold red].")
+        print_system("Звуковые сигналы отключены [bold red]OFF[/bold red].")
         return
 
     if subcmd in ("test", "play"):
@@ -271,9 +271,9 @@ def handle_sound_command(command: str) -> None:
         cfg = get_sound_events_config()
         curr_target = cfg.get(event, "system")
         if curr_target.lower() in ("mute", "none", "off", "0", "false"):
-            print_system(f"🔔 Событие '[cyan]{event}[/cyan]' имеет статус [dim yellow]mute[/dim yellow] (звук отключен).")
+            print_system(f"Событие '[cyan]{event}[/cyan]' имеет статус [dim yellow]mute[/dim yellow] (звук отключен).")
         else:
-            print_system(f"🔔 Проигрывание тестового сигнала для '[cyan]{event}[/cyan]' (цель: [yellow]{curr_target}[/yellow])...")
+            print_system(f"Проигрывание тестового сигнала для '[cyan]{event}[/cyan]' (цель: [yellow]{curr_target}[/yellow])...")
             play_sound(event, force=True)
         return
 
@@ -295,7 +295,7 @@ def handle_sound_command(command: str) -> None:
 
         if val_lower in ("system", "synth", "chord", "mute", "none", "off"):
             set_sound_event(target_event, val_lower)
-            print_system(f"🔔 Для '[cyan]{target_event}[/cyan]' установлен пресет: [bold green]{val_lower}[/bold green]")
+            print_system(f"Для '[cyan]{target_event}[/cyan]' установлен пресет: [bold green]{val_lower}[/bold green]")
             if val_lower not in ("mute", "none", "off"):
                 sample_event = "done" if target_event == "all" else target_event
                 play_sound(sample_event, force=True)
@@ -311,9 +311,9 @@ def handle_sound_command(command: str) -> None:
 
         if os.path.isfile(expanded_path):
             if not expanded_path.lower().endswith(".wav"):
-                print_system("[dim yellow]⚠️ Предупреждение: рекомендуется формат .wav (несжатый PCM).[/dim yellow]")
+                print_system("[dim yellow]Предупреждение: рекомендуется формат .wav (несжатый PCM).[/dim yellow]")
             set_sound_event(target_event, expanded_path)
-            print_system(f"🔔 Для '[cyan]{target_event}[/cyan]' назначен аудиофайл: [bold green]{expanded_path}[/bold green]")
+            print_system(f"Для '[cyan]{target_event}[/cyan]' назначен аудиофайл: [bold green]{expanded_path}[/bold green]")
             sample_event = "done" if target_event == "all" else target_event
             play_sound(sample_event, force=True)
             return
@@ -330,7 +330,7 @@ def handle_sound_command(command: str) -> None:
     status_label = "[bold green]ВКЛЮЧЕНЫ (ON)[/bold green]" if is_on else "[bold red]ОТКЛЮЧЕНЫ (OFF)[/bold red]"
     events_cfg = get_sound_events_config()
 
-    table = Table(title=f"🔔 Звуковые сигналы: {status_label}", show_header=True, header_style="bold cyan")
+    table = Table(title=f"Звуковые сигналы: {status_label}", show_header=True, header_style="bold cyan")
     table.add_column("Событие", style="bold yellow")
     table.add_column("Назначенный звук", style="white")
     table.add_column("Описание", style="dim")

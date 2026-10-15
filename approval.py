@@ -797,7 +797,7 @@ def _raw_terminal_prompt(action: str, destructive: bool, grant_key: str | None) 
                 spec["question"],
                 choices=spec["choices"],
             ).ask()
-            if choice is None or choice.startswith("✕") or choice.startswith("❌"):
+            if choice is None or choice.startswith("✕"):
                 return "deny"
             return "always" if choice.startswith(_ALWAYS_PREFIX) else "once"
 

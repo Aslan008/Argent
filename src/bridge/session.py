@@ -120,7 +120,7 @@ class AgentSession:
                     gen.close()
                     # Same line the REPL prints on Ctrl+C (main.py).
                     self._emit({"type": "system",
-                                "text": "\n[dim yellow]⚡ Ход прерван пользователем (Ctrl+C)[/dim yellow]"})
+                                "text": "\n[dim yellow]Ход прерван пользователем (Ctrl+C)[/dim yellow]"})
                     interrupted = True
                     break
                 kind = chunk.get("type")
@@ -171,7 +171,7 @@ class AgentSession:
             if self._stop_requested and not interrupted:
                 interrupted = True
                 self._emit({"type": "system",
-                            "text": "\n[dim yellow]⚡ Ход прерван пользователем (Ctrl+C)[/dim yellow]"})
+                            "text": "\n[dim yellow]Ход прерван пользователем (Ctrl+C)[/dim yellow]"})
             # An interrupted turn prints no snapshot in the REPL (the Ctrl+C
             # handler skips it), so the TUI doesn't either.
             if not interrupted:

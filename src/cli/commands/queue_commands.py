@@ -27,7 +27,7 @@ def handle_queue(ctx: CommandContext) -> CommandResult:
         if not items:
             print_system(
                 "Очередь сообщений пуста.\n"
-                "[dim]💡 Вы можете печатать текст и нажимать Enter прямо во время работы агента, "
+                "[dim]Вы можете печатать текст и нажимать Enter прямо во время работы агента, "
                 "чтобы ставить задачи в очередь.[/dim]"
             )
             return CommandResult.continue_loop()

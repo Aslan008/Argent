@@ -285,7 +285,7 @@ def test_in_ask_mode_the_user_chooses_the_next_model():
     assert r.text and r.model == "c/third:free" and p.calls == ["a/primary:free", "c/third:free"]
     title, options = rec.asked[0]
     assert "a/primary:free" in title and "исчерпала лимит" in title
-    assert options[0].startswith("↻") and options[-1].startswith("✂")
+    assert options[0].startswith("↻") and options[-1].startswith("Без модели")
     assert "b/second:free" in options and "c/third:free" in options
     assert rec.events == ["pause", "ask", "resume"], "the spinner is off while a question is on screen"
 

@@ -152,7 +152,7 @@ class SpeculativeCache:
             # Cache HIT
             self._cache.move_to_end(key)
             self.stats["hits"] += 1
-            logger.info(f"⚡ Speculative cache HIT for {tool_name}: {arguments}")
+            logger.info(f"Speculative cache HIT for {tool_name}: {arguments}")
             return entry.result
 
     def invalidate(self, file_path: str) -> None:

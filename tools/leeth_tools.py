@@ -68,7 +68,7 @@ def delegate_to_leeth(task: str) -> str:
             results.append(f"Step {idx} [{tool_name}({json.dumps(tool_args, ensure_ascii=False)})]:\n{res_str}")
 
         elapsed_ms = (time.perf_counter() - t0) * 1000.0
-        header = f"⚡ Leeth Fast-Path completed {len(steps)} action(s) in {elapsed_ms:.1f} ms:\n"
+        header = f"Leeth Fast-Path completed {len(steps)} action(s) in {elapsed_ms:.1f} ms:\n"
         return header + "\n\n".join(results)
 
     except Exception as e:

@@ -40,7 +40,7 @@ def set_vibe_mode(enabled: bool, notify: bool = True) -> bool:
         approval.set_policy(approval.POLICY_AUTO)
         if notify:
             print_system(
-                "🌴 Vibe-режим ВКЛ: безопасные действия одобряются автоматически, "
+                "Vibe-режим ВКЛ: безопасные действия одобряются автоматически, "
                 "деструктивные — отклоняются во избежание потери данных, "
                 "перед первой правкой каждого хода создаётся чекпоинт. Откат: /rewind."
             )
@@ -399,6 +399,16 @@ def handle_advisor(ctx: CommandContext) -> CommandResult:
                      % ("разрешена" if rest.lower() == "on" else "запрещена (будем спрашивать)"))
     else:
         print_error("Использование: /advisor [status] | model <провайдер>:<модель> | clear | consent on|off")
+    return CommandResult.continue_loop()
+
+
+# --- Status Command ---
+
+@registry.register("/status", help_text="Одним экраном: что включено, что идёт, что ждёт вас", category="agent")
+def handle_status(ctx: CommandContext) -> CommandResult:
+    from src.cli import status_overview
+    for line in status_overview.render(status_overview.collect()):
+        print_system(line)
     return CommandResult.continue_loop()
 
 
@@ -876,9 +886,10 @@ def handle_rooms(ctx: CommandContext) -> CommandResult:
         return questionary.select(question, choices=options).ask()
 
     def _human(node, state):
-        ans = questionary.text(f"[{node.id}] {node.prompt or 'Ваш ввод:'}").ask()
-        if ans:
-            state.data[f"{node.id}.output"] = ans
+        from src.rooms.ask import ask_human
+        ask_human(node, state, print_system,
+                  lambda q: questionary.text(q).ask(),
+                  lambda q, options: questionary.select(q, choices=options).ask())
 
     def _ask_text(question: str) -> str:
         return questionary.text(question).ask() or ""

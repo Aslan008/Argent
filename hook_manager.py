@@ -18,11 +18,41 @@ class HookManager:
     def __init__(self):
         self.hooks_dir = get_global_hooks_dir()
         self._plugins = []
+        self._loaded_signature = None
         self._load_plugins()
 
-    def _load_plugins(self):
+    @staticmethod
+    def _signature(directory: Path) -> tuple:
+        """What the plugin set is made of: the directory, each plugin file with its stamp, and the
+        disabled list. Two equal signatures mean a reload would load exactly the same thing."""
+        files = []
+        try:
+            for item in sorted(directory.iterdir()):
+                if item.is_file() and item.suffix == ".py" and not item.name.startswith("_"):
+                    st = item.stat()
+                    files.append((item.name, st.st_mtime_ns, st.st_size))
+        except OSError:
+            pass
+        return (str(directory), tuple(files), tuple(sorted(get_disabled_plugins())))
+
+    def reload_if_changed(self, quiet: bool = True) -> bool:
+        """Pick up a plugin that was added, edited, removed, enabled or disabled since the last load.
+        Cheap when nothing changed (one directory listing). Returns whether it reloaded."""
+        try:
+            directory = get_global_hooks_dir()
+        except Exception:
+            return False
+        if self._signature(directory) == self._loaded_signature:
+            return False
+        self.hooks_dir = directory
+        self._load_plugins(quiet=quiet)
+        return True
+
+    def _load_plugins(self, quiet: bool = False):
         """Discovers and loads all .py files in the hooks directory."""
         if not self.hooks_dir.exists():
+            self._plugins = []
+            self._loaded_signature = self._signature(self.hooks_dir)
             return
             
         # Add to sys.path so plugins can import each other
@@ -58,7 +88,8 @@ class HookManager:
         if str(self.hooks_dir) in sys.path:
             sys.path.remove(str(self.hooks_dir))
             
-        if loaded_count > 0:
+        self._loaded_signature = self._signature(self.hooks_dir)
+        if loaded_count > 0 and not quiet:
             print_system(f"Loaded {loaded_count} global plugin(s) from {self.hooks_dir}")
 
     def reload_plugins(self, new_dir=None):

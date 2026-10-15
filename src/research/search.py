@@ -201,8 +201,12 @@ def _brave_pace():
     """Block just long enough to stay under the free tier's rate limit."""
     global _brave_last_call
     with _BRAVE_LOCK:
-        wait = _BRAVE_MIN_INTERVAL - (time.monotonic() - _brave_last_call)
-        if wait > 0:
+        # sleep() may return a little early (coarse timers on Windows), so wait
+        # on the monotonic deadline itself rather than trusting one sleep.
+        while True:
+            wait = _BRAVE_MIN_INTERVAL - (time.monotonic() - _brave_last_call)
+            if wait <= 0:
+                break
             time.sleep(wait)
         _brave_last_call = time.monotonic()
 

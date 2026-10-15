@@ -1333,15 +1333,15 @@ When solving non-trivial problems, formulating plans, or taking actions:
                         trajectory_id=leeth_trajectory.current_trajectory_id(),
                         context=session_ctx,
                     )
-                    badge_title = "⚡ Leeth Fast-Path (Forced)" if is_forced_leeth else "⚡ Leeth Fast-Path"
+                    badge_title = "Leeth Fast-Path (Forced)" if is_forced_leeth else "Leeth Fast-Path"
                 elif backend == "micromodel":
                     from src.micromodels.dispatcher import dispatcher as micro_disp
                     dispatch = micro_disp.try_fast_dispatch(user_text)
-                    badge_title = "⚡ MicroModel Fast-Path"
+                    badge_title = "MicroModel Fast-Path"
                 elif backend == "needle" and get_needle_enabled() and get_needle_fast_path():
                     from src.agent.needle_coprocessor import coprocessor as needle_disp
                     dispatch = needle_disp.try_fast_dispatch(user_text)
-                    badge_title = "⚡ Needle 3 Fast-Path"
+                    badge_title = "Needle 3 Fast-Path"
 
                 if dispatch is not None:
                     # Ground-truth verification: read_file only dispatches if file exists on disk
@@ -1370,7 +1370,7 @@ When solving non-trivial problems, formulating plans, or taking actions:
                     _review_mode = get_leeth_review_mode()
                     _decision_id = getattr(dispatch, "decision_id", None)
                     if not is_forced_leeth and _review_mode != "off" and _decision_id:
-                        yield {"type": "content_stream", "content": f"\n[🔍 Ревью предложения Leeth: {dispatch.tool_name} {json.dumps(dispatch.arguments, ensure_ascii=False)}]\n"}
+                        yield {"type": "content_stream", "content": f"\n[Ревью предложения Leeth: {dispatch.tool_name} {json.dumps(dispatch.arguments, ensure_ascii=False)}]\n"}
                         _verdict = self._review_leeth_proposal(provider, user_text, dispatch)
                         if _verdict is not None:
                             try:
@@ -1413,7 +1413,7 @@ When solving non-trivial problems, formulating plans, or taking actions:
                             if not _st.decision_id:
                                 _kept_steps.append(_st)
                                 continue
-                            yield {"type": "content_stream", "content": f"\n[🔍 Ревью шага цепочки: {_st.tool_name} {json.dumps(_st.arguments, ensure_ascii=False)}]\n"}
+                            yield {"type": "content_stream", "content": f"\n[Ревью шага цепочки: {_st.tool_name} {json.dumps(_st.arguments, ensure_ascii=False)}]\n"}
                             _verdict = self._review_leeth_proposal(provider, user_text, _st)
                             if _verdict is not None:
                                 try:
@@ -2307,7 +2307,7 @@ When solving non-trivial problems, formulating plans, or taking actions:
                                     if stale_note:
                                         result = str(result) + stale_note
                                     if spec_hit:
-                                        yield {"type": "content_stream", "content": "\n[⚡ Speculative CoT Cache Hit: 0.1 ms]\n"}
+                                        yield {"type": "content_stream", "content": "\n[Speculative CoT Cache Hit: 0.1 ms]\n"}
 
                                 # Invalidate speculative cache on workspace-modifying tools
                                 if speculative_enabled:
@@ -3039,7 +3039,7 @@ def run_plan_critique(target: str, goal: str = None, what: str = "plan / idea") 
     except Exception as e:
         if model or provider:
             from ui import console
-            console.print(f"[dim yellow]⚠️ Critic on {provider or ''}:{model} failed ({e}); falling back to current model...[/dim yellow]")
+            console.print(f"[dim yellow]Critic on {provider or ''}:{model} failed ({e}); falling back to current model...[/dim yellow]")
             log.warning("Critic on %s/%s failed (%s); falling back to current model",
                         provider, model, e)
             return ArgentSubAgent("Critic", task, tools_override=[]).execute()

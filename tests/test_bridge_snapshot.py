@@ -60,7 +60,7 @@ def test_snapshot_lines_are_pure():
 
 def test_off_mode_is_the_minimal_line():
     lines = cli_ui.turn_snapshot_lines(FakeAgent(), 8.2, usage={}, mode="off")
-    assert len(lines) == 1 and lines[0].startswith("[dim](⏱ 8.2s")
+    assert len(lines) == 1 and lines[0].startswith("[dim](8.2s")
 
 
 def test_verbose_mode_is_multiline():

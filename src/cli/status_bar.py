@@ -58,7 +58,7 @@ class StatusBar:
                 f"[cyan]{provider}:{model}[/cyan] · "
                 f"[dim]tier:{tier}[/dim]"
                 f"[#79c0ff]{think_part}[/#79c0ff] · "
-                f"[dim]📁 {cwd}[/dim]"
+                f"[dim]{cwd}[/dim]"
                 f"{ctx_part} · "
                 f"[dim #8b949e](ESC — прервать)[/dim #8b949e]"
             )

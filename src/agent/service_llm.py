@@ -363,7 +363,7 @@ def default_ui(status=None) -> UI:
         try:
             from rich.markup import escape
             from ui import print_system
-            print_system("[yellow]⚠ " + escape(msg) + "[/yellow]")
+            print_system("[yellow]" + escape(msg) + "[/yellow]")
         except Exception:
             pass
 
@@ -488,7 +488,7 @@ def _ordered_candidates(provider, primary: str, tried: List[str], extra: Optiona
 
 
 _RETRY = "↻ Повторить ту же модель"
-_GIVE_UP = "✂ Без модели (детерминированная выжимка)"
+_GIVE_UP = "Без модели (детерминированная выжимка)"
 
 
 def _choose_next(provider, model, info, tried, policy, ui, extra, now):

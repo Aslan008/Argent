@@ -296,7 +296,7 @@ def run_review(target: str = "", focus: str = "", cwd=None, runner: Optional[Cal
     return ReviewResult(findings, bundle, raw, True, dropped)
 
 
-_MARK = {"critical": "‼", "high": "●", "medium": "◐", "low": "○"}
+_MARK = {"critical": "!!", "high": "●", "medium": "◐", "low": "○"}
 
 
 def render(result: ReviewResult) -> str:

@@ -585,7 +585,7 @@ def handle_fast(ctx: CommandContext) -> CommandResult:
         backend = get_fast_dispatch_backend()
         active = backend != "off"
         status_str = f"[bold green]ВКЛ[/bold green] (бэкенд: [bold cyan]{backend}[/bold cyan])" if active else "[bold red]ВЫКЛ[/bold red]"
-        print_system(f"⚡ Fast-Path статус: {status_str}")
+        print_system(f"Fast-Path статус: {status_str}")
         print_system("  /fast on|off         — включить/выключить перехват рутинных инструментов")
         print_system("  /fast leeth          — использовать Leeth (1.5ms, 23.7M params, INT8 ONNX)")
         print_system("  /fast micromodel     — использовать MicroModel router")
@@ -882,7 +882,7 @@ def handle_max_tokens(ctx: CommandContext) -> CommandResult:
     print_system(f"Лимит токенов на один ответ: [bold cyan]{value}[/bold cyan]")
     window = getattr(ctx.agent, "max_context_tokens", 0) or 0
     if window and value >= window:
-        print_system(f"[yellow]⚠ Это не меньше окна контекста модели ({window}): "
+        print_system(f"[yellow]Это не меньше окна контекста модели ({window}): "
                      f"ответ не поместится рядом с историей.[/yellow]")
     return CommandResult.continue_loop()
 
@@ -1356,7 +1356,7 @@ def handle_needle(ctx: CommandContext) -> CommandResult:
 
     if sub == "on":
         set_needle_enabled(True)
-        print_system("⚡ Needle 3 coprocessor: ВКЛ")
+        print_system("Needle 3 coprocessor: ВКЛ")
         # Auto-initialize on enable to report load time
         try:
             from src.agent.needle_coprocessor import coprocessor
@@ -1367,9 +1367,9 @@ def handle_needle(ctx: CommandContext) -> CommandResult:
             if ok:
                 print_system(f"  Модель загружена за {elapsed:.0f} ms")
             else:
-                print_system(f"  ⚠ Не удалось инициализировать: {coprocessor._init_error}")
+                print_system(f"  Не удалось инициализировать: {coprocessor._init_error}")
         except Exception as e:
-            print_system(f"  ⚠ Ошибка инициализации: {e}")
+            print_system(f"  Ошибка инициализации: {e}")
     elif sub == "off":
         set_needle_enabled(False)
         set_needle_fast_path(False)
@@ -1379,9 +1379,9 @@ def handle_needle(ctx: CommandContext) -> CommandResult:
         if fast_arg == "on":
             if not get_needle_enabled():
                 set_needle_enabled(True)
-                print_system("⚡ Needle 3 coprocessor: ВКЛ (авто)")
+                print_system("Needle 3 coprocessor: ВКЛ (авто)")
             set_needle_fast_path(True)
-            print_system("⚡ Fast-Path режим: ВКЛ (перехват read_file, git_status, git_diff, grep_search)")
+            print_system("Fast-Path режим: ВКЛ (перехват read_file, git_status, git_diff, grep_search)")
         elif fast_arg == "off":
             set_needle_fast_path(False)
             print_system("Fast-Path режим: ВЫКЛ")
@@ -1404,7 +1404,7 @@ def handle_needle(ctx: CommandContext) -> CommandResult:
             result = coprocessor.try_fast_dispatch(test_query)
             if result:
                 print_system(
-                    f"[⚡ Needle 3 Fast-Path: {result.elapsed_ms:.1f} ms]\n"
+                    f"[Needle 3 Fast-Path: {result.elapsed_ms:.1f} ms]\n"
                     f"  Tool: {result.tool_name}\n"
                     f"  Args: {result.arguments}\n"
                     f"  Confidence: {result.confidence:.2f}"
@@ -1428,7 +1428,7 @@ def handle_needle(ctx: CommandContext) -> CommandResult:
         except ImportError:
             print_system("  Пакет:      НЕ УСТАНОВЛЕН")
     else:
-        print_system("⚡ Needle 3 — ультрабыстрый CPU-сопроцессор для вызова инструментов")
+        print_system("Needle 3 — ультрабыстрый CPU-сопроцессор для вызова инструментов")
         print_system("  /needle on           — включить сопроцессор")
         print_system("  /needle off          — выключить")
         print_system("  /needle fast on|off  — режим мгновенного перехвата рутинных команд")
@@ -1449,7 +1449,7 @@ def handle_micro(ctx: CommandContext) -> CommandResult:
 
     if sub == "on":
         set_fast_dispatch_backend("micromodel")
-        print_system("⚡ Fast-Path бэкенд переключён на: MicroModel (ВКЛ)")
+        print_system("Fast-Path бэкенд переключён на: MicroModel (ВКЛ)")
     elif sub == "off":
         set_fast_dispatch_backend("off")
         print_system("Fast-Path перехват: ВЫКЛ")
@@ -1457,7 +1457,7 @@ def handle_micro(ctx: CommandContext) -> CommandResult:
         b_arg = parts[2].lower() if len(parts) > 2 else ""
         if b_arg in ("leeth", "micromodel", "needle", "off"):
             set_fast_dispatch_backend(b_arg)
-            print_system(f"⚡ Fast-Path бэкенд установлен: {b_arg}")
+            print_system(f"Fast-Path бэкенд установлен: {b_arg}")
         else:
             cur = get_fast_dispatch_backend()
             print_system(f"Текущий бэкенд: {cur}")
@@ -1487,7 +1487,7 @@ def handle_micro(ctx: CommandContext) -> CommandResult:
 
             if disp_res:
                 print_system(
-                    f"  Статус:     ⚡ FAST-DISPATCH\n"
+                    f"  Статус:     FAST-DISPATCH\n"
                     f"  Инструмент: {disp_res.tool_name}\n"
                     f"  Аргументы:  {disp_res.arguments}\n"
                     f"  Время:      {disp_res.elapsed_ms:.2f} ms"
@@ -1497,14 +1497,14 @@ def handle_micro(ctx: CommandContext) -> CommandResult:
         except Exception as e:
             print_error(f"Ошибка проверки микромодели: {e}")
     elif sub == "train":
-        print_system("🔄 Запуск слияния данных активного обучения и дообучения микромодели...")
+        print_system("Запуск слияния данных активного обучения и дообучения микромодели...")
         try:
             from src.micromodels.data_collector import collector
             ok, msg = collector.merge_and_retrain()
             if ok:
                 print_system(f"✓ {msg}")
             else:
-                print_system(f"ℹ {msg}")
+                print_system(f"{msg}")
         except Exception as e:
             print_error(f"Ошибка обучения: {e}")
     elif sub == "queue":
@@ -1541,7 +1541,7 @@ def handle_micro(ctx: CommandContext) -> CommandResult:
         print_system(f"  Активное обучение:  {stats['uncertain_queries_queued']} неуверенных запросов")
         print_system(f"  Собрано живых пар:  {stats['live_samples_recorded']} примеров")
     else:
-        print_system("⚡ MicroModels — собственные узкоспециализированные ИИ модели Argent")
+        print_system("MicroModels — собственные узкоспециализированные ИИ модели Argent")
         print_system("  /micro status             — состояние модели, движка и метрик")
         print_system("  /micro test <запрос>      — анализ запроса (интент, аргументы, латентность)")
         print_system("  /micro backend [name]     — выбор бэкенда (micromodel | needle | off)")

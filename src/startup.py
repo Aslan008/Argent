@@ -191,7 +191,7 @@ def restore_session(agent, meta: dict, io: Optional[StartupIO] = None) -> bool:
     saved_model = data.get("model") or ""
     current_model = getattr(agent, "model_name", "")
     if saved_model and saved_model != current_model:
-        io.system(f"[yellow]⚠ Сессия велась на '{saved_model}', сейчас активна "
+        io.system(f"[yellow]Сессия велась на '{saved_model}', сейчас активна "
                   f"'{current_model}'.[/yellow] История содержит вызовы "
                   f"инструментов, которые текущая модель может не повторить — "
                   f"смените модель через /model, если это важно.")
@@ -199,7 +199,7 @@ def restore_session(agent, meta: dict, io: Optional[StartupIO] = None) -> bool:
     saved_cwd = data.get("cwd") or ""
     current = os.getcwd()
     if saved_cwd and os.path.normcase(os.path.abspath(saved_cwd)) != os.path.normcase(current):
-        io.system(f"[yellow]⚠ Сессия сохранена в:[/yellow] {saved_cwd}\n"
+        io.system(f"[yellow]Сессия сохранена в:[/yellow] {saved_cwd}\n"
                   f"[yellow]   Вы сейчас в:       [/yellow] {current}")
         if not os.path.isdir(saved_cwd):
             io.system("[dim]Директории сессии больше нет — пути из истории "

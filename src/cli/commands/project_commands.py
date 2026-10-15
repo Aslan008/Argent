@@ -172,7 +172,7 @@ def handle_commit(ctx: CommandContext) -> CommandResult:
 
                 if verdict == CriticVerdict.RETHINK:
                     proceed = questionary.confirm(
-                        "⚠️ Критик выставил вердикт RETHINK (критические проблемы в подготовленном диффе). Вы уверены, что хотите закоммитить?",
+                        "Критик выставил вердикт RETHINK (критические проблемы в подготовленном диффе). Вы уверены, что хотите закоммитить?",
                         default=False,
                     ).ask()
                     if not proceed:

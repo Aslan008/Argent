@@ -271,7 +271,7 @@ def ask_user_questions(questions: list) -> str:
         play_sound("prompt")
     except Exception:
         pass
-    console.print("\n[bold cyan]🔍 Уточнение требований:[/bold cyan]")
+    console.print("\n[bold cyan]Уточнение требований:[/bold cyan]")
 
 
     for q in questions:

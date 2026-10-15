@@ -162,7 +162,7 @@ def decode_json_escapes(s: str) -> str:
                 out.append(nxt)
                 i += 2
                 continue
-            # Combine a UTF-16 surrogate pair (😀) into one codepoint.
+            # Combine a UTF-16 surrogate pair (an emoji) into one codepoint.
             if 0xD800 <= cp <= 0xDBFF and s[i + 6:i + 8] == '\\u':
                 try:
                     lo = int(s[i + 8:i + 12], 16)

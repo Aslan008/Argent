@@ -434,7 +434,7 @@ def turn_snapshot_lines(agent, elapsed: float, timing: dict = None,
         breakdown_str = " · ".join(breakdown_parts)
         if breakdown_str:
             breakdown_str = f" ({breakdown_str})"
-        lines.append(f"[dim](⏱ {total_fmt}{breakdown_str}{usage_str})[/dim]")
+        lines.append(f"[dim]({total_fmt}{breakdown_str}{usage_str})[/dim]")
         return lines
 
     # ── VERBOSE mode: multi-line detailed breakdown ──

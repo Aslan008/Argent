@@ -70,11 +70,11 @@ def switch_model(agent: ArgentAgent, new_model: str) -> None:
 
     kept = len([m for m in agent.messages if m.get("role") != "system"])
     if before_history and agent.max_history_messages < before_history and kept > agent.max_history_messages:
-        print_system(f"[yellow]⚠ Бюджет истории: {before_history} → "
+        print_system(f"[yellow]Бюджет истории: {before_history} → "
                      f"{agent.max_history_messages} сообщений.[/yellow] Сейчас в диалоге "
                      f"{kept} — лишние будут отброшены на следующем ходу.")
     if before_ctx and agent.max_context_tokens < before_ctx:
-        print_system(f"[yellow]⚠ Окно контекста: {before_ctx} → "
+        print_system(f"[yellow]Окно контекста: {before_ctx} → "
                      f"{agent.max_context_tokens} токенов.[/yellow] Начало разговора "
                      f"может не поместиться.")
 
@@ -106,7 +106,7 @@ def export_chat_history(agent: ArgentAgent, filename: str = None, auto: bool = F
     
     try:
         with open(filepath, "w", encoding="utf-8") as f:
-            f.write(f"# 🗓 Argent Session: {datetime.now().strftime('%Y-%m-%d %H:%M')}\n\n")
+            f.write(f"# Argent Session: {datetime.now().strftime('%Y-%m-%d %H:%M')}\n\n")
             
             for msg in agent.messages:
                 role = msg.get("role")
@@ -120,9 +120,9 @@ def export_chat_history(agent: ArgentAgent, filename: str = None, auto: bool = F
                     content = "\n".join(text_parts) + "\n*[Вложение: медиа]*"
                     
                 if role == "user":
-                    f.write(f"### 👤 Пользователь\n{content}\n\n")
+                    f.write(f"### Пользователь\n{content}\n\n")
                 elif role in ("assistant", "model"):
-                    f.write(f"### 🤖 Argent\n{content}\n\n")
+                    f.write(f"### Argent\n{content}\n\n")
                     
         if auto:
             print_system(f"Диалог автосохранён: {filepath}")
@@ -536,7 +536,7 @@ def _handle_mcp_command(command: str):
         from src.agent.mcp_prompt import model_access_warning
         warning = model_access_warning()
         if warning:
-            print_system(f"[yellow]⚠ {warning}[/yellow]")
+            print_system(f"[yellow]{warning}[/yellow]")
         return
 
     subcmd = parts[1].lower() if len(parts) > 1 else ""
@@ -784,7 +784,7 @@ def _handle_lmtrust_command(command: str) -> None:
         try:
             req = create_test_request(source_file, focus_layers=layers)
             print_system(
-                f"✅ **Запрос на LMTrust тесты создан в шлюзе:**\n"
+                f"**Запрос на LMTrust тесты создан в шлюзе:**\n"
                 f"- **ID:** `{req['id']}`\n"
                 f"- **Файл:** `{req['source_file']}`\n"
                 f"- **Слои:** `{', '.join(req['focus_layers'])}`\n"
@@ -845,7 +845,7 @@ def _handle_telegram_command(command: str) -> None:
             return
         from src.telegram.bot import send_welcome
         client = telegram_bridge.client if telegram_bridge.is_running and telegram_bridge.client else TelegramClient(token)
-        if client.send_message(chat_id, "✅ <b>Связь работает.</b>\nЭто проверочное сообщение от Argent.") is None:
+        if client.send_message(chat_id, "<b>Связь работает.</b>\nЭто проверочное сообщение от Argent.") is None:
             print_error(f"Telegram не принял сообщение: {client.last_error or 'нет ответа'}")
             return
         send_welcome(client, chat_id)
@@ -902,7 +902,7 @@ def _handle_telegram_command(command: str) -> None:
             return
         chat_id = get_telegram_chat_id()
         if not chat_id:
-            print_system("[yellow]⚠ Chat ID ещё не привязан. Любые команды будут отклоняться до привязки через /telegram setup.[/yellow]")
+            print_system("[yellow]Chat ID ещё не привязан. Любые команды будут отклоняться до привязки через /telegram setup.[/yellow]")
         ok, msg = telegram_bridge.start()
         if ok:
             set_telegram_enabled(True)
@@ -976,7 +976,7 @@ def _handle_telegram_command(command: str) -> None:
                         if user_chat_id:
                             set_telegram_chat_id(user_chat_id)
                             from src.telegram.bot import send_welcome
-                            client.send_message(user_chat_id, "🎉 <b>Argent успешно привязан к этому чату!</b>")
+                            client.send_message(user_chat_id, "<b>Argent успешно привязан к этому чату!</b>")
                             send_welcome(client, user_chat_id)
                             print_system(f"[green]✓ Успешно привязан пользователь @{user_name} (Chat ID: {user_chat_id})[/green]")
                             paired = True

@@ -258,7 +258,7 @@ class TestPrintTurnSnapshot:
         )
 
         output_text = "\n".join(printed)
-        assert "(⏱ 4.2s" in output_text
+        assert "(4.2s" in output_text
 
     def test_context_overflow_warning_above_85(self, monkeypatch):
         monkeypatch.setattr(config, "get_turn_snapshot_mode", lambda: "compact")

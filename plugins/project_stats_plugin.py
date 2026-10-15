@@ -8,7 +8,7 @@ def on_startup():
         files = [f for f in os.listdir('.') if os.path.isfile(f)]
         file_count = len(files)
         
-        console.print(f"[dim]📁 В проекте найдено [bold cyan]{file_count}[/bold cyan] файлов.[/dim]")
+        console.print(f"[dim]В проекте найдено [bold cyan]{file_count}[/bold cyan] файлов.[/dim]")
     except Exception as e:
         # Silent fail or subtle log on startup to not disrupt the user
         pass

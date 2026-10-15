@@ -102,7 +102,7 @@ def set_vibe_mode(enabled: bool, notify: bool = True) -> bool:
         approval.set_policy(approval.POLICY_AUTO)
         if notify:
             print_system(
-                "🌴 Vibe-режим ВКЛ: безопасные действия одобряются автоматически, "
+                "Vibe-режим ВКЛ: безопасные действия одобряются автоматически, "
                 "деструктивные — отклоняются во избежание потери данных, "
                 "перед первой правкой каждого хода создаётся чекпоинт. Откат: /rewind."
             )
@@ -290,7 +290,7 @@ def main():
         from src.agent.mcp_prompt import model_access_warning
         warning = model_access_warning()
         if warning:
-            print_system(f"[yellow]⚠ {warning}[/yellow]")
+            print_system(f"[yellow]{warning}[/yellow]")
 
     # Trigger Startup Hook
     hook_manager.call_hook("on_startup")
@@ -311,7 +311,7 @@ def main():
         if start_background_scheduler(on_event=notice.enqueue_event) is not None:
             scheduled = [a for a in load_automations() if a.enabled]
             if scheduled:
-                print_system(f"[dim]⏰ Автоматизации по расписанию: {len(scheduled)} "
+                print_system(f"[dim]Автоматизации по расписанию: {len(scheduled)} "
                              f"(/tasks — сводка; запускаются, пока Argent открыт)[/dim]")
             digest = notice.startup_digest()
             if digest:
@@ -357,7 +357,7 @@ def main():
             if ok:
                 print_system(f"Telegram-мост: [bold green]ВКЛ[/bold green] ({msg})")
         except Exception as e:
-            print_system(f"[yellow]⚠ Не удалось запустить Telegram-мост: {e}[/yellow]")
+            print_system(f"[yellow]Не удалось запустить Telegram-мост: {e}[/yellow]")
 
     while True:
         try:
@@ -550,7 +550,7 @@ def main():
                     from src.cli.cli_prompt import expand_file_mentions
                     expanded_input, attached_files = expand_file_mentions(user_input)
                     if attached_files:
-                        print_system(f"[dim]📎 Прикреплены файлы: {', '.join('@' + f for f in attached_files)}[/dim]")
+                        print_system(f"[dim]Прикреплены файлы: {', '.join('@' + f for f in attached_files)}[/dim]")
                         user_input = expanded_input
 
                 # Reset project mode on new manual input
@@ -692,7 +692,7 @@ def main():
                 play_sound("error")
             except Exception:
                 pass
-            print_system("\n[dim yellow]⚡ Ход прерван пользователем (Ctrl+C)[/dim yellow]")
+            print_system("\n[dim yellow]Ход прерван пользователем (Ctrl+C)[/dim yellow]")
             # Heal the history: an interrupted turn may have left tool_calls
             # without matching tool results, which would poison the next request.
             try:

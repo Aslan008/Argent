@@ -11,6 +11,7 @@ from src.cli.commands import project_commands
 from src.cli.commands import agent_commands
 from src.cli.commands import config_commands
 from src.cli.commands import queue_commands
+from src.cli.commands import backup_commands
 from src.cli.commands import plan_commands
 from src.cli.commands import permission_commands
 from src.cli.commands import review_commands
