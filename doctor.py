@@ -105,13 +105,21 @@ def _check_browser():
     if not _module_available("playwright"):
         return (WARN, "playwright not installed — browser tools unavailable")
     try:
-        from browser_detect import detect_browsers
+        from browser_detect import bundled_chromium_status, detect_browsers
         browsers = detect_browsers()
         mode = get_browser_mode()
         if mode == "user" and not browsers:
             return (WARN, "mode 'user' but no CDP-capable browser detected")
         names = ", ".join(b.key for b in browsers) if browsers else "none detected"
-        return (OK, f"mode '{mode}' ({get_browser_name()}); detected: {names}")
+        detail = f"mode '{mode}' ({get_browser_name()}); detected: {names}"
+        # The isolated mode (and the fallback of 'user') launches Playwright's own Chromium, whose revision is
+        # pinned to the installed Playwright. A stale download means "Executable doesn't exist" at first use.
+        bundled = bundled_chromium_status()
+        if bundled["known"] and bundled["missing"]:
+            have = ", ".join(bundled["installed"]) or "none"
+            return (WARN, detail + f"; the bundled Chromium this Playwright needs is missing "
+                    f"({', '.join(bundled['missing'])}; installed: {have}) - run: playwright install chromium")
+        return (OK, detail)
     except Exception as e:
         return (WARN, f"playwright ok, browser detection failed: {e}")
 

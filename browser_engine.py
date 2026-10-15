@@ -686,10 +686,20 @@ class BrowserEngine:
         if ext_dir:
             launch_args.append(f"--load-extension={ext_dir}")
 
-        self._browser = await self._playwright.chromium.launch(
-            headless=not headed,
-            args=launch_args,
-        )
+        try:
+            self._browser = await self._playwright.chromium.launch(
+                headless=not headed,
+                args=launch_args,
+            )
+        except Exception as e:
+            if "Executable doesn't exist" in str(e):
+                from browser_detect import bundled_chromium_status
+                missing = ", ".join(bundled_chromium_status()["missing"]) or "the bundled Chromium"
+                raise RuntimeError(
+                    f"Playwright's Chromium is not installed for this Playwright version ({missing}). "
+                    "Run: playwright install chromium (or set browser mode 'user' to drive your own browser)."
+                ) from e
+            raise
         self._cdp_port = port
         self._headed = headed
         self._cdp_mode = False

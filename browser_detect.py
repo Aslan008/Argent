@@ -6,6 +6,7 @@ All of these support Chrome DevTools Protocol (CDP) for remote automation.
 """
 
 import os
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -120,3 +121,49 @@ def get_default_browser() -> Optional[BrowserInfo]:
     """
     browsers = detect_browsers()
     return browsers[0] if browsers else None
+
+
+def _playwright_browsers_dir() -> Optional[Path]:
+    """Where Playwright keeps the browsers it downloads (None when it lives inside the package)."""
+    env = os.environ.get("PLAYWRIGHT_BROWSERS_PATH", "").strip()
+    if env == "0":
+        return None
+    if env:
+        return Path(env)
+    if os.name == "nt":
+        return Path(os.environ.get("LOCALAPPDATA", "")) / "ms-playwright"
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Caches" / "ms-playwright"
+    return Path.home() / ".cache" / "ms-playwright"
+
+
+def bundled_chromium_status() -> dict:
+    """Is the Chromium that THIS Playwright version asks for installed? Reads files only (no driver start).
+
+    Playwright pins an exact browser revision to its version; after `pip install -U playwright` the old
+    download no longer matches and a launch fails with "Executable doesn't exist". Returns
+    {"known": bool, "missing": [folder names], "needed": {name: revision}, "installed": [revisions]}."""
+    out = {"known": False, "missing": [], "needed": {}, "installed": []}
+    try:
+        import json
+        import playwright
+        manifest = Path(playwright.__file__).parent / "driver" / "package" / "browsers.json"
+        revisions = {b["name"]: str(b["revision"]) for b in json.loads(manifest.read_text(encoding="utf-8"))["browsers"]}
+        root = _playwright_browsers_dir()
+        if root is None:
+            root = Path(playwright.__file__).parent / "driver" / "package" / ".local-browsers"
+        # The window opens as `chromium`, headless as `chromium-headless-shell`.
+        for name in ("chromium", "chromium-headless-shell"):
+            rev = revisions.get(name)
+            if not rev:
+                continue
+            folder = name.replace("-", "_") if name == "chromium-headless-shell" else name
+            out["needed"][name] = rev
+            if not (root / f"{folder}-{rev}" / "INSTALLATION_COMPLETE").is_file():
+                out["missing"].append(f"{folder}-{rev}")
+        if root.is_dir():
+            out["installed"] = sorted(p.name for p in root.iterdir() if p.name.startswith("chromium"))
+        out["known"] = True
+    except Exception as e:  # a layout we do not know: say nothing rather than guess
+        log.debug("bundled_chromium_status: %s", e)
+    return out
