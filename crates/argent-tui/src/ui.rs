@@ -199,6 +199,48 @@ fn bold() -> Style {
     Style::default().add_modifier(Modifier::BOLD)
 }
 
+/// A question's title as rows: wrapped to the width (it may hold line breaks and run long), cut
+/// to `max_rows`. One row of a short title is exactly what the title was before.
+fn title_rows(title: &str, width: usize, max_rows: usize) -> Vec<String> {
+    // `? ` in front of the first row, two blanks under it on the others.
+    let avail = width.saturating_sub(4).max(8);
+    let mut rows: Vec<String> = crate::view::wrap_words(title.trim(), avail);
+    while rows.last().is_some_and(|r| r.trim().is_empty()) && rows.len() > 1 {
+        rows.pop();
+    }
+    if rows.is_empty() {
+        rows.push(String::new());
+    }
+    let max_rows = max_rows.max(1);
+    if rows.len() > max_rows {
+        rows.truncate(max_rows);
+        if let Some(last) = rows.last_mut() {
+            last.push('…');
+        }
+    }
+    rows
+}
+
+/// The title rows of a question as styled lines: the `?` mark on the first, the rest set in under
+/// the text. `tail` is added after the last row (the typed text, or the hint of what keys do).
+fn title_lines(rows: &[String], tail: Vec<Span<'static>>) -> Vec<Line<'static>> {
+    let n = rows.len();
+    rows.iter()
+        .enumerate()
+        .map(|(i, r)| {
+            let mut spans = if i == 0 {
+                vec![qmark(), Span::styled(format!(" {r} "), bold())]
+            } else {
+                vec![Span::styled(format!("  {r} "), bold())]
+            };
+            if i + 1 == n {
+                spans.extend(tail.iter().cloned());
+            }
+            Line::from(spans)
+        })
+        .collect()
+}
+
 /// The `❯ ` prompt while idle, or the REPL's `❯ [Ввод на лету]:` echo while a
 /// turn runs (nothing at all while busy and nothing typed — as in the REPL).
 pub(crate) fn prompt_block_classic(app: &App, width: u16, max_rows: usize) -> PromptBlock {
@@ -385,7 +427,8 @@ fn menu_rows(app: &App, width: u16) -> Vec<Line<'static>> {
 /// A long list shows the current step with its neighbours and a "… ещё N" row for the rest.
 pub(crate) fn todo_rows(app: &App, width: u16, max_rows: usize) -> Vec<Line<'static>> {
     let todos = &app.status.todos;
-    if todos.is_empty() || max_rows < 2 {
+    let folded = app.todos_folded;
+    if todos.is_empty() || max_rows < if folded { 1 } else { 2 } {
         return Vec::new();
     }
     let (muted, accent, ok, text) = if app.ui.is_premium() {
@@ -395,13 +438,20 @@ pub(crate) fn todo_rows(app: &App, width: u16, max_rows: usize) -> Vec<Line<'sta
         (Color::Rgb(0x88, 0x88, 0x88), Color::Rgb(0xff, 0xb3, 0x00), Color::Rgb(0x4c, 0xaf, 0x50), Color::Reset)
     };
     let done = todos.iter().filter(|t| t.is_done()).count();
-    let mut rows = vec![clip_line(
-        Line::from(vec![
-            Span::styled("  ☰ Задачи ", Style::default().fg(muted).add_modifier(Modifier::BOLD)),
-            Span::styled(format!("{done}/{}", todos.len()), Style::default().fg(muted)),
-        ]),
-        width as usize,
-    )];
+    // The header is the fold button: `▾` open, `▸` folded. Folded, it also says what is going on now.
+    let mut head = vec![
+        Span::styled(if folded { "  ▸ Задачи " } else { "  ▾ Задачи " }, Style::default().fg(muted).add_modifier(Modifier::BOLD)),
+        Span::styled(format!("{done}/{}", todos.len()), Style::default().fg(muted)),
+    ];
+    if folded {
+        let now = todos.iter().find(|t| t.is_active()).or_else(|| todos.iter().find(|t| !t.is_done()));
+        if let Some(t) = now {
+            head.push(Span::styled("  ·  ", Style::default().fg(muted)));
+            head.push(Span::styled(t.content.clone(), Style::default().fg(text)));
+        }
+        return vec![clip_line(Line::from(head), width as usize)];
+    }
+    let mut rows = vec![clip_line(Line::from(head), width as usize)];
 
     let room = max_rows - 1;
     let (start, end, hidden) = if todos.len() <= room {
@@ -465,19 +515,12 @@ fn approval_rows(app: &App, a: &ApprovalData, width: u16) -> Vec<Line<'static>> 
         )
     });
     let mut rows: Vec<Line<'static>> = header.iter().cloned().collect();
+    let trows = title_rows(&p.question, width as usize, 8);
     if p.confirm {
-        rows.push(Line::from(vec![
-            qmark(),
-            Span::styled(format!(" {} ", p.question), bold()),
-            Span::raw("(y/N) "),
-        ]));
+        rows.extend(title_lines(&trows, vec![Span::raw("(y/N) ")]));
         return rows;
     }
-    rows.push(Line::from(vec![
-        qmark(),
-        Span::styled(format!(" {} ", p.question), bold()),
-        Span::raw("(Use arrow keys)"),
-    ]));
+    rows.extend(title_lines(&trows, vec![Span::raw("(Use arrow keys)")]));
     for (i, c) in p.choices.iter().enumerate() {
         rows.push(Line::from(vec![answer_pointer(i == a.selected), Span::raw(c.clone())]));
     }
@@ -490,7 +533,10 @@ fn select_rows(s: &SelectModalData, width: u16, max_rows: usize) -> (Vec<Line<'s
     let w = width as usize;
     if s.options.is_empty() {
         let typed = crate::ansi::strip_ansi(&s.filter);
-        let head = format!("? {} ", s.title);
+        let trows = title_rows(&s.title, w, max_rows.saturating_sub(1).max(1));
+        let last = trows.last().cloned().unwrap_or_default();
+        // The typed text goes on the row of the last line of the title.
+        let head = if trows.len() == 1 { format!("? {last} ") } else { format!("  {last} ") };
         let budget = w.saturating_sub(UnicodeWidthStr::width(head.as_str()) + 1).max(1);
         let shown: String = {
             let n = typed.chars().count();
@@ -500,13 +546,13 @@ fn select_rows(s: &SelectModalData, width: u16, max_rows: usize) -> (Vec<Line<'s
                 typed.clone()
             }
         };
-        let row = Line::from(vec![
-            qmark(),
-            Span::styled(format!(" {} ", s.title), bold()),
-            Span::styled(shown.clone(), Style::default().fg(Color::Rgb(0xff, 0x9d, 0x00)).add_modifier(Modifier::BOLD)),
-        ]);
+        let tail = vec![Span::styled(
+            shown.clone(),
+            Style::default().fg(Color::Rgb(0xff, 0x9d, 0x00)).add_modifier(Modifier::BOLD),
+        )];
+        let rows = title_lines(&trows, tail);
         let col = UnicodeWidthStr::width(head.as_str()) + UnicodeWidthStr::width(shown.as_str());
-        return (vec![row], Some((col as u16, 0)));
+        return (rows, Some((col as u16, (trows.len() - 1) as u16)));
     }
 
     let filtered = s.filtered_options();
@@ -518,13 +564,12 @@ fn select_rows(s: &SelectModalData, width: u16, max_rows: usize) -> (Vec<Line<'s
     } else {
         "(Use arrow keys)"
     };
-    let mut rows = vec![Line::from(vec![
-        qmark(),
-        Span::styled(format!(" {} ", s.title), bold()),
-        Span::raw(instruction),
-    ])];
+    // A long title takes the rows it needs, but at least three are kept for the choices.
+    let trows = title_rows(&s.title, w, max_rows.saturating_sub(3).max(1));
+    let title_h = trows.len();
+    let mut rows = title_lines(&trows, vec![Span::raw(instruction)]);
 
-    let list_h = max_rows.saturating_sub(1 + usize::from(!s.filter.is_empty())).max(1);
+    let list_h = max_rows.saturating_sub(title_h + usize::from(!s.filter.is_empty())).max(1);
     let pos = filtered.iter().position(|(o, _)| *o == s.selected_idx).unwrap_or(0);
     let top = if pos >= list_h { pos + 1 - list_h } else { 0 };
     for (orig, opt) in filtered.iter().skip(top).take(list_h) {
@@ -610,7 +655,9 @@ pub fn draw_ui(f: &mut Frame, app: &App) {
     menu.truncate(h.saturating_sub(toolbar_h + 1));
     // The agent's checklist sits between the chat and the prompt. It is the first thing to give way:
     // never in front of a question, and only with room to spare for the chat above it.
-    let todo_room = h.saturating_sub(prompt_rows.len() + menu.len() + toolbar_h + 5).min(9);
+    // At most six rows (the header and five steps): the checklist is a glance, not the screen. A
+    // click on its header folds it to that one row.
+    let todo_room = h.saturating_sub(prompt_rows.len() + menu.len() + toolbar_h + 5).min(6);
     let todo = if modal { Vec::new() } else { todo_rows(app, w, todo_room) };
     // The stack may never squeeze the transcript out entirely.
     let reserved = prompt_rows.len() + menu.len() + toolbar_h;
@@ -723,6 +770,10 @@ pub fn draw_ui(f: &mut Frame, app: &App) {
     let todo_y = area.y + (view_h + over) as u16;
     for (i, row) in todo.iter().enumerate() {
         put_line(f.buffer_mut(), area, todo_y + i as u16, row, w);
+    }
+    if !todo.is_empty() && todo_y < area.y + area.height {
+        // The header row is a button: it folds and unfolds the list.
+        app.register_clickable(area.x, todo_y, w, 1, ClickAction::ToggleTodos);
     }
     let py = todo_y + todo.len() as u16;
     for (i, row) in prompt_rows.iter().enumerate() {

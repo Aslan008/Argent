@@ -134,8 +134,10 @@ impl Default for Palette {
             warn,
             danger,
             user_bg: base,
-            tool: Color::Rgb(0x38, 0x8b, 0xfd),
-            think: Color::Rgb(0x7d, 0x85, 0x90),
+            // One accent (blue) for you and the answer; the rest of the roles each get a quiet hue of their
+            // own, so a call, a thought and a system line differ by colour and not by how grey they are.
+            tool: Color::Rgb(0x3f, 0xa8, 0x9c),
+            think: Color::Rgb(0x9b, 0x8c, 0xd0),
             rethink: Color::Rgb(0xd1, 0x8f, 0x52),
             code: Color::Rgb(0x11, 0x15, 0x1c),
             ok_soft: blend(ok, surface, 0.16),

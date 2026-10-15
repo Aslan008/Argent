@@ -143,3 +143,31 @@ fn the_premium_look_colours_the_marks_and_strikes_out_what_is_done() {
     let pending = buf.content.iter().find(|c| c.symbol() == "○").expect("pending mark");
     assert_eq!(pending.fg, p.muted);
 }
+
+#[test]
+fn the_header_is_a_button_that_folds_the_list_to_one_row() {
+    use argent_tui::app::ClickAction;
+
+    let mut app = app_with(vec![item("read the code", "completed"), item("write the fix", "in_progress"), item("run tests", "pending")]);
+    let screen = render(&app, 80, 24);
+    let header = row_of(&screen, "Задачи").unwrap();
+    assert!(screen[header].contains('▾'), "open: {}", screen[header]);
+    assert_eq!(app.get_clicked_action(3, header as u16), Some(ClickAction::ToggleTodos));
+
+    app.todos_folded = true;
+    let folded = render(&app, 80, 24);
+    let header = row_of(&folded, "Задачи").unwrap();
+    assert!(folded[header].contains('▸') && folded[header].contains("1/3"), "{}", folded[header]);
+    assert!(folded[header].contains("write the fix"), "folded, it still says what is going on: {}", folded[header]);
+    assert!(row_of(&folded, "run tests").is_none() && row_of(&folded, "read the code").is_none());
+    assert_eq!(app.get_clicked_action(3, header as u16), Some(ClickAction::ToggleTodos), "and it unfolds again");
+}
+
+#[test]
+fn the_list_is_a_glance_not_a_screen() {
+    let items: Vec<TodoItem> = (1..=30).map(|i| item(&format!("step {i}"), "pending")).collect();
+    let screen = render(&app_with(items), 80, 50);
+    let header = row_of(&screen, "Задачи").unwrap();
+    let prompt = screen.iter().rposition(|r| r.contains('❯')).unwrap();
+    assert!(prompt - header <= 8, "at most the header, five steps and the 'more' row: {}", prompt - header);
+}

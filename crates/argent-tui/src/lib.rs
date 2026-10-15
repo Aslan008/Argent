@@ -13,7 +13,7 @@ use crossterm::{
     event::{
         self, DisableBracketedPaste, DisableFocusChange, DisableMouseCapture,
         EnableBracketedPaste, EnableFocusChange, EnableMouseCapture, Event, KeyCode,
-        KeyEventKind, KeyModifiers,
+        KeyEvent, KeyEventKind, KeyModifiers,
         KeyboardEnhancementFlags, MouseButton, MouseEventKind, PopKeyboardEnhancementFlags,
         PushKeyboardEnhancementFlags,
     },
@@ -41,6 +41,62 @@ pub mod view;
 
 use app::{App, ClickAction, CompletionItem, MessageItem, Submit};
 use events::ArgentEvent;
+
+/// How long a burst of keys may pause, in ms, and still be one paste (a long paste reaches the
+/// console in chunks).
+const PASTE_GAP_MS: u64 = 15;
+
+/// The text a key stands for when it is part of a pasted burst: plain characters, Enter and Tab.
+fn paste_char(key: &KeyEvent) -> Option<char> {
+    if key.kind == KeyEventKind::Release {
+        return None;
+    }
+    if !(key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT) {
+        return None;
+    }
+    match key.code {
+        KeyCode::Enter => Some('\n'),
+        KeyCode::Tab => Some('\t'),
+        KeyCode::Char(c) if c == '\r' || c == '\n' || c == '\t' || !c.is_control() => Some(c),
+        _ => None,
+    }
+}
+
+/// Three keys or more, one right after another, are a paste; two (a letter and Enter) are a person.
+fn is_paste_burst(burst: &[KeyEvent]) -> bool {
+    burst.len() >= 3
+}
+
+#[cfg(test)]
+mod paste_tests {
+    use super::*;
+
+    fn key(code: KeyCode) -> KeyEvent {
+        KeyEvent::new(code, KeyModifiers::NONE)
+    }
+
+    #[test]
+    fn enter_in_a_burst_is_a_newline_not_a_submit() {
+        let burst = [key(KeyCode::Char('a')), key(KeyCode::Enter), key(KeyCode::Char('b'))];
+        assert!(is_paste_burst(&burst));
+        let text: String = burst.iter().filter_map(paste_char).collect();
+        assert_eq!(text, "a\nb");
+    }
+
+    #[test]
+    fn a_letter_and_enter_are_typing() {
+        assert!(!is_paste_burst(&[key(KeyCode::Char('a')), key(KeyCode::Enter)]));
+    }
+
+    #[test]
+    fn shortcuts_are_not_paste_keys() {
+        let ctrl = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
+        assert_eq!(paste_char(&ctrl), None);
+        let shift = KeyEvent::new(KeyCode::Char('Я'), KeyModifiers::SHIFT);
+        assert_eq!(paste_char(&shift), Some('Я'));
+        assert_eq!(paste_char(&key(KeyCode::Up)), None);
+    }
+}
 use sink::RustEventSink;
 
 #[pyfunction]
@@ -186,6 +242,9 @@ fn run_tui(py: Python, bridge: PyObject) -> PyResult<()> {
             app.mouse_capture_enabled = true;
         }
 
+        // Events read ahead while looking for a pasted burst and not consumed yet.
+        let mut backlog: std::collections::VecDeque<Event> = std::collections::VecDeque::new();
+
         loop {
             app.tick = app.tick.wrapping_add(1);
 
@@ -282,9 +341,18 @@ fn run_tui(py: Python, bridge: PyObject) -> PyResult<()> {
 
             // Poll input events; short while a turn runs (spinners), longer idle.
             let poll_for = if app.is_busy { 30 } else { 60 };
-            if event::poll(Duration::from_millis(poll_for)).map_err(|e| e.to_string())? {
+            let mut from_backlog = false;
+            let next_event = if let Some(queued) = backlog.pop_front() {
+                from_backlog = true;
+                Some(queued)
+            } else if event::poll(Duration::from_millis(poll_for)).map_err(|e| e.to_string())? {
+                Some(event::read().map_err(|e| e.to_string())?)
+            } else {
+                None
+            };
+            if let Some(next_event) = next_event {
                 app.dirty.set(true);
-                match event::read().map_err(|e| e.to_string())? {
+                match next_event {
                     // Mouse Wheel Scroll support & interactive button clicks
                     Event::Mouse(mouse) => match mouse.kind {
                         MouseEventKind::ScrollUp => {
@@ -446,6 +514,9 @@ fn run_tui(py: Python, bridge: PyObject) -> PyResult<()> {
                                     ClickAction::ScrollToBottom => {
                                         app.scroll_down(usize::MAX);
                                     }
+                                    ClickAction::ToggleTodos => {
+                                        app.todos_folded = !app.todos_folded;
+                                    }
                                     ClickAction::ToggleMouseCapture => {
                                         match guard.toggle_mouse_capture() {
                                             Ok(enabled) => {
@@ -520,6 +591,47 @@ Event::FocusGained => {
                         // CRITICAL: Filter out Release events to prevent duplicate characters on Windows!
                         if key.kind == KeyEventKind::Release {
                             continue;
+                        }
+                        // A Windows console does not deliver a paste as Event::Paste: the text
+                        // arrives as a storm of key presses, and every Enter in it would submit
+                        // the line. Keys that arrive back to back are therefore taken as one paste.
+                        if !from_backlog
+                            && app.active_approval.is_none()
+                            && app.active_select.is_none()
+                            && paste_char(&key).is_some()
+                        {
+                            let mut burst = vec![key];
+                            let mut after: Option<Event> = None;
+                            loop {
+                                // Inside a burst wait a moment: a long paste reaches the console in chunks.
+                                let wait = if burst.len() > 1 { PASTE_GAP_MS } else { 0 };
+                                if !event::poll(Duration::from_millis(wait)).map_err(|e| e.to_string())? {
+                                    break;
+                                }
+                                match event::read().map_err(|e| e.to_string())? {
+                                    Event::Key(k) if k.kind == KeyEventKind::Release => {}
+                                    Event::Key(k) if paste_char(&k).is_some() => burst.push(k),
+                                    other => {
+                                        after = Some(other);
+                                        break;
+                                    }
+                                }
+                            }
+                            if is_paste_burst(&burst) {
+                                let text: String = burst.iter().filter_map(paste_char).collect();
+                                app.insert_str(&text);
+                                if let Some(other) = after {
+                                    backlog.push_back(other);
+                                }
+                                continue;
+                            }
+                            // Just quick typing: the keys are handled one by one, in their order.
+                            for k in burst.drain(1..).rev() {
+                                backlog.push_front(Event::Key(k));
+                            }
+                            if let Some(other) = after {
+                                backlog.push_back(other);
+                            }
                         }
                         // Ctrl+C copies a mouse selection; scrolling keeps it (it is
                         // anchored to the text, not to the screen); Esc only dismisses

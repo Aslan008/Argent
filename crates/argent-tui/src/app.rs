@@ -510,6 +510,8 @@ pub enum ClickAction {
     RewindLast,
     /// The "newest" chip shown while the chat is scrolled back.
     ScrollToBottom,
+    /// Fold / unfold the agent's checklist above the prompt.
+    ToggleTodos,
 }
 
 #[derive(Debug, Clone)]
@@ -566,6 +568,8 @@ pub struct App {
     pub scroll_anchor: std::cell::Cell<Option<ScrollAnchor>>,
     /// Rows of empty space the user has scrolled open under the newest output.
     pub overscroll: usize,
+    /// The agent's checklist is folded to one row (a click on its header, or on its row, toggles it).
+    pub todos_folded: bool,
     pub auto_scroll: bool,
     /// Set by an `exit` event from the bridge (e.g. the `/exit` command). The
     /// main loop checks it and shuts down cleanly.
@@ -734,6 +738,7 @@ impl App {
             scroll_used: std::cell::Cell::new(None),
             scroll_anchor: std::cell::Cell::new(None),
             overscroll: 0,
+            todos_folded: false,
             auto_scroll: true,
             should_quit: false,
             completions: Vec::new(),

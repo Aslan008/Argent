@@ -52,6 +52,8 @@ const CARD_PRE: usize = 3;
 const CARD_TEXT: usize = 5;
 /// Rows of a tool's output a card shows (the REPL's own cap).
 const RESULT_ROWS: usize = 15;
+/// Rows of a room's report a card shows (it is a list of findings, not a log).
+const ROOM_RESULT_ROWS: usize = 40;
 /// Rows of a diff a card shows.
 const DIFF_ROWS: usize = 25;
 
@@ -183,9 +185,19 @@ pub(crate) fn lead_blank(app: &App, idx: usize) -> bool {
         return false;
     }
     match app.messages.get(idx) {
-        Some(cur) if is_thought(cur) || is_card(cur) => !is_thought(prev),
+        // a thought sits against the thought before it; a call against the thought that led to it
+        // and against the call before it (a run of calls is one block, not a column of islands)
+        Some(cur) if is_thought(cur) => !is_thought(prev),
+        Some(cur) if is_card(cur) => !(is_thought(prev) || is_card(prev)),
+        // lines of the system (a room's progress, a notice) follow each other and the call they belong to
+        Some(cur) if is_note(cur) => !(is_note(prev) || is_card(prev)),
         _ => true,
     }
+}
+
+/// A line of the system: a notice or a system message.
+fn is_note(m: &MessageItem) -> bool {
+    matches!(m, MessageItem::Notice(_) | MessageItem::System(_))
 }
 
 /// An answer that is followed, in the same turn, by a tool call is one on the way
@@ -287,7 +299,8 @@ pub(crate) fn item_view(app: &App, idx: usize, width: u16) -> ItemView {
                     blocks.click_last(ClickAction::ToggleTool(idx));
                 }
             } else if name != "ask_user_questions" {
-                let exp = *expanded || app.show_tool_results || app.ui.show_tool_results;
+                // A room's report is the point of the call: it is shown, not folded into one row.
+                let exp = *expanded || app.show_tool_results || app.ui.show_tool_results || name == "rooms";
                 let res = result.as_deref().unwrap_or("");
                 tool_blocks(app, idx, name, args, res, *duration_secs, exp, width, &mut blocks);
                 blocks.click_last(ClickAction::ToggleTool(idx));
@@ -420,12 +433,6 @@ fn user_blocks(app: &App, text: &str, width: u16, blocks: &mut Blocks) {
     let tint = |n: usize| Span::styled(" ".repeat(n), Style::default().bg(bg));
     let edge_row = || Line::from(vec![lead(), tint(bubble_w - 1), bar()]);
 
-    // The label sits over the bubble's right edge.
-    let label = Line::from(vec![
-        Span::raw(" ".repeat(w.saturating_sub(3))),
-        Span::styled("Вы", Style::default().fg(p.accent).add_modifier(Modifier::BOLD)),
-    ]);
-    blocks.add_cols(rows_of(vec![label]), Cols::NONE);
     blocks.add_cols(rows_of(vec![edge_row()]), Cols::NONE);
     let body: Vec<Line<'static>> = rows
         .iter()
@@ -451,9 +458,10 @@ fn user_blocks(app: &App, text: &str, width: u16, blocks: &mut Blocks) {
 fn answer_header(p: &Palette, intermediate: bool) -> Line<'static> {
     let mut spans = vec![Span::raw(" ".repeat(INDENT))];
     if intermediate {
-        spans.push(Span::styled("✦ Argent", Style::default().fg(p.muted).add_modifier(Modifier::BOLD)));
+        let quiet = crate::theme::blend(p.accent, p.muted, 0.45);
+        spans.push(Span::styled("✦ Argent", Style::default().fg(quiet).add_modifier(Modifier::BOLD)));
         spans.push(Span::raw("  "));
-        spans.push(Span::styled(" промежуточный ответ ", Style::default().fg(p.muted).bg(p.surface_hi)));
+        spans.push(Span::styled(" промежуточный ответ ", Style::default().fg(quiet).bg(p.surface_hi)));
     } else {
         spans.push(Span::styled("✦ Argent", Style::default().fg(p.accent).add_modifier(Modifier::BOLD)));
     }
@@ -514,7 +522,7 @@ fn thought_blocks(
             spans.push(Span::raw("  "));
             spans.push(Span::styled(
                 shown,
-                Style::default().fg(p.muted).add_modifier(Modifier::DIM | Modifier::ITALIC),
+                Style::default().fg(crate::theme::blend(color, p.text, 0.30)).add_modifier(Modifier::ITALIC),
             ));
         }
         blocks.add_cols(rows_of(vec![clip_line(Line::from(spans), w)]), Cols::from(CARD_PRE));
@@ -671,9 +679,10 @@ fn tool_rows(
 
     // The output, on the darker body of the card.
     let all: Vec<&str> = result.lines().collect();
-    let hidden = all.len().saturating_sub(RESULT_ROWS);
+    let cap = if name == "rooms" { ROOM_RESULT_ROWS } else { RESULT_ROWS };
+    let hidden = all.len().saturating_sub(cap);
     let mut body_rows: Vec<String> = Vec::new();
-    for l in all.iter().take(RESULT_ROWS) {
+    for l in all.iter().take(cap) {
         let clean = strip_ansi(l);
         body_rows.extend(wrap_soft(&clean.replace('\t', "    "), w.saturating_sub(CARD_TEXT + 1)));
     }

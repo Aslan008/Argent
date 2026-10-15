@@ -79,12 +79,12 @@ fn your_message_is_a_bubble_at_the_right_edge() {
 }
 
 #[test]
-fn the_bubble_has_a_label_and_padding_rows() {
+fn the_bubble_has_padding_rows_and_no_label() {
     let mut app = premium_app();
     app.messages.push(MessageItem::User("hello".into()));
     let buf = draw(&app, 60, 20);
     let y = find(&buf, "hello");
-    assert!(row(&buf, y - 2).trim_end().ends_with("Вы"), "{:?}", row(&buf, y - 2));
+    assert!(!rows(&buf).iter().any(|r| r.contains("Вы")), "the bubble says who spoke by where it is");
     assert_eq!(buf[(58, y - 1)].symbol(), "▐", "padding above");
     assert_eq!(buf[(58, y + 1)].symbol(), "▐", "padding below");
     assert_eq!(buf[(50, y - 1)].bg, p().user_bg);
@@ -195,16 +195,15 @@ fn a_running_tool_is_the_first_row_of_its_card() {
 }
 
 #[test]
-fn consecutive_cards_are_set_apart_by_a_blank_row() {
+fn consecutive_cards_sit_tight_one_under_the_other() {
     let mut app = premium_app();
     app.messages.push(tool("read_file", &[("file_path", "a.py")], "x"));
     app.messages.push(tool("read_file", &[("file_path", "b.py")], "y"));
     let buf = draw(&app, 80, 20);
     let a = find(&buf, "a.py");
     let b = find(&buf, "b.py");
-    assert_eq!(b - a, 3, "header, summary, one blank, header:\n{}", rows(&buf).join("\n"));
-    assert_eq!(row(&buf, a + 2).trim(), "");
-    assert_eq!(buf[(40, a + 2)].bg, ratatui::style::Color::Reset, "the gap is the page, not a card");
+    assert_eq!(b - a, 2, "header, summary, header: a run of calls is one block:\n{}", rows(&buf).join("\n"));
+    assert_eq!(buf[(40, a + 1)].bg, p().surface, "no gap of the page's colour between the two");
 }
 
 #[test]
@@ -435,4 +434,23 @@ fn a_long_premium_session_costs_a_screenful_not_the_history() {
     }
     let per_frame = t.elapsed() / 5;
     assert!(per_frame < std::time::Duration::from_millis(250), "a frame took {per_frame:?}");
+}
+
+// ── a question of several lines ──────────────────────────────────────────────
+
+#[test]
+fn a_question_with_line_breaks_is_shown_whole() {
+    let mut app = premium_app();
+    app.messages.push(MessageItem::User("run it".into()));
+    app.active_select = Some(argent_tui::app::SelectModalData::new(
+        "q".into(),
+        "Замечания критика:\n- первое замечание\n- второе замечание\n\nПродолжить?".into(),
+        vec!["Да".into(), "Нет".into()],
+        None,
+    ));
+    let buf = draw(&app, 70, 24);
+    for needle in ["Замечания критика", "первое замечание", "второе замечание", "Продолжить?"] {
+        assert!(rows(&buf).iter().any(|r| r.contains(needle)), "{needle} is on the screen:\n{}", rows(&buf).join("\n"));
+    }
+    assert!(rows(&buf).iter().any(|r| r.contains("Да")) && rows(&buf).iter().any(|r| r.contains("Нет")));
 }

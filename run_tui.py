@@ -19,6 +19,35 @@ import traceback
 _ROOT = os.path.dirname(os.path.abspath(__file__))
 _VENV_PY = os.path.join(_ROOT, ".venv", "Scripts", "python.exe")
 _ERROR_LOG = os.path.join(_ROOT, ".argent", "tui_error.log")
+_CRASH_LOG = os.path.join(_ROOT, ".argent", "tui_crash.log")
+_LAUNCH_MARK = os.path.join(_ROOT, ".argent", "launch.ok")
+_crash_file = None  # kept referenced: faulthandler writes to it from a signal handler
+
+
+def _announce_start() -> None:
+    """First action of the process: tell Argent.bat the interpreter really started.
+
+    The launcher waits for this file and falls back to another way of opening a
+    console when it does not appear (see Argent.bat). It also arms faulthandler, so a
+    native crash (the Rust extension, a DLL) leaves a traceback on disk instead of a
+    window that silently closes.
+    """
+    global _crash_file
+    try:
+        os.makedirs(os.path.dirname(_LAUNCH_MARK), exist_ok=True)
+        with open(_LAUNCH_MARK, "w", encoding="utf-8") as fh:
+            fh.write(f"{os.getpid()} {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+    except OSError:
+        pass
+    try:
+        import faulthandler
+        _crash_file = open(_CRASH_LOG, "a", encoding="utf-8")
+        faulthandler.enable(file=_crash_file, all_threads=True)
+    except Exception:
+        pass
+
+
+_announce_start()
 
 
 def _report_failure(message: str) -> None:
