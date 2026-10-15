@@ -77,6 +77,12 @@ class RoomProposer:
             "(needs a \"budget\" and a \"writes\" list), condition, human_pause. Edges: "
             "unconditional, or {\"if\": expr}, {\"else\": true}, {\"while\": expr, \"max\": N, \"id\": ...}. "
             "Every node must be able to reach an EXIT:<name>. Do NOT use spawn_room. "
+            "A verdict (tests pass, command succeeded) must come from a tool node with "
+            '"sets": {"<field>": "ok"|"exit_code"|"body"|"tail"} on run_command, not from an agent. '
+            'Agent nodes may carry "role" (Researcher/Reviewer/Coder) and a read-only "tools" list; '
+            'a risky tool node (commit, push, delete) must have "confirm": true. '
+            'Put the person\'s words into steps with {{task}}; set "defaults" for parameters and '
+            '"next" ({"<exit>": "<room>"|"END"}) to chain rooms. '
             f"Existing rooms: {existing}. Task: {task}. Failure: {failure}. "
             "Output ONLY the JSON object."
         )

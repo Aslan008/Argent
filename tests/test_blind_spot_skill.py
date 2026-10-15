@@ -31,7 +31,6 @@ class TestGeneralSkill:
     def test_actionable_wiring(self):
         body = _GENERAL.read_text(encoding="utf-8")
         assert "ask_user_questions" in body      # structured questions tool
-        assert "set_goal" in body                 # pin the refined contract
         assert "Max 3" in body or "max 3" in body # economy rule
         assert "ASSUMPTIONS" in body              # report shape
         assert "FACTS" in body and "RISKS" in body and "QUESTIONS" in body

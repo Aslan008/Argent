@@ -25,6 +25,7 @@ class Enemy:
 class TestTemporal:
     """L8: Temporal / ordering tests."""
 
+    @pytest.mark.lmtrust(layer="L8", direction="D6")
     def test_heal_then_damage_vs_damage_then_heal(self):
         """A→B vs B→A: результат тот же? (коммутативность)"""
         # heal then damage (max_hp=100, чтобы heal не упирался в потолок)
@@ -39,6 +40,7 @@ class TestTemporal:
 
         assert p1.hp == p2.hp, f"Order dependence: {p1.hp} != {p2.hp}"
 
+    @pytest.mark.lmtrust(layer="L8", direction="D10")
     def test_idempotent_zero_damage(self):
         """Повторный нулевой урон не накапливает эффект."""
         enemy = Enemy(hp=100)
@@ -46,6 +48,7 @@ class TestTemporal:
             enemy.take_damage(0)
         assert enemy.hp == 100, "Zero damage accumulated"
 
+    @pytest.mark.lmtrust(layer="L8", direction="D10")
     def test_repeated_heal_caps_at_max(self):
         """Повторный heal не превышает max_hp (идемпотентность насыщения)."""
         enemy = Enemy(hp=80, max_hp=100)
@@ -54,6 +57,7 @@ class TestTemporal:
         enemy.heal(50)  # already at max → stays 100
         assert enemy.hp == 100, "Heal above max should be idempotent"
 
+    @pytest.mark.lmtrust(layer="L8", direction="D6")
     def test_damage_then_heal_to_full(self):
         """Урон → heal до полного — HP восстанавливается корректно."""
         enemy = Enemy(hp=100)

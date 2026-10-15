@@ -2,6 +2,8 @@
 
 from unittest.mock import MagicMock
 
+import pytest
+
 import mcp_client
 
 
@@ -11,6 +13,16 @@ class _FakePipe:
 
     def close(self):
         self.closed = True
+
+
+@pytest.fixture(autouse=True)
+def _tree_kills(monkeypatch):
+    """Record kill_process_tree instead of running it: the fake processes here
+    have no real pid for it to act on."""
+    calls = []
+    monkeypatch.setattr(mcp_client, "kill_process_tree",
+                        lambda proc, descendants=(): calls.append(proc))
+    return calls
 
 
 def _transport_with_process():
@@ -33,19 +45,24 @@ class TestStopClosesPipes:
         t.stop()
         assert proc.stdout.closed and proc.stderr.closed and proc.stdin.closed
 
-    def test_process_is_terminated_and_cleared(self):
+    def test_process_is_released_and_cleared(self, _tree_kills):
+        """EOF on stdin is the polite exit; a server that takes it needs no
+        terminate(), but the tree behind it is still swept."""
         t, proc = _transport_with_process()
         t.stop()
-        proc.terminate.assert_called_once()
+        proc.terminate.assert_not_called()
+        assert proc.stdin.closed
+        assert _tree_kills == [proc]
         assert t._process is None
         assert t._initialized is False
         assert t._pending_requests == {}
 
-    def test_kill_fallback_still_closes_pipes(self):
+    def test_a_server_that_will_not_exit_is_terminated_then_killed_as_a_tree(self, _tree_kills):
         t, proc = _transport_with_process()
         proc.wait.side_effect = Exception("did not exit")
         t.stop()
-        proc.kill.assert_called_once()
+        proc.terminate.assert_called_once()
+        assert _tree_kills == [proc]
         assert proc.stdout.closed and proc.stderr.closed
 
     def test_close_failure_is_survivable(self):

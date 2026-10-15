@@ -42,11 +42,13 @@ def test_replace_python_function_previews(tmp_path):
 
 
 def test_replace_python_function_blocks_plugin_dir(tmp_path, monkeypatch):
+    import config
     plugins = tmp_path / "plugins"
     plugins.mkdir()
     f = plugins / "myplugin.py"
     f.write_text("def command_hi():\n    return 0\n", encoding="utf-8")
     monkeypatch.setattr(helpers, "get_hooks_dir", lambda: str(plugins))
+    monkeypatch.setattr(config, "get_model_category_override", lambda: "small")
     out = replace_python_function(str(f), "command_hi", "def command_hi():\n    return 9\n")
     assert "create_plugin" in out or "restricted" in out.lower()
     assert "return 9" not in f.read_text(encoding="utf-8")   # the edit was refused

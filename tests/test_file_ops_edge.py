@@ -45,20 +45,22 @@ class TestReadFileEdgeCases:
         assert "\t\n" in out or out.strip() == ""
 
     def test_start_line_beyond_end(self, tmp_path):
-        """start_line=1000 on a 5-line file should not crash."""
+        """start_line=1000 on a 5-line file is a contract error, said plainly.
+
+        It used to answer "[Lines 1000-999 of 5]" and an empty body: a range that
+        runs backwards, which a model reads as "the file is empty"."""
         (tmp_path / "short.py").write_text("a\nb\nc\nd\ne\n", encoding="utf-8")
         out = file_ops.read_file("short.py", start_line=1000)
         assert isinstance(out, str)
-        assert "Error" not in out
-        # Should report the range and total
-        assert "1000" in out
+        assert out.startswith("Error:")
+        assert "1000" in out and "(5)" in out        # what was asked, and the file's length
 
     def test_start_greater_than_end(self, tmp_path):
-        """start_line=5, end_line=2 should not crash (no lines match)."""
+        """start_line=5, end_line=2 should report a clear contract error."""
         (tmp_path / "rev.py").write_text("a\nb\nc\nd\ne\n", encoding="utf-8")
         out = file_ops.read_file("rev.py", start_line=5, end_line=2)
         assert isinstance(out, str)
-        assert "Error" not in out
+        assert "Error:" in out and "start_line" in out and "end_line" in out
 
     def test_utf8_bom_not_garbled(self, tmp_path):
         """A file with UTF-8 BOM should be readable without garbled output."""

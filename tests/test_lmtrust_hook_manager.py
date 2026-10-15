@@ -37,18 +37,16 @@ def hooks_dir(tmp_path):
 
 @pytest.fixture
 def patched_config(monkeypatch, hooks_dir):
-    """Monkeypatch config.get_hooks_dir and config.get_disabled_plugins so the
+    """Monkeypatch config and hook_manager so the
     hook_manager module (and any HookManager instance) uses our tmp_path."""
     import config
+    import hook_manager
 
     monkeypatch.setattr(config, "get_hooks_dir", lambda: str(hooks_dir))
     monkeypatch.setattr(config, "get_disabled_plugins", lambda: [])
-
-    # Make sure hook_manager is (re)imported with the patched config so the
-    # singleton does not blow up pointing at the real ~/.argent/hooks dir.
-    if "hook_manager" in sys.modules:
-        del sys.modules["hook_manager"]
-    import hook_manager  # noqa: F401
+    monkeypatch.setattr(hook_manager, "get_hooks_dir", lambda: str(hooks_dir))
+    monkeypatch.setattr(hook_manager, "get_disabled_plugins", lambda: [])
+    monkeypatch.setattr(hook_manager, "get_global_hooks_dir", lambda: hooks_dir)
     return hook_manager
 
 
@@ -302,6 +300,7 @@ class TestDisabledPlugins:
         """A plugin whose stem name appears in get_disabled_plugins() is skipped
         during discovery."""
         import config
+        import hook_manager
 
         _write_plugin(hooks_dir, "enabled_plug", """
             def on_event():
@@ -313,14 +312,12 @@ class TestDisabledPlugins:
         """)
 
         monkeypatch.setattr(config, "get_hooks_dir", lambda: str(hooks_dir))
-        monkeypatch.setattr(config, "get_disabled_plugins",
-                            lambda: ["disabled_plug"])
+        monkeypatch.setattr(config, "get_disabled_plugins", lambda: ["disabled_plug"])
+        monkeypatch.setattr(hook_manager, "get_hooks_dir", lambda: str(hooks_dir))
+        monkeypatch.setattr(hook_manager, "get_disabled_plugins", lambda: ["disabled_plug"])
+        monkeypatch.setattr(hook_manager, "get_global_hooks_dir", lambda: hooks_dir)
 
-        if "hook_manager" in sys.modules:
-            del sys.modules["hook_manager"]
-        import hook_manager as hm_mod
-
-        mgr = hm_mod.HookManager()
+        mgr = hook_manager.HookManager()
         names = [p.__name__ for p in mgr._plugins]
         assert "enabled_plug" in names
         assert "disabled_plug" not in names

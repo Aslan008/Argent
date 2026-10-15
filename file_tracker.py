@@ -38,7 +38,8 @@ def _session_dir(session_id: str = "default") -> Path:
 
 def _key(src: Path) -> str:
     """Short, fixed-length, path-length-safe key for a file's absolute path."""
-    return hashlib.sha1(str(src).encode("utf-8")).hexdigest()[:16]
+    normalized = os.path.normcase(str(src))
+    return hashlib.sha1(normalized.encode("utf-8")).hexdigest()[:16]
 
 
 def _rotate(dest_dir: Path, key: str) -> None:
@@ -112,6 +113,13 @@ def undo(file_path: str, session_id: str = "default") -> str:
     try:
         shutil.copy2(str(latest), str(src))
         latest.unlink()
+        if len(snapshots) <= 1:
+            meta = dest_dir / f"{_key(src)}.path"
+            if meta.exists():
+                try:
+                    meta.unlink()
+                except OSError:
+                    pass
         return f"Restored '{file_path}' to previous version."
     except Exception as e:
         return f"Error restoring file: {e}"
@@ -150,10 +158,21 @@ def undo_all(session_id: str = "default") -> str:
         key = meta.stem
         snapshots = sorted(dest_dir.glob(f"{key}__*"))
         if not snapshots:
+            try:
+                meta.unlink()
+            except OSError:
+                pass
             continue
         try:
             target = meta.read_text(encoding="utf-8").strip()
-            shutil.copy2(str(snapshots[-1]), target)
+            latest = snapshots[-1]
+            shutil.copy2(str(latest), target)
+            latest.unlink()
+            if len(snapshots) <= 1:
+                try:
+                    meta.unlink()
+                except OSError:
+                    pass
             results.append(f"  Restored: {target}")
         except Exception:
             results.append(f"  Failed: {key}")
@@ -161,3 +180,20 @@ def undo_all(session_id: str = "default") -> str:
     if not results:
         return "No pending changes to undo."
     return "Undo all results:\n" + "\n".join(results)
+
+
+def clear_session_snapshots(session_id: str = "default") -> int:
+    """Purge all snapshots and metadata for a session (e.g. after a global /rewind).
+    Returns the number of removed files."""
+    d = HISTORY_DIR / session_id
+    if not d.exists():
+        return 0
+    count = 0
+    for p in d.iterdir():
+        try:
+            if p.is_file():
+                p.unlink()
+                count += 1
+        except OSError:
+            pass
+    return count

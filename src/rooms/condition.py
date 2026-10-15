@@ -25,6 +25,15 @@ _COMPARE_OPS = {
 }
 
 
+#: Arithmetic a condition (or a computed value, "= state.i + 1") may use. No power, no shifts: an
+#: expression cannot be made to run away.
+_ARITH_OPS = {
+    ast.Add: operator.add, ast.Sub: operator.sub, ast.Mult: operator.mul,
+    ast.Div: operator.truediv, ast.FloorDiv: operator.floordiv, ast.Mod: operator.mod,
+}
+MAX_EXPR_CHARS = 500
+
+
 class ConditionError(ValueError):
     """A condition string is malformed or uses a forbidden construct."""
 
@@ -45,6 +54,20 @@ def _eval(node: ast.AST, data: dict):
         return any(vals)
     if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
         return not _eval(node.operand, data)
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.USub, ast.UAdd)):
+        value = _eval(node.operand, data)
+        try:
+            return -value if isinstance(node.op, ast.USub) else +value
+        except TypeError:
+            raise ConditionError("a sign needs a number")
+    if isinstance(node, ast.BinOp) and type(node.op) in _ARITH_OPS:
+        left, right = _eval(node.left, data), _eval(node.right, data)
+        try:
+            return _ARITH_OPS[type(node.op)](left, right)
+        except ZeroDivisionError:
+            raise ConditionError("division by zero")
+        except TypeError:
+            raise ConditionError(f"cannot apply '{type(node.op).__name__}' to {type(left).__name__} and {type(right).__name__}")
     if isinstance(node, ast.Compare):
         left = _eval(node.left, data)
         for op, comparator in zip(node.ops, node.comparators):
@@ -52,7 +75,12 @@ def _eval(node: ast.AST, data: dict):
             if fn is None:
                 raise ConditionError(f"comparison {type(op).__name__} not allowed")
             right = _eval(comparator, data)
-            if not fn(left, right):
+            try:
+                holds = fn(left, right)
+            except TypeError:
+                # "5 < 'a'", or a number against a field that is not there yet: not true, not a crash
+                holds = False
+            if not holds:
                 return False
             left = right
         return True
@@ -74,9 +102,15 @@ def _check(node: ast.AST) -> None:
             _check(v)
         return
     if isinstance(node, ast.UnaryOp):
-        if not isinstance(node.op, ast.Not):
+        if not isinstance(node.op, (ast.Not, ast.USub, ast.UAdd)):
             raise ConditionError(f"unary {type(node.op).__name__} not allowed")
         return _check(node.operand)
+    if isinstance(node, ast.BinOp):
+        if type(node.op) not in _ARITH_OPS:
+            raise ConditionError(f"operator {type(node.op).__name__} not allowed (use + - * / // %)")
+        _check(node.left)
+        _check(node.right)
+        return
     if isinstance(node, ast.Compare):
         for op in node.ops:
             if type(op) not in _COMPARE_OPS:
@@ -101,6 +135,8 @@ def validate(expr: str) -> None:
     """Raise ConditionError if `expr` is not a well-formed, in-grammar condition."""
     if not expr or not expr.strip():
         raise ConditionError("empty condition")
+    if len(expr) > MAX_EXPR_CHARS:
+        raise ConditionError(f"expression is longer than {MAX_EXPR_CHARS} characters")
     try:
         tree = ast.parse(expr, mode="eval")
     except SyntaxError as e:
@@ -112,3 +148,9 @@ def evaluate(expr: str, state_data: dict) -> bool:
     """Evaluate `expr` against `state_data`, returning a bool."""
     validate(expr)
     return bool(_eval(ast.parse(expr, mode="eval"), state_data or {}))
+
+
+def evaluate_value(expr: str, state_data: dict):
+    """Evaluate `expr` and return its value (a number, text, list ...), for a computed field."""
+    validate(expr)
+    return _eval(ast.parse(expr, mode="eval"), state_data or {})

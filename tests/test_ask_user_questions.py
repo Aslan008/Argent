@@ -206,9 +206,9 @@ class TestLongOptions:
 
     @pytest.fixture
     def narrow(self, monkeypatch):
-        import shutil
+        import os, shutil
         monkeypatch.setattr(shutil, "get_terminal_size",
-                            lambda d=None: type("S", (), {"columns": 80})())
+                            lambda *a, **kw: os.terminal_size((80, 24)))
 
     def test_short_options_need_no_listing(self):
         from tools.misc_tools import _fit_options

@@ -34,6 +34,14 @@ _EXPLANATIONS = [
     (r"\b404\b.*model|model .*not found|no such model",
      "Провайдер не знает такую модель — часто бывает после смены провайдера. "
      "Выберите модель заново: /model."),
+    (r"cannot post .*chat/completions|404.*chat/completions|endpoint .*not found|notfoundexception",
+     "Эндпоинт чата не найден (404). Возможно, путь API (/v1/chat/completions) не поддерживается или указан неверный api_base в настройках провайдера (/provider)."),
+    (r"no such host|dial tcp.*lookup|502 bad gateway|status code:\s*502",
+     "Сервер провайдера недоступен или не удаётся разрешить адрес DNS (502 / Host unreachable). Проверьте интернет-соединение или статус сервиса."),
+    (r"connection (reset|closed|broken)|remote disconnected|chunkedencodingerror",
+     "Соединение с сервером модели было неожиданно разорвано. Повторите запрос или выберите другую модель через /model."),
+    (r"\b503\b|service unavailable|overloaded",
+     "Сервис модели временно перегружен (503 Service Unavailable). Попробуйте повторить запрос через минуту или смените модель в /model."),
     (r"no endpoints found that support tool use",
      "У этой модели нет канала вызова инструментов. Argent сам перейдёт на "
      "текстовый формат вызовов, но качество будет ниже — для работы с кодом "

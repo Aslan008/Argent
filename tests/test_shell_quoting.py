@@ -2,7 +2,7 @@
 
 Reported:
 
-    > run_command('cd C:\\Users\\mshat\\Desktop\\Argent && python -c
+    > run_command('cd C:\\Users\\user\\Desktop\\Argent && python -c
       "import multilspy; print(\\'multilspy version:\\', ...)"')
       File "<string>", line 1
         "import
@@ -60,6 +60,56 @@ class TestTheShapesThatBroke:
         r = _run('python -c "print(\'E && ok\')"')
         assert r.returncode == 0, r.stderr
         assert "E && ok" in r.stdout
+
+    def test_powershell_inline_python_with_nested_quotes(self):
+        """Pure PowerShell execution (no cmd-chaining &&) with nested quotes in dicts."""
+        r = _run('python -c "import sys; d={\\"a\\": 1}; print(d[\\"a\\"])"')
+        assert r.returncode == 0, r.stderr
+        assert r.stdout.strip() == "1"
+
+    def test_powershell_inline_python_multiline(self):
+        """Multiline python -c invocation with newlines and semicolons."""
+        cmd = '''python -c "
+import sys
+sys.path.insert(0, '.')
+d = {'key': 'val', \\"nested\\": \\"it works!\\"}
+print('Result:', d['key'], d['nested'])
+"'''
+        r = _run(cmd)
+        assert r.returncode == 0, r.stderr
+        assert "Result: val it works!" in r.stdout
+
+    def test_powershell_inline_python_single_quoted(self):
+        """Single-quoted python -c on Windows."""
+        r = _run('python -c \'import sys; print("single_quoted_ok")\'')
+        assert r.returncode == 0, r.stderr
+        assert "single_quoted_ok" in r.stdout
+
+    def test_powershell_inline_python_with_env_prefix(self):
+        """PowerShell env variable prefix before python -c."""
+        cmd = '$env:MY_TEST_VAR=\'hello_from_env\'; python -c "import os; print(\'GOT_ENV:\', os.environ.get(\'MY_TEST_VAR\'))"'
+        r = _run(cmd)
+        assert r.returncode == 0, r.stderr
+        assert "GOT_ENV: hello_from_env" in r.stdout
+
+    def test_powershell_inline_python_with_flags_and_nested_quotes(self):
+        """Python flags like -X utf8 before -c with nested quotes."""
+        cmd = 'python -X utf8 -c "d = {\'a\': \\"b\\"}; print(\'FLAGS_OK:\', d[\'a\'])"'
+        r = _run(cmd)
+        assert r.returncode == 0, r.stderr
+        assert "FLAGS_OK: b" in r.stdout
+
+    def test_powershell_inline_python_with_env_and_flags_multiline(self):
+        """Real-world case: env prefix, flags (-X utf8), multiline, and string method calls."""
+        cmd = '''$env:PYTHONIOENCODING='utf-8'; python -X utf8 -c "
+import os, sys
+res = '1+__import__(\\'os\\').system(\\'whoami\\')'
+d = {\\"res\\": res}
+print('SYSTEM_CALL_STR:', d[\\"res\\"])
+"'''
+        r = _run(cmd)
+        assert r.returncode == 0, r.stderr
+        assert "SYSTEM_CALL_STR: 1+__import__('os').system('whoami')" in r.stdout
 
 
 class TestTheOrdinaryPathsStillWork:

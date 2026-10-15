@@ -1,4 +1,3 @@
-import os
 import jedi
 from pathlib import Path
 from typing import List, Dict, Any
@@ -74,7 +73,7 @@ class CodeIntelligence:
                     if start <= column <= start + len(w):
                         return w
             return ""
-        except:
+        except Exception:
             return ""
 
 # Global instance

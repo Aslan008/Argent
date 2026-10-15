@@ -39,6 +39,7 @@ class Enemy:
 class TestIntegration:
     """L6: Cross-system integration — без моков (No-Mock E2E)."""
 
+    @pytest.mark.lmtrust(layer="L6", direction="D3")
     def test_damage_calc_plus_enemy_hp(self):
         """calculate_damage + Enemy.receive_damage — полная цепочка без моков."""
         enemy = Enemy(hp=100, armor=20)
@@ -46,6 +47,7 @@ class TestIntegration:
         assert dealt == 90.0
         assert enemy.hp == 10  # 100 - 90 = 10
 
+    @pytest.mark.lmtrust(layer="L6", direction="D3")
     def test_crit_kill_chain(self):
         """Критический удар убивает врага — полная цепочка."""
         enemy = Enemy(hp=100, armor=20)
@@ -57,12 +59,14 @@ class TestIntegration:
 class TestLayerConsistency:
     """L6 × Cross-Layer: преобразования данных между слоями."""
 
+    @pytest.mark.lmtrust(layer="L6", direction="D7")
     def test_indexing_conversion(self):
         """Преобразование индексации: UI (1-indexed) → internal (0-indexed)."""
         ui_line = 1  # 1-indexed (UI слой)
         internal_index = ui_line - 1  # преобразование: 1→0
         assert internal_index == 0, f"Double conversion: expected 0, got {internal_index}"
 
+    @pytest.mark.lmtrust(layer="L6", direction="D10")
     def test_round_trip_conversion(self):
         """Обратное преобразование: round-trip == identity."""
         ui_value = 5

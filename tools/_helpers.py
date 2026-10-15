@@ -1,5 +1,5 @@
 import os
-import ast
+import re
 import difflib
 import py_compile
 import subprocess
@@ -9,8 +9,11 @@ from src.agent.shell import run_text
 from rich.syntax import Syntax
 from rich.panel import Panel
 from ui import console
-from config import get_hooks_dir
+import config
 from logger import get_logger
+
+def get_hooks_dir() -> str:
+    return config.get_hooks_dir()
 
 log = get_logger("tools")
 
@@ -26,20 +29,27 @@ def _resolve_path(file_path: str) -> Path:
     """
     return Path(file_path).expanduser().resolve()
 
-def _is_plugin_path_restricted(file_path: str) -> str | None:
-    """Checks if the path is inside the plugins directory and returns an error if restricted."""
+def _is_inside_dir(child_path: str, parent_dir: str) -> bool:
+    """True if child_path is strictly inside parent_dir."""
     try:
-        abs_path = os.path.abspath(file_path)
-        hooks_dir = os.path.abspath(get_hooks_dir())
-        if abs_path.startswith(hooks_dir):
+        c = Path(child_path).resolve()
+        p = Path(parent_dir).resolve()
+        return c.is_relative_to(p)
+    except Exception:
+        return False
+
+
+def _is_plugin_path_restricted(file_path: str) -> str | None:
+    """Checks if the path is inside the plugins directory and returns an error if restricted.
+
+    Restricted for small/tiny models to prevent broken partial edits.
+    For medium/large/cloud models, direct edits are allowed (and automatically reloaded).
+    """
+    try:
+        hooks_dir = get_hooks_dir()
+        if _is_inside_dir(file_path, hooks_dir):
             basename = os.path.basename(file_path)
-            if basename.endswith('.py'):
-                return (
-                    f"Error: Direct modification of files in the plugins directory is restricted. "
-                    f"You MUST use the `create_plugin` or `delete_plugin` tools for all plugin-related tasks. "
-                    f"These tools ensure mandatory syntax validation and automatic system reloading."
-                )
-            else:
+            if not basename.endswith('.py'):
                 # Non-Python files (like .md, .txt) should not go in plugins/
                 cwd = os.getcwd()
                 return (
@@ -47,9 +57,34 @@ def _is_plugin_path_restricted(file_path: str) -> str | None:
                     f"For documents and notes, write to the current project directory instead. "
                     f"Example: use file_path='{basename}' or file_path='{cwd}/{basename}'."
                 )
+
+            # Check model category
+            from config import get_current_model, get_model_size_category, is_moe_model
+            current_model = get_current_model()
+            if is_moe_model(current_model):
+                return None
+            category = get_model_size_category(current_model)
+            if category in ("tiny", "small"):
+                return (
+                    f"Error: Direct modification of files in the plugins directory is restricted for {category} models."
+                )
     except Exception:
         pass
     return None
+
+
+def _maybe_reload_plugin(file_path: str) -> None:
+    """If file_path is inside plugins/, reload plugins in hook_manager."""
+    try:
+        hooks_dir = get_hooks_dir()
+        if _is_inside_dir(file_path, hooks_dir) and str(file_path).endswith('.py'):
+            from hook_manager import hook_manager
+            hook_manager.reload_plugins()
+            log.info("Auto-reloaded plugins after modifying %s", file_path)
+    except Exception as e:
+        log.warning("Failed to auto-reload plugin %s: %s", file_path, e)
+
+
 
 
 def _is_unity_meta_restricted(file_path: str) -> str | None:
@@ -126,29 +161,32 @@ def _unity_script_placement_error(file_path) -> str | None:
 
 
 def _validate_code_syntax(file_path: str) -> str | None:
-    """Quietly checks if the written Python or C# file has syntax errors.
+    """Quietly checks if the written Python, C#, JS, TS, or JSON file has syntax errors.
     Returns the error string if failed, or None if passed."""
     if not file_path:
         return None
     file_path = str(file_path).strip()
+    lower_path = file_path.lower()
     
-    if file_path.endswith('.py'):
+    if lower_path.endswith('.py'):
         try:
             py_compile.compile(file_path, doraise=True)
             try:
                 import sys
-                result = run_text([sys.executable, "-m", "flake8", "--select=F821,E999,F822,F831", file_path], capture_output=True, timeout=5)
+                # Check for critical syntax/parse errors (E999, F822, F831) rather than F821 (undefined name)
+                # to allow multi-file and multi-step refactoring without premature aborts.
+                result = run_text([sys.executable, "-m", "flake8", "--select=E999,F822,F831", file_path], capture_output=True, timeout=5)
                 if result.returncode != 0 and result.stdout.strip():
-                    return f"Syntax is correct, but LINTER DETECTED ERRORS:\n{result.stdout.strip()}\n\nPlease fix these errors using the `multi_replace_in_file_chunk` tool."
+                    return f"Syntax is correct, but CRITICAL LINTER ERRORS DETECTED:\n{result.stdout.strip()}\n\nPlease fix these errors using the `replace_in_file` tool."
             except Exception:
                 pass 
             return None
         except py_compile.PyCompileError as e:
-            return f"SyntaxError in your Python code:\n{e.msg}\n\nPlease fix this syntax error using the `multi_replace_in_file_chunk` tool."
+            return f"SyntaxError in your Python code:\n{e.msg}\n\nPlease fix this syntax error using the `replace_in_file` tool."
         except Exception as e:
             return f"Validation Error: {e}"
             
-    if file_path.endswith('.cs'):
+    if lower_path.endswith('.cs'):
         # Unity compiles via its own pipeline; a plain `dotnet build` on a
         # Unity-generated .csproj is slow AND resolves Unity assemblies wrongly,
         # producing false compiler errors that would revert a valid edit. Skip
@@ -175,41 +213,105 @@ def _validate_code_syntax(file_path: str) -> str | None:
             try:
                 result = run_text(["dotnet", "build", str(csproj_file), "-v", "q", "/nologo"], capture_output=True, timeout=15)
                 if result.returncode != 0:
-                    return f"C# Compiler Error:\n{result.stdout}\n\nPlease fix this compiler error using the `multi_replace_in_file_chunk` tool."
+                    file_basename = Path(file_path).name
+                    syntax_errors = []
+                    for ln in (result.stdout or "").splitlines():
+                        if file_basename in ln:
+                            # Filter for syntax errors (CS1001-CS1099, CS1513, CS1514, CS1519, CS1525)
+                            if re.search(r"error CS(10\d{2}|1513|1514|1519|1525)\b", ln):
+                                syntax_errors.append(ln)
+                    if syntax_errors:
+                        return f"C# Syntax Error:\n" + "\n".join(syntax_errors) + "\n\nPlease fix this syntax error using the `replace_in_file` tool."
             except subprocess.TimeoutExpired:
                 pass
             except Exception:
                 pass
                 
-    if file_path.endswith('.json'):
+    if lower_path.endswith('.json'):
         try:
-            with open(file_path, 'r', encoding='utf-8') as f:
+            with open(file_path, 'r', encoding='utf-8-sig') as f:
                 import json
                 json.load(f)
             return None
         except Exception as e:
-            return f"JSON Syntax Error in your file:\n{e}\n\nPlease fix this syntax error using the `multi_replace_in_file_chunk` tool."
+            return f"JSON Syntax Error in your file:\n{e}\n\nPlease fix this syntax error using the `replace_in_file` tool."
 
-    if file_path.endswith(('.js', '.jsx')):
+    if lower_path.endswith(('.js', '.jsx')):
         try:
             result = run_text(["node", "--check", file_path], capture_output=True, timeout=5, shell=(os.name == 'nt'))
             if result.returncode != 0:
-                return f"JavaScript Syntax Error:\n{result.stderr or result.stdout}\n\nPlease fix this syntax error using the `multi_replace_in_file_chunk` tool."
+                return f"JavaScript Syntax Error:\n{result.stderr or result.stdout}\n\nPlease fix this syntax error using the `replace_in_file` tool."
         except Exception as e:
             pass
 
-    if file_path.endswith(('.ts', '.tsx')):
+    if lower_path.endswith(('.ts', '.tsx')):
         try:
-            # --no-install: without it npx offers to DOWNLOAD tsc and waits for
-            # "Ok to proceed? (y)" on a captured pipe nobody can see or answer.
-            # Validation must never install anything, and a project without a
-            # local tsc simply goes unchecked rather than blocking an edit.
-            result = run_text(["npx", "--no-install", "tsc", "--noEmit", "--skipLibCheck", file_path],
-                              capture_output=True, timeout=20, shell=(os.name == 'nt'))
-            if result.returncode != 0:
-                err_out = result.stderr or result.stdout
-                if "error TS" in err_out or file_path in err_out:
-                    return f"TypeScript Compiler Error:\n{err_out}\n\nPlease fix this compiler error using the `multi_replace_in_file_chunk` tool."
+            # Find the nearest tsconfig.json for proper project context
+            path_obj = Path(file_path).resolve()
+            tsconfig_dir = None
+            for p in path_obj.parents:
+                if (p / "tsconfig.json").exists():
+                    tsconfig_dir = p
+                    break
+
+            if tsconfig_dir is None:
+                return None  # No project config — can't validate meaningfully
+
+            import json as _json
+            rel_path = os.path.relpath(file_path, tsconfig_dir).replace("\\", "/")
+            temp_config = {
+                "extends": "./tsconfig.json",
+                "include": [rel_path],
+                "compilerOptions": {
+                    "noEmit": True,
+                    "skipLibCheck": True,
+                    "strict": False,
+                    "noUnusedLocals": False,
+                    "noUnusedParameters": False,
+                    "noImplicitAny": False,
+                    "noImplicitReturns": False,
+                    "noFallthroughCasesInSwitch": False,
+                    "allowUnreachableCode": True,
+                    "allowUnusedLabels": True,
+                }
+            }
+
+            temp_tsconfig = tsconfig_dir / ".tsconfig.argent-check.json"
+            try:
+                with open(temp_tsconfig, "w", encoding="utf-8") as f:
+                    _json.dump(temp_config, f)
+
+                # --no-install: without it npx offers to DOWNLOAD tsc and waits for
+                # "Ok to proceed? (y)" on a captured pipe nobody can see or answer.
+                # Validation must never install anything, and a project without a
+                # local tsc simply goes unchecked rather than blocking an edit.
+                result = run_text(
+                    ["npx", "--no-install", "tsc", "--project", str(temp_tsconfig)],
+                    capture_output=True, timeout=20, shell=(os.name == 'nt')
+                )
+                if result.returncode != 0:
+                    err_out = result.stderr or result.stdout
+                    file_basename = Path(file_path).name
+                    # Only catch actual SYNTAX / parse grammar errors (TS1000-TS1999).
+                    # Semantic type mismatches (TS2xxx), unused locals/params (TS6xxx),
+                    # and unresolved cross-file references during multi-file refactoring
+                    # must NOT revert the file and deadlock the agent.
+                    syntax_errors = []
+                    for ln in err_out.splitlines():
+                        if "error TS" in ln and (file_basename in ln or rel_path in ln):
+                            if re.search(r"error TS(1\d{3})\b", ln):
+                                syntax_errors.append(ln)
+                    if syntax_errors:
+                        return (
+                            f"TypeScript Syntax Error:\n"
+                            + "\n".join(syntax_errors)
+                            + "\n\nPlease fix this syntax error using the `replace_in_file` tool."
+                        )
+            finally:
+                try:
+                    temp_tsconfig.unlink(missing_ok=True)
+                except Exception:
+                    pass
         except Exception:
             pass
 
@@ -282,14 +384,24 @@ def _maybe_unescape_content(text: str) -> str:
         # (any resulting line has an odd number of unescaped quotes), the \n
         # markers are literal code, not leaked JSON escaping — leave them alone.
         for line in candidate.splitlines():
+            # Comments and docstrings often contain English apostrophes (don't, it's)
+            # which are not unclosed string literal delimiters.
+            stripped = line.strip()
+            if stripped.startswith(("#", "//", "/*", "*", "--", ";")):
+                continue
             quotes = 0
             i = 0
             while i < len(line):
                 if line[i] == '\\' and i + 1 < len(line):
                     i += 2
                     continue
-                if line[i] in ('"', "'"):
+                if line[i] == '"':
                     quotes += 1
+                elif line[i] == "'":
+                    prev_char = line[i - 1] if i > 0 else " "
+                    next_char = line[i + 1] if i + 1 < len(line) else " "
+                    if not (prev_char.isalpha() and next_char.isalpha()):
+                        quotes += 1
                 i += 1
             if quotes % 2 != 0:
                 return text
@@ -330,11 +442,13 @@ def _strip_read_line_numbers(text: str) -> str:
     matches = [_LINE_NUMBER_PREFIX.match(ln) for ln in lines if ln != ""]
     if len(matches) < 2 or not all(matches):
         return text
+
     numbers = [int(m.group(2)) for m in matches]
     if any(b - a != 1 for a, b in zip(numbers, numbers[1:])):
         return text
     if not any(m.group(1) for m in matches):
         return text
+
     return "\n".join(_LINE_NUMBER_PREFIX.sub("", ln) if ln != "" else ln
                      for ln in lines)
 

@@ -59,12 +59,14 @@ export class StorageService {
     } catch (e) {
       console.warn('Превышена квота localStorage. Оптимизация истории сообщений:', e);
       try {
-        // Если квота превышена, сжимаем историю старых сессий
+        const currentActiveId = this.getCurrentSessionId();
+        // Если квота превышена, сжимаем историю неактивных старых сессий
         const trimmed = sessions.map((s, idx) => {
-          if (idx === 0) return s; // Активную сессию не обрезаем
+          const isActive = currentActiveId ? s.id === currentActiveId : idx === 0;
+          if (isActive) return s; // Активную сессию не обрезаем
           return {
             ...s,
-            messages: s.messages.slice(-20) // Оставляем последние 20 сообщений
+            messages: s.messages.slice(-20) // Оставляем последние 20 сообщений в архиве
           };
         });
         localStorage.setItem(STORAGE_KEYS.SESSIONS, JSON.stringify(trimmed));

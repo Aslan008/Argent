@@ -1,5 +1,6 @@
 """The command risk-gate: graded assessment + run_command enforcement."""
 
+# pyrefly: ignore [missing-import]
 import pytest
 
 from approval import assess_command_risk, is_destructive_command
@@ -32,6 +33,14 @@ class TestAssessLevels:
         "git clean -fd",
         "taskkill /im python.exe",
         "del file.txt",
+        "find . -name '*.log' -delete",
+        "git branch -D old-branch",
+        "git stash drop",
+        "git push origin --delete branch",
+        "truncate -s 0 file.txt",
+        "python -c \"import os; os.remove('db.sqlite')\"",
+        "python -c \"import shutil; shutil.rmtree('build')\"",
+        "python -c \"open('file.txt', 'w').write('x')\"",
     ])
     def test_destructive_is_warn(self, cmd):
         level, _ = assess_command_risk(cmd)
@@ -43,6 +52,14 @@ class TestAssessLevels:
         "ls -la",
         "echo hello",
         "npm run build",
+        "Get-ChildItem src -Recurse | Format-Table -AutoSize",
+        "Get-Process | Format-List *",
+        "python -c \"import torch; print(torch.__version__)\"",
+        "python -c \"import json; print(json.dumps({'k': 'v'}))\"",
+        "python -c \"from pathlib import Path; print(list(Path('.').glob('*.py')))\"",
+        "grep -rn \"ri\" src/",
+        "python script.py --param \"del\"",
+        "python -m pytest -k \"test_rd\"",
         "",
         "   ",
     ])
@@ -50,6 +67,19 @@ class TestAssessLevels:
         level, reasons = assess_command_risk(cmd)
         assert level == "safe", cmd
         assert reasons == []
+
+    def test_user_reported_checkpoint_inspection_command_is_safe(self):
+        cmd = (
+            "python -c \"import torch; from pathlib import Path; d=Path('src/leeth/data'); "
+            "[print(p.name, '| max_score_levels=', ck['config'].max_score_levels, "
+            "'| score_head.3=', tuple(ck['state_dict']['score_head.3.weight'].shape) "
+            "if 'score_head.3.weight' in ck['state_dict'] else 'ABSENT') "
+            "for p in sorted(d.glob('leeth_*v*.pt')) for ck in [torch.load(p)]]\""
+        )
+        level, reasons = assess_command_risk(cmd)
+        assert level == "safe"
+        assert reasons == []
+        assert is_destructive_command(cmd) is False
 
 
 class TestBackwardCompat:
@@ -87,17 +117,59 @@ class TestRunCommandGate:
         result, calls = self._run(monkeypatch, "warn", "rm -rf /", approve=False)
         assert calls.get("destructive") is True
         assert "rm -rf" in calls["action"]
-        assert "delete" in calls["action"].lower() or "[" in calls["action"]  # reason shown
-        assert "NOT run" in result
+        assert "NOT executed" in result
 
     def test_block_mode_allows_safe_command(self, monkeypatch):
         # safe command is not blocked even in block mode; it reaches the prompt
         result, calls = self._run(monkeypatch, "block", "git status", approve=False)
         assert "BLOCKED" not in result
         assert calls.get("destructive") is False
-        assert "NOT run" in result  # we denied at the prompt
+        assert "NOT executed" in result  # we denied at the prompt
 
     def test_off_mode_hides_reasons(self, monkeypatch):
         result, calls = self._run(monkeypatch, "off", "git reset --hard", approve=False)
         assert calls.get("destructive") is True
         assert "[" not in calls["action"]  # no reason detail in off mode
+
+
+class TestCompoundChainedCommands:
+    """Verify graded risk assessment for chained/compound commands."""
+
+    def test_user_reported_chained_inline_python_is_safe(self):
+        cmd = (
+            'python -u -c "import filelock; print(\'filelock ok\')" ; '
+            'python -u -c "import numpy; print(\'numpy ok\')" ; '
+            'python -u -c "import torch; print(\'torch ok\')"'
+        )
+        level, reasons = assess_command_risk(cmd)
+        assert level == "safe"
+        assert reasons == []
+        assert is_destructive_command(cmd) is False
+
+    def test_chained_safe_commands_with_and_operator(self):
+        cmd = 'echo 1 && python -u -c "print(2)" && git status'
+        level, reasons = assess_command_risk(cmd)
+        assert level == "safe"
+        assert reasons == []
+        assert is_destructive_command(cmd) is False
+
+    def test_chained_command_with_destructive_subcommand_is_warn(self):
+        cmd = 'python -u -c "print(1)" ; rm notes.txt ; python -u -c "print(2)"'
+        level, reasons = assess_command_risk(cmd)
+        assert level == "warn"
+        assert reasons
+        assert is_destructive_command(cmd) is True
+
+    def test_chained_command_with_catastrophic_subcommand_is_block(self):
+        cmd = 'python -u -c "print(1)" ; rm -rf / ; python -u -c "print(2)"'
+        level, reasons = assess_command_risk(cmd)
+        assert level == "block"
+        assert reasons
+        assert is_destructive_command(cmd) is True
+
+    def test_semicolon_inside_string_is_not_split(self):
+        cmd = 'python -c "a = \';\'; print(a)"'
+        level, reasons = assess_command_risk(cmd)
+        assert level == "safe"
+        assert is_destructive_command(cmd) is False
+

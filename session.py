@@ -25,7 +25,7 @@ import json
 import os
 import threading
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from logger import get_logger
@@ -48,6 +48,20 @@ _META_FIELDS = ("id", "saved_at", "model", "provider", "message_count",
                 "preview", "cwd", "label")
 
 _SESSION_LOCK = threading.RLock()
+_LAST_STAMP: datetime | None = None
+
+
+def _save_stamp() -> str:
+    """When this save happened, strictly later than the previous save of this process.
+
+    The Windows clock ticks in ~15 ms steps, so two saves in a row used to get the same `saved_at` and the "newest first" order fell back to
+    the order of the index, i.e. the older session came first.  Call under _SESSION_LOCK."""
+    global _LAST_STAMP
+    now = datetime.now()
+    if _LAST_STAMP is not None and now <= _LAST_STAMP:
+        now = _LAST_STAMP + timedelta(microseconds=1)
+    _LAST_STAMP = now
+    return now.isoformat()
 
 
 def _session_path(session_id: str) -> Path:
@@ -83,6 +97,8 @@ def _make_serializable(messages) -> list:
         return []
     clean = []
     for m in list(messages):
+        if not isinstance(m, dict):
+            continue
         entry = {}
         for k, v in m.items():
             try:
@@ -97,9 +113,13 @@ def _make_serializable(messages) -> list:
 def _first_user_message(messages: list) -> str | None:
     """The first thing the human actually said, or None if they never did."""
     for m in messages:
+        if not isinstance(m, dict):
+            continue
         if m.get("role") != "user":
             continue
         content = m.get("content")
+        if (not isinstance(content, str) or not content.strip()) and m.get("images"):
+            return "[Изображение]"
         if not isinstance(content, str) or not content.strip():
             continue
         # Check against common injected system/tool messages masquerading as user
@@ -181,8 +201,11 @@ def _sync_index() -> dict:
 # --- the operations ---------------------------------------------------------
 
 def save_session(messages: list, metadata: dict = None, session_id: str = None,
-                 label: str = None) -> str | None:
-    """Save a session, returning its id — or None if there was nothing to save."""
+                 label: str = None, state: dict = None) -> str | None:
+    """Save a session, returning its id — or None if there was nothing to save.
+
+    `state` is what belongs to the conversation but is not a message (the todo list): restoring the messages
+    without it left the model reading a plan it could no longer see in its own tail."""
     metadata = metadata or {}
 
     first_user = _first_user_message(messages)
@@ -205,7 +228,7 @@ def save_session(messages: list, metadata: dict = None, session_id: str = None,
         
         data = {
             "id": session_id,
-            "saved_at": datetime.now().isoformat(),
+            "saved_at": _save_stamp(),
             "model": metadata.get("model", "unknown"),
             "provider": metadata.get("provider", "unknown"),
             "cwd": cwd,
@@ -214,22 +237,20 @@ def save_session(messages: list, metadata: dict = None, session_id: str = None,
             "preview": first_user[:80],
             "messages": safe_messages,
         }
+        if state:
+            data["state"] = state
 
         path = _session_path(session_id)
-        try:
-            from atomic_io import atomic_write_bytes
+        from atomic_io import atomic_write_bytes
 
-            def _write(fh):
-                from text_safety import repair_surrogates
-                payload = repair_surrogates(
-                    json.dumps(data, ensure_ascii=False, default=str))
-                with gzip.GzipFile(fileobj=fh, mode="wb") as gz:
-                    gz.write(payload.encode("utf-8"))
+        def _write(fh):
+            from text_safety import repair_surrogates
+            payload = repair_surrogates(
+                json.dumps(data, ensure_ascii=False, default=str))
+            with gzip.GzipFile(fileobj=fh, mode="wb") as gz:
+                gz.write(payload.encode("utf-8"))
 
-            atomic_write_bytes(path, _write)
-        except Exception as e:
-            log.error("Failed to save session %s: %s", session_id, e)
-            return None
+        atomic_write_bytes(path, _write)
 
         try:
             # Sync index instead of trusting the read, to prevent losing other entries if corrupt
@@ -257,15 +278,90 @@ def load_session(session_id: str) -> dict | None:
         return None
 
 
+def format_relative_time(iso_str: str) -> str:
+    """Turn an ISO timestamp into a concise human-readable time string (Russian)."""
+    if not iso_str:
+        return "неизвестно"
+    try:
+        dt = datetime.fromisoformat(iso_str)
+        now = datetime.now()
+        diff = now - dt
+        seconds = int(diff.total_seconds())
+        if seconds < 60:
+            return "только что"
+        elif seconds < 3600:
+            mins = seconds // 60
+            return f"{mins} мин назад"
+        elif dt.date() == now.date():
+            return f"сегодня {dt.strftime('%H:%M')}"
+        elif (now.date() - dt.date()).days == 1:
+            return f"вчера {dt.strftime('%H:%M')}"
+        elif dt.year == now.year:
+            return dt.strftime("%d.%m %H:%M")
+        else:
+            return dt.strftime("%d.%m.%Y")
+    except Exception:
+        return str(iso_str)[:16].replace("T", " ")
+
+
+def format_short_path(path_str: str) -> str:
+    """Shorten path replacing home directory with ~."""
+    if not path_str:
+        return ""
+    try:
+        p = Path(path_str).resolve()
+        home = Path.home().resolve()
+        try:
+            rel = p.relative_to(home)
+            return f"~/{rel}".replace("\\", "/")
+        except ValueError:
+            return str(p).replace("\\", "/")
+    except Exception:
+        return str(path_str).replace("\\", "/")
+
+
+def _matches_cwd(session_cwd: object, target_dir: str) -> bool:
+    """Safely check if a session's cwd matches target_dir without throwing."""
+    if not session_cwd or not isinstance(session_cwd, str):
+        return False
+    try:
+        return os.path.normcase(os.path.abspath(session_cwd)) == target_dir
+    except Exception:
+        return False
+
+
 def list_sessions(query: str = None) -> list[dict]:
     """Saved sessions, newest first, optionally filtered."""
     sessions = list(_sync_index().values())
     if query and query.strip():
         needle = query.strip().lower()
-        sessions = [s for s in sessions
-                    if needle in " ".join(str(s.get(k) or "")
-                                          for k in ("id", "label", "preview",
-                                                    "model", "cwd")).lower()]
+        if needle in (".", "here", "cwd", "./", ".\\"):
+            try:
+                here = os.path.normcase(os.path.abspath(os.getcwd()))
+                sessions = [s for s in sessions if _matches_cwd(s.get("cwd"), here)]
+            except Exception:
+                sessions = []
+        elif os.path.isabs(query) or os.path.isdir(query):
+            try:
+                target = os.path.normcase(os.path.abspath(os.path.expanduser(query)))
+                path_matches = [s for s in sessions if _matches_cwd(s.get("cwd"), target)]
+                if path_matches:
+                    sessions = path_matches
+                else:
+                    sessions = [s for s in sessions
+                                if needle in " ".join(str(s.get(k) or "")
+                                                      for k in ("id", "label", "preview",
+                                                                "model", "provider", "cwd")).lower()]
+            except Exception:
+                sessions = [s for s in sessions
+                            if needle in " ".join(str(s.get(k) or "")
+                                                  for k in ("id", "label", "preview",
+                                                            "model", "provider", "cwd")).lower()]
+        else:
+            sessions = [s for s in sessions
+                        if needle in " ".join(str(s.get(k) or "")
+                                              for k in ("id", "label", "preview",
+                                                        "model", "provider", "cwd")).lower()]
     sessions.sort(key=lambda s: s.get("saved_at") or "", reverse=True)
     return sessions
 
@@ -321,9 +417,10 @@ def delete_session(session_id: str) -> bool:
         return existed
 
 
-def get_last_session() -> dict | None:
-    """Get the most recent session."""
-    sessions = list_sessions()
+def get_last_session(cwd: str = None) -> dict | None:
+    """Get the most recent valid session, optionally filtered by working directory."""
+    sessions = [s for s in list_sessions(cwd)
+                if s.get("preview") != "[corrupted session]"]
     return sessions[0] if sessions else None
 
 

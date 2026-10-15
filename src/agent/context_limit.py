@@ -54,7 +54,7 @@ def parse_context_limit(text: str):
 def effective_history_budget(window: int, sys_tokens: int,
                              response_reserve: int = 1024,
                              tools_reserve: int = 2048,
-                             floor: int = 2048) -> int:
+                             floor: int | None = None) -> int:
     """Tokens left for trimmable history after reserving everything else.
 
     The model's window must hold the system prompt, the tool schemas sent
@@ -62,5 +62,18 @@ def effective_history_budget(window: int, sys_tokens: int,
     (plus a margin for drift between our token estimate and the model's real
     tokenizer) and return what history may use.
     """
-    margin = int(max(0, window) * 0.08)
-    return max(floor, window - max(0, sys_tokens) - response_reserve - tools_reserve - margin)
+    window = max(0, window)
+    sys_tokens = max(0, sys_tokens)
+    margin = int(window * 0.08)
+    calc_budget = window - sys_tokens - response_reserve - tools_reserve - margin
+
+    if floor is not None:
+        # An explicit floor requested by caller must be strictly respected
+        return max(floor, calc_budget)
+
+    # On small context models (< 8k), default floor cannot exceed a reasonable fraction
+    # of the remaining room, or system + history overflows the window.
+    remaining_hard = max(256, window - sys_tokens - response_reserve - margin)
+    dynamic_floor = min(2048, max(256, int(window * 0.25)))
+    budget = max(dynamic_floor, calc_budget)
+    return min(budget, remaining_hard)

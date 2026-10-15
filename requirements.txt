@@ -11,5 +11,4 @@
 # Lighter installs:
 #   pip install -e .                     terminal agent only
 #   pip install -e .[rag]                + semantic search
-#   pip install -e .[server]             + the Tauri/web GUI backend
 -e .[rag,browser,research]

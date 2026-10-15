@@ -13,11 +13,13 @@ import time
 import uuid
 from abc import ABC, abstractmethod
 from enum import Enum
-from typing import Dict, Any, List, Optional
+from typing import Dict, List, Optional
 import requests
 
 import queue
 from logger import get_logger
+from project_paths import find_repo_root, project_root_or_cwd
+from src.agent.shell import descendant_processes, kill_process_tree
 
 # Was logging.getLogger("argent.mcp"), which has no handler — every MCP event
 # went nowhere. A call that hung for ten minutes left not one line on disk, so
@@ -54,6 +56,58 @@ def _closest_names(name: str, candidates, limit: int = 3):
     return difflib.get_close_matches(name, [c for c in candidates if c], n=limit, cutoff=0.6)
 
 
+def _wait_exit(process, timeout: float) -> bool:
+    """True once `process` has exited; never raises."""
+    try:
+        process.wait(timeout=timeout)
+        return True
+    except Exception:
+        return False
+
+
+def _close_pipes(process) -> None:
+    for pipe in (process.stdout, process.stderr, process.stdin):
+        try:
+            if pipe is not None:
+                pipe.close()
+        except Exception:
+            pass
+
+
+def _shutdown_stdio_process(process, readers, grace: float = 2.0) -> None:
+    """Stop an MCP stdio server and release everything it held. See StdioTransport.stop."""
+    descendants = descendant_processes(process)     # before the parent can vanish
+
+    try:
+        if process.stdin is not None:
+            process.stdin.close()
+    except Exception:
+        pass
+
+    if not _wait_exit(process, grace):
+        try:
+            process.terminate()
+        except Exception:
+            pass
+        _wait_exit(process, grace)
+
+    kill_process_tree(process, descendants)
+
+    for reader in readers:
+        reader.join(timeout=2)
+
+    if any(reader.is_alive() for reader in readers):
+        # A reader outlived the tree (a process in an uninterruptible state, a
+        # descendant that escaped). Closing under it would block, so let a
+        # throw-away thread take that risk instead of the caller.
+        closer = threading.Thread(target=_close_pipes, args=(process,), daemon=True,
+                                  name="mcp-pipe-closer")
+        closer.start()
+        closer.join(timeout=1)
+    else:
+        _close_pipes(process)
+
+
 # ═══════════════════════════════════════════════════════════════
 # Transport Layer
 # ═══════════════════════════════════════════════════════════════
@@ -77,15 +131,33 @@ class _BaseTransport(ABC):
 class StdioTransport(_BaseTransport):
     """JSON-RPC 2.0 over subprocess stdin/stdout — standard MCP protocol."""
 
-    def __init__(self, command: str, args: List[str] = None, env: dict = None):
+    def __init__(self, command: str, args: List[str] = None, env: dict = None, cwd=None):
         self._command = command
         self._args = args or []
         self._env = env
+        self._cwd = cwd
         self._process: Optional[subprocess.Popen] = None
         self._lock = threading.Lock()
         self._request_id = 0
         self._initialized = False
         self._pending_requests: Dict[int, queue.Queue] = {}
+        self._readers: List[threading.Thread] = []
+        self._write_lock = threading.Lock()
+
+    def _resolve_command(self, env: dict) -> str:
+        """Find the executable on the user's PATH, the way their shell would.
+
+        On Windows CreateProcess looks in the directory of the *calling*
+        executable before PATH. Argent started from `.venv\\Scripts\\python.exe`
+        (Argent.bat, the Rust TUI) therefore turned a bare `python` into the
+        bare interpreter behind that venv — one without the server's own
+        dependencies — while the same config worked from a shell, where
+        `python` is whatever PATH names first. Resolving through PATH makes the
+        server start identically from every front-end. `which` also honours
+        PATHEXT, so `npx` finds `npx.cmd`.
+        """
+        import shutil
+        return shutil.which(self._command, path=env.get("PATH")) or self._command
 
     def start(self) -> bool:
         try:
@@ -94,17 +166,27 @@ class StdioTransport(_BaseTransport):
             if self._env:
                 env.update({k: str(v) for k, v in self._env.items()})
 
-            self._process = subprocess.Popen(
-                [self._command] + self._args,
+            process = subprocess.Popen(
+                [self._resolve_command(env)] + self._args,
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 env=env,
+                cwd=self._cwd,
                 bufsize=0,
             )
+            self._process = process
 
-            threading.Thread(target=self._stderr_reader, daemon=True).start()
-            threading.Thread(target=self._stdout_reader, daemon=True).start()
+            # Readers are bound to THIS process: after a restart a late reader
+            # of the old one must not touch the new one's requests.
+            self._readers = [
+                threading.Thread(target=self._stderr_reader, args=(process,),
+                                 daemon=True, name="mcp-stderr"),
+                threading.Thread(target=self._stdout_reader, args=(process,),
+                                 daemon=True, name="mcp-stdout"),
+            ]
+            for reader in self._readers:
+                reader.start()
 
             result = self.send_request("initialize", {
                 "protocolVersion": "2024-11-05",
@@ -126,60 +208,111 @@ class StdioTransport(_BaseTransport):
             self.stop()
             return False
 
-    def _stderr_reader(self):
+    def _stderr_reader(self, process):
         try:
-            while self._process and self._process.stderr:
-                line = self._process.stderr.readline()
-                if not line:
+            while True:
+                line = process.stderr.readline()
+                if not line or not isinstance(line, (bytes, str)):
                     break
-                log.debug("MCP stderr: %s", line.decode(errors='replace').rstrip())
+                text = line.decode(errors='replace') if isinstance(line, bytes) else str(line)
+                log.debug("MCP stderr: %s", text.rstrip())
         except Exception:
             pass
 
-    def _stdout_reader(self):
+    def _stdout_reader(self, process):
         try:
-            while self._process and self._process.stdout:
-                line = self._process.stdout.readline()
-                if not line:
+            while True:
+                line = process.stdout.readline()
+                if not line or not isinstance(line, (bytes, str)):
                     break
                 try:
-                    data = json.loads(line.decode("utf-8"))
-                    req_id = data.get("id")
-                    if req_id is not None:
-                        with self._lock:
-                            if req_id in self._pending_requests:
-                                self._pending_requests[req_id].put(data)
+                    text = line.decode("utf-8") if isinstance(line, bytes) else str(line)
+                    data = json.loads(text)
                 except Exception:
-                    pass
+                    continue    # a banner or a log line, not JSON-RPC
+                if not isinstance(data, dict):
+                    continue
+                if "method" in data:
+                    # The server is asking us something (or just telling us).
+                    # It must never be mistaken for the answer to OUR request
+                    # with the same id: both sides count from 1.
+                    self._answer_server_message(process, data)
+                    continue
+                req_id = data.get("id")
+                if req_id is not None:
+                    with self._lock:
+                        waiter = self._pending_requests.get(req_id)
+                    if waiter is not None:
+                        waiter.put(data)
         except Exception:
             pass
+        finally:
+            # EOF: the server is gone. Anyone still waiting would otherwise sit
+            # out the whole request timeout (up to minutes) for an answer that
+            # can no longer come.
+            if self._process is None or self._process is process:
+                self._fail_pending("MCP server closed the connection")
+
+    def _answer_server_message(self, process, data: dict) -> None:
+        """Reply to a server-initiated request; ignore a notification.
+
+        `ping` must be answered or a server that health-checks us gives up on
+        us. Anything else is a capability we never advertised, so the honest
+        reply is JSON-RPC's "method not found".
+        """
+        req_id = data.get("id")
+        if req_id is None:
+            return
+        method = data.get("method")
+        if method == "ping":
+            reply = {"jsonrpc": "2.0", "id": req_id, "result": {}}
+        else:
+            reply = {"jsonrpc": "2.0", "id": req_id,
+                     "error": {"code": -32601, "message": f"Method not found: {method}"}}
+        self._write(process, reply)
+
+    def _write(self, process, message: dict) -> None:
+        payload = (json.dumps(message) + "\n").encode("utf-8")
+        with self._write_lock:
+            process.stdin.write(payload)
+            process.stdin.flush()
+
+    def _fail_pending(self, message: str) -> None:
+        with self._lock:
+            waiters = list(self._pending_requests.values())
+        for waiter in waiters:
+            try:
+                waiter.put({"error": {"message": message}})
+            except Exception:
+                pass
 
     def stop(self):
-        if self._process:
-            try:
-                self._process.terminate()
-                self._process.wait(timeout=3)
-            except Exception:
-                try:
-                    self._process.kill()
-                except Exception:
-                    pass
-            # Close the pipes explicitly. The reader threads sit in a blocking
-            # readline(); terminating the child normally closes its end and
-            # wakes them, but not if a grandchild inherited the handle or the
-            # child ignores SIGTERM. Closing here guarantees readline() returns
-            # instead of parking a thread for the rest of the session — they
-            # accumulate across MCP restarts.
-            for pipe in (self._process.stdout, self._process.stderr, self._process.stdin):
-                try:
-                    if pipe is not None:
-                        pipe.close()
-                except Exception:
-                    pass
-            self._process = None
+        """Shut the server down. Returns in bounded time, whatever the server does.
+
+        Order matters, and getting it wrong hangs the caller:
+
+        1. Close the server's stdin: EOF is MCP's own "please exit".
+        2. Wait briefly, then terminate(), then kill the WHOLE tree. Launchers
+           (`uv`, `npx`, `cmd`) leave the real server alive behind them, and it
+           keeps our pipes open.
+        3. Join the readers - they return once every writer is gone.
+        4. Only then close our ends. Closing a Windows pipe while a thread is
+           still blocked reading it blocks the closer too, which is how quitting
+           Argent with a launcher-based server used to hang for good.
+        """
+        process, self._process = self._process, None
+        readers, self._readers = getattr(self, "_readers", []), []
         self._initialized = False
+        if process is not None:
+            _shutdown_stdio_process(process, readers)
         with self._lock:
+            waiters = list(self._pending_requests.values())
             self._pending_requests.clear()
+        for waiter in waiters:
+            try:
+                waiter.put({"error": {"message": "MCP server was stopped"}})
+            except Exception:
+                pass
 
     def send_request(self, method: str, params: dict = None, timeout: float = 30) -> dict:
         if not self._process or self._process.poll() is not None:
@@ -199,10 +332,8 @@ class StdioTransport(_BaseTransport):
         if params is not None:
             msg["params"] = params
 
-        payload = json.dumps(msg) + "\n"
         try:
-            self._process.stdin.write(payload.encode("utf-8"))
-            self._process.stdin.flush()
+            self._write(self._process, msg)
         except Exception as e:
             with self._lock:
                 self._pending_requests.pop(req_id, None)
@@ -226,10 +357,8 @@ class StdioTransport(_BaseTransport):
         msg = {"jsonrpc": "2.0", "method": method}
         if params is not None:
             msg["params"] = params
-        payload = json.dumps(msg) + "\n"
         try:
-            self._process.stdin.write(payload.encode("utf-8"))
-            self._process.stdin.flush()
+            self._write(self._process, msg)
         except Exception:
             pass
 
@@ -368,6 +497,13 @@ class MCPServer:
                 command=self.config["command"],
                 args=self.config.get("args", []),
                 env=self.config.get("env"),
+                # stdio servers resolve resources relative to their CWD (e.g.
+                # `unity mcp` discovers the Editor via <cwd>/Library/Pipeline/...).
+                # Anchor to the repo root first: Argent drops `.argent` in its
+                # launch folder (often Assets/ inside a Unity project), so the
+                # plain project root would just be that folder. A per-server
+                # "cwd" config entry wins if set.
+                cwd=self.config.get("cwd") or find_repo_root() or project_root_or_cwd(),
             )
         elif stype == MCPTransportType.SSE:
             self.transport = SSETransport(
@@ -609,12 +745,22 @@ class MCPClient:
         return f"Server '{name}' not found."
 
     def stop_all(self):
-        for name in list(self.servers.keys()):
+        """Stop every server at once: exiting must cost one shutdown, not N."""
+        servers = list(self.servers.values())
+        self.servers.clear()
+
+        def _stop(srv):
             try:
-                self.servers[name].stop()
+                srv.stop()
             except Exception:
                 pass
-        self.servers.clear()
+
+        threads = [threading.Thread(target=_stop, args=(srv,), daemon=True,
+                                    name="mcp-stop") for srv in servers]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=15)
 
     def get_servers(self) -> List[dict]:
         result = []
@@ -635,10 +781,9 @@ class MCPClient:
 
         srv = self.servers[name]
         if not srv.is_running:
-            return f"Server '{name}' is not running. Attempting to start..."
             started = srv.start()
             if not started:
-                return f"Failed to start server '{name}'."
+                return f"Server '{name}' is not running and failed to start."
 
         tools = srv.list_tools()
         if not tools:

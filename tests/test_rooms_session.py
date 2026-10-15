@@ -93,16 +93,17 @@ class _FakeRunner:
         self.test_runs = 0
 
         def tool(node, state):
+            if node.id == "run_tests":   # the verifier is a process: its exit code decides
+                self.test_runs += 1
+                if self.test_runs >= self.pass_on:
+                    return "Exit code: 0\nOUTPUT:\nok"
+                return "Exit code: 1\nOUTPUT:\nboom"
             return {"output": "ok"}
 
         def agent(node, context):
-            if node.id == "run_tests":   # verifier agent
-                self.test_runs += 1
-                passed = self.test_runs >= self.pass_on
-                return {"tests_passed": passed, "error_summary": None if passed else "boom"}
-            return {"error_summary": "applied"}
+            return {"fix_summary": "applied"}
 
-        self._runner = NodeRunner(tool_executor=tool, agent_executor=agent)
+        self._runner = NodeRunner(tool_executor=tool, agent_executor=agent, confirm=lambda n, s: True)
 
     def run_node(self, node, state):
         return self._runner.run_node(node, state)
@@ -110,7 +111,8 @@ class _FakeRunner:
 
 class TestRunRoomsAssembly:
     def test_debug_loop_greens_through_full_wiring(self):
-        lib = RoomLibrary().load_dir(default_starter_dir(), {"run_command", "search_web"})
+        from tests.test_rooms_library import STARTER_TOOLS
+        lib = RoomLibrary().load_dir(default_starter_dir(), STARTER_TOOLS)
         fake = _FakeRunner(pass_on=2)
         res = run_rooms("fix tests", start="debug_loop", library=lib, runner=fake)
         assert res.outcome == "done"

@@ -88,5 +88,6 @@ class TestRunnerDispatch:
 
 class TestTriageStillValid:
     def test_triage_with_spawn_edges_valid(self):
-        lib = RoomLibrary().load_dir(default_starter_dir(), {"run_command", "search_web"})
+        from tests.test_rooms_library import STARTER_TOOLS
+        lib = RoomLibrary().load_dir(default_starter_dir(), STARTER_TOOLS)
         assert lib.load_errors == {} and lib.get("triage") is not None

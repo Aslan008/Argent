@@ -46,3 +46,33 @@ def find_project_root(start: Path | None = None) -> Path | None:
 def project_root_or_cwd(start: Path | None = None) -> Path:
     """find_project_root, falling back to the CWD for a brand-new project."""
     return find_project_root(start) or (Path(start).resolve() if start else Path.cwd().resolve())
+
+
+def find_repo_root(start: Path | None = None) -> Path | None:
+    """Nearest ancestor (including start) holding a STRONG project marker.
+
+    Unlike find_project_root, a bare `.argent` does not stop the walk: Argent
+    drops its state folder wherever it happens to be launched (e.g. Assets/
+    inside a Unity project), so the CWD itself always carries a `.argent` and
+    the walk would never leave it. `.git` and `.argent_project.json` only
+    appear at roots a human created. Consumers that need the actual project
+    root above Argent's own state — the MCP server CWD, whose auto-discovery
+    (unity mcp) resolves the Editor via <cwd>/Library/Pipeline — use this
+    first and fall back to project_root_or_cwd().
+    """
+    try:
+        current = Path(start).resolve() if start else Path.cwd().resolve()
+        stop = Path.home().resolve()
+    except OSError:
+        return None
+
+    for d in [current, *current.parents]:
+        if d == stop or d in stop.parents:
+            break
+        for marker in (".git", ".argent_project.json"):
+            try:
+                if (d / marker).exists():
+                    return d
+            except OSError:
+                continue
+    return None

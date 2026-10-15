@@ -66,7 +66,7 @@ def parse_query_list(raw: str, limit: int = 5) -> list:
     return []
 
 
-def number_sources(chunks: list, source_map: dict) -> tuple:
+def number_sources(chunks: list, source_map: dict, url_to_num: dict = None) -> tuple:
     """Annotate chunks with [n] citation markers and build the source list.
 
     Each distinct source URL (in order of first appearance) gets a number; every
@@ -74,14 +74,18 @@ def number_sources(chunks: list, source_map: dict) -> tuple:
     ``(annotated_text, sources_lines)`` where annotated_text is the chunks joined
     with separators (fed to extraction/synthesis so the model can cite inline)
     and sources_lines is ``["[1] https://...", ...]`` for the SOURCES section.
+    If an existing ``url_to_num`` dict is provided, existing mappings are preserved
+    and newly discovered URLs continue numbering from len(url_to_num) + 1.
     """
-    url_to_num = {}
+    if url_to_num is None:
+        url_to_num = {}
     annotated = []
     for c in chunks:
         url = source_map.get(c)
         if url and url not in url_to_num:
-            url_to_num[url] = len(url_to_num) + 1
+            url_to_num[url] = (max(url_to_num.values()) + 1) if url_to_num else 1
         num = url_to_num.get(url)
         annotated.append(f"[{num}] {c}" if num else c)
-    sources = [f"[{num}] {url}" for url, num in url_to_num.items()]
+    sorted_items = sorted(url_to_num.items(), key=lambda item: item[1])
+    sources = [f"[{num}] {url}" for url, num in sorted_items]
     return "\n---\n".join(annotated), sources

@@ -26,17 +26,10 @@ from tool_profiles import (
 def _isolate_conditional(monkeypatch):
     """Pin the conditional-core inputs so tests are deterministic.
 
-    Without this, core_tools_now reads the developer's live config / LSP
-    manager and the suite becomes machine-dependent.
+    Without this, core_tools_now reads the developer's live config and the
+    suite becomes machine-dependent.
     """
     monkeypatch.setattr("config.get_mcp_servers", lambda: [])
-    # lsp_manager may not be importable on every machine; patch the module
-    # attribute used by the lambda if the module exists.
-    try:
-        import src.lsp.manager as lsp_manager  # noqa: F401
-        monkeypatch.setattr(lsp_manager.lsp_manager, "is_available", lambda: False)
-    except Exception:
-        pass
 
 
 # ---------------------------------------------------------------------------
@@ -45,8 +38,8 @@ def _isolate_conditional(monkeypatch):
 
 class TestCoreChatToolsMembership:
     def test_files_tools_present(self):
-        for t in ("read_file", "write_file", "append_to_file", "delete_file",
-                  "replace_in_file", "multi_replace_in_file", "get_file_outline",
+        for t in ("read_file", "write_file", "delete_file",
+                  "replace_in_file", "get_file_outline",
                   "list_directory", "create_directory", "move_file"):
             assert t in CORE_CHAT_TOOLS, f"{t} should be in CORE_CHAT_TOOLS"
 
@@ -62,23 +55,27 @@ class TestCoreChatToolsMembership:
             assert t in CORE_CHAT_TOOLS
 
     def test_interaction_utils_present(self):
-        for t in ("ask_user_questions", "calculate", "set_goal",
-                  "analyze_project", "filter_new_items"):
+        for t in ("ask_user_questions", "calculate", "analyze_project"):
             assert t in CORE_CHAT_TOOLS
 
     def test_browser_tools_excluded(self):
-        for t in ("browser_open", "browser_click", "browser_screenshot",
-                  "run_browser_task", "view_image"):
+        for t in ("browser_open", "browser_action", "browser_inspect",
+                  "browser_close", "view_image"):
             assert t not in CORE_CHAT_TOOLS
 
     def test_mcp_tools_excluded(self):
         for t in ("call_mcp_tool", "list_mcp_tools"):
             assert t not in CORE_CHAT_TOOLS
 
-    def test_lsp_tools_excluded(self):
-        for t in ("check_code", "find_implementations",
-                  "search_workspace_symbols", "get_call_hierarchy"):
+    def test_removed_tools_are_not_listed(self):
+        """The separate LSP tools and multi_replace_in_file were folded into
+        grep_search / replace_in_file; a core list naming them advertises nothing."""
+        from tools.schemas import AVAILABLE_TOOLS
+        for t in ("check_code", "find_implementations", "search_workspace_symbols",
+                  "get_call_hierarchy", "find_definition", "find_references",
+                  "multi_replace_in_file"):
             assert t not in CORE_CHAT_TOOLS
+            assert t not in AVAILABLE_TOOLS
 
     def test_system_ops_excluded(self):
         for t in ("query_registry", "read_event_logs", "get_process_info",
@@ -86,9 +83,8 @@ class TestCoreChatToolsMembership:
             assert t not in CORE_CHAT_TOOLS
 
     def test_heavy_misc_excluded(self):
-        for t in ("create_svg_image", "create_skill", "git_checkpoint",
-                  "run_subagent", "run_swarm_workers", "write_project_spec",
-                  "plan_work_changes"):
+        for t in ("create_skill", "git_checkpoint",
+                  "run_subagent", "git_rollback"):
             assert t not in CORE_CHAT_TOOLS
 
     def test_is_a_set(self):
@@ -120,11 +116,6 @@ class TestConditionalCoreStructure:
         mcp_names = ("call_mcp_tool", "list_mcp_tools")
         assert mcp_names in _CONDITIONAL_CORE
 
-    def test_contains_lsp_group(self):
-        lsp_names = ("check_code", "find_implementations",
-                     "search_workspace_symbols", "get_call_hierarchy")
-        assert lsp_names in _CONDITIONAL_CORE
-
     def test_conditional_tools_not_in_core(self):
         """Conditional tools are deliberately outside the static core set."""
         for names in _CONDITIONAL_CORE:
@@ -147,17 +138,14 @@ class TestCoreToolsNow:
     def test_specific_core_tools_present(self):
         result = core_tools_now()
         for t in ("read_file", "write_file", "run_command", "replace_in_file",
-                  "grep_search", "ask_user_questions", "calculate",
-                  "filter_new_items"):
+                  "grep_search", "ask_user_questions", "calculate"):
             assert t in result
 
-    def test_conditional_excluded_when_no_mcp_no_lsp(self):
-        """With empty config and LSP off, conditional tools stay out."""
+    def test_conditional_excluded_when_no_mcp(self):
+        """With no MCP server configured, the MCP tools stay out."""
         result = core_tools_now()
         assert "call_mcp_tool" not in result
         assert "list_mcp_tools" not in result
-        assert "check_code" not in result
-        assert "find_implementations" not in result
 
     def test_includes_mcp_tools_when_servers_configured(self, monkeypatch):
         monkeypatch.setattr("config.get_mcp_servers",
@@ -177,23 +165,6 @@ class TestCoreToolsNow:
         result = core_tools_now()
         assert "call_mcp_tool" not in result
 
-    def test_includes_lsp_tools_when_available(self, monkeypatch):
-        import src.lsp.manager as lsp_manager
-        monkeypatch.setattr(lsp_manager.lsp_manager, "is_available",
-                            lambda: True)
-        result = core_tools_now()
-        assert "check_code" in result
-        assert "find_implementations" in result
-        assert "search_workspace_symbols" in result
-        assert "get_call_hierarchy" in result
-
-    def test_lsp_false_excludes(self, monkeypatch):
-        import src.lsp.manager as lsp_manager
-        monkeypatch.setattr(lsp_manager.lsp_manager, "is_available",
-                            lambda: False)
-        result = core_tools_now()
-        assert "check_code" not in result
-
     def test_broken_config_does_not_shrink_core(self, monkeypatch):
         """If get_mcp_servers raises, core_tools_now must still return core."""
         def _boom():
@@ -205,27 +176,10 @@ class TestCoreToolsNow:
         # Conditional tools are not added (exception → pass).
         assert "call_mcp_tool" not in result
 
-    def test_broken_lsp_does_not_shrink_core(self, monkeypatch):
-        import src.lsp.manager as lsp_manager
-        def _boom():
-            raise RuntimeError("lsp broken")
-        monkeypatch.setattr(lsp_manager.lsp_manager, "is_available", _boom)
-        result = core_tools_now()
-        assert result >= CORE_CHAT_TOOLS
-        assert "check_code" not in result
-
-    def test_both_conditional_on(self, monkeypatch):
+    def test_mcp_on_adds_exactly_the_mcp_tools(self, monkeypatch):
         monkeypatch.setattr("config.get_mcp_servers", lambda: ["x"])
-        import src.lsp.manager as lsp_manager
-        monkeypatch.setattr(lsp_manager.lsp_manager, "is_available",
-                            lambda: True)
         result = core_tools_now()
-        assert "call_mcp_tool" in result
-        assert "list_mcp_tools" in result
-        assert "check_code" in result
-        assert "get_call_hierarchy" in result
-        # And core still fully present.
-        assert result >= CORE_CHAT_TOOLS
+        assert result == set(CORE_CHAT_TOOLS) | {"call_mcp_tool", "list_mcp_tools"}
 
     def test_returns_new_set_each_call(self):
         a = core_tools_now()
@@ -242,7 +196,7 @@ class TestSlimToolsForCategory:
     ALL = [
         "read_file", "write_file", "run_command", "grep_search", "calculate",
         "browser_open", "browser_click", "call_mcp_tool", "create_skill",
-        "create_svg_image", "git_checkpoint", "run_subagent", "analyze_project",
+        "git_checkpoint", "run_subagent", "analyze_project",
         "filter_new_items", "semantic_search",
     ]
 
@@ -262,7 +216,7 @@ class TestSlimToolsForCategory:
         slim = slim_tools_for_category(self.ALL, "tiny")
         assert "browser_open" not in slim
         assert "call_mcp_tool" not in slim
-        assert "create_svg_image" not in slim
+        assert "create_skill" not in slim
         assert "run_subagent" not in slim
 
     def test_tiny_keeps_core_tools(self):
@@ -308,7 +262,7 @@ class TestSlimToolsForCategory:
         assert slim_tools_for_category([], "large") == []
 
     def test_all_non_core_tiny(self):
-        non_core = ["browser_open", "create_svg_image", "run_subagent"]
+        non_core = ["browser_open", "create_skill", "run_subagent"]
         assert slim_tools_for_category(non_core, "tiny") == []
 
     def test_tiny_includes_conditional_when_on(self, monkeypatch):

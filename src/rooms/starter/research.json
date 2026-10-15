@@ -1,0 +1,25 @@
+{
+  "room": "research",
+  "description": "Answer a question with sources: search the web, read the best pages, synthesize a short answer that cites them. No files are changed. Исследует вопрос в интернете и отвечает со ссылками.",
+  "tags": ["исследуй", "найди", "узнай", "поищи", "сравни", "research", "search", "find", "compare", "документация", "docs", "интернет"],
+  "budget": {"max_iterations": 6, "max_tokens": 70000},
+  "entry": "search",
+  "next": {"answered": "END", "unsure": "END"},
+  "report": "{{answer}}\n\nИсточники:\n{{sources}}",
+  "nodes": [
+    {"id": "search", "type": "tool", "tool": "search_web",
+     "input_from": "state.task",
+     "instruction": "Search the web for the question."},
+    {"id": "synthesize", "type": "agent", "role": "Researcher",
+     "tools": ["read_webpage", "search_web", "read_file", "grep_search"],
+     "budget": {"max_iterations": 8, "max_tokens": 50000},
+     "context": ["search.output"],
+     "writes": ["answer", "sources", "confident"],
+     "instruction": "Question: {{task}}\nRead the most relevant of the search results (read_webpage) and answer the question. State only what the sources say; if they disagree or do not answer, say so. Answer with the JSON object: answer=<short answer>, sources=<the URLs you used, one per line>, confident=true or false."}
+  ],
+  "edges": [
+    {"from": "search", "to": "synthesize"},
+    {"from": "synthesize", "if": "state.confident", "to": "EXIT:answered"},
+    {"from": "synthesize", "else": true, "to": "EXIT:unsure"}
+  ]
+}

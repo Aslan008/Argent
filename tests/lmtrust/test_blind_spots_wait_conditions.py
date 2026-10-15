@@ -7,30 +7,6 @@ from pathlib import Path
 from unittest.mock import patch, MagicMock
 import pytest
 
-# --- Robust import setup to avoid 'agent is not a package' conflicts ---
-_THIS = Path(__file__).resolve()
-_CANDIDATE = _THIS.parent
-while _CANDIDATE != _CANDIDATE.parent:
-    if (_CANDIDATE / "agent" / "wait_conditions.py").exists():
-        break
-    _CANDIDATE = _CANDIDATE.parent
-_PROJECT_ROOT = _CANDIDATE
-
-# Remove any conflicting 'agent' module cached from a previous import
-for key in list(sys.modules.keys()):
-    if key == "agent" or key.startswith("agent."):
-        del sys.modules[key]
-
-# Drop sys.path entries that contain a stray agent.py shadowing the package
-sys.path = [p for p in sys.path
-            if not (Path(p) / "agent.py").is_file()
-            or Path(p) == _PROJECT_ROOT]
-
-# Ensure project root is first so the real 'agent' package wins
-if str(_PROJECT_ROOT) in sys.path:
-    sys.path.remove(str(_PROJECT_ROOT))
-sys.path.insert(0, str(_PROJECT_ROOT))
-
 from src.agent.wait_conditions import (
     _file_exists, _file_missing, _file_contains,
     _process_finished, _process_running, _eval_node,

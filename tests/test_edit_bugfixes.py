@@ -61,15 +61,12 @@ class TestMoveFileFixes:
         mock_rag = MagicMock()
         mock_rag.remove_file_index = fake_remove
         mock_rag.update_file_index = fake_update
-        sys.modules["rag_engine"] = mock_rag
+        monkeypatch.setitem(sys.modules, "rag_engine", mock_rag)
 
         out = move_file(str(src), str(dst))
         assert "Successfully moved" in out
         assert ("remove", str(src.resolve())) in rag_calls
         assert ("update", str(dst.resolve())) in rag_calls
-
-        # Cleanup
-        del sys.modules["rag_engine"]
 
     def test_snapshot_before_move(self, tmp_path, monkeypatch):
         """snapshot() should be called on source before moving."""
@@ -121,13 +118,11 @@ class TestCopyFileFixes:
         import sys
         mock_rag = MagicMock()
         mock_rag.update_file_index = fake_update
-        sys.modules["rag_engine"] = mock_rag
+        monkeypatch.setitem(sys.modules, "rag_engine", mock_rag)
 
         out = copy_file(str(src), str(dst))
         assert "Successfully copied" in out
         assert ("update", str(dst.resolve())) in rag_calls
-
-        del sys.modules["rag_engine"]
 
     def test_plugin_restriction_on_source(self, tmp_path, monkeypatch):
         """Plugin path restriction should check source."""

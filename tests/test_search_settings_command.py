@@ -221,3 +221,52 @@ class TestRerankerModel:
                             lambda *a, **k: type("A", (), {"ask": lambda s: " BAAI/bge-reranker-base "})())
         command_handler._handle_search_command()
         assert config.get_reranker_model() == "BAAI/bge-reranker-base"
+
+
+class TestSearchEngineSwitch:
+    def test_cli_switch_ddg(self, cfg, ui):
+        command_handler._handle_search_command("/search ddg")
+        assert config.get_search_engine() == "duckduckgo"
+        assert any("DuckDuckGo" in line for line in ui)
+
+    def test_cli_switch_brave_warns_if_no_key(self, cfg, ui):
+        command_handler._handle_search_command("/search brave")
+        assert config.get_search_engine() == "brave"
+        assert any("Brave API-ключ не задан" in line for line in ui)
+
+    def test_cli_switch_all(self, cfg, ui):
+        config.set_search_engine("duckduckgo")
+        command_handler._handle_search_command("/search all")
+        assert config.get_search_engine() == "all"
+
+    def test_cli_switch_status(self, cfg, ui):
+        config.set_search_engine("duckduckgo")
+        command_handler._handle_search_command("/search status")
+        blob = "\n".join(ui)
+        assert "DuckDuckGo" in blob
+        assert "Brave API-ключ" in blob
+
+    def test_cli_switch_unknown(self, cfg, ui):
+        command_handler._handle_search_command("/search nonexistent")
+        assert any("Неизвестный поисковый движок" in line for line in ui)
+
+    def test_menu_switch_engine(self, cfg, ui, monkeypatch):
+        from command_handler import SEARCH_MENU_ENGINE
+        answers = iter([SEARCH_MENU_ENGINE, "duckduckgo"])
+
+        class _Seq:
+            def ask(self):
+                return next(answers)
+
+        monkeypatch.setattr(command_handler.questionary, "select", lambda *a, **k: _Seq())
+        command_handler._handle_search_command()
+        assert config.get_search_engine() == "duckduckgo"
+
+    def test_active_engines_switches_to_single_engine(self, cfg):
+        from src.research.search import active_engines, _ddg_search, DEFAULT_ENGINES
+        assert active_engines() == DEFAULT_ENGINES
+        config.set_search_engine("duckduckgo")
+        assert active_engines() == [_ddg_search]
+        config.set_search_engine("all")
+        assert active_engines() == DEFAULT_ENGINES
+

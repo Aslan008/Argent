@@ -2,9 +2,22 @@ import ast
 import os
 import shutil
 from pathlib import Path
+from typing import Any
 from file_tracker import snapshot
 from memory_manager import memory
-from tools._helpers import _resolve_path, _is_plugin_path_restricted, _is_unity_meta_restricted, _validate_code_syntax, _print_diff, _shift_indent, _maybe_unescape_content, _changed_region_preview, _unity_script_placement_error, _strip_read_line_numbers
+from tools._helpers import (
+    _resolve_path,
+    _is_plugin_path_restricted,
+    _is_unity_meta_restricted,
+    _validate_code_syntax,
+    _print_diff,
+    _shift_indent,
+    _maybe_unescape_content,
+    _changed_region_preview,
+    _unity_script_placement_error,
+    _strip_read_line_numbers,
+    _maybe_reload_plugin,
+)
 from logger import get_logger
 
 log = get_logger("tools")
@@ -45,6 +58,25 @@ def read_file(file_path: str, start_line: int = None, end_line: int = None) -> s
         if not path.is_file():
             return f"Error: '{file_path}' is not a file."
 
+        # Universal binary file check via null bytes in first 4KB
+        try:
+            with open(path, "rb") as probe:
+                chunk = probe.read(4096)
+                if b"\x00" in chunk:
+                    return (
+                        f"Error: Cannot read '{file_path}': file appears to be binary. "
+                        f"Use an appropriate tool (e.g. view_image for images) instead."
+                    )
+        except Exception as e:
+            return f"Error reading file '{file_path}': {e}"
+
+        if start_line is not None and start_line < 1:
+            start_line = 1
+        if end_line is not None and end_line < 1:
+            return f"Error: 'end_line' ({end_line}) must be greater than or equal to 1."
+        if start_line is not None and end_line is not None and start_line > end_line:
+            return f"Error: 'start_line' ({start_line}) cannot be greater than 'end_line' ({end_line})."
+
         max_lines, max_chars = _read_budget()
         ranged = start_line is not None or end_line is not None
         first = max(1, start_line or 1)
@@ -57,7 +89,7 @@ def read_file(file_path: str, start_line: int = None, end_line: int = None) -> s
         size = 0
         total = 0
         stopped_at_chars = False
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
             for number, line in enumerate(f, start=1):
                 total = number
                 if number < first:
@@ -73,9 +105,16 @@ def read_file(file_path: str, start_line: int = None, end_line: int = None) -> s
                 numbered.append(f"{number:>5}\t{line}")
                 size += len(line)
 
+        if total == 0:
+            return ""
+
+        if ranged and first > total:
+            return f"Error: 'start_line' ({first}) exceeds total lines in file ({total})."
+
         body = "".join(numbered)
         if body and not body.endswith("\n"):
             body += "\n"
+
         shown_to = first + len(numbered) - 1
 
         if stopped_at_chars:
@@ -97,7 +136,7 @@ def read_file(file_path: str, start_line: int = None, end_line: int = None) -> s
 
 def delete_file(file_path: str) -> str:
     """Delete a file from the file system."""
-    restriction_error = _is_plugin_path_restricted(file_path)
+    restriction_error = _is_plugin_path_restricted(file_path) or _is_unity_meta_restricted(file_path)
     if restriction_error:
         return restriction_error
         
@@ -118,6 +157,11 @@ def delete_file(file_path: str) -> str:
             return f"Deletion aborted by user. The file '{file_path}' was NOT deleted."
         
         snapshot(str(path))
+        try:
+            import stat
+            os.chmod(path, stat.S_IWRITE)
+        except Exception:
+            pass
         path.unlink()
         # Drop it from the vector index too, or semantic_search keeps serving
         # snippets of a file that no longer exists.
@@ -128,6 +172,7 @@ def delete_file(file_path: str) -> str:
             pass
         log.info("delete_file: %s", file_path)
         memory.add_completed(f"Deleted {file_path}")
+        _maybe_reload_plugin(str(path))
         return f"Successfully deleted '{file_path}'."
     except Exception as e:
         log.error("delete_file error %s: %s", file_path, e)
@@ -165,11 +210,12 @@ def write_file(file_path: str, content: str, overwrite: bool = False) -> str:
         if existed:
             snapshot(str(path))
             try:
-                prior_content = path.read_text(encoding="utf-8")
+                with open(path, "r", encoding="utf-8", errors="replace", newline="") as f:
+                    prior_content = f.read()
             except Exception:
                 prior_content = None
         content = _maybe_unescape_content(content)
-        with open(path, "w", encoding="utf-8") as f:
+        with open(path, "w", encoding="utf-8", newline="") as f:
             f.write(content)
 
         validation_error = _validate_code_syntax(str(path))
@@ -178,7 +224,8 @@ def write_file(file_path: str, content: str, overwrite: bool = False) -> str:
             # Restore the previous version, or remove a brand-new broken file.
             if existed:
                 if prior_content is not None:
-                    path.write_text(prior_content, encoding="utf-8")
+                    with open(path, "w", encoding="utf-8", newline="") as f:
+                        f.write(prior_content)
                 else:
                     from file_tracker import undo
                     undo(str(path))
@@ -198,6 +245,7 @@ def write_file(file_path: str, content: str, overwrite: bool = False) -> str:
         except ImportError:
             pass
 
+        _maybe_reload_plugin(str(path))
         log.info("write_file: %s (%d chars)", file_path, len(content))
         memory.add_file_modified(file_path)
         memory.add_completed(f"Wrote {file_path} ({len(content)} chars)")
@@ -242,6 +290,7 @@ def append_to_file(file_path: str, content: str) -> str:
         except ImportError:
             pass
 
+        _maybe_reload_plugin(str(path))
         log.info("append_to_file: %s (%d chars)", file_path, len(content))
         memory.add_file_modified(file_path)
         memory.add_completed(f"Appended to {file_path} ({len(content)} chars)")
@@ -359,6 +408,7 @@ def replace_python_function(file_path: str, function_name: str, new_code: str) -
         except ImportError:
             pass
 
+        _maybe_reload_plugin(str(path))
         log.info("replace_python_function: %s (%s)", file_path, function_name)
         memory.add_file_modified(file_path)
         memory.add_completed(f"Replaced {function_name} in {file_path}")
@@ -370,8 +420,64 @@ def replace_python_function(file_path: str, function_name: str, new_code: str) -
         import traceback
         return f"Error surgically replacing function: {e}\n{traceback.format_exc()}"
 
-def replace_in_file(file_path: str, target_text: str, replacement_text: str) -> str:
-    """Replace exactly matching text in a file with new text."""
+def replace_in_file(
+    file_path: str = None,
+    target_text: str = None,
+    replacement_text: str = None,
+    start_line: int | None = None,
+    end_line: int | None = None,
+    changes_json: Any = None,
+    changes: Any = None,
+) -> str:
+    """Replace exactly matching text in a file with new text, or apply multiple changes.
+    
+    Modes:
+    1. Single replacement: file_path + target_text + replacement_text (+ optional start_line/end_line).
+    2. Multi-replacement: provide 'changes' or 'changes_json' as a list or JSON array of change objects
+       [{file_path, target_text, replacement_text}] with atomic rollback on syntax/compile errors.
+    """
+    # Multi-replace delegation if changes or changes_json is provided
+    multi_input = changes if changes is not None else changes_json
+    if multi_input is None and target_text is None and file_path:
+        if isinstance(file_path, (list, dict)):
+            multi_input = file_path
+        elif isinstance(file_path, str) and file_path.strip().startswith(("[", "{")) and '"target' in file_path:
+            multi_input = file_path
+
+    if multi_input is not None:
+        if file_path:
+            if isinstance(multi_input, list):
+                for c in multi_input:
+                    if isinstance(c, dict) and not c.get("file_path"):
+                        c["file_path"] = file_path
+            elif isinstance(multi_input, dict):
+                if not multi_input.get("file_path"):
+                    multi_input["file_path"] = file_path
+                if "changes" in multi_input and isinstance(multi_input["changes"], list):
+                    for c in multi_input["changes"]:
+                        if isinstance(c, dict) and not c.get("file_path"):
+                            c["file_path"] = file_path
+            elif isinstance(multi_input, str) and multi_input.strip().startswith(("[", "{")):
+                try:
+                    import json
+                    parsed = json.loads(multi_input)
+                    if isinstance(parsed, list):
+                        for c in parsed:
+                            if isinstance(c, dict) and not c.get("file_path"):
+                                c["file_path"] = file_path
+                        multi_input = json.dumps(parsed)
+                    elif isinstance(parsed, dict):
+                        if not parsed.get("file_path"):
+                            parsed["file_path"] = file_path
+                        if "changes" in parsed and isinstance(parsed["changes"], list):
+                            for c in parsed["changes"]:
+                                if isinstance(c, dict) and not c.get("file_path"):
+                                    c["file_path"] = file_path
+                        multi_input = json.dumps(parsed)
+                except Exception:
+                    pass
+        return multi_replace_in_file(multi_input)
+
     restriction_error = _is_plugin_path_restricted(file_path) or _is_unity_meta_restricted(file_path)
     if restriction_error:
         return restriction_error
@@ -384,7 +490,7 @@ def replace_in_file(file_path: str, target_text: str, replacement_text: str) -> 
     if not (target_text or "").strip():
         return (f"Error: 'target_text' is empty, so there is nothing to find in "
                 f"'{file_path}'. Pass the exact existing text you want replaced. "
-                f"(If you are calling multi_replace_in_file, each entry must be "
+                f"(If you are passing `changes`, each entry must be "
                 f"flat: {{\"file_path\", \"target_text\", \"replacement_text\"}}.)")
 
     try:
@@ -395,17 +501,127 @@ def replace_in_file(file_path: str, target_text: str, replacement_text: str) -> 
         if not path.is_file():
             return f"Error: '{file_path}' is not a file."
 
-        with open(path, "r", encoding="utf-8") as f:
-            content = f.read()
+        with open(path, "r", encoding="utf-8", errors="replace", newline="") as f:
+            raw_content = f.read()
 
-        target_text_processed = _strip_read_line_numbers(_maybe_unescape_content(target_text))
+        has_crlf = "\r\n" in raw_content
+        content = raw_content.replace("\r\n", "\n")
+        content_lines = content.splitlines()
+
+        target_text_processed = _strip_read_line_numbers(_maybe_unescape_content(target_text)).replace("\r\n", "\n")
         replacement_text_processed = _strip_read_line_numbers(
-            _maybe_unescape_content(replacement_text))
+            _maybe_unescape_content(replacement_text)).replace("\r\n", "\n")
 
         fuzzy_note = ""
         anchor_line = 0            # 0-indexed start of the changed region
         new_line_count = 1         # lines the replacement spans, for the preview
-        if target_text_processed in content:
+
+        is_bounded = start_line is not None or end_line is not None
+        if is_bounded:
+            try:
+                if start_line is not None:
+                    start_line = int(start_line)
+                if end_line is not None:
+                    end_line = int(end_line)
+            except (ValueError, TypeError):
+                return "Error: 'start_line' and 'end_line' must be valid integers."
+
+            total_lines = len(content_lines)
+            if start_line is None:
+                start_line = 1
+            if end_line is None:
+                end_line = total_lines
+            if start_line < 1:
+                start_line = 1
+            if start_line > total_lines:
+                return f"Error: 'start_line' ({start_line}) exceeds total lines in file ({total_lines})."
+            if end_line < start_line:
+                return f"Error: 'end_line' ({end_line}) cannot be less than 'start_line' ({start_line})."
+            end_line = min(end_line, total_lines)
+
+            start_char_idx = sum(len(line) + 1 for line in content_lines[:start_line - 1])
+            end_char_idx = min(len(content), sum(len(line) + 1 for line in content_lines[:end_line]))
+            window_text = content[start_char_idx:end_char_idx]
+
+            if target_text_processed in window_text:
+                count = window_text.count(target_text_processed)
+                if count > 1:
+                    locs = []
+                    search_from = 0
+                    for _ in range(count):
+                        idx = window_text.find(target_text_processed, search_from)
+                        if idx == -1:
+                            break
+                        line_offset = window_text.count("\n", 0, idx)
+                        locs.append(f"line {start_line + line_offset}")
+                        search_from = idx + 1
+                    return (
+                        f"Error: The target text appears {count} times within lines {start_line}-{end_line} "
+                        f"in '{file_path}' (at {', '.join(locs[:5])}). Narrow down start_line/end_line, "
+                        f"add distinctive nearby lines to target_text, or use write_file to rewrite it whole."
+                    )
+                pos = window_text.index(target_text_processed)
+                abs_pos = start_char_idx + pos
+                anchor_line = content.count("\n", 0, abs_pos)
+                new_line_count = replacement_text_processed.count("\n") + 1
+                new_content = (
+                    content[:abs_pos]
+                    + replacement_text_processed
+                    + content[abs_pos + len(target_text_processed):]
+                )
+            else:
+                # Fuzzy fallback strictly within the bounded range
+                target_lines = [line.strip() for line in target_text_processed.splitlines() if line.strip()]
+                matches = []
+                if target_lines:
+                    for i in range(start_line - 1, end_line):
+                        if content_lines[i].strip() != target_lines[0]:
+                            continue
+                        match_start = i
+                        t_idx = 1
+                        c_idx = i + 1
+                        while c_idx < min(len(content_lines), end_line) and t_idx < len(target_lines):
+                            if not content_lines[c_idx].strip():
+                                c_idx += 1
+                                continue
+                            if content_lines[c_idx].strip() == target_lines[t_idx]:
+                                t_idx += 1
+                                c_idx += 1
+                            else:
+                                break
+                        if t_idx == len(target_lines):
+                            matches.append((match_start, c_idx))
+
+                if len(matches) > 1:
+                    locs = [f"lines {s + 1}-{e}" for (s, e) in matches[:5]]
+                    return (
+                        f"Error: The target text matches {len(matches)} places within lines {start_line}-{end_line}: "
+                        f"{'; '.join(locs)}. Narrow down your line range, add distinctive context, or use write_file to rewrite it whole."
+                    )
+                if not matches:
+                    hint = _build_match_hint(target_text_processed, window_text)
+                    return (
+                        f"Error: The target text was not found within lines {start_line}-{end_line} in '{file_path}'. "
+                        f"Make sure the line range covers the target text, or omit start_line/end_line to search the whole file.{hint}"
+                    )
+
+                m_start, m_end = matches[0]
+                file_first = content_lines[m_start]
+                file_indent = file_first[:len(file_first) - len(file_first.lstrip())]
+                model_first = next((l for l in target_text_processed.splitlines() if l.strip()), "")
+                model_indent = model_first[:len(model_first) - len(model_first.lstrip())]
+                adjusted_replacement = _shift_indent(replacement_text_processed, model_indent, file_indent)
+                adjusted_lines = adjusted_replacement.splitlines()
+                new_content = "\n".join(
+                    content_lines[:m_start] + adjusted_lines + content_lines[m_end:]
+                )
+                if content.endswith("\n") and not new_content.endswith("\n"):
+                    new_content += "\n"
+                anchor_line = m_start
+                new_line_count = len(adjusted_lines) or 1
+                fuzzy_note = f" (fuzzy match within lines {start_line}-{end_line}: whitespace/indentation differences in target_text were corrected automatically)"
+
+        elif target_text_processed in content:
             count = content.count(target_text_processed)
             if count > 1:
                 locs = []
@@ -420,7 +636,8 @@ def replace_in_file(file_path: str, target_text: str, replacement_text: str) -> 
                     f"Error: The target text appears {count} times in '{file_path}' "
                     f"(at {', '.join(locs[:5])}). Add a distinctive nearby line (a unique "
                     f"comment, the method signature, or a preceding statement) so target_text "
-                    f"is unique — or, for a small file, use write_file to rewrite it whole."
+                    f"is unique — or specify 'start_line' and 'end_line' to target a specific range — "
+                    f"or, for a small file, use write_file to rewrite it whole."
                 )
             pos = content.index(target_text_processed)
             anchor_line = content.count("\n", 0, pos)
@@ -432,13 +649,14 @@ def replace_in_file(file_path: str, target_text: str, replacement_text: str) -> 
             # single unambiguous whitespace-insensitive match is applied
             # automatically (re-indented), saving a full model round-trip.
             target_lines = [line.strip() for line in target_text_processed.splitlines() if line.strip()]
-            content_lines = content.splitlines()
             matches = []
             if target_lines:
                 for i in range(len(content_lines)):
-                    t_idx = 0
-                    c_idx = i
-                    match_start = c_idx
+                    if content_lines[i].strip() != target_lines[0]:
+                        continue
+                    match_start = i
+                    t_idx = 1
+                    c_idx = i + 1
                     while c_idx < len(content_lines) and t_idx < len(target_lines):
                         if not content_lines[c_idx].strip():
                             c_idx += 1
@@ -462,38 +680,45 @@ def replace_in_file(file_path: str, target_text: str, replacement_text: str) -> 
                     f"Error: The target text matches {len(matches)} places: {'; '.join(locs)}. "
                     f"They differ only in surrounding context, so pick ONE and add a distinctive "
                     f"nearby line (a unique comment, the method signature, or a preceding statement) "
-                    f"to your target_text so it's unique — or, for a small file, use write_file to "
+                    f"to your target_text so it's unique — or specify 'start_line' and 'end_line' "
+                    f"to target one specific occurrence — or, for a small file, use write_file to "
                     f"rewrite it whole."
                 )
             if not matches:
                 hint = _build_match_hint(target_text_processed, content)
                 return f"Error: The target text was not found in '{file_path}'. Make sure it matches exactly, including whitespace and indentation.{hint}"
 
-            start_line, end_line = matches[0]
+            m_start, m_end = matches[0]
             # Re-base the replacement onto the file's actual indentation.
-            file_first = content_lines[start_line]
+            file_first = content_lines[m_start]
             file_indent = file_first[:len(file_first) - len(file_first.lstrip())]
             model_first = next((l for l in target_text_processed.splitlines() if l.strip()), "")
             model_indent = model_first[:len(model_first) - len(model_first.lstrip())]
             adjusted_replacement = _shift_indent(replacement_text_processed, model_indent, file_indent)
             adjusted_lines = adjusted_replacement.splitlines()
             new_content = "\n".join(
-                content_lines[:start_line] + adjusted_lines + content_lines[end_line:]
+                content_lines[:m_start] + adjusted_lines + content_lines[m_end:]
             )
             if content.endswith("\n") and not new_content.endswith("\n"):
                 new_content += "\n"
-            anchor_line = start_line
+            anchor_line = m_start
             new_line_count = len(adjusted_lines) or 1
             fuzzy_note = " (fuzzy match: whitespace/indentation differences in target_text were corrected automatically)"
 
+        write_content = new_content
+        if has_crlf:
+            write_content = write_content.replace("\r\n", "\n").replace("\n", "\r\n")
+        else:
+            write_content = write_content.replace("\r\n", "\n")
+
         snapshot(str(path))
-        with open(path, "w", encoding="utf-8") as f:
-            f.write(new_content)
+        with open(path, "w", encoding="utf-8", newline="") as f:
+            f.write(write_content)
             
         validation_error = _validate_code_syntax(str(path))
         if validation_error:
-            with open(path, "w", encoding="utf-8") as f:
-                f.write(content)
+            with open(path, "w", encoding="utf-8", newline="") as f:
+                f.write(raw_content)
             return f"Modification aborted because it broke code compilation. Changes reverted.\n\n{validation_error}"
             
         _print_diff(content, new_content, file_path)
@@ -504,6 +729,7 @@ def replace_in_file(file_path: str, target_text: str, replacement_text: str) -> 
         except ImportError:
             pass
 
+        _maybe_reload_plugin(str(path))
         log.info("replace_in_file: %s (replaced %d chars)%s", file_path, len(target_text_processed), fuzzy_note)
         memory.add_file_modified(file_path)
         memory.add_completed(f"Edited {file_path}")
@@ -535,64 +761,95 @@ def multi_replace_in_file_chunk(file_path: str, changes_json: str) -> str:
             
         snapshot(str(path))
         
-        with open(path, "r", encoding="utf-8") as f:
-            lines = f.read().splitlines()
-            
-        lines = [line + "\n" for line in lines]
-        original_content = "".join(lines)
-            
+        with open(path, "r", encoding="utf-8", errors="replace", newline="") as f:
+            raw_content = f.read()
+
+        has_crlf = "\r\n" in raw_content
+        has_trailing_newline = raw_content.endswith("\r\n") or raw_content.endswith("\n")
+        lines = raw_content.splitlines(keepends=True)
+        original_content = raw_content
+
+        # Validate chunk format and non-overlapping invariant
         try:
-            changes.sort(key=lambda x: x.get("start_line", 1), reverse=True)
+            sorted_asc = sorted(changes, key=lambda x: x.get("start_line", 1))
         except TypeError:
             return "Error: Invalid chunk format. 'start_line' must be an integer."
 
+        for i, cur in enumerate(sorted_asc):
+            cur_start = cur.get("start_line")
+            cur_end = cur.get("end_line")
+            if cur_start is None or cur_end is None:
+                return "Error: Every chunk must contain 'start_line' and 'end_line'."
+            if not isinstance(cur_start, int) or not isinstance(cur_end, int):
+                return "Error: Invalid chunk format. 'start_line' and 'end_line' must be integers."
+            if cur_start < 1 or cur_end < cur_start:
+                return f"Error: Invalid line range {cur_start}-{cur_end}."
+            if i > 0:
+                prev = sorted_asc[i - 1]
+                if prev.get("end_line", 0) >= cur_start:
+                    return (
+                        f"Error: Replacement chunks overlap between line {prev.get('start_line')}-{prev.get('end_line')} "
+                        f"and {cur_start}-{cur_end}. Chunks must specify non-overlapping ranges."
+                    )
+
+        # Apply replacements from bottom to top so line indices before start_line remain valid
+        changes.sort(key=lambda x: x["start_line"], reverse=True)
+
         for change in changes:
-            start_line = change.get("start_line")
-            end_line = change.get("end_line")
+            start_line = change["start_line"]
+            end_line = change["end_line"]
             target = change.get("target_content", "")
             repl = change.get("replacement_content", "")
-            
-            if start_line is None or end_line is None:
-                return "Error: Every chunk must contain 'start_line' and 'end_line'."
-                
+
             s_idx = max(0, start_line - 1)
             e_idx = min(len(lines), end_line)
-            
-            if s_idx > e_idx or s_idx < 0:
-                return f"Error: Invalid line range {start_line}-{end_line}."
-                
+
             actual_target_lines = lines[s_idx:e_idx]
             actual_target = "".join(actual_target_lines)
-            
+
             def normalize(t):
-                return _strip_read_line_numbers(_maybe_unescape_content(t)).strip()
-                
+                return _strip_read_line_numbers(_maybe_unescape_content(t)).replace("\r\n", "\n").strip()
+
             norm_target = normalize(target)
             norm_actual = normalize(actual_target)
-            
+
             if norm_target and norm_target != norm_actual:
                 return f"Error: The target_content for lines {start_line}-{end_line} does not match the actual file content.\nExpected:\n{norm_target}\n\nActual:\n{norm_actual}"
-                
-            repl_processed = _maybe_unescape_content(repl)
 
-            if repl_processed and not repl_processed.endswith('\n'):
-                repl_processed += '\n'
-                
+            repl_processed = _maybe_unescape_content(repl)
+            if repl_processed:
+                if has_crlf:
+                    repl_processed = repl_processed.replace("\r\n", "\n").replace("\n", "\r\n")
+                if not (repl_processed.endswith("\r\n") if has_crlf else repl_processed.endswith("\n")):
+                    repl_processed += "\r\n" if has_crlf else "\n"
+
             lines[s_idx:e_idx] = [repl_processed] if repl_processed else []
-            
+
         new_content = "".join(lines)
-        
-        with open(path, "w", encoding="utf-8") as f:
+        if not has_trailing_newline:
+            if new_content.endswith("\r\n"):
+                new_content = new_content[:-2]
+            elif new_content.endswith("\n"):
+                new_content = new_content[:-1]
+
+        with open(path, "w", encoding="utf-8", newline="") as f:
             f.write(new_content)
-            
+
         validation_error = _validate_code_syntax(str(path))
         if validation_error:
-            with open(path, "w", encoding="utf-8") as f:
+            with open(path, "w", encoding="utf-8", newline="") as f:
                 f.write(original_content)
             return f"Modification aborted because it broke code compilation. Changes reverted.\n\n{validation_error}"
-            
+
         _print_diff(original_content, new_content, file_path)
         
+        try:
+            from rag_engine import update_file_index
+            update_file_index(str(path))
+        except ImportError:
+            pass
+
+        _maybe_reload_plugin(str(path))
         log.info("multi_replace_in_file_chunk: %s", file_path)
         memory.add_file_modified(file_path)
         memory.add_completed(f"Edited {file_path} via chunk patcher")
@@ -604,33 +861,293 @@ def multi_replace_in_file_chunk(file_path: str, changes_json: str) -> str:
         log.error("multi_replace_in_file_chunk error %s: %s", file_path, e)
         return f"Error replacing chunks in '{file_path}': {e}"
 
-def multi_replace_in_file(changes_json: str) -> str:
-    """Apply multiple text replacements across one or multiple files using a JSON array string."""
+
+def _parse_multi_replace_changes(raw_input):
+    """Parse changes_json with duplicate-key preservation and alias normalization."""
     import json
+    ALIAS_MAP = {
+        "path": "file_path", "file": "file_path", "filename": "file_path", "filepath": "file_path",
+        "target": "target_text", "target_content": "target_text", "old_text": "target_text", "old_content": "target_text", "old": "target_text",
+        "replacement": "replacement_text", "replacement_content": "replacement_text", "new_text": "replacement_text", "new_content": "replacement_text", "new": "replacement_text", "repl": "replacement_text"
+    }
+
+    def _object_pairs_hook(pairs):
+        normalized = []
+        for k, v in pairs:
+            canonical = ALIAS_MAP.get(k, k)
+            normalized.append((canonical, v))
+
+        target_indices = [i for i, (k, v) in enumerate(normalized) if k == "target_text"]
+        if len(target_indices) > 1:
+            common_fp = next((v for k, v in normalized if k == "file_path" and v), None)
+            chunks = []
+            for idx, start_i in enumerate(target_indices):
+                end_i = target_indices[idx + 1] if idx + 1 < len(target_indices) else len(normalized)
+                chunk_pairs = normalized[start_i:end_i]
+                d = {"file_path": common_fp} if common_fp else {}
+                for ck, cv in chunk_pairs:
+                    if ck == "replacement_text" and ck in d and d[ck] and (not cv or not str(cv).strip()):
+                        continue
+                    d[ck] = cv
+                chunks.append(d)
+            return {"__multi_unpacked__": chunks}
+
+        res = {}
+        for k, v in normalized:
+            if k in res:
+                existing = res[k]
+                # Never let empty string or whitespace overwrite a non-empty string on duplicate keys!
+                if isinstance(existing, str) and existing.strip() and (not isinstance(v, str) or not v.strip()):
+                    log.warning("multi_replace_in_file: Preserved non-empty '%s' over duplicate empty/whitespace value.", k)
+                    continue
+                if (not existing) and v:
+                    res[k] = v
+                    continue
+                res[k] = v
+            else:
+                res[k] = v
+        return res
+
+    if isinstance(raw_input, str):
+        try:
+            data = json.loads(raw_input, object_pairs_hook=_object_pairs_hook)
+        except json.JSONDecodeError:
+            return None, "Error: changes_json is not valid JSON."
+    elif isinstance(raw_input, (list, dict)):
+        try:
+            s = json.dumps(raw_input)
+            data = json.loads(s, object_pairs_hook=_object_pairs_hook)
+        except Exception:
+            data = raw_input
+    else:
+        return None, "Error: changes_json must be a JSON array of objects."
+
+    items = []
+    if isinstance(data, dict):
+        if "__multi_unpacked__" in data:
+            items.extend(data["__multi_unpacked__"])
+        elif "changes" in data and isinstance(data["changes"], list):
+            common_fp = data.get("file_path")
+            for item in data["changes"]:
+                if isinstance(item, dict):
+                    if common_fp and not item.get("file_path"):
+                        item["file_path"] = common_fp
+                    if "__multi_unpacked__" in item:
+                        for u in item["__multi_unpacked__"]:
+                            if common_fp and not u.get("file_path"):
+                                u["file_path"] = common_fp
+                        items.extend(item["__multi_unpacked__"])
+                    else:
+                        items.append(item)
+        else:
+            return None, "Error: changes_json must be a JSON array of objects."
+    elif isinstance(data, list):
+        for item in data:
+            if isinstance(item, dict) and "__multi_unpacked__" in item:
+                items.extend(item["__multi_unpacked__"])
+            else:
+                items.append(item)
+    else:
+        return None, "Error: changes_json must be a JSON array of objects."
+
+    return items, None
+
+
+def _apply_atomic_multi_replace(file_path: str, file_edits: list) -> str:
+    """Atomically apply multiple text replacements to a single file, sorted bottom-to-top."""
     try:
-        changes = json.loads(changes_json)
-        if not isinstance(changes, list):
-            return "Error: changes_json must be a JSON array of objects."
-            
+        from tools._helpers import _print_diff, _validate_code_syntax, _maybe_unescape_content, _strip_read_line_numbers, _shift_indent, _build_match_hint, _maybe_reload_plugin
+        path = _resolve_path(file_path)
+        if not path.exists():
+            return f"Error: File '{file_path}' does not exist."
+        if not path.is_file():
+            return f"Error: '{file_path}' is not a file."
+
+        with open(path, "r", encoding="utf-8", errors="replace", newline="") as f:
+            raw_content = f.read()
+
+        has_crlf = "\r\n" in raw_content
+        content = raw_content.replace("\r\n", "\n")
+        content_lines = content.splitlines()
+
+        located_edits = []
+
+        for idx, change in file_edits:
+            target = change.get("target_text")
+            repl = change.get("replacement_text")
+            if target is None:
+                return f"Error in change #{idx + 1}: 'target_text' is missing."
+            if repl is None:
+                return f"Error in change #{idx + 1}: 'replacement_text' is missing. To delete code, pass an explicit empty string."
+
+            target_proc = _strip_read_line_numbers(_maybe_unescape_content(target)).replace("\r\n", "\n")
+            repl_proc = _strip_read_line_numbers(_maybe_unescape_content(repl)).replace("\r\n", "\n")
+
+            if not target_proc:
+                return f"Error in change #{idx + 1}: 'target_text' is empty."
+
+            if target_proc in content:
+                count = content.count(target_proc)
+                if count > 1:
+                    locs = []
+                    search_from = 0
+                    for _ in range(count):
+                        idx_pos = content.find(target_proc, search_from)
+                        if idx_pos == -1:
+                            break
+                        locs.append(f"line {content.count(chr(10), 0, idx_pos) + 1}")
+                        search_from = idx_pos + 1
+                    return (
+                        f"Error: The target text in change #{idx + 1} appears {count} times in '{file_path}' "
+                        f"(at {', '.join(locs[:5])}). Add surrounding context to make target_text unique."
+                    )
+                start_pos = content.index(target_proc)
+                end_pos = start_pos + len(target_proc)
+                located_edits.append((start_pos, end_pos, repl_proc, target_proc, idx, False))
+            else:
+                target_lines = [line.strip() for line in target_proc.splitlines() if line.strip()]
+                matches = []
+                if target_lines:
+                    for i in range(len(content_lines)):
+                        if content_lines[i].strip() != target_lines[0]:
+                            continue
+                        match_start = i
+                        t_idx = 1
+                        c_idx = i + 1
+                        while c_idx < len(content_lines) and t_idx < len(target_lines):
+                            if not content_lines[c_idx].strip():
+                                c_idx += 1
+                                continue
+                            if content_lines[c_idx].strip() == target_lines[t_idx]:
+                                t_idx += 1
+                                c_idx += 1
+                            else:
+                                break
+                        if t_idx == len(target_lines):
+                            matches.append((match_start, c_idx))
+
+                if len(matches) > 1:
+                    return f"Error: The target text in change #{idx + 1} matches {len(matches)} places ambiguously."
+                if not matches:
+                    hint = _build_match_hint(target_proc, content)
+                    return f"Error: The target text in change #{idx + 1} was not found in '{file_path}'.{hint}"
+
+                start_line, end_line = matches[0]
+                start_pos = sum(len(content_lines[k]) + 1 for k in range(start_line))
+                end_pos = sum(len(content_lines[k]) + 1 for k in range(end_line))
+                if end_line == len(content_lines) and not content.endswith("\n"):
+                    end_pos -= 1
+
+                file_first = content_lines[start_line]
+                file_indent = file_first[:len(file_first) - len(file_first.lstrip())]
+                model_first = next((l for l in target_proc.splitlines() if l.strip()), "")
+                model_indent = model_first[:len(model_first) - len(model_first.lstrip())]
+                adjusted_replacement = _shift_indent(repl_proc, model_indent, file_indent)
+                located_edits.append((start_pos, end_pos, adjusted_replacement, target_proc, idx, True))
+
+        located_edits.sort(key=lambda x: x[0])
+        for i in range(1, len(located_edits)):
+            prev = located_edits[i - 1]
+            curr = located_edits[i]
+            if prev[1] > curr[0]:
+                return f"Error: Replacement chunks #{prev[4] + 1} and #{curr[4] + 1} overlap in '{file_path}'. Chunks must specify non-overlapping regions."
+
+        located_edits.sort(key=lambda x: x[0], reverse=True)
+        new_content = content
+        for start_pos, end_pos, repl_proc, _, _, _ in located_edits:
+            new_content = new_content[:start_pos] + repl_proc + new_content[end_pos:]
+
+        write_content = new_content
+        if has_crlf:
+            write_content = write_content.replace("\r\n", "\n").replace("\n", "\r\n")
+        else:
+            write_content = write_content.replace("\r\n", "\n")
+
+        snapshot(str(path))
+        with open(path, "w", encoding="utf-8", newline="") as f:
+            f.write(write_content)
+
+        validation_error = _validate_code_syntax(str(path))
+        if validation_error:
+            with open(path, "w", encoding="utf-8", newline="") as f:
+                f.write(raw_content)
+            return f"Modification aborted because it broke code compilation. Changes reverted.\n\n{validation_error}"
+
+        _print_diff(content, new_content, file_path)
+
+        try:
+            from rag_engine import update_file_index
+            update_file_index(str(path))
+        except ImportError:
+            pass
+
+        _maybe_reload_plugin(str(path))
+        memory.add_file_modified(file_path)
+        memory.add_completed(f"Edited {file_path} ({len(located_edits)} edits)")
+        fuzzy_count = sum(1 for e in located_edits if e[5])
+        fuzzy_note = f" ({fuzzy_count} fuzzy-matched)" if fuzzy_count else ""
+        return f"Successfully applied {len(located_edits)} non-overlapping replacements to '{file_path}'.{fuzzy_note}"
+    except Exception as e:
+        log.error("_apply_atomic_multi_replace error %s: %s", file_path, e)
+        return f"Error replacing chunks in '{file_path}': {e}"
+
+
+def multi_replace_in_file(changes_json) -> str:
+    """Apply multiple text replacements across one or multiple files using a JSON array string or list of objects."""
+    from collections import defaultdict
+    try:
+        changes, parse_err = _parse_multi_replace_changes(changes_json)
+        if parse_err:
+            return parse_err
+
+        if not changes:
+            return "Successfully: Multi-replace execution finished:\n"
+
+        grouped_by_file = defaultdict(list)
         report = []
-        for change in changes:
-            fp = change.get("file_path")
-            
-            restriction_error = _is_plugin_path_restricted(fp)
-            if restriction_error:
-                report.append(f"Skipping '{fp}': {restriction_error}")
+
+        for idx, change in enumerate(changes):
+            if not isinstance(change, dict):
+                report.append(f"Skipping change: item is not an object.")
                 continue
-                
-            target = change.get("target_text", "")
-            repl = change.get("replacement_text", "")
+
+            fp = change.get("file_path")
             if not fp:
                 report.append("Skipping change: 'file_path' is missing.")
                 continue
-            res = replace_in_file(fp, target, repl)
-            report.append(f"[{fp}]: {res}")
-            
-        return "Multi-replace execution finished:\n" + "\n".join(report)
+
+            restriction_error = _is_plugin_path_restricted(fp) or _is_unity_meta_restricted(fp)
+            if restriction_error:
+                report.append(f"Skipping '{fp}': {restriction_error}")
+                continue
+
+            grouped_by_file[fp].append((idx, change))
+
+        for fp, file_edits in grouped_by_file.items():
+            if len(file_edits) == 1:
+                idx, change = file_edits[0]
+                target = change.get("target_text")
+                repl = change.get("replacement_text")
+                if not (target or "").strip():
+                    report.append(
+                        f"[{fp}]: Error: 'target_text' is empty, so there is nothing to find in "
+                        f"'{fp}'. Pass the exact existing text you want replaced. "
+                        f"(If you are passing `changes`, each entry must be "
+                        f"flat: {{\"file_path\", \"target_text\", \"replacement_text\"}}.)"
+                    )
+                    continue
+                if repl is None:
+                    report.append(f"[{fp}]: Error: 'replacement_text' is missing. To delete code, pass an explicit empty string.")
+                    continue
+                res = replace_in_file(fp, target, repl)
+                report.append(f"[{fp}]: {res}")
+            else:
+                res = _apply_atomic_multi_replace(fp, file_edits)
+                report.append(f"[{fp}]: {res}")
+
+        return "Successfully: Multi-replace execution finished:\n" + "\n".join(report)
     except Exception as e:
+        log.error("multi_replace_in_file error: %s", e)
         return f"Error executing multi_replace: {e}"
 
 def get_file_outline(file_path: str) -> str:
@@ -725,7 +1242,10 @@ def create_directory(dir_path: str) -> str:
 
 def move_file(source: str, destination: str) -> str:
     """Move or rename a file from source to destination."""
-    restriction_error = _is_plugin_path_restricted(source) or _is_plugin_path_restricted(destination)
+    restriction_error = (
+        _is_plugin_path_restricted(source) or _is_plugin_path_restricted(destination)
+        or _is_unity_meta_restricted(source) or _is_unity_meta_restricted(destination)
+    )
     if restriction_error:
         return restriction_error
     try:
@@ -735,9 +1255,11 @@ def move_file(source: str, destination: str) -> str:
             return f"Error: Source '{source}' does not exist."
         if not src.is_file():
             return f"Error: '{source}' is not a file."
+        if dst.exists() and dst.is_dir():
+            dst = dst / src.name
         dst.parent.mkdir(parents=True, exist_ok=True)
         if dst.exists():
-            return f"Error: Destination '{destination}' already exists."
+            return f"Error: Destination '{dst}' already exists."
         snapshot(str(src))
         shutil.move(str(src), str(dst))
         try:
@@ -755,7 +1277,10 @@ def move_file(source: str, destination: str) -> str:
 
 def copy_file(source: str, destination: str) -> str:
     """Copy a file from source to destination. Creates parent directories if needed."""
-    restriction_error = _is_plugin_path_restricted(source) or _is_plugin_path_restricted(destination)
+    restriction_error = (
+        _is_plugin_path_restricted(source) or _is_plugin_path_restricted(destination)
+        or _is_unity_meta_restricted(source) or _is_unity_meta_restricted(destination)
+    )
     if restriction_error:
         return restriction_error
     try:
@@ -765,9 +1290,11 @@ def copy_file(source: str, destination: str) -> str:
             return f"Error: Source '{source}' does not exist."
         if not src.is_file():
             return f"Error: '{source}' is not a file."
+        if dst.exists() and dst.is_dir():
+            dst = dst / src.name
         dst.parent.mkdir(parents=True, exist_ok=True)
         if dst.exists():
-            return f"Error: Destination '{destination}' already exists."
+            return f"Error: Destination '{dst}' already exists."
         shutil.copy2(str(src), str(dst))
         try:
             from rag_engine import update_file_index
@@ -802,8 +1329,10 @@ def list_directory(dir_path: str) -> str:
             else:
                 files.append(item)
         
+        all_sorted = sorted(dirs) + sorted(files)
+        max_items = 200
         output = [f"Contents of {dir_path}:"]
-        for item in sorted(dirs) + sorted(files):
+        for item in all_sorted[:max_items]:
             type_str = "DIR" if item.is_dir() else "FILE"
             line = f"[{type_str}] {item.name}"
             if item.is_file():
@@ -818,6 +1347,8 @@ def list_directory(dir_path: str) -> str:
                 except OSError:
                     pass
             output.append(line)
+        if len(all_sorted) > max_items:
+            output.append(f"... and {len(all_sorted) - max_items} more items. (Showing first {max_items}. Use search_files or specify a subdirectory to narrow down.)")
         return "\n".join(output)
     except Exception as e:
         return f"Error listing directory '{dir_path}': {e}"
@@ -825,10 +1356,10 @@ def list_directory(dir_path: str) -> str:
 def run_deep_linter(path: str = ".") -> str:
     """Run a deep static analysis (Pylint) on a file or directory."""
     import subprocess
-    import os
     try:
         abs_path = str(_resolve_path(path))
-        print(f"\n[bold yellow]Agent running deep linter on:[/bold yellow] {abs_path}")
+        from ui import console
+        console.print(f"\n[bold yellow]Agent running deep linter on:[/bold yellow] {abs_path}")
         result = subprocess.run(
             ["pylint", abs_path, "-E", "--output-format=text"], 
             capture_output=True, text=True, timeout=60

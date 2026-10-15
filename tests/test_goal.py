@@ -35,28 +35,24 @@ class TestSetGoalTool:
 
 
 class TestSetGoalRegistration:
-    def test_in_dispatch(self):
-        from tools.schemas import AVAILABLE_TOOLS
-        assert AVAILABLE_TOOLS.get("set_goal") is not None
-
-    def test_has_schema(self):
-        from tools.schemas import TOOL_SCHEMAS
+    def test_not_in_tool_schemas(self):
+        """set_goal is not in LLM schemas to avoid goal confusion and token waste."""
+        from tools.schemas import AVAILABLE_TOOLS, TOOL_SCHEMAS
+        assert "set_goal" not in AVAILABLE_TOOLS
         names = {t["function"]["name"] for t in TOOL_SCHEMAS if "function" in t}
-        assert "set_goal" in names
-
-    def test_available_to_weak_models(self):
-        from tool_profiles import CORE_CHAT_TOOLS, slim_tools_for_category
-        assert "set_goal" in CORE_CHAT_TOOLS
-        assert "set_goal" in slim_tools_for_category(["set_goal", "browser_open"], "tiny")
+        assert "set_goal" not in names
 
 
 class TestObjectiveAnchor:
-    """The trailing anchor re-pins the goal AND a compact working-memory slice
-    (already-done, known-failures) so weak models on long conversations don't
-    redo finished work or retry failed approaches."""
+    """The trailing anchor re-pins a compact working-memory slice
+    (completed, recent errors, edited files) so weak models on long conversations don't
+    redo finished work or retry failed approaches, without pinning a stale goal."""
 
     def _agent(self, monkeypatch):
         import agent as agent_module
+        import config
+        monkeypatch.setattr(config, "get_current_model", lambda: "qwen2.5-coder:7b")
+        monkeypatch.setattr(agent_module, "get_current_model", lambda: "qwen2.5-coder:7b")
         monkeypatch.setattr(agent_module, "get_mcp_servers", lambda: [])
         monkeypatch.setattr(agent_module, "create_provider", lambda *a, **k: MagicMock())
         monkeypatch.setattr(agent_module, "estimate_tokens", lambda t, m, p: len(t) // 4)
@@ -65,16 +61,13 @@ class TestObjectiveAnchor:
     def test_anchor_includes_done_and_failures(self, monkeypatch):
         from memory_manager import memory
         memory.clear()
-        memory.set_objective("Build parser")
-        memory.set_current_task("write lexer")
         memory.add_completed("Wrote lexer.py")
         memory.add_completed("Ran tests")
         memory.add_error("pytest failed: import error")
         anchor = self._agent(monkeypatch)._build_objective_anchor()
-        assert "OBJECTIVE: Build parser" in anchor
-        assert "CURRENT TASK: write lexer" in anchor
-        assert "ALREADY DONE" in anchor and "Ran tests" in anchor
-        assert "KNOWN FAILURES" in anchor and "import error" in anchor
+        assert "OBJECTIVE" not in anchor
+        assert "COMPLETED" in anchor and "Ran tests" in anchor
+        assert "RECENT ERRORS" in anchor and "import error" in anchor
 
     def test_anchor_none_when_memory_empty(self, monkeypatch):
         from memory_manager import memory
@@ -82,19 +75,16 @@ class TestObjectiveAnchor:
         assert self._agent(monkeypatch)._build_objective_anchor() is None
 
     def test_anchor_present_with_only_working_memory(self, monkeypatch):
-        # No explicit goal, but work has happened — the anchor still fires so the
-        # "don't redo / don't retry" reminders reach the model.
         from memory_manager import memory
         memory.clear()
         memory.add_completed("Created project skeleton")
         anchor = self._agent(monkeypatch)._build_objective_anchor()
         assert anchor is not None
-        assert "ALREADY DONE" in anchor and "skeleton" in anchor
+        assert "COMPLETED" in anchor and "skeleton" in anchor
 
     def test_anchor_is_bounded(self, monkeypatch):
         from memory_manager import memory
         memory.clear()
-        memory.set_objective("Goal")
         for i in range(10):
             memory.add_completed(f"did {i}")
         for i in range(6):
@@ -109,10 +99,9 @@ class TestObjectiveAnchor:
         # model re-edits a file it already rewrote.
         from memory_manager import memory
         memory.clear()
-        memory.set_objective("Refactor")
         memory.add_file_modified("src/board/MatchDetector.cs")
         anchor = self._agent(monkeypatch)._build_objective_anchor()
-        assert "FILES YOU ALREADY EDITED" in anchor
+        assert "FILES ALREADY EDITED" in anchor
         assert "MatchDetector.cs" in anchor
 
     def test_edited_files_are_deduplicated_and_bounded(self, monkeypatch):

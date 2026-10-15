@@ -96,9 +96,12 @@ class TestJsonInAString:
     invites the model to send the object itself."""
 
     def test_a_list_is_serialised_back(self):
-        changes = [{"file_path": "a.py", "changes": []}]
-        assert _c("multi_replace_in_file", changes_json=changes) == {
-            "changes_json": '[{"file_path": "a.py", "changes": []}]'}
+        """Originally pinned with multi_replace_in_file(changes_json=[...]); that
+        tool was folded into replace_in_file, and call_mcp_tool is the remaining
+        `*_json` parameter."""
+        batch = [{"file_path": "a.py", "changes": []}]
+        assert _c("call_mcp_tool", server_name="unity", tool_name="t",
+                  arguments_json=batch)["arguments_json"] == '[{"file_path": "a.py", "changes": []}]'
 
     def test_a_dict_is_serialised_back(self):
         assert _c("call_mcp_tool", server_name="unity", tool_name="t",
@@ -216,3 +219,18 @@ class TestAgainstTheRealTools:
                                             "start_line": "5", "end_line": "8"})
         out = read_file(**args)
         assert "not supported between instances" not in out
+
+    def test_replace_in_file_aliases_remap_to_target_and_replacement(self):
+        args = {"file_path": "test.py", "old_string": "foo", "new_string": "bar"}
+        coerced = coerce_and_log("replace_in_file", args)
+        assert coerced["target_text"] == "foo"
+        assert coerced["replacement_text"] == "bar"
+        assert "old_string" not in coerced
+        assert "new_string" not in coerced
+
+    def test_read_file_path_alias_remaps_to_file_path(self):
+        args = {"path": "main.py"}
+        coerced = coerce_and_log("read_file", args)
+        assert coerced["file_path"] == "main.py"
+        assert "path" not in coerced
+

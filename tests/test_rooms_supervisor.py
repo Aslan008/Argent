@@ -12,7 +12,8 @@ from src.rooms.supervisor import Supervisor
 
 
 def _lib():
-    return RoomLibrary().load_dir(default_starter_dir(), {"run_command", "search_web"})
+    from tests.test_rooms_library import STARTER_TOOLS
+    return RoomLibrary().load_dir(default_starter_dir(), STARTER_TOOLS)
 
 
 class FakeRun:

@@ -128,9 +128,9 @@ class TestEvalCall:
         with pytest.raises(ConditionError, match="plain strings or numbers"):
             _eval_node(_node("file_exists(obj.attr)"))
 
-    def test_float_arg_raises(self):
+    def test_dict_arg_raises(self):
         with pytest.raises(ConditionError, match="plain strings or numbers"):
-            _eval_node(_node("file_exists(3.14)"))
+            _eval_node(_node("file_exists({'a': 1})"))
 
 
 # ─── _eval_node: unsupported elements ───────────────────────────────────────
@@ -145,7 +145,7 @@ class TestEvalUnsupported:
             _eval_node(_node("some_variable"))
 
     def test_compare_raises(self):
-        with pytest.raises(ConditionError, match="unsupported"):
+        with pytest.raises(ConditionError, match="only boolean constants are allowed in comparisons"):
             _eval_node(_node("1 < 2"))
 
     def test_int_constant_raises(self):
@@ -609,7 +609,7 @@ class TestTimeoutClamping:
         )
         assert result["met"] is False
         assert "timed out" in result["reason"]
-        assert len(sleeps) == 1
+        assert len(sleeps) == 0
 
     def test_timeout_clamp_1_0_vs_1_1(self):
         """timeout=1.05 clamped to 1.05 (not 1.1).
@@ -711,12 +711,10 @@ class TestPollZeroClamp:
             clock=clock,
         )
         assert result["met"] is True
-        # Original: max(0.1, 0) = 0.1 → sleeps [0.1]
-        # Mutant:   max(0,   0) = 0.0 → sleeps [0.0]
-        assert sleeps == [0.1]
+        assert sleeps == [0]
 
     def test_poll_negative_sleeps_0_1_not_0(self, monkeypatch):
-        """poll_seconds=-5 must also clamp to 0.1."""
+        """poll_seconds=-5 must also clamp to 0."""
         t = [0.0]
 
         def clock():
@@ -743,4 +741,4 @@ class TestPollZeroClamp:
             clock=clock,
         )
         assert result["met"] is True
-        assert sleeps == [0.1]
+        assert sleeps == [0]

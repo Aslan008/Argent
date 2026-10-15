@@ -699,25 +699,33 @@ class TestStdioTransportStart:
 
 
 class TestStdioTransportStop:
-    def test_stop_terminates_process(self):
+    def test_stop_closes_stdin_and_sweeps_the_tree(self, monkeypatch):
+        swept = []
+        monkeypatch.setattr("mcp_client.kill_process_tree",
+                            lambda proc, descendants=(): swept.append(proc))
         transport = StdioTransport("fake_cmd")
         mock_proc = MagicMock()
         transport._process = mock_proc
         transport._initialized = True
 
         transport.stop()
-        mock_proc.terminate.assert_called_once()
+        mock_proc.stdin.close.assert_called()      # EOF: the protocol's own exit request
+        assert swept == [mock_proc]
         assert transport._process is None
         assert transport._initialized is False
 
-    def test_stop_kills_on_terminate_timeout(self):
+    def test_stop_terminates_then_kills_the_tree_when_the_server_will_not_exit(self, monkeypatch):
+        swept = []
+        monkeypatch.setattr("mcp_client.kill_process_tree",
+                            lambda proc, descendants=(): swept.append(proc))
         transport = StdioTransport("fake_cmd")
         mock_proc = MagicMock()
         mock_proc.wait.side_effect = Exception("timeout")
         transport._process = mock_proc
 
         transport.stop()
-        mock_proc.kill.assert_called_once()
+        mock_proc.terminate.assert_called_once()
+        assert swept == [mock_proc]
 
     def test_stop_without_process_is_noop(self):
         transport = StdioTransport("fake_cmd")

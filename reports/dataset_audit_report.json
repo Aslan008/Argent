@@ -1,0 +1,127 @@
+{
+  "validation_dataset": {
+    "file": "src\\leeth\\data_400m\\leeth_400m_val.jsonl",
+    "total_rows": 3000,
+    "type_counts": {
+      "noul": 836,
+      "choice": 1012,
+      "extract": 765,
+      "score": 387
+    },
+    "state_duplicates_within_file": 943,
+    "choice": {
+      "total": 1012,
+      "invalid_targets": 6,
+      "length_correlation_r_pb": -0.0409,
+      "length_shortcut_detected": false,
+      "position_counts": {
+        "3": 176,
+        "2": 115,
+        "12": 42,
+        "5": 20,
+        "14": 96,
+        "0": 274,
+        "1": 87,
+        "7": 17,
+        "13": 49,
+        "8": 15,
+        "11": 45,
+        "4": 38,
+        "9": 10,
+        "6": 16,
+        "10": 6
+      },
+      "position_chi2_stat": 1156.06,
+      "position_uniformity_p_val": 0.0,
+      "position_bias_detected": true
+    },
+    "noul": {
+      "total": 836,
+      "label_distribution": {
+        "1.0": 635,
+        "0.0": 201
+      },
+      "positive_ratio": 0.7596,
+      "imbalance_detected": true
+    },
+    "extract": {
+      "total": 765,
+      "missing_span_in_state": 0,
+      "mid_word_extractions": 0,
+      "span_fidelity_rate": 1.0
+    },
+    "score": {
+      "total": 387,
+      "mean": 46.22,
+      "min": 0.0,
+      "max": 100.0
+    }
+  },
+  "training_dataset": {
+    "file": "src\\leeth\\data_400m\\leeth_400m_train.jsonl",
+    "total_rows": 120000,
+    "type_counts": {
+      "extract": 31036,
+      "choice": 40973,
+      "noul": 31220,
+      "score": 16771
+    },
+    "state_duplicates_within_file": 92023,
+    "choice": {
+      "total": 40973,
+      "invalid_targets": 339,
+      "length_correlation_r_pb": -0.0651,
+      "length_shortcut_detected": false,
+      "position_counts": {
+        "4": 1354,
+        "2": 4199,
+        "3": 7579,
+        "1": 3017,
+        "0": 10978,
+        "6": 533,
+        "11": 1874,
+        "13": 2378,
+        "14": 4338,
+        "7": 778,
+        "5": 752,
+        "10": 278,
+        "12": 1722,
+        "9": 441,
+        "8": 413
+      },
+      "position_chi2_stat": 47730.09,
+      "position_uniformity_p_val": 0.0,
+      "position_bias_detected": true
+    },
+    "noul": {
+      "total": 31220,
+      "label_distribution": {
+        "0.0": 7162,
+        "1.0": 24058
+      },
+      "positive_ratio": 0.7706,
+      "imbalance_detected": true
+    },
+    "extract": {
+      "total": 31036,
+      "missing_span_in_state": 0,
+      "mid_word_extractions": 0,
+      "span_fidelity_rate": 1.0
+    },
+    "score": {
+      "total": 16771,
+      "mean": 47.88,
+      "min": 0.0,
+      "max": 100.0
+    }
+  },
+  "cross_split_leakage": {
+    "status": "completed",
+    "train_unique_states": 27977,
+    "val_total_states": 3000,
+    "exact_state_leaks": 2584,
+    "exact_leak_ratio": 0.8613,
+    "near_duplicate_states_sample": 55,
+    "leak_risk_detected": true
+  }
+}

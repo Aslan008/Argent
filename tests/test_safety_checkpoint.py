@@ -23,7 +23,7 @@ def fake_confirm(answer):
 
 class TestOfferSafetyCheckpoint:
     def test_dirty_tree_and_yes_creates_checkpoint(self, monkeypatch):
-        monkeypatch.setattr(main_module.subprocess, "run", fake_git(dirty=True))
+        monkeypatch.setattr(main_module, "run_text", fake_git(dirty=True))
         monkeypatch.setattr(main_module.questionary, "confirm", fake_confirm(True))
         cp = MagicMock(return_value="Checkpoint created")
         monkeypatch.setattr(misc_tools, "git_checkpoint", cp)
@@ -31,10 +31,10 @@ class TestOfferSafetyCheckpoint:
         main_module.offer_safety_checkpoint("написать игру")
 
         cp.assert_called_once()
-        assert "перед /auto: написать игру" in cp.call_args[0][0]
+        assert "перед задачей: написать игру" in cp.call_args[0][0]
 
     def test_dirty_tree_and_no_skips_checkpoint(self, monkeypatch):
-        monkeypatch.setattr(main_module.subprocess, "run", fake_git(dirty=True))
+        monkeypatch.setattr(main_module, "run_text", fake_git(dirty=True))
         monkeypatch.setattr(main_module.questionary, "confirm", fake_confirm(False))
         cp = MagicMock()
         monkeypatch.setattr(misc_tools, "git_checkpoint", cp)
@@ -44,7 +44,7 @@ class TestOfferSafetyCheckpoint:
         cp.assert_not_called()
 
     def test_clean_tree_never_prompts(self, monkeypatch):
-        monkeypatch.setattr(main_module.subprocess, "run", fake_git(dirty=False))
+        monkeypatch.setattr(main_module, "run_text", fake_git(dirty=False))
         confirm = MagicMock()
         monkeypatch.setattr(main_module.questionary, "confirm", confirm)
 
@@ -53,7 +53,7 @@ class TestOfferSafetyCheckpoint:
         confirm.assert_not_called()
 
     def test_outside_git_never_prompts(self, monkeypatch):
-        monkeypatch.setattr(main_module.subprocess, "run", fake_git(is_repo=False))
+        monkeypatch.setattr(main_module, "run_text", fake_git(is_repo=False))
         confirm = MagicMock()
         monkeypatch.setattr(main_module.questionary, "confirm", confirm)
 
@@ -64,5 +64,5 @@ class TestOfferSafetyCheckpoint:
     def test_git_failure_is_swallowed(self, monkeypatch):
         def boom(cmd, **kwargs):
             raise OSError("git missing")
-        monkeypatch.setattr(main_module.subprocess, "run", boom)
+        monkeypatch.setattr(main_module, "run_text", boom)
         main_module.offer_safety_checkpoint("задача")  # must not raise

@@ -22,8 +22,21 @@ log = get_logger("ui")
 _TIMEOUT_SECONDS = 6
 
 
+def _claude_context_length(model: str) -> int | None:
+    """Anthropic's models endpoint states each model's input window; read it, do not guess."""
+    try:
+        from providers import create_provider
+        entry = create_provider("claude").catalog().get(model)
+        return entry.max_input if entry else None
+    except Exception as e:
+        log.info("context length for %r unavailable: %s", model, e)
+        return None
+
+
 def detect_context_length(model: str, provider: str = "ollama") -> int | None:
     """The model's maximum context in tokens, or None if it cannot be known."""
+    if model and provider in ("claude", "anthropic"):
+        return _claude_context_length(model)
     if not model or provider != "ollama":
         # Only Ollama exposes this locally. Cloud providers publish it per
         # model on their own sites, and guessing from a name would be fiction.

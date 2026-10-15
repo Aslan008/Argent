@@ -18,6 +18,8 @@ caller's job — terminal prompt, tool approval, or GUI dialog):
    `git reflog`.
 """
 
+from pathlib import Path
+import re
 import subprocess
 from typing import NamedTuple
 
@@ -45,8 +47,12 @@ def auto_checkpoint_enabled() -> bool:
 
 
 def _git(*args: str) -> subprocess.CompletedProcess:
-    return subprocess.run(["git", *args], capture_output=True, text=True,
-                          encoding="utf-8", errors="replace")
+    try:
+        return subprocess.run(["git", *args], capture_output=True, text=True,
+                              encoding="utf-8", errors="replace")
+    except FileNotFoundError:
+        return subprocess.CompletedProcess(args=["git", *args], returncode=127,
+                                          stdout="", stderr="git binary not found")
 
 
 def is_git_repo() -> bool:
@@ -67,8 +73,9 @@ def create_checkpoint(message: str) -> str | None:
     _git("add", "-A")
     if _git("diff", "--cached", "--quiet").returncode == 0:
         return None
-    res = _git("commit", "-m", f"{CHECKPOINT_PREFIX} {message}")
+    res = _git("commit", "-m", f"{CHECKPOINT_PREFIX} {message}", "--no-verify")
     if res.returncode != 0:
+        _git("reset")  # unstage to prevent index poisoning for future turns
         raise CheckpointError(f"git commit failed: {res.stderr.strip() or res.stdout.strip()}")
     return _git("rev-parse", "--short", "HEAD").stdout.strip()
 
@@ -80,6 +87,7 @@ class CheckpointResult(NamedTuple):
     sha: str | None
     reason: str | None = None
     warn: bool = False
+    clean: bool = False     # no checkpoint because the tree was clean: HEAD itself is the pre-turn state
 
 
 def auto_checkpoint_detailed(label: str) -> CheckpointResult:
@@ -107,7 +115,7 @@ def auto_checkpoint_detailed(label: str) -> CheckpointResult:
             )
         sha = create_checkpoint(f"before: {label}")
         if sha is None:
-            return CheckpointResult(None, "nothing to checkpoint (clean tree)")
+            return CheckpointResult(None, "nothing to checkpoint (clean tree)", clean=True)
         return CheckpointResult(sha)
     except Exception as e:
         log.warning("auto-checkpoint failed: %s", e)
@@ -146,16 +154,61 @@ def blocking_commits(target_sha: str) -> list[str]:
     return bad
 
 
+def current_head() -> str | None:
+    """Full sha of HEAD, or None outside a repository / in one without commits."""
+    try:
+        res = _git("rev-parse", "--verify", "-q", "HEAD")
+    except Exception:
+        return None
+    sha = res.stdout.strip()
+    return sha if res.returncode == 0 and sha else None
+
+
 def rewind_to(target_sha: str) -> str:
     """Hard-reset the tree to a checkpoint commit. Consent is the caller's
     responsibility; this function enforces only the mechanical safety rules."""
+    return _rewind(target_sha, require_checkpoint=True)
+
+
+def rewind_to_base(base_sha: str) -> str:
+    """Return the tree to ``base_sha`` — the commit HEAD pointed at when a turn began
+    with a clean tree, so that commit IS the state before the turn.
+
+    Same rules as ``rewind_to`` (no real commit may be discarded, nothing is lost
+    silently: the turn's edits go to ``git stash``), minus the requirement that the
+    target is an Argent checkpoint."""
+    return _rewind(base_sha, require_checkpoint=False)
+
+
+def _rewind(target_sha: str, require_checkpoint: bool) -> str:
     if not is_git_repo():
         raise CheckpointError("Not a git repository.")
+
+    target_sha = (target_sha or "").strip()
+    if not target_sha or target_sha.startswith("-") or not re.match(r"^[0-9a-zA-Z_\.\^~]+$", target_sha):
+        raise CheckpointError(f"Invalid commit reference '{target_sha}'.")
+
+    # Guard against active merge / rebase / cherry-pick (worktree-safe)
+    for head_name, desc in [
+        ("MERGE_HEAD", "слияние (git merge)"),
+        ("rebase-merge", "rebase"),
+        ("rebase-apply", "rebase"),
+        ("CHERRY_PICK_HEAD", "cherry-pick"),
+        ("REVERT_HEAD", "revert"),
+    ]:
+        git_path_res = _git("rev-parse", "--git-path", head_name)
+        if git_path_res.returncode == 0:
+            p = Path(git_path_res.stdout.strip())
+            if p.exists():
+                raise CheckpointError(
+                    f"Обнаружен активный незавершённый процесс: {desc} ({head_name} существует). "
+                    f"Завершите или отмените его перед откатом."
+                )
 
     subject = _git("log", "-1", "--pretty=%s", target_sha)
     if subject.returncode != 0:
         raise CheckpointError(f"Unknown commit '{target_sha}'.")
-    if not subject.stdout.strip().startswith(CHECKPOINT_PREFIX):
+    if require_checkpoint and not subject.stdout.strip().startswith(CHECKPOINT_PREFIX):
         raise CheckpointError(
             f"Commit {target_sha} is not an Argent Checkpoint — rewind refused for safety.")
     if _git("merge-base", "--is-ancestor", target_sha, "HEAD").returncode != 0:
@@ -170,18 +223,38 @@ def rewind_to(target_sha: str) -> str:
             f"{listing}\nAborted for safety.")
 
     stashed = False
+    stash_msg = f"Argent Auto-Save before Rewind to {target_sha}"
     if _git("status", "--porcelain").stdout.strip():
-        _git("stash", "push", "-u", "-m",
-             f"Argent Auto-Save before Rewind to {target_sha}")
+        stash_res = _git("stash", "push", "-u", "-m", stash_msg)
+        if stash_res.returncode != 0:
+            err = stash_res.stderr.strip() or stash_res.stdout.strip()
+            raise CheckpointError(
+                f"Не удалось безопасно сохранить незакоммиченные изменения в git stash: {err}.\n"
+                f"Откат прерван для защиты ваших данных."
+            )
         stashed = True
 
     discarded = _git("rev-list", "--count", f"{target_sha}..HEAD").stdout.strip()
     res = _git("reset", "--hard", target_sha)
     if res.returncode != 0:
-        raise CheckpointError(f"git reset failed: {res.stderr.strip()}")
+        reset_err = res.stderr.strip() or res.stdout.strip()
+        pop_note = ""
+        if stashed:
+            pop_res = _git("stash", "pop")
+            if pop_res.returncode == 0:
+                pop_note = "\nНезакоммиченные изменения автоматически восстановлены из stash."
+            else:
+                pop_note = (
+                    f"\nАвтоматический возврат изменений из stash не удался: {pop_res.stderr.strip()}. "
+                    f"Изменения сохранены в `git stash` ('{stash_msg}'). Восстановите их вручную: `git stash pop`."
+                )
+        raise CheckpointError(f"git reset failed: {reset_err}.{pop_note}")
 
     label = subject.stdout.strip()[len(CHECKPOINT_PREFIX):].strip()
-    msg = f"Rewound to checkpoint {target_sha} — '{label}'."
+    if subject.stdout.strip().startswith(CHECKPOINT_PREFIX):
+        msg = f"Rewound to checkpoint {target_sha} — '{label}'."
+    else:
+        msg = f"Rewound to {target_sha[:8]} — '{subject.stdout.strip()[:60]}'."
     if discarded and discarded != "0":
         msg += f" Discarded {discarded} newer checkpoint(s) (recoverable via `git reflog`)."
     if stashed:

@@ -3,6 +3,7 @@ from itertools import islice
 from unittest.mock import MagicMock
 
 import agent as agent_module
+import config
 from agent import ArgentAgent, MAX_SALVAGE_CONTINUES
 from src.agent.salvage import (
     extract_partial_write, trim_to_last_line, last_lines, SALVAGEABLE_TOOLS,
@@ -65,9 +66,8 @@ class TestLastLines:
 
 
 class TestSalvageableTools:
-    def test_includes_write_and_append(self):
+    def test_includes_write_file(self):
         assert "write_file" in SALVAGEABLE_TOOLS
-        assert "append_to_file" in SALVAGEABLE_TOOLS
 
 
 class TestVerifySalvagedFile:
@@ -135,6 +135,9 @@ class TestSalvageIntegration:
         monkeypatch.setattr(agent_module, "get_mcp_servers", lambda: [])
         monkeypatch.setattr(agent_module, "create_provider", lambda *a, **k: provider)
         monkeypatch.setattr(agent_module, "estimate_tokens", lambda t, m, p: len(t) // 4)
+        # These tests script the provider; a fast-path model answering first would
+        # make them depend on the machine (Leeth is on by default when its files exist).
+        monkeypatch.setattr(config, "get_fast_dispatch_backend", lambda: "off")
         return ArgentAgent()
 
     def test_truncated_write_is_persisted_and_continued(self, tmp_path, monkeypatch):
@@ -158,9 +161,9 @@ class TestSalvageIntegration:
         assert os.path.exists(target)
         text = open(target, encoding="utf-8").read()
         assert "<body>" in text and "<p>hi</p>" in text
-        # The model was asked to continue via append, not to start over.
+        # The model was asked to continue via replace/append, not to start over.
         user_msgs = [m["content"] for m in agent.messages if m.get("role") == "user"]
-        assert any("append_to_file" in m and "INCOMPLETE" in m for m in user_msgs)
+        assert any(("append_to_file" in m or "replace_in_file" in m) and "INCOMPLETE" in m for m in user_msgs)
 
     def test_cap_reached_reports_broken_python(self, tmp_path, monkeypatch):
         # A .py write that never completes: after the continuation cap, the file

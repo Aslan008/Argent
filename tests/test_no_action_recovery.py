@@ -85,3 +85,23 @@ class TestNoActionRecovery:
         chunks = consume(agent.process_user_input("question"))
         errors = [c["content"] for c in chunks if c["type"] == "error"]
         assert not any("nudging" in e for e in errors)
+
+    def test_dummy_stop_phrase_is_nudged(self, make_agent):
+        dummy_chunk = [{"content": "No response requested.", "thinking": "", "tool_call_deltas": []}]
+        agent = make_agent(FakeProvider([dummy_chunk]))
+        chunks = consume(agent.process_user_input("run mcp setup"))
+        errors = [c["content"] for c in chunks if c["type"] == "error"]
+        nudges = [e for e in errors if "nudging the model" in e]
+        assert len(nudges) == MAX_NO_ACTION_CONTINUES
+        user_msgs = [m["content"] for m in agent.messages if m.get("role") == "user"]
+        assert any("placeholder stop phrase" in m for m in user_msgs)
+
+    def test_dummy_stop_phrase_then_real_answer_completes(self, make_agent):
+        dummy_chunk = [{"content": "No response requested.", "thinking": "", "tool_call_deltas": []}]
+        agent = make_agent(FakeProvider([dummy_chunk, ANSWER]))
+        chunks = consume(agent.process_user_input("install tool"))
+        errors = [c["content"] for c in chunks if c["type"] == "error"]
+        assert sum("nudging the model" in e for e in errors) == 1
+        content = "".join(c["content"] for c in chunks if c["type"] == "content_stream")
+        assert "final answer" in content
+

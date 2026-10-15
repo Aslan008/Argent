@@ -76,6 +76,8 @@ def detect_browsers() -> list[BrowserInfo]:
     for each browser found. Order matches _BROWSER_REGISTRY priority.
     """
     local_app_data = os.environ.get("LOCALAPPDATA", "")
+    if not local_app_data:
+        local_app_data = str(Path.home() / "AppData" / "Local")
     found: list[BrowserInfo] = []
 
     for key, display_name, exe_candidates, data_dir_rel in _BROWSER_REGISTRY:
@@ -102,6 +104,8 @@ def find_browser(name: str) -> Optional[BrowserInfo]:
 
     Returns None if the browser is not installed.
     """
+    if not name or not isinstance(name, str):
+        return None
     name_lower = name.lower().strip()
     for browser in detect_browsers():
         if browser.key == name_lower:

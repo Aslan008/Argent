@@ -14,7 +14,10 @@ import re
 from collections import deque
 
 WARN_REPEATS = 2   # same call with the same result seen this many times -> warn
-STOP_REPEATS = 4   # -> force-end the turn
+NUDGE_REPEATS = 4  # for smart models: inject sobering alert (nudge), don't kill the turn
+STOP_REPEATS = 4   # default / small models -> force-end the turn
+STOP_REPEATS_SMALL = 4
+STOP_REPEATS_SMART = 6  # for smart models: emergency stop
 
 # Tools whose verbatim repetition is legitimate by design.
 EXCLUDED_TOOLS = {"wait_heartbeat"}
@@ -32,6 +35,9 @@ _VOLATILE_PATTERNS = [
     (re.compile(r"\b\d{1,2}:\d{2}:\d{2}(?:[.,]\d+)?\b"), "<time>"),
     (re.compile(r"0x[0-9a-fA-F]+"), "<hex>"),
     (re.compile(r"\b[0-9a-fA-F]{8,}\b"), "<hex>"),
+    # Collapse "RUNNING for NNs" so that consecutive idle polls of the same
+    # background process produce identical signatures for the loop guard.
+    (re.compile(r"RUNNING for \d+s"), "RUNNING for <elapsed>"),
     (re.compile(r"\d{4,}"), "<n>"),
 ]
 
@@ -48,6 +54,13 @@ def build_loop_note(level: str) -> str:
             "\n\n[LOOP GUARD]: You have ALREADY executed this exact tool call and received "
             "the IDENTICAL result. Repeating it will not change anything. Choose a DIFFERENT "
             "approach or different arguments, or explain the blocker to the user."
+        )
+    if level == "nudge":
+        return (
+            "\n\n[LOOP GUARD ALERT - REPEATED CALL DETECTED]: You have executed this exact call "
+            f"{NUDGE_REPEATS} times with the exact same outcome. The environment is STATIC and will NOT change by repeating this. "
+            "Do NOT repeat this call again. Reflect on why this is failing: switch tools (e.g. use browser_action(action=\"wait_for\"), read error logs, check inputs) "
+            "or explain the situation to the user directly."
         )
     return (
         f"\n\n[LOOP GUARD]: This exact call has repeated {STOP_REPEATS} times with the same "
@@ -75,15 +88,35 @@ class LoopGuard:
         raw = f"{func_name}|{args_part}|{result_part}"
         return hashlib.sha1(raw.encode("utf-8", errors="replace")).hexdigest()
 
-    def record(self, func_name: str, arguments, result: str) -> str | None:
-        """Register an executed call. Returns None, "warn" or "stop"."""
+    def record(self, func_name: str, arguments, result: str, enabled: bool = True, category: str | None = None) -> str | None:
+        """Register an executed call. Returns None, "warn", "nudge" or "stop"."""
+        if not enabled:
+            return None
+        try:
+            from config import get_loop_guard_mode
+            mode = get_loop_guard_mode()
+        except Exception:
+            mode = "auto"
+        if mode == "off":
+            return None
         if func_name in EXCLUDED_TOOLS:
             return None
         sig = self._signature(func_name, arguments, result)
         self._recent.append(sig)
         count = sum(1 for s in self._recent if s == sig)
-        if count >= STOP_REPEATS:
-            return "stop"
-        if count >= WARN_REPEATS:
-            return "warn"
-        return None
+
+        is_smart_model = category in ("cloud", "large", "moe", "standard", "medium")
+        if is_smart_model:
+            if count >= STOP_REPEATS_SMART:
+                return "stop"
+            if count >= NUDGE_REPEATS:
+                return "nudge"
+            if count >= WARN_REPEATS:
+                return "warn"
+            return None
+        else:
+            if count >= STOP_REPEATS_SMALL:
+                return "stop"
+            if count >= WARN_REPEATS:
+                return "warn"
+            return None

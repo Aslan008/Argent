@@ -57,10 +57,25 @@ class TestTheOnesThatWereMissing:
         base = " ".join(_pyproject()["project"]["dependencies"])
         assert "pillow" in base.lower()
 
+    def test_psutil_is_required_not_optional(self):
+        """Process-tree kill and lock liveness have fallbacks that are worse:
+        an MCP server started through a launcher can outlive Argent."""
+        base = " ".join(_pyproject()["project"]["dependencies"])
+        assert "psutil" in base.lower()
+        assert "psutil" in " ".join(_requirement_lines("requirements-ci.txt")).lower()
+
     def test_rag_ships_its_store_and_its_encoder_together(self):
         """Half of RAG installed is a semantic search that cannot start."""
         rag = " ".join(_pyproject()["project"]["optional-dependencies"]["rag"]).lower()
         assert "chromadb" in rag and "sentence-transformers" in rag
+
+
+# Root-level files that are deliberately not part of the installed package.
+# conftest is test plumbing; the rest is the self-contained "Leeth plays Snake"
+# demo (a game, its Qt front end and a benchmark), which nothing in Argent
+# imports. Anything else new at the root has to be packaged or named here.
+_NOT_SHIPPED = {"conftest", "leeth_player", "run_snake", "snake_benchmark",
+                "snake_engine", "snake_ui_qt"}
 
 
 class TestPackagedModules:
@@ -74,5 +89,6 @@ class TestPackagedModules:
         fails on import only for people who installed rather than cloned."""
         listed = set(_pyproject()["tool"]["setuptools"]["py-modules"])
         on_disk = {p.stem for p in _ROOT.glob("*.py")
-                   if not p.stem.startswith("test_") and p.stem != "argent_server"}
+                   if not p.stem.startswith("test_")
+                   and p.stem not in _NOT_SHIPPED}
         assert not (on_disk - listed), f"не попадут в установку: {sorted(on_disk - listed)}"

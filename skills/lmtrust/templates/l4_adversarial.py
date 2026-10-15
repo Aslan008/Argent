@@ -27,6 +27,7 @@ class TestAdversarial:
     """L4: Adversarial tests — нарушение каждого неявного предположения."""
 
     @pytest.mark.xfail(reason="Слепая зона: SUT не обрабатывает negative armor — ожидаемо для L4")
+    @pytest.mark.lmtrust(layer="L4", direction="D1")
     def test_negative_armor_increases_damage(self):
         """Предположение: armor >= 0. Что если armor < 0?
 
@@ -37,6 +38,7 @@ class TestAdversarial:
         result = calculate_damage(100, -20, 1.0)
         assert result <= 100, f"Negative armor increased damage: {result}"
 
+    @pytest.mark.lmtrust(layer="L4", direction="D1")
     def test_nan_crit_produces_nan(self):
         """Предположение: crit is finite. Что если NaN?
 
@@ -47,6 +49,7 @@ class TestAdversarial:
         assert math.isfinite(result), f"NaN crit produced non-finite: {result}"
 
     @pytest.mark.xfail(reason="Слепая зона: SUT не обрабатывает Inf — ожидаемо для L4")
+    @pytest.mark.lmtrust(layer="L4", direction="D1")
     def test_inf_base_produces_inf(self):
         """Предположение: base is finite. Что если Inf?
 
@@ -57,6 +60,7 @@ class TestAdversarial:
         result = calculate_damage(float('inf'), 20, 1.0)
         assert math.isfinite(result), f"Inf base propagated to Inf: {result}"
 
+    @pytest.mark.lmtrust(layer="L4", direction="D1")
     def test_negative_crit_produces_negative(self):
         """Предположение: crit >= 0. Что если crit < 0?
 

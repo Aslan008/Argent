@@ -14,6 +14,8 @@ never a half-written mix.
 """
 
 import os
+import threading
+import uuid
 from pathlib import Path
 
 
@@ -22,20 +24,21 @@ def atomic_write_text(path, text: str, encoding: str = "utf-8") -> None:
 
 
 def atomic_write_bytes(path, writer) -> None:
-    """Same guarantee for binary payloads. ``writer`` receives the open file.
-
-    Passing a callback rather than a bytes blob lets the caller stream into it —
-    a gzip session is written through a wrapper, and materialising the whole
-    compressed blob in memory first would be pointless.
+    """Same guarantee for binary payloads. ``writer`` receives the open file,
+    or can be raw bytes/bytearray.
     """
+    if not callable(writer):
+        data = writer
+        writer = lambda f: f.write(data)
     _atomic_write(path, writer, "wb")
 
 
 def _atomic_write(path, writer, mode: str, encoding: str = None) -> None:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    # Include the PID so concurrent writers don't clobber each other's temp.
-    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    # Include PID, thread ID and UUID so concurrent writers don't clobber each other's temp.
+    stem = path.name[:180]
+    tmp = path.with_name(f".{stem}.{os.getpid()}.{threading.get_ident()}.{uuid.uuid4().hex[:8]}.tmp")
     try:
         with open(tmp, mode, encoding=encoding) as f:
             writer(f)

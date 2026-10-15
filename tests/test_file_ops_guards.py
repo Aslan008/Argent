@@ -101,3 +101,56 @@ class TestUnityValidationSkip:
         monkeypatch.setattr(helpers, "run_text", lambda *a, **k: called.setdefault("built", True) or R())
         _validate_code_syntax(str(cs))
         assert called.get("built")   # a genuine non-Unity C# project still gets checked
+
+
+class TestPluginGuard:
+    def test_small_model_blocked_from_direct_plugin_edit(self, tmp_path, monkeypatch):
+        import config
+        from hook_manager import hook_manager
+
+        plugins_dir = tmp_path / "plugins"
+        plugins_dir.mkdir()
+        monkeypatch.setattr(config, "get_hooks_dir", lambda: str(plugins_dir))
+        monkeypatch.setattr(config, "get_current_model", lambda: "qwen2.5:3b")  # small model
+        monkeypatch.setattr(config, "get_model_category_override", lambda: "small")
+
+        plugin_file = plugins_dir / "my_plugin.py"
+        plugin_file.write_text("print('hello')", encoding="utf-8")
+
+        # replace_in_file should be blocked
+        out = replace_in_file(str(plugin_file), "print('hello')", "print('world')")
+        assert "restricted for small models" in out
+        assert plugin_file.read_text(encoding="utf-8") == "print('hello')"
+
+    def test_medium_model_allowed_and_auto_reloads(self, tmp_path, monkeypatch):
+        import config
+        from hook_manager import hook_manager
+
+        plugins_dir = tmp_path / "plugins"
+        plugins_dir.mkdir()
+        monkeypatch.setattr(config, "get_hooks_dir", lambda: str(plugins_dir))
+        monkeypatch.setattr(config, "get_current_model", lambda: "qwen2.5-coder:14b")  # large/medium model
+        monkeypatch.setattr(config, "get_model_category_override", lambda: "large")
+
+        reloaded = []
+        monkeypatch.setattr(hook_manager, "reload_plugins", lambda: reloaded.append(True))
+
+        plugin_file = plugins_dir / "my_plugin.py"
+        plugin_file.write_text("print('hello')", encoding="utf-8")
+
+        # replace_in_file should succeed and auto-reload
+        out = replace_in_file(str(plugin_file), "print('hello')", "print('world')")
+        assert "Successfully replaced" in out
+        assert plugin_file.read_text(encoding="utf-8") == "print('world')"
+        assert len(reloaded) == 1
+
+    def test_non_python_file_in_plugins_blocked(self, tmp_path, monkeypatch):
+        import config
+        plugins_dir = tmp_path / "plugins"
+        plugins_dir.mkdir()
+        monkeypatch.setattr(config, "get_hooks_dir", lambda: str(plugins_dir))
+
+        doc_file = plugins_dir / "notes.md"
+        out = write_file(str(doc_file), "Notes")
+        assert "is for Python plugins only" in out
+

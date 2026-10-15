@@ -20,16 +20,19 @@ def calculate_damage(base, armor, crit_multiplier):
 class TestSmoke:
     """L0: Smoke tests — код существует и базово работает."""
 
+    @pytest.mark.lmtrust(layer="L0", direction="D7")
     def test_function_callable(self):
         """Функция вызывается и возвращает что-то."""
         result = calculate_damage(100, 20, 1.0)
         assert result is not None
 
+    @pytest.mark.lmtrust(layer="L0", direction="D7")
     def test_returns_number(self):
         """Возвращается число (не None, не строка, не список)."""
         result = calculate_damage(100, 20, 1.0)
         assert isinstance(result, (int, float))
 
+    @pytest.mark.lmtrust(layer="L0", direction="D1")
     def test_no_crash_on_minimal_input(self):
         """Не падает на минимальном валидном входе."""
         result = calculate_damage(0, 0, 0)

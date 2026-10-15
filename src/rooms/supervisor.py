@@ -31,6 +31,10 @@ class RunResult:
     history: list = field(default_factory=list)   # [(room_name, exit), ...]
     state: State = None
 
+    @property
+    def last_exit(self) -> str:
+        return self.history[-1][1] if self.history else ""
+
 
 class Supervisor:
     def __init__(self, library, run_room, routes=None,
@@ -64,6 +68,9 @@ class Supervisor:
                 current = self.triage_room
                 continue
 
+            for key, value in (room.defaults or {}).items():
+                state.data.setdefault(key, value)   # a parameter the run did not set keeps its default
+
             outcome = self.run_room(room, state)
             rooms_run += 1
             history.append((current, outcome.exit))
@@ -91,15 +98,19 @@ class Supervisor:
     def _route(self, current, outcome, state):
         """Return the next room name, None to END, or "__ESCALATE__"."""
         if current == self.triage_room:
-            route_to = state.data.get("route_to")
+            route_to = state.data.pop("route_to", None)   # consumed: a later triage must decide afresh
             if outcome.exit == "routed" and route_to:
                 return route_to
             return "__ESCALATE__"   # triage proposed / paused / gave no route
 
         key = (current, outcome.exit)
-        if key in self.routes:
-            target = self.routes[key]
-            if target.startswith("END:"):
+        target = self.routes.get(key)
+        if target is None:
+            # the room's own data: {"next": {"planned": "debug_loop", "success": "END"}}
+            room = self.library.get(current)
+            target = (room.next or {}).get(outcome.exit) if room is not None else None
+        if target is not None:
+            if target == "END" or target.startswith("END:"):
                 return None
             if target == "TRIAGE":
                 return self.triage_room
@@ -112,19 +123,20 @@ class Supervisor:
         return None   # a success-like exit with no explicit route ends the run
 
 
-def build_supervisor(library, runner, routes=None, journal=None, **kwargs) -> Supervisor:
+def build_supervisor(library, runner, routes=None, journal=None, on_event=None, **kwargs) -> Supervisor:
     """Production wiring: rooms are executed by the Engine driving a NodeRunner.
     When `journal` is given, each room's node steps are journaled for crash-safe
-    resume (see resume_run)."""
+    resume (see resume_run); `on_event` observes node/room events for a progress
+    display."""
     engine = Engine()
 
     def run_room(room, state):
-        return engine.run(room, state, runner.run_node, journal=journal)
+        return engine.run(room, state, runner.run_node, journal=journal, on_event=on_event)
 
     return Supervisor(library, run_room, routes=routes, **kwargs)
 
 
-def resume_run(supervisor, library, journal, runner) -> "RunResult":
+def resume_run(supervisor, library, journal, runner, on_event=None) -> "RunResult":
     """Resume an interrupted run from `journal`, then hand back to the supervisor.
 
     Reads where the last room was, recovers its node-level position via
@@ -150,8 +162,8 @@ def resume_run(supervisor, library, journal, runner) -> "RunResult":
     if status == "finished":
         exit_name = last.get("exit")
     else:  # "resume" — finish the interrupted room first
-        outcome = Engine().run(room, state, runner.run_node,
-                               journal=journal, start_node=start_node)
+        outcome = Engine().run(room, state, runner.run_node, journal=journal,
+                               start_node=start_node, on_event=on_event)
         exit_name = outcome.exit
         history.append((room.room, exit_name))
 

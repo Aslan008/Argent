@@ -54,11 +54,23 @@ def _get_cross_encoder(model_name: str = None):
     return _cross_encoder
 
 
+_bi_encoder = None
+
+
+def _get_bi_encoder():
+    global _bi_encoder
+    if _bi_encoder is None:
+        from sentence_transformers import SentenceTransformer
+        _bi_encoder = SentenceTransformer("all-MiniLM-L6-v2")
+    return _bi_encoder
+
+
 def _bi_encoder_rank(query: str, chunks: list, top_n: int) -> list:
     """Fallback: the old bi-encoder cosine ranking."""
-    from sentence_transformers import SentenceTransformer
+    if top_n <= 0:
+        return []
     import numpy as np
-    model = SentenceTransformer("all-MiniLM-L6-v2")
+    model = _get_bi_encoder()
     q = model.encode([query])
     c = model.encode(chunks)
     sims = np.dot(c, q.T).flatten()
@@ -75,6 +87,13 @@ def rerank(query: str, chunks: list, top_n: int = 15, _scorer=None) -> list:
     """
     if not chunks:
         return []
+    try:
+        top_n = max(0, int(top_n))
+    except (ValueError, TypeError):
+        top_n = 15
+    if top_n == 0:
+        return []
+
     try:
         if _scorer is None:
             _scorer = _get_cross_encoder().predict

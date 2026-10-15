@@ -21,17 +21,20 @@ def calculate_damage(base, armor, crit_multiplier):
 class TestContract:
     """L1: Contract tests — документированные примеры и типы."""
 
+    @pytest.mark.lmtrust(layer="L1", direction="D7")
     def test_documented_examples(self):
         """Каждый документированный пример: input → expected output."""
         assert calculate_damage(100, 20, 1.0) == 90.0
         assert calculate_damage(100, 20, 2.0) == 180.0
         assert calculate_damage(10, 50, 1.0) == 0.0
 
+    @pytest.mark.lmtrust(layer="L1", direction="D7")
     def test_return_type(self):
         """Возвращаемый тип соответствует контракту."""
         result = calculate_damage(100, 20, 1.0)
         assert isinstance(result, (int, float))
 
+    @pytest.mark.lmtrust(layer="L1", direction="D10")
     def test_no_side_effects(self):
         """Функция чистая — не имеет побочных эффектов."""
         # Для чистой функции: повторный вызов с теми же аргументами = тот же результат
@@ -43,6 +46,7 @@ class TestContract:
 class TestCoordinates:
     """L1 × Known Coordinates: операция нацелена в правильное место."""
 
+    @pytest.mark.lmtrust(layer="L1", direction="D7")
     def test_damage_applies_to_correct_enemy(self):
         """Урон применяется к нужному врагу, не к соседнему."""
         enemies = [{"hp": 100}, {"hp": 200}, {"hp": 300}]

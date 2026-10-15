@@ -300,15 +300,15 @@ class TestGrepSearch:
 
     def test_nonexistent_directory(self):
         result = grep_search("/nonexistent/dir/xyz", "pattern")
-        assert "Error: Directory" in result
+        assert "Error:" in result
         assert "does not exist" in result
 
     def test_directory_is_a_file(self, tmp_path, monkeypatch):
         f = tmp_path / "afile.txt"
-        f.write_text("x\n", encoding="utf-8")
+        f.write_text("pattern here\n", encoding="utf-8")
         result = grep_search(str(f), "pattern")
-        assert "Error:" in result
-        assert "is not a directory" in result
+        assert "Found" in result
+        assert "pattern" in result
 
     def test_no_matches(self, search_tmp, monkeypatch):
         _force_python_fallback(monkeypatch)
@@ -442,15 +442,15 @@ class TestPythonGrepSearch:
 
     def test_nonexistent_directory(self):
         result = _python_grep_search("/nonexistent/dir/xyz", "pattern")
-        assert "Error: Directory" in result
+        assert "Error:" in result
         assert "does not exist" in result
 
     def test_directory_is_a_file(self, search_tmp):
         f = search_tmp / "afile.txt"
-        f.write_text("x\n", encoding="utf-8")
+        f.write_text("pattern here\n", encoding="utf-8")
         result = _python_grep_search(str(f), "pattern")
-        assert "Error:" in result
-        assert "is not a directory" in result
+        assert "Found" in result
+        assert "pattern" in result
 
     def test_case_insensitive(self, search_tmp):
         (search_tmp / "a.py").write_text("Hello\nHELLO\nhello\n", encoding="utf-8")

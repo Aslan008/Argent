@@ -110,3 +110,140 @@ class TestValidationNeverInstalls:
         source = (Path(__file__).resolve().parents[1] / "tools" / "_helpers.py").read_text(
             encoding="utf-8")
         assert '"npx", "--no-install", "tsc"' in source
+        assert '"--project"' in source
+
+    def test_ts_validation_without_tsconfig_skips(self, tmp_path):
+        """If there is no tsconfig.json in the tree, TS validation is skipped
+        to avoid false syntax errors on isolated files."""
+        from tools._helpers import _validate_code_syntax
+
+        ts_file = tmp_path / "app.ts"
+        ts_file.write_text("const x: number = 42;", encoding="utf-8")
+        assert _validate_code_syntax(str(ts_file)) is None
+
+    def test_ts_validation_creates_and_cleans_temp_config(self, tmp_path, monkeypatch):
+        """Validates that a scoped .tsconfig.argent-check.json is created and cleaned up."""
+        import json
+        from unittest.mock import MagicMock
+        from tools._helpers import _validate_code_syntax
+
+        # Create tsconfig.json in project root
+        project_root = tmp_path / "my_project"
+        project_root.mkdir()
+        tsconfig = project_root / "tsconfig.json"
+        tsconfig.write_text('{"compilerOptions": {"strict": true}}', encoding="utf-8")
+
+        src_dir = project_root / "src"
+        src_dir.mkdir()
+        ts_file = src_dir / "index.ts"
+        ts_file.write_text("export const a = 1;", encoding="utf-8")
+
+        called_cmd = []
+        temp_config_content = {}
+
+        def fake_run_text(cmd, **kwargs):
+            called_cmd.extend(cmd)
+            # Read the temp config before it gets deleted in finally
+            temp_cfg = project_root / ".tsconfig.argent-check.json"
+            if temp_cfg.exists():
+                temp_config_content.update(json.loads(temp_cfg.read_text(encoding="utf-8")))
+            return MagicMock(returncode=0, stdout="", stderr="")
+
+        monkeypatch.setattr("tools._helpers.run_text", fake_run_text)
+
+        err = _validate_code_syntax(str(ts_file))
+        assert err is None
+        assert "--project" in called_cmd
+        assert temp_config_content.get("extends") == "./tsconfig.json"
+        assert temp_config_content.get("include") == ["src/index.ts"]
+        assert not (project_root / ".tsconfig.argent-check.json").exists()
+
+    def test_ts_validation_filters_unrelated_errors(self, tmp_path, monkeypatch):
+        """Pre-existing errors in other project files should not block edits to target file."""
+        from unittest.mock import MagicMock
+        from tools._helpers import _validate_code_syntax
+
+        project_root = tmp_path / "proj"
+        project_root.mkdir()
+        (project_root / "tsconfig.json").write_text("{}", encoding="utf-8")
+        ts_file = project_root / "clean.ts"
+        ts_file.write_text("export const x = 1;", encoding="utf-8")
+
+        def fake_run_text(cmd, **kwargs):
+            # Error in other_file.ts, but clean.ts is fine
+            return MagicMock(
+                returncode=1,
+                stdout="other_file.ts:10:5 - error TS2322: Type 'number' is not assignable to type 'string'.",
+                stderr="",
+            )
+
+        monkeypatch.setattr("tools._helpers.run_text", fake_run_text)
+        assert _validate_code_syntax(str(ts_file)) is None
+
+    def test_ts_validation_reports_target_file_syntax_errors(self, tmp_path, monkeypatch):
+        """Syntax errors in the edited target file (TS1xxx) are reported."""
+        from unittest.mock import MagicMock
+        from tools._helpers import _validate_code_syntax
+
+        project_root = tmp_path / "proj"
+        project_root.mkdir()
+        (project_root / "tsconfig.json").write_text("{}", encoding="utf-8")
+        ts_file = project_root / "broken.ts"
+        ts_file.write_text("export const x = ;", encoding="utf-8")
+
+        def fake_run_text(cmd, **kwargs):
+            return MagicMock(
+                returncode=1,
+                stdout="broken.ts:1:18 - error TS1005: Expression expected.",
+                stderr="",
+            )
+
+        monkeypatch.setattr("tools._helpers.run_text", fake_run_text)
+        err = _validate_code_syntax(str(ts_file))
+        assert err is not None
+        assert "TypeScript Syntax Error" in err
+        assert "broken.ts:1:18 - error TS1005" in err
+
+    def test_ts_validation_ignores_semantic_type_errors(self, tmp_path, monkeypatch):
+        """Semantic type mismatches (TS2xxx) in-flight during multi-file refactoring do not block."""
+        from unittest.mock import MagicMock
+        from tools._helpers import _validate_code_syntax
+
+        project_root = tmp_path / "proj"
+        project_root.mkdir()
+        (project_root / "tsconfig.json").write_text("{}", encoding="utf-8")
+        ts_file = project_root / "refactor.ts"
+        ts_file.write_text("export const x: number = 'str';", encoding="utf-8")
+
+        def fake_run_text(cmd, **kwargs):
+            return MagicMock(
+                returncode=1,
+                stdout="refactor.ts:1:14 - error TS2322: Type 'string' is not assignable to type 'number'.",
+                stderr="",
+            )
+
+        monkeypatch.setattr("tools._helpers.run_text", fake_run_text)
+        err = _validate_code_syntax(str(ts_file))
+        assert err is None
+
+    def test_ts_validation_ignores_unused_variable_errors(self, tmp_path, monkeypatch):
+        """Unused variable/parameter errors (TS6xxx) during incremental editing do not block."""
+        from unittest.mock import MagicMock
+        from tools._helpers import _validate_code_syntax
+
+        project_root = tmp_path / "proj"
+        project_root.mkdir()
+        (project_root / "tsconfig.json").write_text("{}", encoding="utf-8")
+        ts_file = project_root / "incremental.ts"
+        ts_file.write_text("export function test(param: string) {}", encoding="utf-8")
+
+        def fake_run_text(cmd, **kwargs):
+            return MagicMock(
+                returncode=1,
+                stdout="incremental.ts:1:23 - error TS6133: 'param' is declared but its value is never read.",
+                stderr="",
+            )
+
+        monkeypatch.setattr("tools._helpers.run_text", fake_run_text)
+        err = _validate_code_syntax(str(ts_file))
+        assert err is None

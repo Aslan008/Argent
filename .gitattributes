@@ -1,0 +1,4 @@
+# cmd.exe misparses batch files with LF-only lines (it runs the tail of a comment as a
+# command), so launchers are always checked out with CRLF.
+*.bat text eol=crlf
+*.cmd text eol=crlf

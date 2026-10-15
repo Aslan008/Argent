@@ -127,7 +127,7 @@ export class AIEngine {
     const decoder = new TextDecoder('utf-8');
     let buffer = '';
 
-    while (true) {
+    streamLoop: while (true) {
       const { done, value } = await reader.read();
       if (done) break;
 
@@ -138,7 +138,7 @@ export class AIEngine {
       for (const line of lines) {
         const trimmed = line.trim();
         if (!trimmed || !trimmed.startsWith('data:')) continue;
-        if (trimmed === 'data: [DONE]') break;
+        if (trimmed === 'data: [DONE]') break streamLoop;
 
         try {
           const json = JSON.parse(trimmed.slice(5).trim());
@@ -289,7 +289,16 @@ export class AIEngine {
     });
 
     for await (const chunk of chunks) {
-      if (abortController.signal.aborted) break;
+      if (abortController.signal.aborted) {
+        if (this.offlineEngine) {
+          try {
+            await this.offlineEngine.interruptGenerate();
+          } catch {
+            // Игнорируем ошибки при прерывании
+          }
+        }
+        break;
+      }
       const text = chunk.choices[0]?.delta?.content || '';
       if (text) {
         parser.feed(text);

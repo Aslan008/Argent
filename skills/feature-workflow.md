@@ -32,7 +32,7 @@ slug (one artifact set per task; overwrite drafts, don't multiply files).
    - an interface sketch: public signatures, data flow, list of files to
      create/modify → `create_artifact("<slug>_spec.md", ...)`; or
    - a runnable vertical slice that touches every layer once; or
-   - a visual mockup (`create_svg_image`) when the feature is UI.
+   - a visual mockup (`create_artifact("<slug>_mockup.html", ...)`) when the feature is UI.
 5. **Approval gate**: `request_user_approval` on the spec. No full
    implementation before an explicit yes.
 
@@ -40,7 +40,7 @@ slug (one artifact set per task; overwrite drafts, don't multiply files).
 
 At the first line of implementation, create
 `create_artifact("<slug>_notes.md", "# Implementation notes: <task>\n")`.
-Then `append_to_file` an entry EVERY time reality forces you off the approved
+Then update the journal (via `create_artifact` or `replace_in_file`) with an entry EVERY time reality forces you off the approved
 spec — an edge case, a project quirk, a hidden coupling:
 
     ## <short title> (<files touched>)

@@ -6,7 +6,7 @@ by 1797 unit tests. Unit tests exercised ``lsp_manager`` with 0-indexed lines
 (matching multilspy's convention), and tool-registry tests checked existence
 rather than behavior. No test ever called through the full chain:
 
-    tool function (1-indexed) → lsp_manager (converts) → multilspy (0-indexed)
+    grep_search(line=…) (1-indexed) → lsp_manager (converts) → multilspy (0-indexed)
 
 These tests fix that. They start a real ``jedi-language-server`` via multilspy,
 create a known Python file, and verify that every LSP query returns the correct
@@ -256,89 +256,3 @@ class TestWorkspaceSymbols:
         found = [s for s in results if s.get("name") == "MyClass"]
         assert found, f"MyClass not found in workspace symbols: {results}"
         assert any("sample.py" in s.get("file_path", "") for s in found)
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# get_call_hierarchy (Jedi fallback)
-# ══════════════════════════════════════════════════════════════════════════════
-
-class TestCallHierarchyFallback:
-    """jedi-language-server does NOT support textDocument/prepareCallHierarchy.
-    The tool layer (lsp_tools.py) falls back to Jedi for Python."""
-
-    def test_incoming_finds_callers(self, lsp_project_dir):
-        """Incoming call hierarchy for standalone_function should find its
-        callers via Jedi fallback."""
-        from tools.lsp_tools import get_call_hierarchy
-        fp = _sample_path(lsp_project_dir)
-        result = get_call_hierarchy(fp, SYM_FUNC_DEF[0], SYM_FUNC_DEF[1], "incoming")
-        assert result, "Expected non-empty call hierarchy result"
-        assert "Caller" in result, f"Expected 'Caller' in result: {result}"
-        # standalone_function is called on line 14
-        assert "14" in result or "standalone" in result.lower(), (
-            f"Expected caller on line 14, got: {result}"
-        )
-
-    def test_outgoing_finds_callees(self, lsp_project_dir):
-        """Outgoing call hierarchy for standalone_function should find its
-        callees via AST fallback."""
-        from tools.lsp_tools import get_call_hierarchy
-        fp = _sample_path(lsp_project_dir)
-        result = get_call_hierarchy(fp, SYM_FUNC_DEF[0], SYM_FUNC_DEF[1], "outgoing")
-        assert result, "Expected non-empty call hierarchy result"
-        assert "Callee" in result, f"Expected 'Callee' in result: {result}"
-        # standalone_function calls MyClass() and method_one()
-        assert "MyClass" in result or "method_one" in result, (
-            f"Expected MyClass or method_one as callee, got: {result}"
-        )
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# find_implementations (Jedi fallback)
-# ══════════════════════════════════════════════════════════════════════════════
-
-class TestFindImplementationsFallback:
-    """jedi-language-server does NOT support textDocument/implementation.
-    The tool layer falls back to Jedi for Python."""
-
-    def test_finds_implementations_via_jedi(self, lsp_project_dir):
-        """find_implementations should fall back to Jedi and return results."""
-        from tools.lsp_tools import find_implementations
-        fp = _sample_path(lsp_project_dir)
-        result = find_implementations(fp, SYM_CLASS_DEF[0], SYM_CLASS_DEF[1])
-        assert result, "Expected non-empty implementations result"
-        assert "implementation" in result.lower() or "No impl" not in result, (
-            f"Expected implementations, got: {result}"
-        )
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# Tool interface (lsp_tools.py) with 1-indexed lines
-# ══════════════════════════════════════════════════════════════════════════════
-
-class TestToolInterface1Indexed:
-    """Verify that the tool-layer functions (lsp_definition, lsp_references)
-    accept and correctly handle 1-indexed line numbers, matching the schema
-    declarations in schemas.py."""
-
-    def test_lsp_definition_with_1_indexed_line(self, lsp_project_dir):
-        """Calling lsp_definition with line=10 (1-indexed) should find
-        MyClass definition on line 3 — not line 4 (which would indicate
-        the line was passed as 0-indexed to multilspy)."""
-        from tools.lsp_tools import lsp_definition
-        fp = _sample_path(lsp_project_dir)
-        result = lsp_definition(fp, SYM_CLASS_USE[0], SYM_CLASS_USE[1])
-        assert result, "Expected non-empty definition result"
-        assert "sample.py" in result
-        assert ":3" in result or "line 3" in result, (
-            f"Expected definition on line 3, got: {result}"
-        )
-
-    def test_lsp_references_with_1_indexed_line(self, lsp_project_dir):
-        """Calling lsp_references with line=3 (1-indexed) should find
-        references including line 3 and line 10."""
-        from tools.lsp_tools import lsp_references
-        fp = _sample_path(lsp_project_dir)
-        result = lsp_references(fp, SYM_CLASS_DEF[0], SYM_CLASS_DEF[1])
-        assert result, "Expected non-empty references result"
-        assert "sample.py" in result

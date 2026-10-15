@@ -62,6 +62,7 @@ class TestInlineInterpreterDetection:
         "perl -e 'unlink $f'",
         "ruby -e 'File.delete(x)'",
         'powershell -Command "Remove-Item x"',
+        'powershell -ExecutionPolicy Bypass -Command "Remove-Item x"',
         "pwsh -EncodedCommand ZQBjAGgAbwA=",
         'bash -c "rm -rf /tmp/x"',
     ])
@@ -76,14 +77,17 @@ class TestInlineInterpreterDetection:
         "python -m pip install requests",
         "node server.js",
         "python manage.py migrate",
+        "powershell -ExecutionPolicy Bypass -File scratch/rebuild_zip.ps1",
+        "powershell -File script.ps1",
+        "pwsh -NoProfile -File script.ps1",
     ])
     def test_named_targets_stay_safe(self, command):
         assert not approval.is_destructive_command(command)
 
     def test_inline_interpreter_not_auto_approved(self, monkeypatch):
-        """The whole point: in POLICY_AUTO a python -c delete still prompts."""
+        """The whole point: in POLICY_AUTO a python -c delete is auto-denied."""
         approval.set_policy(approval.POLICY_AUTO)
-        # destructive=True routes to the backend even under POLICY_AUTO.
+        # destructive=True is auto-denied under POLICY_AUTO without prompting.
         level, _ = approval.assess_command_risk('python -c "os.remove(x)"')
         asked = []
         approval.set_approval_backend(
@@ -92,7 +96,7 @@ class TestInlineInterpreterDetection:
             ok = approval.request_approval("run it", destructive=(level != "safe"))
         finally:
             approval.reset_approval_backend()
-        assert ok is False and asked == [True]     # prompted, not silently run
+        assert ok is False and asked == []     # auto-denied, backend never called
 
 
 class TestObfuscationDetection:
@@ -133,7 +137,7 @@ class TestObfuscationDetection:
             ok = approval.request_approval("run it", destructive=(level != "safe"))
         finally:
             approval.reset_approval_backend()
-        assert ok is False and asked == [True]    # prompted, not silently run
+        assert ok is False and asked == []    # auto-denied, backend never called
 
     def test_reason_is_reported_to_the_user(self):
         _, reasons = approval.assess_command_risk("iex $payload")
@@ -147,6 +151,23 @@ class TestGrantKey:
     def test_empty_returns_none(self):
         assert approval.command_grant_key("") is None
         assert approval.command_grant_key("   ") is None
+
+    def test_compound_commands_return_none(self):
+        assert approval.command_grant_key("cd /tmp; rm -rf /") is None
+        assert approval.command_grant_key("cd C:\\Users && make") is None
+        assert approval.command_grant_key("cat file | grep text") is None
+        assert approval.command_grant_key("echo 1 & echo 2") is None
+        assert approval.command_grant_key("test || echo fail") is None
+
+    def test_quoted_separators_allowed(self):
+        assert approval.command_grant_key("python -c 'print(\"hello; world\")'") == "python"
+        assert approval.command_grant_key('git commit -m "feat: one; two"') == "git"
+        assert approval.command_grant_key('python -c "a = 1 && b = 2"') == "python"
+
+    def test_powershell_call_operator(self):
+        assert approval.command_grant_key("& 'python' app.py") == "python"
+        assert approval.command_grant_key("& pytest -v") == "pytest"
+
 
 
 class TestPolicy:
@@ -184,7 +205,8 @@ class TestPolicy:
         result = approval.request_approval(
             "run command: git reset --hard", destructive=True, grant_key="git"
         )
-        assert prompted.get("yes"), "destructive action must always prompt"
+        # In POLICY_AUTO, destructive actions are auto-denied without prompting
+        assert not prompted.get("yes"), "destructive action must be auto-denied, not prompted"
         assert result is False
 
     def test_interactive_denial(self, monkeypatch):

@@ -1,0 +1,25 @@
+{
+  "room": "code_review",
+  "description": "Review the current uncommitted changes: take the git diff, then an independent read-only reviewer checks correctness, regressions, risks and tests, and gives a verdict. Ревью текущих изменений (git diff), ничего не меняя.",
+  "tags": ["ревью", "review", "проверь", "изменения", "diff", "код-ревью", "посмотри", "pr", "pull"],
+  "budget": {"max_iterations": 6, "max_tokens": 70000},
+  "defaults": {"task": "общая проверка изменений"},
+  "entry": "collect",
+  "next": {"approved": "END", "changes_requested": "END"},
+  "report": "Вердикт: {{verdict}}\n{{findings}}",
+  "nodes": [
+    {"id": "collect", "type": "tool", "tool": "read_git_diff",
+     "instruction": "Collect the uncommitted changes."},
+    {"id": "review", "type": "agent", "role": "Reviewer",
+     "tools": ["read_file", "grep_search", "search_files", "get_file_outline", "list_directory", "read_git_diff"],
+     "budget": {"max_iterations": 10, "max_tokens": 50000},
+     "context": ["collect.output"],
+     "writes": ["verdict", "findings"],
+     "instruction": "Review these changes. Focus: {{task}}\nLook for bugs, regressions, unhandled errors, security problems, missing tests. Read the surrounding code where the diff alone is not enough. Do NOT modify files. Answer with the JSON object: verdict=\"approve\" or \"changes_requested\", findings=<a short list: file:line — problem — suggested fix>."}
+  ],
+  "edges": [
+    {"from": "collect", "to": "review"},
+    {"from": "review", "if": "state.verdict == \"approve\"", "to": "EXIT:approved"},
+    {"from": "review", "else": true, "to": "EXIT:changes_requested"}
+  ]
+}

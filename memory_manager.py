@@ -156,6 +156,55 @@ class MemoryManager:
                     self.data["errors_encountered"] = self.data["errors_encountered"][-10:]
                 self._save()
 
+    def clear_current_task(self):
+        with self._lock:
+            self.data["current_task"] = ""
+            self._save()
+
+    def resolve_command_error(self, command: str):
+        """Remove recorded failures for a command (or script target) that has now succeeded."""
+        import re
+        cmd = str(command or "").strip()
+        if not cmd:
+            return
+
+        def _extract_targets(text: str) -> set:
+            targets = set()
+            for sc in re.split(r"[;&|]+", text):
+                sc = sc.strip()
+                if not sc:
+                    continue
+                targets.add(sc)
+                for tok in sc.split():
+                    cleaned = tok.strip("'\"()[]{}").replace("\\", "/")
+                    if any(cleaned.endswith(ext) for ext in (
+                        ".py", ".js", ".ts", ".sh", ".bat", ".ps1", ".rs", ".go", ".cs", ".cpp"
+                    )):
+                        targets.add(cleaned.split("/")[-1])
+            return targets
+
+        cmd_targets = _extract_targets(cmd)
+
+        with self._lock:
+            errors = self.data.get("errors_encountered", [])
+            new_errors = []
+            for err in errors:
+                # Check direct match
+                if err.startswith(f"Command '{cmd}' failed") or f"'{cmd}'" in err:
+                    continue
+                # Check target match (e.g. same script file)
+                m = re.search(r"Command '([^']+)' failed", err)
+                if m:
+                    old_cmd = m.group(1)
+                    old_targets = _extract_targets(old_cmd)
+                    if cmd_targets and old_targets and (cmd_targets & old_targets):
+                        continue
+                new_errors.append(err)
+
+            if len(new_errors) != len(errors):
+                self.data["errors_encountered"] = new_errors
+                self._save()
+
     def build_context_note(self) -> str:
         """Build a concise memory note to inject into system prompt after context reset."""
         with self._lock:
@@ -186,11 +235,23 @@ class MemoryManager:
                     parts.append(f"  - {fact}")
 
             if d.get("errors_encountered"):
-                parts.append("KNOWN ERRORS (do not repeat these approaches):")
+                parts.append("KNOWN ERRORS (unresolved):")
                 for err in d["errors_encountered"][-3:]:
                     parts.append(f"  - {err}")
 
             return "\n".join(parts)
+
+    def start_session(self):
+        """Start a new working session: clear working lists from past session, preserving objective."""
+        with self._lock:
+            old_objective = self.data.get("objective", "")
+            self.data["completed"] = []
+            self.data["files_modified"] = []
+            self.data["errors_encountered"] = []
+            self.data["current_task"] = ""
+            self.data["objective"] = old_objective
+            self._save()
+        log.info("Session started — working lists cleared, objective preserved")
 
     def clear(self):
         with self._lock:

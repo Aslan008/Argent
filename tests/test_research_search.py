@@ -110,3 +110,46 @@ class TestSearchWebIntegration:
         import tools.web_tools as wt
         monkeypatch.setattr("src.research.search.meta_search", lambda query, max_results=5: [])
         assert "No results found" in wt.search_web("q")
+
+    def test_explicit_engine_duckduckgo(self, monkeypatch):
+        import tools.web_tools as wt
+        from src.research.search import _ddg_search
+        passed_engines = []
+
+        def fake_meta(query, max_results=5, engines=None):
+            passed_engines.append(engines)
+            return [{"title": "DDG Result", "url": "http://ddg", "snippet": "ok", "source": "duckduckgo"}]
+
+        monkeypatch.setattr("src.research.search.meta_search", fake_meta)
+        out = wt.search_web("q", engine="duckduckgo")
+        assert "DDG Result" in out
+        assert len(passed_engines) == 1
+        assert passed_engines[0] == [_ddg_search]
+
+    def test_explicit_engine_brave_missing_key(self, monkeypatch):
+        import tools.web_tools as wt
+        monkeypatch.setattr("config.get_brave_api_key", lambda: "")
+        out = wt.search_web("q", engine="brave")
+        assert "Brave search is not configured" in out
+
+    def test_explicit_engine_brave_configured(self, monkeypatch):
+        import tools.web_tools as wt
+        from src.research.search import _brave_search
+        monkeypatch.setattr("config.get_brave_api_key", lambda: "key-123")
+        passed = []
+        monkeypatch.setattr("src.research.search.meta_search",
+                            lambda query, max_results=5, engines=None: (passed.append(engines) or []))
+        wt.search_web("q", engine="brave")
+        assert passed == [[_brave_search]]
+
+    def test_explicit_engine_ollama_missing_key(self, monkeypatch):
+        import tools.web_tools as wt
+        monkeypatch.setattr("config.get_ollama_api_key", lambda: "")
+        out = wt.search_web("q", engine="ollama")
+        assert "Ollama web search is not configured" in out
+
+    def test_explicit_engine_unknown(self):
+        import tools.web_tools as wt
+        out = wt.search_web("q", engine="google")
+        assert "Unknown search engine 'google'" in out
+

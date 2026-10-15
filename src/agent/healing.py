@@ -10,7 +10,7 @@ exit code and the error prefixes that Argent's own tools produce.
 import re
 
 # Tools whose failures trigger the auto-healing loop.
-HEALING_TOOLS = ("run_command", "write_file", "replace_in_file", "replace_python_function")
+HEALING_TOOLS = ("run_command", "write_file", "replace_in_file")
 
 # Commands launched fire-and-forget (UI apps): their exit codes are meaningless.
 _FIRE_AND_FORGET_PREFIXES = ("explorer", "start ", "start.", 'start"')
@@ -18,8 +18,10 @@ _FIRE_AND_FORGET_PREFIXES = ("explorer", "start ", "start.", 'start"')
 _EXIT_CODE_RE = re.compile(r"^Exit code:\s*(-?\d+)")
 
 
-def detect_tool_failure(func_name: str, result: str, command: str | None = None) -> bool:
+def detect_tool_failure(func_name: str, result: str, command: str | None = None, category: str | None = None, enabled: bool = True) -> bool:
     """Return True when a tool result is an actual failure worth auto-fixing."""
+    if not enabled or (category and category in ("cloud", "large", "moe")):
+        return False
     if func_name not in HEALING_TOOLS:
         return False
     text = str(result).strip()
@@ -48,7 +50,7 @@ def build_healing_hint(attempt: int, func_name: str = None, max_attempts: int = 
     actively misleading. File/edit tool failures are genuine code problems.
     """
     if attempt > max_attempts:
-        return "\n\n[AUTO-HEALING FAILED]: You have failed 3 times. Stop trying and explain the failure to the user."
+        return f"\n\n[AUTO-HEALING FAILED]: You have failed {max_attempts} times. Stop trying and explain the failure to the user."
 
     if func_name == "run_command":
         return (

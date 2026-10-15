@@ -33,34 +33,30 @@ class TestSchemaDeclarations:
         return props.get(param_name, {})
 
     def test_lsp_tools_declare_1_indexed_lines(self, schemas_by_name):
-        """Every LSP tool with a 'line' parameter must declare it as 1-indexed."""
-        lsp_tools = ["find_definition", "find_references", "get_hover",
-                     "find_implementations", "get_call_hierarchy"]
+        """Every LSP navigation tool with a 'line' parameter must declare it as 1-indexed."""
+        lsp_tools = ["grep_search"]
         for name in lsp_tools:
             schema = schemas_by_name.get(name)
-            if not schema:
-                continue
+            assert schema is not None, f"Tool '{name}' must be registered in TOOL_SCHEMAS"
             line_param = self._find_param(schema, "line")
-            if line_param:
-                desc = line_param.get("description", "")
-                assert "1-indexed" in desc, (
-                    f"Tool '{name}' line param must say '1-indexed', got: '{desc}'"
-                )
+            assert line_param, f"Tool '{name}' must have a 'line' parameter"
+            desc = line_param.get("description", "")
+            assert "1-indexed" in desc, (
+                f"Tool '{name}' line param must say '1-indexed', got: '{desc}'"
+            )
 
     def test_lsp_tools_declare_0_indexed_columns(self, schemas_by_name):
-        """Every LSP tool with a 'column' parameter must declare it as 0-indexed."""
-        lsp_tools = ["find_definition", "find_references", "get_hover",
-                     "find_implementations", "get_call_hierarchy"]
+        """Every LSP navigation tool with a 'column' parameter must declare it as 0-indexed."""
+        lsp_tools = ["grep_search"]
         for name in lsp_tools:
             schema = schemas_by_name.get(name)
-            if not schema:
-                continue
+            assert schema is not None, f"Tool '{name}' must be registered in TOOL_SCHEMAS"
             col_param = self._find_param(schema, "column")
-            if col_param:
-                desc = col_param.get("description", "")
-                assert "0-indexed" in desc, (
-                    f"Tool '{name}' column param must say '0-indexed', got: '{desc}'"
-                )
+            assert col_param, f"Tool '{name}' must have a 'column' parameter"
+            desc = col_param.get("description", "")
+            assert "0-indexed" in desc, (
+                f"Tool '{name}' column param must say '0-indexed', got: '{desc}'"
+            )
 
     def test_read_file_declares_1_indexed(self, schemas_by_name):
         """read_file start_line/end_line must be declared 1-indexed."""

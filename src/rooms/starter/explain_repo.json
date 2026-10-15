@@ -1,0 +1,24 @@
+{
+  "room": "explain_repo",
+  "description": "Explain an unfamiliar project: structure, entry points, how to run and test it, where the important logic lives. Read-only. Объясняет устройство проекта: структура, точки входа, как запускать и тестировать.",
+  "tags": ["объясни", "проект", "устройство", "структура", "обзор", "explain", "overview", "onboarding", "architecture", "архитектура", "как устроен"],
+  "budget": {"max_iterations": 5, "max_tokens": 60000},
+  "defaults": {"task": "общий обзор проекта"},
+  "entry": "scan",
+  "next": {"explained": "END"},
+  "report": "{{overview}}",
+  "nodes": [
+    {"id": "scan", "type": "tool", "tool": "analyze_project",
+     "instruction": "Scan the project: languages, layout, entry points."},
+    {"id": "explain", "type": "agent", "role": "Researcher",
+     "tools": ["read_file", "list_directory", "grep_search", "search_files", "get_file_outline"],
+     "budget": {"max_iterations": 12, "max_tokens": 45000},
+     "context": ["scan.output"],
+     "writes": ["overview"],
+     "instruction": "Explain this project to a new developer. Focus: {{task}}\nCover: what it does, the layout (which directory holds what), the entry points, how to run and test it, and the three places where the important logic lives. Read the README and the entry files rather than guessing. Do NOT modify anything. Answer with the JSON object: overview=<the explanation in the language of the question>."}
+  ],
+  "edges": [
+    {"from": "scan", "to": "explain"},
+    {"from": "explain", "to": "EXIT:explained"}
+  ]
+}

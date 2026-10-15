@@ -16,13 +16,15 @@ class SessionUsage:
     def __init__(self):
         self.prompt = 0
         self.completion = 0
+        self.cached = 0
         self.cost = 0.0
         self.requests = 0
 
     def add(self, usage: dict):
-        """Accumulate one request's usage dict {prompt, completion, total, cost?}."""
+        """Accumulate one request's usage dict {prompt, completion, total, cost?, cached?}."""
         self.prompt += int(usage.get("prompt", 0) or 0)
         self.completion += int(usage.get("completion", 0) or 0)
+        self.cached += int(usage.get("cached", 0) or 0)
         self.cost += float(usage.get("cost", 0.0) or 0.0)
         self.requests += 1
 
@@ -38,7 +40,12 @@ class SessionUsage:
         """
         prompt = int(usage.get("prompt", 0) or 0)
         completion = int(usage.get("completion", 0) or 0)
-        parts = [f"{_short(prompt)}->{_short(completion)} tok"]
+        cached = int(usage.get("cached", 0) or 0)
+        tok_str = f"{_short(prompt)}->{_short(completion)} tok"
+        if cached > 0:
+            pct = int(cached / prompt * 100) if prompt > 0 else 0
+            tok_str += f" (cached {_short(cached)} {pct}%)"
+        parts = [tok_str]
         cost = float(usage.get("cost", 0.0) or 0.0)
         if cost > 0:
             parts.append(_fmt_cost(cost))

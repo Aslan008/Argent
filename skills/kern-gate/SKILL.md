@@ -33,8 +33,8 @@ flowchart TD
 ```
 
 ### Path to Gate Executable
-The gate system resides at: `C:\Users\mshat\Desktop\kern\gate.py`
-Execution command: `python "C:\Users\mshat\Desktop\kern\gate.py" <spec_file> <candidate_file>`
+The gate system resides at: `C:\Users\user\Desktop\kern\gate.py`
+Execution command: `python "C:\Users\user\Desktop\kern\gate.py" <spec_file> <candidate_file>`
 
 ---
 
@@ -103,7 +103,7 @@ def calculate_mitigated_damage(damage, armor, shield):
 
 ### Step 3: Run the Gate
 Execute:
-`run_command(command="python C:\\Users\\mshat\\Desktop\\kern\\gate.py spec_<feature>.py ai_<feature>.py", cwd="C:\\Users\\mshat\\Desktop\\kern")`
+`run_command(command="python C:\\Users\\user\\Desktop\\kern\\gate.py spec_<feature>.py ai_<feature>.py", cwd="C:\\Users\\user\\Desktop\\kern")`
 
 ---
 

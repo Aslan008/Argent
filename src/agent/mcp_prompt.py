@@ -72,8 +72,8 @@ def build_mcp_section(mcp_servers, client=None) -> str:
         "These servers are connected to this session. Their tool signatures are NOT "
         "listed here — one server can expose hundreds, and carrying them all would "
         "cost more than the whole rest of these instructions.",
-        "- `list_mcp_tools(server, filter)` — look up the tools you need, by topic.",
-        "- `call_mcp_tool(server, tool, arguments_json)` — then run one.",
+        "- `list_mcp_tools(server_name, filter)` — look up the tools you need, by topic.",
+        "- `call_mcp_tool(server_name, tool_name, arguments_json)` — then run one.",
         "When a request is clearly the job of one of these servers, use it without "
         "being told to.",
         "",

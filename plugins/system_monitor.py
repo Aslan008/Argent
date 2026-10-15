@@ -32,7 +32,7 @@ def command_system(*args):
             total_mem = subprocess.check_output(cmd, shell=True).decode().split("\n")[1].strip()
             total_gb = round(int(total_mem) / (1024**3), 2)
             table.add_row("[bold cyan]Total RAM:[/bold cyan]", f"{total_gb} GB")
-        except:
+        except Exception:
             table.add_row("[bold cyan]Total RAM:[/bold cyan]", "Unknown")
     
     # Disk Usage

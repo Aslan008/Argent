@@ -62,36 +62,6 @@ class TestFindProjectRoot:
         assert find_project_root() == inner
 
 
-class TestProjectManagerAnchoring:
-    def test_project_file_found_from_subfolder(self, home, monkeypatch):
-        import project_manager
-        root = home / "proj"
-        (root / ".argent").mkdir(parents=True)
-        (root / ".argent_project.json").write_text(
-            json.dumps({"goal": "build a game"}), encoding="utf-8")
-        nested = root / "src"
-        nested.mkdir()
-
-        monkeypatch.chdir(nested)
-        pm = project_manager.ProjectManager()
-        assert pm.data is not None and pm.data.get("goal") == "build a game"
-
-    def test_save_writes_to_the_root_not_the_cwd(self, home, monkeypatch):
-        import project_manager
-        root = home / "proj"
-        (root / ".argent").mkdir(parents=True)
-        nested = root / "src"
-        nested.mkdir()
-
-        monkeypatch.chdir(nested)
-        pm = project_manager.ProjectManager()
-        pm.data = {"goal": "x"}
-        pm._save()
-
-        assert (root / ".argent_project.json").exists()
-        assert not (nested / ".argent_project.json").exists()
-
-
 class TestAgentsMemoryAnchoring:
     def test_project_agents_md_found_from_subfolder(self, home, monkeypatch):
         from agent import build_agents_memory

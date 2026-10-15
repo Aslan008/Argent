@@ -1,0 +1,34 @@
+{
+  "timestamp": "2026-10-03 03:02:57",
+  "adapters": [
+    {
+      "name": "guard",
+      "export_path": "C:\\Users\\user\\Desktop\\Argent\\.argent\\models\\adapters\\guard.onnx",
+      "size_kb": 1029.4658203125,
+      "accuracy": 0.8990825688073395,
+      "ece": 0.16342816040466687,
+      "brier": 0.08087827265262604,
+      "mean_latency_ms": 0.047692200110759586,
+      "p95_latency_ms": 0.05241999897407366,
+      "p99_latency_ms": 0.06430400208046194,
+      "latency_target_passed": true
+    },
+    {
+      "name": "ground",
+      "export_path": "C:\\Users\\user\\Desktop\\Argent\\.argent\\models\\adapters\\ground.onnx",
+      "size_kb": 1029.4658203125,
+      "accuracy": 1.0,
+      "ece": 0.03459619679488241,
+      "brier": 0.009774494916200638,
+      "mean_latency_ms": 0.050316799941356294,
+      "p95_latency_ms": 0.059810003949678496,
+      "p99_latency_ms": 0.08442600163107261,
+      "latency_target_passed": false
+    }
+  ],
+  "summary": {
+    "all_latency_passed": false,
+    "max_mean_latency_ms": 0.050316799941356294,
+    "max_ece": 0.16342816040466687
+  }
+}

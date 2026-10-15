@@ -261,6 +261,7 @@ class ArgentMobileApp {
     const bannerText = document.getElementById('banner-status-text');
 
     let liveTokenCount = 0;
+    let lastContentRenderTime = 0;
 
     try {
       await AIEngine.generate(
@@ -292,9 +293,13 @@ class ArgentMobileApp {
 
             if (this.activeTextContent) {
               this.activeTextContent.classList.remove('is-generating');
-              this.activeTextContent.innerHTML = this.renderMarkdown(fullContent);
-              this.attachCodeActionListeners(this.activeTextContent);
-              this.scrollToBottom();
+              const now = Date.now();
+              // Троттлинг отрисовки во время стриминга (~80мс), чтобы не перегружать поток интерфейса
+              if (now - lastContentRenderTime > 80) {
+                lastContentRenderTime = now;
+                this.activeTextContent.innerHTML = this.renderMarkdown(fullContent, true);
+                this.scrollToBottom();
+              }
             }
           },
           onThinking: (_delta, fullThinking) => {
@@ -357,6 +362,13 @@ class ArgentMobileApp {
                   </div>
                 `;
               }
+            }
+
+            if (this.activeTextContent && fullContent.trim()) {
+              this.activeTextContent.classList.remove('is-generating');
+              this.activeTextContent.innerHTML = this.renderMarkdown(fullContent, false);
+              this.attachCodeActionListeners(this.activeTextContent);
+              this.scrollToBottom();
             }
 
             const durationMs = Date.now() - startTime;
@@ -732,7 +744,7 @@ class ArgentMobileApp {
     return doc.body.innerHTML;
   }
 
-  private renderMarkdown(raw: string): string {
+  private renderMarkdown(raw: string, isStreaming: boolean = false): string {
     const rawHtml = marked.parse(raw) as string;
     const cleanHtml = this.sanitizeMarkdownHtml(rawHtml);
     const temp = document.createElement('div');
@@ -741,7 +753,9 @@ class ArgentMobileApp {
     // Подсветка и обёртка блоков кода
     temp.querySelectorAll('pre code').forEach((codeBlock) => {
       const codeElement = codeBlock as HTMLElement;
-      hljs.highlightElement(codeElement);
+      if (!isStreaming) {
+        hljs.highlightElement(codeElement);
+      }
 
       const pre = codeElement.parentElement;
       if (!pre) return;

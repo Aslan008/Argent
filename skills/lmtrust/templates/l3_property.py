@@ -26,6 +26,7 @@ class TestProperties:
     @given(st.floats(min_value=0, max_value=1000),
            st.floats(min_value=0, max_value=500),
            st.floats(min_value=0, max_value=10))
+    @pytest.mark.lmtrust(layer="L3", direction="D10")
     def test_damage_nonnegative(self, base, armor, crit):
         """Инвариант: результат всегда >= 0."""
         result = calculate_damage(base, armor, crit)
@@ -34,6 +35,7 @@ class TestProperties:
     @given(st.floats(min_value=0, max_value=1000),
            st.floats(min_value=0, max_value=500),
            st.floats(min_value=0, max_value=500))
+    @pytest.mark.lmtrust(layer="L3", direction="D10")
     def test_monotonic_armor(self, base, armor1, armor2):
         """Инвариант: больше брони → меньше или равно урон (при crit=1)."""
         d1 = calculate_damage(base, armor1, 1.0)
@@ -43,6 +45,7 @@ class TestProperties:
 
     @given(st.floats(min_value=0, max_value=1000),
            st.floats(min_value=0, max_value=500))
+    @pytest.mark.lmtrust(layer="L3", direction="D10")
     def test_crit_never_reduces_damage(self, base, armor):
         """Инвариант: crit_multiplier >= 1 не уменьшает урон."""
         no_crit = calculate_damage(base, armor, 1.0)

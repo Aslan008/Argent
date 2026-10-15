@@ -186,13 +186,13 @@ class TestGrepSearchAdversarial:
         out = grep_search("/no/such/dir/xyz", "pattern")
         assert "Error" in out
 
-    def test_file_path_not_directory_errors(self, tmp_path):
+    def test_file_path_searches_file_directly(self, tmp_path):
         f = tmp_path / "file.txt"
         f.write_text("x\n", encoding="utf-8")
         from tools.search_ops import grep_search
         out = grep_search(str(f), "x")
-        assert "Error" in out
-        assert "not a directory" in out
+        assert "Found" in out
+        assert "x" in out
 
     def test_invalid_regex_pattern(self, tmp_path):
         """L4: invalid regex should produce a graceful error, not a crash."""

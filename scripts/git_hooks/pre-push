@@ -1,0 +1,25 @@
+#!/bin/sh
+# Refuses a push that would publish keys, tokens, personal data or a file a git host cannot take.
+# Installed by scripts/install_git_hooks.py (hooks are not versioned by git itself).
+ROOT="$(git rev-parse --show-toplevel)"
+PY="$ROOT/.venv/Scripts/python.exe"
+[ -x "$PY" ] || PY="$ROOT/.venv/bin/python"
+[ -x "$PY" ] || PY="$(command -v python3 || command -v python)"
+zero="0000000000000000000000000000000000000000"
+status=0
+while read -r local_ref local_sha remote_ref remote_sha; do
+  [ "$local_sha" = "$zero" ] && continue
+  case "$local_ref" in
+    refs/heads/*|refs/tags/*) ;;
+    *) echo "pre-push: refusing to push $local_ref (only branches and tags may leave this machine)" >&2; exit 1 ;;
+  esac
+  if [ "$remote_sha" = "$zero" ]; then
+    "$PY" "$ROOT/scripts/repo_hygiene.py" --range "$local_sha" --not --remotes || status=1
+  else
+    "$PY" "$ROOT/scripts/repo_hygiene.py" --range "$remote_sha..$local_sha" || status=1
+  fi
+done
+if [ "$status" -ne 0 ]; then
+  echo "pre-push: nothing was pushed. Fix the findings above (python scripts/repo_hygiene.py --fix), then commit again." >&2
+fi
+exit $status

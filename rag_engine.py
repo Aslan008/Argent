@@ -1,10 +1,14 @@
 import os
-import json
 import threading
 import time
 import hashlib
+import queue
 from pathlib import Path
+from typing import Optional
 from logger import get_logger
+
+# Disable ChromaDB / PostHog background telemetry to prevent socket exceptions and keep offline
+os.environ["ANONYMIZED_TELEMETRY"] = "False"
 
 log = get_logger("rag")
 
@@ -23,6 +27,7 @@ class OllamaEmbeddingFunction:
 
     def __init__(self, model_name: str = "nomic-embed-text"):
         self.model_name = model_name
+        self._dim: int = 768
 
     def __call__(self, input: list[str]) -> list[list[float]]:
         """Embed texts, preferring Ollama's NATIVE batching.
@@ -39,7 +44,7 @@ class OllamaEmbeddingFunction:
             return []
 
         from config import get_embedding_batch_size
-        embeddings: list[list[float]] = [[0.0] * 768 for _ in range(len(input))]
+        embeddings: list[Optional[list[float]]] = [None] * len(input)
         ollama_host = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
         try:
             batch_size = max(1, int(get_embedding_batch_size()))
@@ -50,16 +55,21 @@ class OllamaEmbeddingFunction:
             chunk = input[start:start + batch_size]
             try:
                 import requests
-                resp = requests.post(
-                    f"{ollama_host}/api/embed",
-                    json={"model": self.model_name, "input": chunk},
-                    timeout=120,
-                )
+                # Indexing a project is hours of work for a small GPU: it waits behind the person's own requests
+                # to the same server (and for a quiet PC). One query to search with is the person's request.
+                with self._lane(len(chunk) > 1):
+                    resp = requests.post(
+                        f"{ollama_host}/api/embed",
+                        json={"model": self.model_name, "input": chunk},
+                        timeout=120,
+                    )
                 resp.raise_for_status()
                 vectors = resp.json().get("embeddings") or []
                 if len(vectors) != len(chunk):
                     raise ValueError(
                         f"expected {len(chunk)} embeddings, got {len(vectors)}")
+                if vectors and len(vectors[0]) > 0:
+                    self._dim = len(vectors[0])
                 for offset, vec in enumerate(vectors):
                     embeddings[start + offset] = vec
             except Exception as e:
@@ -68,7 +78,19 @@ class OllamaEmbeddingFunction:
                 for offset, vec in enumerate(self._embed_individually(chunk, ollama_host)):
                     embeddings[start + offset] = vec
 
-        return embeddings
+        # Fill any missing entries with zero vectors of the discovered dimension
+        for i in range(len(embeddings)):
+            if embeddings[i] is None:
+                embeddings[i] = [0.0] * self._dim
+
+        return embeddings  # type: ignore
+
+    def _lane(self, background: bool):
+        """The Ollama server's lane, for one embedding request (see src/agent/governor.py)."""
+        from src.agent import governor
+        from src.agent.local_backend import classify
+        return governor.slot(classify("ollama", self.model_name), f"embeddings:{self.model_name}",
+                             governor.P_BACKGROUND if background else None)
 
     def _embed_individually(self, texts: list[str], ollama_host: str) -> list[list[float]]:
         """Fallback: one request per text, with bounded concurrency so a weak
@@ -78,16 +100,20 @@ class OllamaEmbeddingFunction:
 
         def fetch_embedding(text):
             try:
-                resp = requests.post(
-                    f"{ollama_host}/api/embed",
-                    json={"model": self.model_name, "input": text},
-                    timeout=60,
-                )
+                with self._lane(len(texts) > 1):
+                    resp = requests.post(
+                        f"{ollama_host}/api/embed",
+                        json={"model": self.model_name, "input": text},
+                        timeout=60,
+                    )
                 resp.raise_for_status()
-                return resp.json()["embeddings"][0]
+                vec = resp.json()["embeddings"][0]
+                if vec:
+                    self._dim = len(vec)
+                return vec
             except Exception as e:
                 log.warning("Ollama embedding failed for text (%d chars): %s", len(text), e)
-                return [0.0] * 768
+                return [0.0] * self._dim
 
         from config import get_embedding_concurrency
         try:
@@ -132,7 +158,10 @@ def init_external_kbs():
 
             global_db_path = Path.home() / ".argent_coder_kbs"
             global_db_path.mkdir(parents=True, exist_ok=True)
-            _GLOBAL_DB_CLIENT = chromadb.PersistentClient(path=str(global_db_path))
+            _GLOBAL_DB_CLIENT = chromadb.PersistentClient(
+                path=str(global_db_path),
+                settings=chromadb.config.Settings(anonymized_telemetry=False),
+            )
             _ACTIVE_KB_COLLECTIONS = []
             
             for kb in enabled_kbs:
@@ -180,7 +209,10 @@ def enable_rag_for_project(project_dir: str) -> str:
         db_path = project_path / ".argent" / "chroma_db"
         db_path.mkdir(parents=True, exist_ok=True)
         
-        client = chromadb.PersistentClient(path=str(db_path))
+        client = chromadb.PersistentClient(
+            path=str(db_path),
+            settings=chromadb.config.Settings(anonymized_telemetry=False),
+        )
         
         embedding_provider = get_embedding_provider()
         if embedding_provider == "ollama":
@@ -415,27 +447,6 @@ def index_external_kb(kb_dict: dict) -> str:
                         rel = str(file_path.relative_to(kb_path))
 
                         if file_path.suffix.lower() in {".html", ".htm"}:
-                            # Unity docs get a symbol-aware cleaner (strips the
-                            # nav/feedback boilerplate and prepends the API
-                            # symbol); other HTML falls back to plain text.
-                            try:
-                                from src.rag.unity_docs import is_unity_doc, chunk_unity_doc
-                                if is_unity_doc(source):
-                                    unity_chunks = chunk_unity_doc(source, rel)
-                                    if unity_chunks:
-                                        file_docs = [c for c, _ in unity_chunks]
-                                        file_metas = [m for _, m in unity_chunks]
-                                        for d, m in zip(file_docs, file_metas):
-                                            docs.append(d)
-                                            m["source_type"] = "external_kb"
-                                            metadatas.append(m)
-                                            import hashlib
-                                            chunk_id = hashlib.md5(f"{rel}_{m.get('start_line', doc_id_counter)}".encode()).hexdigest()
-                                            ids.append(f"kb_{chunk_id}_{doc_id_counter}")
-                                            doc_id_counter += 1
-                                        continue  # done with this file
-                            except Exception as e:
-                                log.debug("Unity-doc chunking failed for %s; falling back: %s", rel, e)
                             try:
                                 from bs4 import BeautifulSoup
                                 soup = BeautifulSoup(source, "html.parser")
@@ -636,8 +647,39 @@ def prune_deleted_files() -> int:
         return 0
 
 
-def update_file_index(file_path: str):
-    """Updates the vector index for a single file. Useful for synchronous RAG updates."""
+_INDEX_QUEUE: queue.Queue = queue.Queue()
+_INDEX_WORKER_THREAD: Optional[threading.Thread] = None
+_WORKER_LOCK = threading.Lock()
+
+
+def _ensure_index_worker():
+    global _INDEX_WORKER_THREAD
+    if _INDEX_WORKER_THREAD is None or not _INDEX_WORKER_THREAD.is_alive():
+        with _WORKER_LOCK:
+            if _INDEX_WORKER_THREAD is None or not _INDEX_WORKER_THREAD.is_alive():
+                _INDEX_WORKER_THREAD = threading.Thread(
+                    target=_background_index_worker,
+                    name="ArgentRAGWorker",
+                    daemon=True,
+                )
+                _INDEX_WORKER_THREAD.start()
+
+
+def _background_index_worker():
+    while True:
+        try:
+            item = _INDEX_QUEUE.get()
+            if item is None:
+                break
+            _sync_update_file_index(item)
+        except Exception as e:
+            log.warning("Background RAG index worker error: %s", e)
+        finally:
+            _INDEX_QUEUE.task_done()
+
+
+def _sync_update_file_index(file_path: str):
+    """Synchronous implementation of file index updating with SQLite retry handling."""
     global _RAG_ENABLED, _COLLECTION
     if not _RAG_ENABLED or _COLLECTION is None:
         return
@@ -651,34 +693,72 @@ def update_file_index(file_path: str):
         # A vanished file must be REMOVED from the index, not skipped: silently
         # returning is what left phantom chunks behind after a delete/rename.
         if not path.exists() or not path.is_file():
-            _COLLECTION.delete(where={"file": rel_path})
+            for attempt in range(3):
+                try:
+                    _COLLECTION.delete(where={"file": rel_path})
+                    break
+                except Exception as del_err:
+                    if "locked" in str(del_err).lower() and attempt < 2:
+                        time.sleep(0.05 * (attempt + 1))
+                        continue
+                    raise
             _clear_keyword_cache()
             _SEARCH_CACHE.clear()
             log.info("RAG: dropped chunks for missing file %s", rel_path)
             return
 
         # 1. Delete old chunks for this file
-        _COLLECTION.delete(where={"file": rel_path})
+        for attempt in range(3):
+            try:
+                _COLLECTION.delete(where={"file": rel_path})
+                break
+            except Exception as del_err:
+                if "locked" in str(del_err).lower() and attempt < 2:
+                    time.sleep(0.05 * (attempt + 1))
+                    continue
+                raise
 
         # 2. Add new chunks
-        with open(path, 'r', encoding='utf-8') as f:
+        with open(path, "r", encoding="utf-8") as f:
             source = f.read()
-            
+
         docs, metadatas = _chunk_text(source, rel_path)
         if docs:
             # Generate new IDs based on timestamp/filename to avoid collisions
-            import time
             ts = time.time_ns()
             ids = [f"upd_{ts}_{i}" for i in range(len(docs))]
-            _COLLECTION.upsert(
-                documents=docs,
-                metadatas=metadatas,
-                ids=ids
-            )
+            for attempt in range(3):
+                try:
+                    _COLLECTION.upsert(
+                        documents=docs,
+                        metadatas=metadatas,
+                        ids=ids,
+                    )
+                    break
+                except Exception as upsert_err:
+                    if "locked" in str(upsert_err).lower() and attempt < 2:
+                        time.sleep(0.05 * (attempt + 1))
+                        continue
+                    raise
             _clear_keyword_cache()
             _SEARCH_CACHE.clear()
     except Exception as e:
-        print(f"[WARN] Failed to update RAG for {file_path}: {e}")
+        log.warning("Failed to update RAG for %s: %s", file_path, e)
+
+
+def update_file_index(file_path: str, async_mode: bool = False):
+    """Updates the vector index for a single file.
+
+    If async_mode=True, delegates to the background worker queue so caller
+    tools (like replace_in_file or write_file) return immediately without
+    blocking on embeddings or DB lock contention.
+    If async_mode=False (default), runs synchronously.
+    """
+    if async_mode:
+        _ensure_index_worker()
+        _INDEX_QUEUE.put(file_path)
+        return
+    _sync_update_file_index(file_path)
 
 def semantic_search(query: str, n_results: int = 5, target_kb: str = "all") -> str:
     """Tool for the LLM to search the vector database for code snippets using Hybrid Search + RRF."""

@@ -10,7 +10,8 @@ from src.rooms.supervisor import build_supervisor, resume_run
 
 
 def _lib():
-    return RoomLibrary().load_dir(default_starter_dir(), {"run_command", "search_web"})
+    from tests.test_rooms_library import STARTER_TOOLS
+    return RoomLibrary().load_dir(default_starter_dir(), STARTER_TOOLS)
 
 
 class FakeRunner:
@@ -22,16 +23,17 @@ class FakeRunner:
         def tool(node, state):
             if node.id == "commit":
                 self.commits += 1
+            if node.id == "run_tests":   # the verifier is a process: its exit code decides
+                self.test_runs += 1
+                if self.test_runs >= self.pass_on:
+                    return "Exit code: 0\nOUTPUT:\nok"
+                return "Exit code: 1\nOUTPUT:\nboom"
             return {"output": "ok"}
 
         def agent(node, context):
-            if node.id == "run_tests":   # verifier agent
-                self.test_runs += 1
-                passed = self.test_runs >= self.pass_on
-                return {"tests_passed": passed, "error_summary": None if passed else "boom"}
-            return {"error_summary": "applied"}
+            return {"fix_summary": "applied"}
 
-        self._nr = NodeRunner(tool_executor=tool, agent_executor=agent)
+        self._nr = NodeRunner(tool_executor=tool, agent_executor=agent, confirm=lambda n, s: True)
 
     def run_node(self, node, state):
         return self._nr.run_node(node, state)

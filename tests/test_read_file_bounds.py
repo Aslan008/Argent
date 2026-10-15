@@ -77,6 +77,18 @@ class TestOrdinaryReadsAreUnchanged:
         out = file_ops.read_file("s.txt", start_line=1, end_line=99)
         assert "of 2]" in out and out.endswith("    1\ta\n    2\tb\n")
 
+    def test_invalid_range_start_greater_than_end(self, tmp_path):
+        _write(tmp_path, "s.txt", "a\nb\n")
+        out = file_ops.read_file("s.txt", start_line=50, end_line=20)
+        assert "Error: 'start_line' (50) cannot be greater than 'end_line' (20)" in out
+
+    def test_read_file_handles_non_utf8_gracefully(self, tmp_path):
+        p = tmp_path / "win1251.txt"
+        p.write_bytes(b"\xef\xf0\xe8\xe2\xe5\xf2")  # 'привет' in CP1251
+        out = file_ops.read_file("win1251.txt")
+        assert "Error reading file" not in out
+        assert len(out) > 0
+
 
 class TestAppendDoesNotAccumulateBlankLines:
     def test_repeated_appends_leave_no_gaps(self, tmp_path):

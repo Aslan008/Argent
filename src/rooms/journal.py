@@ -49,6 +49,16 @@ class Journal:
         recs = self.records()
         return recs[-1] if recs else None
 
+    def unfinished(self) -> bool:
+        """Whether the last run was interrupted mid-way, so `resume` could still continue it
+        (the last record is an intent, or a commit that names a next node)."""
+        last = self.last()
+        if not last:
+            return False
+        if last.get("kind") == "intent":
+            return True
+        return last.get("kind") == "commit" and last.get("next") is not None
+
     def clear(self) -> None:
         if self.path.exists():
             self.path.unlink()

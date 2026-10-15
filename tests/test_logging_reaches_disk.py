@@ -21,8 +21,11 @@ from pathlib import Path
 import pytest
 
 _ROOT = Path(__file__).resolve().parents[1]
-_SKIP = {".git", "venv_pyqt6", "node_modules", "__pycache__", ".pytest_cache",
-         ".claude", "tests", "scripts", "desktop", "visuals"}
+# Third-party code (the project's own virtualenv sits in the repo) is not ours to
+# police: scanning .venv reported aiohttp's loggers and took tens of seconds.
+_SKIP = {".git", ".venv", "venv", "venv_pyqt6", "site-packages", "node_modules",
+         "__pycache__", ".pytest_cache", ".claude", "tests", "scripts", "desktop",
+         "visuals"}
 
 
 def _sources():
@@ -85,5 +88,7 @@ class TestTheCompactionTrail:
     def test_the_decisions_worth_recording_are_recorded(self, phrase):
         """These three lines answer 'why does the model no longer know the
         project'. Losing any of them puts the question back out of reach."""
-        text = (_ROOT / "src" / "agent" / "trimmer.py").read_text(encoding="utf-8")
+        # The summarisation call itself (and its timeout) lives in service_llm.py.
+        text = "".join((_ROOT / "src" / "agent" / name).read_text(encoding="utf-8")
+                       for name in ("trimmer.py", "service_llm.py"))
         assert phrase in text

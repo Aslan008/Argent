@@ -39,8 +39,8 @@ def memory(monkeypatch, tmp_path):
 @pytest.fixture
 def ui(monkeypatch):
     printed = []
-    monkeypatch.setattr(main_module, "print_system", lambda t, *a, **k: printed.append(str(t)))
-    monkeypatch.setattr(main_module, "print_error", lambda t, *a, **k: printed.append(str(t)))
+    monkeypatch.setattr("ui.print_system", lambda t, *a, **k: printed.append(str(t)))
+    monkeypatch.setattr("ui.print_error", lambda t, *a, **k: printed.append(str(t)))
     return printed
 
 
@@ -54,7 +54,7 @@ def _answer(monkeypatch, value):
         def select(*a, **k):
             return _Ans()
 
-    monkeypatch.setattr(main_module, "questionary", _Q)
+    monkeypatch.setattr("src.startup.questionary", _Q)
 
 
 class TestWhatCarriesOver:
@@ -73,8 +73,8 @@ class TestWhatCarriesOver:
 
 class TestTheChoice:
     def test_nothing_is_asked_when_there_is_nothing_to_carry(self, memory, ui, monkeypatch):
-        monkeypatch.setattr(main_module, "get_last_session", lambda: None)
-        monkeypatch.setattr(main_module, "questionary",
+        monkeypatch.setattr("src.startup.get_last_session", lambda: None)
+        monkeypatch.setattr("src.startup.questionary",
                             type("Q", (), {"select": staticmethod(
                                 lambda *a, **k: pytest.fail("нечего спрашивать"))}))
         offer_previous_context(_Agent())
@@ -82,7 +82,7 @@ class TestTheChoice:
     def test_working_memory_alone_is_enough_to_ask(self, memory, ui, monkeypatch):
         """The old code only asked when a saved SESSION existed, so memory-only
         carry-over passed in silence."""
-        monkeypatch.setattr(main_module, "get_last_session", lambda: None)
+        monkeypatch.setattr("src.startup.get_last_session", lambda: None)
         memory.set_objective("прошлая цель")
         _answer(monkeypatch, "Начать с чистого листа (забыть всё выше)")
         offer_previous_context(_Agent())
@@ -90,7 +90,7 @@ class TestTheChoice:
 
     def test_a_clean_start_really_clears_the_memory(self, memory, ui, monkeypatch):
         """The whole point: "начать с чистого листа" is now literally true."""
-        monkeypatch.setattr(main_module, "get_last_session", lambda: None)
+        monkeypatch.setattr("src.startup.get_last_session", lambda: None)
         memory.set_objective("старая цель")
         memory.add_completed("старый шаг")
         _answer(monkeypatch, "Начать с чистого листа (забыть всё выше)")
@@ -98,7 +98,7 @@ class TestTheChoice:
         assert memory.data["objective"] == "" and memory.data["completed"] == []
 
     def test_keeping_the_memory_keeps_it(self, memory, ui, monkeypatch):
-        monkeypatch.setattr(main_module, "get_last_session", lambda: None)
+        monkeypatch.setattr("src.startup.get_last_session", lambda: None)
         memory.set_objective("нужная цель")
         _answer(monkeypatch, "Новый чат, но сохранить рабочую память проекта")
         offer_previous_context(_Agent())
@@ -106,18 +106,18 @@ class TestTheChoice:
 
     def test_restoring_a_session_loads_the_conversation(self, memory, ui, monkeypatch):
         restored = []
-        monkeypatch.setattr(main_module, "get_last_session",
+        monkeypatch.setattr("src.startup.get_last_session",
                             lambda: {"id": "s1", "saved_at": "2026-08-09T10:00:00",
                                      "preview": "почини меню", "cwd": ""})
-        monkeypatch.setattr(main_module, "restore_session",
-                            lambda a, m: restored.append(m["id"]))
+        monkeypatch.setattr("src.startup.restore_session",
+                            lambda a, m, io=None: restored.append(m["id"]))
         _answer(monkeypatch, "Продолжить прошлую сессию")
         offer_previous_context(_Agent())
         assert restored == ["s1"]
 
     def test_what_would_carry_over_is_shown_before_the_choice(self, memory, ui, monkeypatch):
         """This is the part that used to arrive uninvited."""
-        monkeypatch.setattr(main_module, "get_last_session", lambda: None)
+        monkeypatch.setattr("src.startup.get_last_session", lambda: None)
         memory.set_objective("прошлая цель")
         _answer(monkeypatch, "Начать с чистого листа (забыть всё выше)")
         offer_previous_context(_Agent())
@@ -125,7 +125,7 @@ class TestTheChoice:
 
     def test_escaping_the_prompt_changes_nothing(self, memory, ui, monkeypatch):
         """Ctrl+C must not silently pick an option that discards work."""
-        monkeypatch.setattr(main_module, "get_last_session", lambda: None)
+        monkeypatch.setattr("src.startup.get_last_session", lambda: None)
         memory.set_objective("нужная цель")
         _answer(monkeypatch, None)
         offer_previous_context(_Agent())

@@ -1,0 +1,257 @@
+{
+ "paragraphs": {
+  "steps": [
+   {
+    "delta": "Hello\n\nWor",
+    "committed": "Hello\n\n",
+    "pending": "Wor"
+   },
+   {
+    "delta": "ld\n\nlast",
+    "committed": "World\n\n",
+    "pending": "last"
+   }
+  ],
+  "final": "last"
+ },
+ "single_delta_many_blocks": {
+  "steps": [
+   {
+    "delta": "a\n\nb\n\nc\n\nd",
+    "committed": "a\n\nb\n\nc\n\n",
+    "pending": "d"
+   }
+  ],
+  "final": "d"
+ },
+ "no_blank_line_yet": {
+  "steps": [
+   {
+    "delta": "one line",
+    "committed": "",
+    "pending": "one line"
+   },
+   {
+    "delta": " still one",
+    "committed": "",
+    "pending": "one line still one"
+   },
+   {
+    "delta": " line",
+    "committed": "",
+    "pending": "one line still one line"
+   }
+  ],
+  "final": "one line still one line"
+ },
+ "fence_open_then_close": {
+  "steps": [
+   {
+    "delta": "intro\n\n```py\nx = 1\n\ny = 2\n",
+    "committed": "intro\n\n",
+    "pending": "```py\nx = 1\n\ny = 2\n"
+   },
+   {
+    "delta": "```\nafter\n\nend",
+    "committed": "```py\nx = 1\n\ny = 2\n```\nafter\n\n",
+    "pending": "end"
+   }
+  ],
+  "final": "end"
+ },
+ "blank_inside_fence_is_not_a_boundary": {
+  "steps": [
+   {
+    "delta": "```\na\n\nb\n\nc\n",
+    "committed": "",
+    "pending": "```\na\n\nb\n\nc\n"
+   }
+  ],
+  "final": "```\na\n\nb\n\nc\n"
+ },
+ "tilde_fence": {
+  "steps": [
+   {
+    "delta": "~~~sh\nls\n~~~\n\nnext",
+    "committed": "~~~sh\nls\n~~~\n\n",
+    "pending": "next"
+   }
+  ],
+  "final": "next"
+ },
+ "mismatched_closing_char": {
+  "steps": [
+   {
+    "delta": "```\ncode\n~~~\nstill code\n```\n\nok",
+    "committed": "```\ncode\n~~~\nstill code\n```\n\n",
+    "pending": "ok"
+   }
+  ],
+  "final": "ok"
+ },
+ "indented_fence": {
+  "steps": [
+   {
+    "delta": "  ```js\n  let a;\n  ```\n\ntail",
+    "committed": "  ```js\n  let a;\n  ```\n\n",
+    "pending": "tail"
+   }
+  ],
+  "final": "tail"
+ },
+ "crlf": {
+  "steps": [
+   {
+    "delta": "a\r\n\r\nb\r\n\r\nc",
+    "committed": "a\r\n\r\nb\r\n\r\n",
+    "pending": "c"
+   }
+  ],
+  "final": "c"
+ },
+ "leading_blank_lines": {
+  "steps": [
+   {
+    "delta": "\n\nfirst\n\nsecond",
+    "committed": "\n\nfirst\n\n",
+    "pending": "second"
+   }
+  ],
+  "final": "second"
+ },
+ "trailing_blank_only": {
+  "steps": [
+   {
+    "delta": "para\n\n\n\n",
+    "committed": "para\n\n\n\n",
+    "pending": ""
+   }
+  ],
+  "final": ""
+ },
+ "cyrillic": {
+  "steps": [
+   {
+    "delta": "Привет\n\nмир\n\n```py\nпечать\n```\n\nконец",
+    "committed": "Привет\n\nмир\n\n```py\nпечать\n```\n\n",
+    "pending": "конец"
+   }
+  ],
+  "final": "конец"
+ },
+ "char_by_char": {
+  "steps": [
+   {
+    "delta": "a",
+    "committed": "",
+    "pending": "a"
+   },
+   {
+    "delta": "b",
+    "committed": "",
+    "pending": "ab"
+   },
+   {
+    "delta": "\n",
+    "committed": "",
+    "pending": "ab\n"
+   },
+   {
+    "delta": "\n",
+    "committed": "ab\n\n",
+    "pending": ""
+   },
+   {
+    "delta": "c",
+    "committed": "",
+    "pending": "c"
+   },
+   {
+    "delta": "d",
+    "committed": "",
+    "pending": "cd"
+   },
+   {
+    "delta": "\n",
+    "committed": "",
+    "pending": "cd\n"
+   },
+   {
+    "delta": "\n",
+    "committed": "cd\n\n",
+    "pending": ""
+   },
+   {
+    "delta": "`",
+    "committed": "",
+    "pending": "`"
+   },
+   {
+    "delta": "`",
+    "committed": "",
+    "pending": "``"
+   },
+   {
+    "delta": "`",
+    "committed": "",
+    "pending": "```"
+   },
+   {
+    "delta": "x",
+    "committed": "",
+    "pending": "```x"
+   },
+   {
+    "delta": "\n",
+    "committed": "",
+    "pending": "```x\n"
+   },
+   {
+    "delta": "y",
+    "committed": "",
+    "pending": "```x\ny"
+   },
+   {
+    "delta": "\n",
+    "committed": "",
+    "pending": "```x\ny\n"
+   },
+   {
+    "delta": "`",
+    "committed": "",
+    "pending": "```x\ny\n`"
+   },
+   {
+    "delta": "`",
+    "committed": "",
+    "pending": "```x\ny\n``"
+   },
+   {
+    "delta": "`",
+    "committed": "```x\ny\n```",
+    "pending": ""
+   },
+   {
+    "delta": "\n",
+    "committed": "\n",
+    "pending": ""
+   },
+   {
+    "delta": "z",
+    "committed": "",
+    "pending": "z"
+   }
+  ],
+  "final": "z"
+ },
+ "four_backtick_fence": {
+  "steps": [
+   {
+    "delta": "````\n```\ninner\n```\n````\n\nx",
+    "committed": "````\n```\ninner\n```\n````\n\n",
+    "pending": "x"
+   }
+  ],
+  "final": "x"
+ }
+}

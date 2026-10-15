@@ -22,12 +22,13 @@ Thread safety:
     - A ``threading.Lock`` guards the diagnostics store.
 """
 
-from __future__ import annotations
-
+import atexit
 import os
 import pathlib
 import threading
 import time
+import urllib.parse
+import urllib.request
 from typing import Any
 
 from logger import get_logger
@@ -68,15 +69,46 @@ _SYMBOL_KINDS = {
 
 
 def _uri_to_path(uri: str) -> str:
-    """Convert a file:// URI to a filesystem path."""
+    """Convert a file:// URI to a filesystem path cross-platform.
+    Handles URL-encoded entities (%20, etc.) and POSIX vs Windows drive letters."""
     if not uri:
         return ""
-    if uri.startswith("file:///"):
-        # Windows: file:///C:/path → C:\path
-        return uri[8:].replace("/", "\\")
     if uri.startswith("file://"):
-        return uri[7:]
+        parsed = urllib.parse.urlparse(uri)
+        unquoted = urllib.parse.unquote(parsed.path)
+        # Windows: /C:/path -> C:\path
+        if len(unquoted) >= 3 and unquoted[0] == "/" and unquoted[1].isalpha() and unquoted[2] == ":":
+            return os.path.normpath(unquoted[1:])
+        path = urllib.request.url2pathname(parsed.path)
+        return os.path.normpath(path)
     return uri
+
+
+def _normalize_file_key(path_or_uri: str) -> str:
+    """Normalize a path or URI to a case-insensitive canonical path string for dict lookups."""
+    if not path_or_uri:
+        return ""
+    p = _uri_to_path(path_or_uri) if path_or_uri.startswith("file://") else path_or_uri
+    try:
+        return str(pathlib.Path(p).resolve()).lower()
+    except Exception:
+        return str(pathlib.Path(p)).lower()
+
+
+def _loc_to_filepath(loc: dict, project_root: str) -> str:
+    """Safely extract file path from an LSP location object without duplicating prefixes."""
+    if not isinstance(loc, dict):
+        return ""
+    abs_path = loc.get("absolutePath")
+    if abs_path and isinstance(abs_path, str):
+        p = pathlib.Path(abs_path)
+        if p.is_absolute():
+            return str(p)
+        return str((pathlib.Path(project_root) / p).resolve())
+    uri = loc.get("uri")
+    if uri and isinstance(uri, str):
+        return _uri_to_path(uri)
+    return ""
 
 
 class LSPManager:
@@ -157,6 +189,7 @@ class LSPManager:
             import asyncio
 
             server.loop = asyncio.new_event_loop()
+            server.loop.set_exception_handler(lambda loop, context: None)
             server.loop_thread = threading.Thread(
                 target=server.loop.run_forever, daemon=True
             )
@@ -173,9 +206,10 @@ class LSPManager:
             async def _on_diagnostics(params):
                 if params and "uri" in params:
                     uri = params["uri"]
+                    norm_key = _normalize_file_key(uri)
                     diags = params.get("diagnostics", [])
                     with self._lock:
-                        self._diagnostics[uri] = list(diags)
+                        self._diagnostics[norm_key] = list(diags)
 
             server.language_server.server.on_notification_handlers[
                 "textDocument/publishDiagnostics"
@@ -191,22 +225,28 @@ class LSPManager:
 
     def shutdown(self):
         """Stop all language servers. Called on Argent exit."""
-        for key, server in list(self._servers.items()):
+        with self._lock:
+            servers_to_stop = list(self._servers.items())
+            self._servers.clear()
+            self._diagnostics.clear()
+
+        for key, server in servers_to_stop:
             try:
                 import asyncio
-                if hasattr(server, "_lsp_ctx") and hasattr(server, "loop"):
-                    asyncio.run_coroutine_threadsafe(
-                        server._lsp_ctx.__aexit__(None, None, None),
-                        loop=server.loop,
-                    ).result(timeout=5)
+                if hasattr(server, "_lsp_ctx") and hasattr(server, "loop") and server.loop.is_running():
+                    try:
+                        future = asyncio.run_coroutine_threadsafe(
+                            server._lsp_ctx.__aexit__(None, None, None),
+                            loop=server.loop,
+                        )
+                        future.result(timeout=3)
+                    except Exception:
+                        pass
                     server.loop.call_soon_threadsafe(server.loop.stop)
                     if hasattr(server, "loop_thread"):
-                        server.loop_thread.join(timeout=3)
+                        server.loop_thread.join(timeout=2)
             except Exception as e:
                 log.warning("Error shutting down LSP server %s: %s", key, e)
-        self._servers.clear()
-        with self._lock:
-            self._diagnostics.clear()
 
     # ── Path helpers ─────────────────────────────────────────────────────
 
@@ -257,11 +297,11 @@ class LSPManager:
             return None
 
         rel_path = self._to_relative(file_path, project_root)
-        uri = self._to_uri(file_path, project_root)
+        norm_key = _normalize_file_key(file_path)
 
-        # Clear previous diagnostics for this URI so we don't return stale data
+        # Clear previous diagnostics for this key so we don't return stale data
         with self._lock:
-            self._diagnostics.pop(uri, None)
+            self._diagnostics.pop(norm_key, None)
 
         try:
             with server.open_file(rel_path):
@@ -269,8 +309,8 @@ class LSPManager:
                 deadline = time.monotonic() + timeout
                 while time.monotonic() < deadline:
                     with self._lock:
-                        if uri in self._diagnostics:
-                            return self._diagnostics[uri]
+                        if norm_key in self._diagnostics:
+                            return self._diagnostics[norm_key]
                     time.sleep(0.1)
                 # Timeout — return empty (server may not support diagnostics)
                 return []
@@ -293,12 +333,14 @@ class LSPManager:
             return None
 
         rel_path = self._to_relative(file_path, project_root)
+        safe_line = max(1, int(line))
+        safe_column = max(0, int(column))
         try:
             with server.open_file(rel_path):
-                results = server.request_definition(rel_path, line - 1, column)
+                results = server.request_definition(rel_path, safe_line - 1, safe_column)
             return [
                 {
-                    "file_path": str(pathlib.Path(project_root) / loc.get("absolutePath", loc.get("uri", ""))),
+                    "file_path": _loc_to_filepath(loc, project_root),
                     "line": loc.get("range", {}).get("start", {}).get("line", 0) + 1,
                     "column": loc.get("range", {}).get("start", {}).get("character", 0),
                     "name": "",
@@ -324,12 +366,14 @@ class LSPManager:
             return None
 
         rel_path = self._to_relative(file_path, project_root)
+        safe_line = max(1, int(line))
+        safe_column = max(0, int(column))
         try:
             with server.open_file(rel_path):
-                results = server.request_references(rel_path, line - 1, column)
+                results = server.request_references(rel_path, safe_line - 1, safe_column)
             return [
                 {
-                    "file_path": str(pathlib.Path(project_root) / loc.get("absolutePath", loc.get("uri", ""))),
+                    "file_path": _loc_to_filepath(loc, project_root),
                     "line": loc.get("range", {}).get("start", {}).get("line", 0) + 1,
                     "column": loc.get("range", {}).get("start", {}).get("character", 0),
                     "name": "",
@@ -354,9 +398,11 @@ class LSPManager:
             return None
 
         rel_path = self._to_relative(file_path, project_root)
+        safe_line = max(1, int(line))
+        safe_column = max(0, int(column))
         try:
             with server.open_file(rel_path):
-                result = server.request_hover(rel_path, line - 1, column)
+                result = server.request_hover(rel_path, safe_line - 1, safe_column)
             if result is None:
                 return None
             return {
@@ -425,11 +471,13 @@ class LSPManager:
 
         rel_path = self._to_relative(file_path, project_root)
         uri = self._to_uri(file_path, project_root)
+        safe_line = max(1, int(line))
+        safe_column = max(0, int(column))
         try:
             with server.open_file(rel_path):
                 params = {
                     "textDocument": {"uri": uri},
-                    "position": {"line": line - 1, "character": column},
+                    "position": {"line": safe_line - 1, "character": safe_column},
                 }
                 response = self._send_request(server, "implementation", params)
             if not response:
@@ -495,8 +543,25 @@ class LSPManager:
         if any_server:
             return all_results
 
-        # No server running — try to start one for a common language.
-        for ext in [".py", ".ts", ".cs", ".rs", ".go", ".java", ".cpp", ".js"]:
+        # No server running — only try to start one for a language actually present in project_root.
+        present_exts = set()
+        try:
+            root_p = pathlib.Path(project_root)
+            for item in root_p.iterdir():
+                if item.is_file():
+                    present_exts.add(item.suffix.lower())
+                elif item.is_dir() and item.name not in ('.git', '__pycache__', '.venv', 'venv', 'node_modules'):
+                    try:
+                        for sub in item.iterdir():
+                            if sub.is_file():
+                                present_exts.add(sub.suffix.lower())
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+        candidate_exts = [e for e in [".py", ".ts", ".cs", ".rs", ".go", ".java", ".cpp", ".js"] if e in present_exts]
+        for ext in candidate_exts:
             lang = _EXT_TO_LANG.get(ext)
             if lang:
                 server = self._get_server(lang, project_root)
@@ -516,9 +581,9 @@ class LSPManager:
                                     "line": loc.get("range", {}).get("start", {}).get("line", 0) + 1,
                                     "container": item.get("containerName", ""),
                                 })
+                            break
                     except Exception as e:
                         log.warning("LSP workspace_symbol failed for %s: %s", lang, e)
-                    break
 
         return all_results if all_results else None
 
@@ -545,12 +610,14 @@ class LSPManager:
 
         rel_path = self._to_relative(file_path, project_root)
         uri = self._to_uri(file_path, project_root)
+        safe_line = max(1, int(line))
+        safe_column = max(0, int(column))
         try:
             with server.open_file(rel_path):
                 # Step 1: prepare call hierarchy
                 params = {
                     "textDocument": {"uri": uri},
-                    "position": {"line": line - 1, "character": column},
+                    "position": {"line": safe_line - 1, "character": safe_column},
                 }
                 items = self._send_request(
                     server, "prepare_call_hierarchy", params, timeout=timeout)
@@ -677,3 +744,4 @@ class LSPManager:
 # ── Module-level singleton ──────────────────────────────────────────────────
 
 lsp_manager = LSPManager()
+atexit.register(lsp_manager.shutdown)

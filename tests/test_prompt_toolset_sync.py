@@ -44,7 +44,7 @@ class TestLineFilter:
         assert "- a:" in out and "- c:" in out and "- b:" not in out
 
     def test_heading_with_nothing_left_under_it_is_dropped(self):
-        text = "## ONLY PLUGINS\n- Use `create_plugin`.\n- Then `delete_plugin`.\n"
+        text = "## ONLY ARTIFACTS\n- Use `create_artifact`.\n- Then `request_user_approval`.\n"
         assert drop_unavailable_tool_lines(text, {"read_file"}).strip() == ""
 
     def test_prose_without_tool_names_survives(self):
@@ -63,7 +63,7 @@ class TestPromptFollowsToolset:
         available = {"read_file", "write_file", "run_command", "ask_user_questions"}
         prompt = agent.build_system_prompt(available)
         for gone in ("create_artifact", "request_user_approval", "create_plugin",
-                     "create_svg_image", "list_directory"):
+                     "create_skill", "list_directory"):
             assert gone not in prompt, f"prompt still instructs the model to use {gone}"
 
     def test_available_tools_are_still_advertised(self, agent):
@@ -94,7 +94,7 @@ class TestPromptFollowsToolset:
 
     def test_that_section_stays_when_its_tool_is_present(self, agent):
         prompt = agent.build_system_prompt(
-            {"read_file", "create_plugin", "delete_plugin"}
+            {"read_file", "write_file"}
         )
         assert "PLUGIN DEVELOPMENT" in prompt
 

@@ -32,6 +32,12 @@ class TestCommandCompleter:
         # "/mcp " has a trailing space -> not a single token, no completion.
         assert texts == []
 
+    def test_subcommands_completed_when_typing_subcommand(self):
+        texts = [c.text for c in completions("/mcp l")]
+        assert texts == ["/mcp list"]
+        texts_full = [c.text for c in completions("/mcp list")]
+        assert texts_full == ["/mcp list"]
+
     def test_completion_carries_description(self):
         comp = next(c for c in completions("/doc"))
         assert "иагностика" in comp.display_meta_text  # самодиагностика
@@ -51,7 +57,10 @@ class TestDescribe:
         assert _describe("/doctor")
 
     def test_subcommand_inherits_base(self):
-        assert _describe("/mcp list") == _describe("/mcp")
+        assert _describe("/diff myfile.py") == _describe("/diff")
+
+    def test_subcommand_exact_description(self):
+        assert _describe("/mcp list") == "Список подключенных MCP-серверов"
 
     def test_unknown_is_empty(self):
         assert _describe("/nonsense") == ""
@@ -131,3 +140,72 @@ class TestContextSegment:
         # No "tokens/max" ratio when the window size is unknown: the fragment
         # ends right after the percentage (the closing </style> tag).
         assert "ctx:" in seg and "10%" in seg and seg.endswith("</style>")
+
+
+class TestAtFileCompleter:
+    def test_completes_at_file_prefix(self, tmp_path, monkeypatch):
+        (tmp_path / "hello.py").write_text("print('hello')", encoding="utf-8")
+        (tmp_path / "helper.py").write_text("def help(): pass", encoding="utf-8")
+        (tmp_path / "other.txt").write_text("text", encoding="utf-8")
+
+        monkeypatch.chdir(tmp_path)
+        texts = [c.text for c in completions("@hel")]
+        assert "@hello.py" in texts
+        assert "@helper.py" in texts
+        assert "@other.txt" not in texts
+
+    def test_completes_bare_at(self, tmp_path, monkeypatch):
+        (tmp_path / "main.py").write_text("x = 1", encoding="utf-8")
+        monkeypatch.chdir(tmp_path)
+        texts = [c.text for c in completions("@")]
+        assert "@main.py" in texts
+
+    def test_completes_at_in_middle_of_sentence(self, tmp_path, monkeypatch):
+        (tmp_path / "main.py").write_text("x = 1", encoding="utf-8")
+        monkeypatch.chdir(tmp_path)
+        texts = [c.text for c in completions("проверь файл @ma")]
+        assert "@main.py" in texts
+
+
+class TestExpandFileMentions:
+    def test_expands_existing_file(self, tmp_path):
+        f = tmp_path / "app.py"
+        f.write_text("print('app')", encoding="utf-8")
+        
+        from src.cli.cli_prompt import expand_file_mentions
+        enhanced, attached = expand_file_mentions("исправь ошибку в @app.py", base_dir=tmp_path)
+        assert attached == ["app.py"]
+        assert "print('app')" in enhanced
+        assert "=== Прикреплённый контекст файлов ===" in enhanced
+
+    def test_ignores_nonexistent_file(self, tmp_path):
+        from src.cli.cli_prompt import expand_file_mentions
+        enhanced, attached = expand_file_mentions("посмотри @not_real.py", base_dir=tmp_path)
+        assert attached == []
+        assert enhanced == "посмотри @not_real.py"
+
+    def test_ignores_emails(self, tmp_path):
+        from src.cli.cli_prompt import expand_file_mentions
+        enhanced, attached = expand_file_mentions("напиши на user@test.com", base_dir=tmp_path)
+        assert attached == []
+        assert enhanced == "напиши на user@test.com"
+
+
+class TestMainScope:
+    def test_main_does_not_shadow_print_error(self):
+        """Verify print_error is not defined/imported locally inside main()."""
+        import ast
+        from pathlib import Path
+
+        main_path = Path(__file__).resolve().parent.parent / "main.py"
+        tree = ast.parse(main_path.read_text(encoding="utf-8"))
+        main_func = [n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "main"][0]
+
+        local_imports = set()
+        for node in ast.walk(main_func):
+            if isinstance(node, (ast.Import, ast.ImportFrom)):
+                for alias in node.names:
+                    local_imports.add(alias.asname or alias.name)
+
+        assert "print_error" not in local_imports, "print_error must not be imported locally in main()"
+

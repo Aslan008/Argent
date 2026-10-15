@@ -215,6 +215,83 @@ class TestEphemeralContext:
         assert eph is not None
         assert "REPOSITORY MAP" in eph
 
+    def test_ephemeral_not_injected_after_tool_response(self, monkeypatch):
+        """Ephemeral context must NOT be appended after a tool result message,
+        preventing OpenAI tool-call schema violations and model recency bias distractions."""
+        from unittest.mock import patch, MagicMock
+
+        agent = ArgentAgent()
+        agent.model_name = "test_model"
+        agent.provider = "test_provider"
+        agent.max_history_messages = 20
+        agent.max_context_tokens = 8192
+        agent._native_tools_unsupported = False
+        agent._constrained_unsupported = False
+        agent.strategy = MagicMock()
+        agent.strategy.should_include_section.return_value = True
+        agent.strategy.supports_native_tools.return_value = True
+        agent.strategy.wants_constrained_decoding.return_value = False
+        agent.strategy.wants_objective_anchor.return_value = True
+        agent.tier = "tier_local"
+        agent.workspace_dir = "."
+        agent._stop_requested = False
+        agent.messages = []
+        agent._read_cache = {}
+        agent._checkpoint_turn_indices = {}
+        agent._log_turn_end = MagicMock()
+        agent._record_turn_start = MagicMock()
+        agent._record_turn_end = MagicMock()
+        agent._trim_history = MagicMock()
+        agent._salvage_continues = 0
+        agent._truncate_continues = 0
+        agent._last_user_turn = 0
+        agent.last_turn_duration_s = 0.0
+        agent._read_dedup_note = MagicMock(return_value=None)
+        agent.repair_history = MagicMock()
+        agent.step_event_callback = None
+
+        mock_provider = MagicMock()
+        mock_provider.validate_config.return_value = None
+        mock_provider.supports_constrained_decoding.return_value = False
+        mock_provider.format_tool_result.side_effect = lambda result, call_id: {
+            "role": "tool",
+            "tool_call_id": call_id,
+            "content": str(result),
+        }
+
+        step1_chunk = {
+            "tool_call_deltas": [{
+                "index": 0,
+                "id": "call_123",
+                "function_name_delta": "dummy_tool",
+                "function_arguments_delta": "{}"
+            }]
+        }
+        step2_chunk = {"content": "Weather is sunny."}
+
+        mock_provider.stream_chat.side_effect = [
+            iter([step1_chunk]),
+            iter([step2_chunk]),
+        ]
+
+        with patch("agent.create_provider", return_value=mock_provider), \
+             patch("agent.get_available_tools", return_value={"dummy_tool": lambda: "Sunny 25C"}), \
+             patch("agent.get_tool_schemas", return_value=[{"type": "function", "function": {"name": "dummy_tool", "parameters": {}}}]):
+
+            events = list(agent.process_user_input("What is the weather?"))
+
+            assert mock_provider.stream_chat.call_count == 2
+            first_call_msgs = mock_provider.stream_chat.call_args_list[0].kwargs["messages"]
+            second_call_msgs = mock_provider.stream_chat.call_args_list[1].kwargs["messages"]
+
+            # In the first call, messages contain user prompt
+            assert any(m.get("role") == "user" for m in first_call_msgs)
+
+            # In the second call (after tool execution), the LAST message MUST be the tool result!
+            assert second_call_msgs[-1]["role"] == "tool"
+            assert second_call_msgs[-1]["content"] == "Sunny 25C"
+            assert "REPOSITORY MAP" not in second_call_msgs[-1].get("content", "")
+
 
 # --------------------------------------------------------------------------- #
 # effective_tool_names
@@ -365,8 +442,7 @@ class TestExternalChangeDetection:
         time.sleep(0.01)
         # Modify the file externally — different size to ensure detection
         f.write_text("x = 222\n")
-        for tool_name in ["replace_in_file", "multi_replace_in_file_chunk",
-                          "replace_python_function", "write_file", "append_to_file"]:
+        for tool_name in ["replace_in_file", "write_file"]:
             result = cloud_agent._external_change_note(tool_name, {"file_path": str(f)})
             assert result is not None, f"{tool_name} should detect external changes"
 

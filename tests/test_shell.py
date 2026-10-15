@@ -37,3 +37,29 @@ class TestBuildArgv:
         """Not a list: list2cmdline escapes an inner quote as \\", which cmd.exe
         does not understand. See test_shell_quoting.py."""
         assert build_command_argv("dir", "cmd") == 'cmd /s /c "dir"'
+
+    def test_quoted_path_gets_call_operator(self):
+        """A quoted path at the start of a command needs & in PowerShell,
+        otherwise PS treats it as a string literal and just prints the path."""
+        argv = build_command_argv('"C:\\tool\\run.bat"', "powershell")
+        assert "& " in argv[-1], "call operator & must be prepended"
+        assert argv[-1].endswith('& "C:\\tool\\run.bat"')
+
+    def test_quoted_path_with_args_gets_call_operator(self):
+        argv = build_command_argv('"C:\\Program Files\\app.exe" --flag', "powershell")
+        assert '& "C:\\Program Files\\app.exe" --flag' in argv[-1]
+
+    def test_unquoted_command_has_no_call_operator(self):
+        """Normal commands must NOT get & — it breaks statements and pipelines."""
+        argv = build_command_argv("python -c \"print(1)\"", "powershell")
+        assert "& python" not in argv[-1]
+
+    def test_variable_assignment_no_call_operator(self):
+        argv = build_command_argv("$x = 1; echo $x", "powershell")
+        assert "& $x" not in argv[-1]
+
+    def test_already_has_call_operator_no_double(self):
+        """If the command already starts with &, don't add another."""
+        argv = build_command_argv("& python -c \"print(1)\"", "powershell")
+        assert "& & " not in argv[-1]
+

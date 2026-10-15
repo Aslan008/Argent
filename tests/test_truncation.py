@@ -13,6 +13,7 @@ from unittest.mock import MagicMock
 import pytest
 
 import agent as agent_module
+import config
 from agent import ArgentAgent, MAX_TRUNCATE_CONTINUES
 
 
@@ -52,6 +53,9 @@ def make_agent(monkeypatch):
         # Hermetic token estimation: no HTTP to a live provider from unit tests.
         monkeypatch.setattr(agent_module, "estimate_tokens",
                             lambda text, model, prov: len(text) // 4)
+        # These tests script the provider; a fast-path model answering first would
+        # make them depend on the machine (Leeth is on by default when its files exist).
+        monkeypatch.setattr(config, "get_fast_dispatch_backend", lambda: "off")
         return ArgentAgent()
     return _make
 
@@ -106,7 +110,7 @@ class TestToolTruncation:
         chunks = consume(agent.process_user_input("создай большой файл"))
         # Guidance to write in parts is injected instead of "continue".
         user_msgs = [m["content"] for m in agent.messages if m.get("role") == "user"]
-        assert any("SMALLER STEPS" in m and "append_to_file" in m for m in user_msgs)
+        assert any("SMALLER STEPS" in m and "replace_in_file" in m for m in user_msgs)
         assert not any("continue exactly where you left off" in m for m in user_msgs)
 
     def test_partial_tool_json_is_not_kept_in_history(self, make_agent):

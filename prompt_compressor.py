@@ -7,7 +7,7 @@ Small models get shorter prompts to stay within context limits.
 import re
 import threading
 
-from config import get_model_size_category
+from config import get_model_size_category, is_moe_model
 from logger import get_logger
 
 log = get_logger("agent")
@@ -34,9 +34,7 @@ def drop_unavailable_tool_lines(prompt: str, available: set) -> str:
     with them.
     """
     if not available:
-        # If no tools are available, we must process the prompt to strip ALL tool lines,
-        # not just short-circuit and return the whole prompt!
-        pass
+        return prompt
 
     kept, section, section_has_content = [], None, False
 
@@ -111,6 +109,31 @@ _TINY_SECTIONS_TO_STRIP = [
 ]
 
 
+def _find_next_section(text: str, start_pos: int) -> int:
+    """Find the index of the next markdown heading (e.g. #, ##, ###)
+    strictly outside of code fence blocks (``` or ~~~).
+    Returns the character index in text, or -1 if no next heading found.
+    """
+    in_fence = False
+    fence_char = ""
+    offset = 0
+    for line in text[start_pos:].splitlines(keepends=True):
+        stripped = line.strip()
+        if stripped.startswith("```") or stripped.startswith("~~~"):
+            marker = stripped[:3]
+            if not in_fence:
+                in_fence = True
+                fence_char = marker
+            elif fence_char == marker:
+                in_fence = False
+                fence_char = ""
+        elif not in_fence:
+            if re.match(r"^#{1,6}\s+", line):
+                return start_pos + offset
+        offset += len(line)
+    return -1
+
+
 def _strip_section(prompt: str, heading: str) -> str:
     # Find the heading case-insensitively, and ensure we only drop that section
     pattern = re.compile(r"^" + re.escape(heading) + r"\b.*$", re.IGNORECASE | re.MULTILINE)
@@ -119,13 +142,11 @@ def _strip_section(prompt: str, heading: str) -> str:
         if not match:
             break
         idx = match.start()
-        # Find the next section (any heading level)
-        next_match = re.search(r"^#+\s", prompt[match.end():], re.MULTILINE)
-        if next_match:
-            nxt = match.end() + next_match.start()
-        else:
-            nxt = -1
-        prompt = prompt[:idx] + (prompt[nxt:] if nxt != -1 else "")
+        nxt = _find_next_section(prompt, match.end())
+        new_prompt = prompt[:idx] + (prompt[nxt:] if nxt != -1 else "")
+        if len(new_prompt) >= len(prompt):
+            break
+        prompt = new_prompt
     return prompt
 
 
@@ -142,11 +163,11 @@ def compress_system_prompt(full_prompt: str, model_name: str, category: str = No
     """
     category = category or get_model_size_category(model_name)
 
-    if category not in ("tiny", "small", "medium", "large", "cloud"):
+    if category not in ("tiny", "small", "medium", "large", "cloud", "moe"):
         log.warning(f"Unknown model category '{category}', falling back to full prompt")
         return full_prompt
 
-    if category in ("medium", "large", "cloud"):
+    if category in ("medium", "large", "cloud", "moe") or is_moe_model(model_name):
         return full_prompt
 
     prompt = full_prompt
@@ -162,8 +183,45 @@ def compress_system_prompt(full_prompt: str, model_name: str, category: str = No
     return prompt
 
 
+PRESERVE_CONTEXT_TOOLS = frozenset({
+    "read_file", "replace_in_file", "get_file_outline"
+})
+
+
+def tool_result_limits(model_name: str, max_lines: int = None, max_chars: int = None,
+                       tool_name: str = None):
+    """(max_lines, max_chars) a tool result may keep for this model."""
+    category = get_model_size_category(model_name)
+
+    if max_lines is None:
+        if category == "tiny": max_lines = 40
+        elif category == "small": max_lines = 100
+        elif category == "medium": max_lines = 500
+        else: max_lines = 2000 # cloud and large
+
+        # Protect precision code inspection tools from aggressive truncation
+        # that breaks replace_in_file context alignment
+        if tool_name and tool_name in PRESERVE_CONTEXT_TOOLS:
+            max_lines = max(max_lines, 250)
+
+    if max_chars is None:
+        # A generous per-line width, so output that already fits the line budget
+        # with normal-width lines also fits here — the char budget is a safety
+        # net for pathologically wide lines, not a second, tighter limit.
+        max_chars = max_lines * 120
+
+    return max(1, int(max_lines)), max(1, int(max_chars))
+
+
+def would_truncate(result: str, model_name: str, tool_name: str = None) -> bool:
+    """Whether `compress_tool_result` would cut this text for this model."""
+    max_lines, max_chars = tool_result_limits(model_name, tool_name=tool_name)
+    return len(result) > max_chars or result.count("\n") + 1 > max_lines
+
+
 def compress_tool_result(result: str, model_name: str,
-                         max_lines: int = None, max_chars: int = None) -> str:
+                         max_lines: int = None, max_chars: int = None,
+                         tool_name: str = None) -> str:
     """Compress tool output to prevent context window explosion."""
     if not isinstance(result, str):
         try:
@@ -174,21 +232,7 @@ def compress_tool_result(result: str, model_name: str,
             except Exception:
                 result = f"<Unrepresentable object: {type(result).__name__}>"
 
-    category = get_model_size_category(model_name)
-
-    if max_lines is None:
-        if category == "tiny": max_lines = 40
-        elif category == "small": max_lines = 100
-        elif category == "medium": max_lines = 500
-        else: max_lines = 2000 # cloud and large
-    if max_chars is None:
-        # A generous per-line width, so output that already fits the line budget
-        # with normal-width lines also fits here — the char budget is a safety
-        # net for pathologically wide lines, not a second, tighter limit.
-        max_chars = max_lines * 120
-
-    max_lines = max(1, int(max_lines))
-    max_chars = max(1, int(max_chars))
+    max_lines, max_chars = tool_result_limits(model_name, max_lines, max_chars, tool_name)
 
     lines = result.splitlines()
     if len(lines) > max_lines:
@@ -197,7 +241,7 @@ def compress_tool_result(result: str, model_name: str,
             tail = []
         else:
             half = max_lines // 2
-            head = lines[:half]
+            head = lines[:max_lines - half]
             tail = lines[-half:] if half > 0 else []
         separator = f"\n... [{len(lines) - len(head) - len(tail)} lines truncated to protect context window] ...\n"
         result = "\n".join(head) + separator + "\n".join(tail)

@@ -36,3 +36,36 @@ def test_unpaired_tool_end_ignored(monkeypatch):
     # tool_end with no preceding tool_start must not crash or add time.
     list(_time_observe(iter([{"type": "tool_end", "name": "t"}]), timing, start_time=10.0))
     assert timing["tools"] == 0.0
+
+
+def test_format_time_compact():
+    from src.cli.cli_ui import _format_time_compact
+    assert _format_time_compact(5.2) == "0:05"
+    assert _format_time_compact(65) == "1:05"
+    assert _format_time_compact(3665) == "1:01:05"
+
+
+def test_format_time_human():
+    from src.cli.cli_ui import _format_time_human
+    assert _format_time_human(8.2) == "8.2s"
+    assert _format_time_human(65) == "1m 5s"
+    assert _format_time_human(3720) == "1h 2m"
+
+
+def test_waiting_display_renders_live_timer():
+    from src.cli.cli_ui import _WaitingDisplay
+    from rich.console import Console
+    d = _WaitingDisplay(start_turn_time=100.0)
+    # Mock current time
+    import src.cli.cli_ui as cli_ui
+    orig_time = cli_ui.time.time
+    try:
+        cli_ui.time.time = lambda: 108.0
+        items = list(d.__rich_console__(Console(width=80), None))
+        assert len(items) == 1
+        text_str = str(items[0].text)
+        assert "Ожидание ответа..." in text_str
+        assert "0:08" in text_str
+    finally:
+        cli_ui.time.time = orig_time
+

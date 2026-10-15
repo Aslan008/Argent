@@ -1,0 +1,70 @@
+{
+  "room": "critic_review",
+  "description": "Critic: reads a plan/artifact or a finished change (read-only) and reports only CRITICAL findings: logic holes, missing steps, bugs. Exits 'clean' or 'critical'. Used as a sub-room by other rooms. Критик: проверяет план, артефакт или реализацию и называет только критические находки.",
+  "tags": [
+    "критик",
+    "critic review",
+    "проверка плана",
+    "поиск ошибок в плане"
+  ],
+  "budget": {
+    "max_iterations": 6,
+    "max_tokens": 40000
+  },
+  "entry": "review",
+  "rules": {
+    "read_only": true
+  },
+  "defaults": {
+    "subject": "plan",
+    "artifact_path": "",
+    "task": "",
+    "findings": "",
+    "critical_count": 0
+  },
+  "next": {
+    "clean": "END",
+    "critical": "END"
+  },
+  "report": "Критик ({{subject}}): критических находок {{critical_count}}.\n{{findings}}",
+  "nodes": [
+    {
+      "id": "review",
+      "type": "agent",
+      "role": "Critic",
+      "tools": [
+        "read_file",
+        "grep_search",
+        "list_directory",
+        "search_files",
+        "get_file_outline",
+        "read_git_diff"
+      ],
+      "budget": {
+        "max_iterations": 6,
+        "max_tokens": 30000
+      },
+      "sampling": {
+        "temperature": 0.2
+      },
+      "writes": [
+        "findings",
+        "critical_count"
+      ],
+      "note": "Критик только читает (правило комнаты read_only) и пишет два поля: findings и critical_count. Температура низкая — нужна строгость, а не фантазия.",
+      "instruction": "You are a strict reviewer. Subject under review: {{subject}} ('plan' = a plan or artifact, 'implementation' = a finished change in the working tree).\nTask the work was done for: {{task}}\nArtifact file (read it with read_file if the path is not empty): {{artifact_path}}\nIf the subject is 'implementation', look at the real change (read_git_diff) and the files it touches.\nReport ONLY critical findings: a hole in the logic, a missing step, a requirement that is not met, a bug that would make the result wrong. Style remarks and nice-to-haves are NOT critical — leave them out.\nAnswer with the JSON object: findings=<bulleted list, one line per finding, empty text if none>, critical_count=<integer>."
+    }
+  ],
+  "edges": [
+    {
+      "from": "review",
+      "if": "state.critical_count > 0",
+      "to": "EXIT:critical"
+    },
+    {
+      "from": "review",
+      "else": true,
+      "to": "EXIT:clean"
+    }
+  ]
+}

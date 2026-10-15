@@ -27,7 +27,7 @@ def agent(monkeypatch):
 def said(monkeypatch):
     lines = []
     monkeypatch.setattr(command_handler, "print_system", lambda t, *a, **k: lines.append(str(t)))
-    monkeypatch.setattr(command_handler, "set_current_model", lambda m: None)
+    monkeypatch.setattr(command_handler, "set_current_model", lambda m, *a, **k: None)
     return lines
 
 

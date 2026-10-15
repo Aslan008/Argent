@@ -23,13 +23,12 @@ _TOOL_NAME_MAP = {
     "Read": "read_file",
     "Write": "write_file",
     "Edit": "replace_in_file",
-    "MultiEdit": "multi_replace_in_file",
+    "MultiEdit": "replace_in_file",
     "Bash": "run_command",
     "Glob": "search_files",
     "Grep": "grep_search",
     "LS": "list_directory",
     "Task": "run_subagent",
-    "TodoWrite": "add_work_task",
     "NotebookEdit": "replace_in_file",
 }
 # These names double as ordinary English words; only treat them as a tool

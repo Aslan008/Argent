@@ -20,6 +20,7 @@ import socket
 import urllib.parse
 
 from logger import get_logger
+from src.agent.netstate import retry_transient
 from src.research.cache import get_cached, set_cached
 
 log = get_logger("research")
@@ -74,8 +75,11 @@ _USER_AGENTS = [
 ]
 
 
+MAX_BODY_BYTES = 10 * 1024 * 1024  # 10 MB cap defends against memory exhaustion / OOM
+
+
 def _http_get(url: str, timeout: int) -> dict:
-    """Fetch a URL. Returns {status, content_type, text, content}.
+    """Fetch a URL with body size capping and stream closing. Returns {status, content_type, text, content}.
 
     Isolated so tests can monkeypatch it and drive the extraction logic with
     canned responses — no network in unit tests.
@@ -91,15 +95,79 @@ def _http_get(url: str, timeout: int) -> dict:
     current = url
     for _ in range(_MAX_REDIRECTS + 1):
         _guard_url(current)
-        resp = requests.get(current, headers=headers, timeout=timeout, allow_redirects=False)
+        # A page fetch is safe to repeat: one more try rides out a connection that blinked.
+        resp = retry_transient(
+            lambda: requests.get(current, headers=headers, timeout=timeout, allow_redirects=False, stream=True),
+            attempts=2)
         if resp.is_redirect and resp.headers.get("Location"):
+            if hasattr(resp, "close"):
+                resp.close()
             current = urllib.parse.urljoin(current, resp.headers["Location"])
             continue
+
+        content_type = (resp.headers.get("Content-Type") or "").lower()
+        path_lower = current.lower().split("?", 1)[0]
+        is_pdf = "application/pdf" in content_type or path_lower.endswith(".pdf")
+        if not is_pdf and any(b in content_type for b in ("video/", "audio/", "application/zip", "application/x-tar", "application/x-gzip")):
+            if hasattr(resp, "close"):
+                resp.close()
+            return {
+                "status": resp.status_code,
+                "content_type": content_type,
+                "text": "",
+                "content": b"",
+            }
+
+        chunks = []
+        total_bytes = 0
+        try:
+            if hasattr(resp, "iter_content"):
+                for chunk in resp.iter_content(chunk_size=65536):
+                    if not chunk:
+                        continue
+                    chunks.append(chunk)
+                    total_bytes += len(chunk)
+                    if total_bytes >= MAX_BODY_BYTES:
+                        log.warning("Truncated response body at %d bytes for %s", MAX_BODY_BYTES, current)
+                        break
+            elif hasattr(resp, "content"):
+                chunks = [resp.content] if resp.content else []
+        finally:
+            if hasattr(resp, "close"):
+                resp.close()
+
+        raw_content = b"".join(chunks)
+        if not raw_content:
+            try:
+                if not getattr(resp, "_content_consumed", False):
+                    c = getattr(resp, "content", None)
+                    if c:
+                        raw_content = c
+            except Exception:
+                pass
+
+        encoding = getattr(resp, "encoding", None) or "utf-8"
+        text = ""
+        if not chunks:
+            try:
+                if not getattr(resp, "_content_consumed", False):
+                    t = getattr(resp, "text", None)
+                    if t:
+                        text = t
+            except Exception:
+                pass
+
+        if not text:
+            try:
+                text = raw_content.decode(encoding, errors="replace")
+            except Exception:
+                text = raw_content.decode("utf-8", errors="replace")
+
         return {
             "status": resp.status_code,
-            "content_type": (resp.headers.get("Content-Type") or "").lower(),
-            "text": resp.text,
-            "content": resp.content,
+            "content_type": content_type,
+            "text": text,
+            "content": raw_content,
         }
     raise UnsafeURLError(f"too many redirects (>{_MAX_REDIRECTS})")
 

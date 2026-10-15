@@ -25,13 +25,35 @@ _lock = threading.Lock()
 
 def _connect() -> sqlite3.Connection:
     _DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(_DB_PATH))
+    conn = sqlite3.connect(str(_DB_PATH), timeout=10.0)
+    try:
+        conn.execute("PRAGMA journal_mode=WAL")
+    except Exception:
+        pass
     conn.execute(
         "CREATE TABLE IF NOT EXISTS pages ("
         "url TEXT NOT NULL, raw INTEGER NOT NULL, text TEXT NOT NULL, "
         "ts REAL NOT NULL, PRIMARY KEY (url, raw))"
     )
     return conn
+
+
+def prune_expired(ttl: float = _DEFAULT_TTL) -> int:
+    """Delete cache entries older than ttl. Returns count of deleted rows."""
+    try:
+        with _lock:
+            conn = _connect()
+            try:
+                cutoff = time.time() - ttl
+                cur = conn.execute("DELETE FROM pages WHERE ts < ?", (cutoff,))
+                deleted = cur.rowcount
+                conn.commit()
+                return deleted
+            finally:
+                conn.close()
+    except Exception as e:
+        log.debug("web cache prune failed: %s", e)
+        return 0
 
 
 def get_cached(url: str, raw: bool = False, ttl: float = _DEFAULT_TTL):

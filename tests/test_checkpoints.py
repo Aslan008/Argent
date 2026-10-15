@@ -285,6 +285,6 @@ class TestAgentTurnCheckpoint:
 
 class TestCheckpointEvent:
     def test_chunk_maps_to_structured_event(self):
-        from src.server.events import to_event
+        from src.bridge.events import to_event
         ev = to_event({"type": "checkpoint", "sha": "abc1234", "label": "почини меню"})
         assert ev == {"type": "checkpoint", "sha": "abc1234", "label": "почини меню"}

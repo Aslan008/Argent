@@ -46,7 +46,7 @@ Then, before writing a new script, `grep_search` for a similar existing one and 
 Full method: `read_skill("blind-spot-pass")`. The Unity-flavored quadrants:
 
 - **Stated** (known knowns): the mechanic/fix as asked. Restate it in one
-  sentence; pin with `set_goal`.
+  sentence clearly before writing code.
 - **Known unknowns** — decide or ask EARLY, they reshape the code: target
   platform(s) (WebGL has no threads; mobile has tight perf budgets), input
   devices (KB+M / gamepad / touch), must it survive scene loads or saves,

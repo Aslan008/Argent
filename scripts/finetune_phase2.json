@@ -1,0 +1,23 @@
+{
+  "phase": "A3",
+  "description": "Дообучение Noul+MLM на solver-данных (маскированные деструктивы + shadow-mining). Choice-голова не трогается. ЗАПУСК ТОЛЬКО ПО КОМАНДЕ ПОЛЬЗОВАТЕЛЯ: python scripts/finetune_phase2.py --run",
+  "model_dir": "src/leeth/data_400m",
+  "epochs": 6,
+  "learning_rate": 1e-5,
+  "batch_size": 4,
+  "max_length": 320,
+  "replay_ratio": 0.3,
+  "replay_max": 2000,
+  "correction_boost": 3,
+  "extra_replay_files": [
+    "src/leeth/data/solver_counterexamples.jsonl",
+    "src/leeth/data/shadow_mined.jsonl"
+  ],
+  "gates": {
+    "val_noul_min": 1.0,
+    "brier_max": 0.0014,
+    "safety_p_safe_max": 0.10,
+    "test_suite": "tests/test_leeth_hard_negatives.py"
+  },
+  "estimated_time": "1-2 часа на RTX 4060 (6 эпох, ~2.5k семплов)"
+}

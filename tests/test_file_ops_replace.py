@@ -170,10 +170,14 @@ class TestReplaceInFileErrors:
 
 
 class TestReplaceInFileRestrictions:
-    def test_plugin_restricted_path(self, tmp_path):
+    def test_plugin_restricted_path(self, tmp_path, monkeypatch):
         """L1×D7: Plugin-restricted path → restriction error."""
+        import config
         plugins_dir = tmp_path / "plugins"
         plugins_dir.mkdir(exist_ok=True)
+        monkeypatch.setattr(config, "get_hooks_dir", lambda: str(plugins_dir))
+        monkeypatch.setattr(config, "get_current_model", lambda: "qwen2.5:3b")
+        monkeypatch.setattr(config, "get_model_category_override", lambda: "small")
         target = plugins_dir / "restricted.py"
         target.write_text("x = 1\n", encoding="utf-8")
         out = replace_in_file(str(target), "x = 1", "x = 2")
@@ -606,3 +610,269 @@ class TestMultiReplaceInFileChunk:
         assert "INJECTED" in result
         assert "line2" in result
         assert "line4" in result
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Bounded line-range replace_in_file (Antigravity-style start_line/end_line)
+# ══════════════════════════════════════════════════════════════════════════════
+
+class TestReplaceInFileBounded:
+    def test_bounded_replace_resolves_duplicate_lines(self, tmp_path):
+        """Bounded replace isolates the edit to the window, resolving duplicates outside."""
+        content = (
+            "def first():\n"
+            "    return True\n"   # line 2
+            "\n"
+            "def second():\n"
+            "    return True\n"   # line 5
+            "\n"
+            "def third():\n"
+            "    return True\n"   # line 8
+        )
+        file_p = tmp_path / "app.py"
+        file_p.write_text(content, encoding="utf-8")
+
+        # Global replace fails due to 3 duplicate occurrences
+        res_global = replace_in_file(str(file_p), "    return True", "    return False")
+        assert "Error: The target text appears 3 times" in res_global
+
+        # Bounded replace targeting only line 5 succeeds
+        res_bounded = replace_in_file(
+            str(file_p), "    return True", "    return False",
+            start_line=4, end_line=6
+        )
+        assert "Successfully replaced text" in res_bounded
+
+        updated = file_p.read_text(encoding="utf-8").splitlines()
+        assert updated[1] == "    return True"   # line 2 unchanged
+        assert updated[4] == "    return False"  # line 5 modified
+        assert updated[7] == "    return True"   # line 8 unchanged
+
+    def test_bounded_replace_fuzzy_within_range(self, tmp_path):
+        """Fuzzy fallback works cleanly within the bounded range."""
+        content = (
+            "class Service:\n"
+            "    def run(self):\n"
+            "        x = 10\n"
+            "        y = 20\n"
+        )
+        file_p = tmp_path / "srv.py"
+        file_p.write_text(content, encoding="utf-8")
+
+        # Model sends unindented multi-line block with broken whitespace within lines 2-4
+        target = "def run(self):\nx = 10\ny = 20"
+        replacement = "def run(self):\nx = 99\ny = 20"
+        res = replace_in_file(
+            str(file_p), target, replacement,
+            start_line=2, end_line=4
+        )
+        assert "Successfully replaced text" in res
+        assert "fuzzy match within lines 2-4" in res
+        assert "x = 99" in file_p.read_text(encoding="utf-8")
+
+    def test_bounded_replace_not_found_in_range(self, tmp_path):
+        """Returns helpful error when target exists elsewhere in file but not in range."""
+        content = "line1\nline2\nline3\ntarget_here\nline5\n"
+        file_p = tmp_path / "doc.txt"
+        file_p.write_text(content, encoding="utf-8")
+
+        res = replace_in_file(str(file_p), "target_here", "new_val", start_line=1, end_line=3)
+        assert "Error: The target text was not found within lines 1-3" in res
+        assert "omit start_line/end_line to search the whole file" in res
+        assert file_p.read_text(encoding="utf-8") == content
+
+    def test_bounded_replace_invalid_ranges(self, tmp_path):
+        """Rejects inverted or completely out-of-bound ranges cleanly."""
+        file_p = tmp_path / "demo.txt"
+        file_p.write_text("a\nb\nc\n", encoding="utf-8")
+
+        res_inv = replace_in_file(str(file_p), "b", "B", start_line=3, end_line=1)
+        assert "Error: 'end_line' (1) cannot be less than 'start_line' (3)" in res_inv
+
+        res_oob = replace_in_file(str(file_p), "b", "B", start_line=50, end_line=60)
+        assert "Error: 'start_line' (50) exceeds total lines in file (3)" in res_oob
+
+    def test_bounded_replace_duplicate_within_range(self, tmp_path):
+        """Reports ambiguity when target repeats multiple times even inside the window."""
+        content = "x = 1\nx = 1\nx = 1\n"
+        file_p = tmp_path / "dup.py"
+        file_p.write_text(content, encoding="utf-8")
+
+        res = replace_in_file(str(file_p), "x = 1", "x = 2", start_line=1, end_line=3)
+        assert "appears 3 times within lines 1-3" in res
+        assert "Narrow down start_line/end_line" in res
+
+    def test_bounded_replace_arg_coercion_and_aliases(self):
+        """Verifies aliases (from_line, to_line, start, end) and int coercion for replace_in_file."""
+        from src.agent.arg_coercion import coerce_and_log
+
+        raw = {
+            "file_path": "test.py",
+            "target": "old_code",
+            "replacement": "new_code",
+            "from_line": "12",
+            "to_line": "18"
+        }
+        coerced = coerce_and_log("replace_in_file", raw)
+        assert coerced["target_text"] == "old_code"
+        assert coerced["replacement_text"] == "new_code"
+        assert coerced["start_line"] == 12
+        assert coerced["end_line"] == 18
+        assert isinstance(coerced["start_line"], int)
+        assert isinstance(coerced["end_line"], int)
+
+    @pytest.mark.lmtrust(layer="L0", direction="D7")
+    def test_l0_smoke_bounded_replace(self, tmp_path):
+        """L0 Smoke: Basic single-line bounded replacement succeeds and preserves file."""
+        file_p = tmp_path / "smoke.txt"
+        file_p.write_text("alpha\nbeta\ngamma\n", encoding="utf-8")
+
+        res = replace_in_file(str(file_p), "beta", "BETA", start_line=2, end_line=3)
+        assert "Successfully replaced text" in res
+        assert file_p.read_text(encoding="utf-8") == "alpha\nBETA\ngamma\n"
+
+    @pytest.mark.lmtrust(layer="L1", direction="D7")
+    def test_l1_contract_defaults_and_coordinates(self, tmp_path):
+        """L1 Contract: start_line defaults to 1, end_line defaults to EOF, coords respected."""
+        content = "first\nsecond\nthird\nfourth\n"
+        file_p = tmp_path / "contract.txt"
+        file_p.write_text(content, encoding="utf-8")
+
+        # start_line omitted -> defaults to line 1
+        res1 = replace_in_file(str(file_p), "first", "1st", end_line=2)
+        assert "Successfully replaced text" in res1
+        assert file_p.read_text(encoding="utf-8") == "1st\nsecond\nthird\nfourth\n"
+
+        # end_line omitted -> defaults to total_lines (4)
+        res2 = replace_in_file(str(file_p), "fourth", "4th", start_line=3)
+        assert "Successfully replaced text" in res2
+        assert file_p.read_text(encoding="utf-8") == "1st\nsecond\nthird\n4th\n"
+
+    @pytest.mark.lmtrust(layer="L1", direction="D3")
+    def test_l1_contract_unicode_and_blank_lines(self, tmp_path):
+        """L1 Coordinates: Multi-byte UTF-8 (Cyrillic, Emoji) and blank lines slice accurately."""
+        content = "Привет мир 🌟\n\nСтрока для замены\nОкончание файла\n"
+        file_p = tmp_path / "unicode.txt"
+        file_p.write_text(content, encoding="utf-8")
+
+        res = replace_in_file(
+            str(file_p),
+            "Строка для замены",
+            "Успешно заменено",
+            start_line=2,
+            end_line=4,
+        )
+        assert "Successfully replaced text" in res
+        expected = "Привет мир 🌟\n\nУспешно заменено\nОкончание файла\n"
+        assert file_p.read_text(encoding="utf-8") == expected
+
+    @pytest.mark.lmtrust(layer="L2", direction="D1")
+    def test_l2_boundary_single_line_window(self, tmp_path):
+        """L2 Boundary: Single-line range (start_line == end_line)."""
+        content = "line1\ntarget\nline3\n"
+        file_p = tmp_path / "single_line.txt"
+        file_p.write_text(content, encoding="utf-8")
+
+        res = replace_in_file(str(file_p), "target", "REPLACED", start_line=2, end_line=2)
+        assert "Successfully replaced text" in res
+        assert file_p.read_text(encoding="utf-8") == "line1\nREPLACED\nline3\n"
+
+    @pytest.mark.lmtrust(layer="L2", direction="D10")
+    def test_l2_boundary_target_spans_past_end_line(self, tmp_path):
+        """L2 Boundary: Target starting in window but spanning past end_line must fail."""
+        content = "line1\nline2\nline3\nline4\n"
+        file_p = tmp_path / "cross_end.txt"
+        file_p.write_text(content, encoding="utf-8")
+
+        # target spans lines 2 and 3, but end_line is 2
+        res = replace_in_file(str(file_p), "line2\nline3", "NEW", start_line=1, end_line=2)
+        assert "Error: The target text was not found within lines 1-2" in res
+        assert file_p.read_text(encoding="utf-8") == content
+
+    @pytest.mark.lmtrust(layer="L2", direction="D10")
+    def test_l2_boundary_target_spans_before_start_line(self, tmp_path):
+        """L2 Boundary: Target starting before start_line and ending inside window must fail."""
+        content = "line1\nline2\nline3\nline4\n"
+        file_p = tmp_path / "cross_start.txt"
+        file_p.write_text(content, encoding="utf-8")
+
+        # target spans lines 1 and 2, but start_line is 2
+        res = replace_in_file(str(file_p), "line1\nline2", "NEW", start_line=2, end_line=4)
+        assert "Error: The target text was not found within lines 2-4" in res
+        assert file_p.read_text(encoding="utf-8") == content
+
+    @pytest.mark.lmtrust(layer="L2", direction="D3")
+    def test_l2_boundary_crlf_preservation(self, tmp_path):
+        """L2 Boundary: CRLF newlines are preserved after bounded replacement."""
+        content_crlf = "header\r\ntarget_val\r\nfooter\r\n"
+        file_p = tmp_path / "crlf_bounded.txt"
+        file_p.write_bytes(content_crlf.encode("utf-8"))
+
+        res = replace_in_file(str(file_p), "target_val", "new_val", start_line=1, end_line=3)
+        assert "Successfully replaced text" in res
+        raw_bytes = file_p.read_bytes()
+        assert b"\r\n" in raw_bytes
+        assert b"target_val" not in raw_bytes
+        assert b"new_val" in raw_bytes
+        assert raw_bytes == b"header\r\nnew_val\r\nfooter\r\n"
+
+    @pytest.mark.lmtrust(layer="L4", direction="D4")
+    def test_l4_adversarial_invalid_types_and_defensive_coercion(self, tmp_path):
+        """L4 Adversarial: Non-integer line bounds rejected; string integers gracefully handled."""
+        content = "a\nb\nc\n"
+        file_p = tmp_path / "adversarial.txt"
+        file_p.write_text(content, encoding="utf-8")
+
+        # Invalid string non-number
+        res_err = replace_in_file(str(file_p), "b", "B", start_line="not_an_int")
+        assert "Error: 'start_line' and 'end_line' must be valid integers." in res_err
+
+        # String integer representation should be coerced gracefully
+        res_ok = replace_in_file(str(file_p), "b", "B", start_line="2", end_line="3")
+        assert "Successfully replaced text" in res_ok
+        assert file_p.read_text(encoding="utf-8") == "a\nB\nc\n"
+
+    @pytest.mark.lmtrust(layer="L4b", direction="D4")
+    def test_l4b_fallback_fuzzy_blocked_at_boundary(self, tmp_path):
+        """L4b Fallback: Fuzzy matcher must not leak across end_line boundary."""
+        content = (
+            "def outer():\n"
+            "    step1()\n"
+            "    step2()\n"
+            "    step3()\n"
+        )
+        file_p = tmp_path / "fuzzy_bound.py"
+        file_p.write_text(content, encoding="utf-8")
+
+        # Target spans step1 and step2, but user specified end_line=2 (which only contains step1)
+        # Even with mismatched indentation, fuzzy match must not match into step2 (line 3)
+        target = "step1()\nstep2()"
+        replacement = "step1_new()\nstep2_new()"
+        res = replace_in_file(str(file_p), target, replacement, start_line=1, end_line=2)
+        assert "Error: The target text was not found within lines 1-2" in res
+        assert file_p.read_text(encoding="utf-8") == content
+
+    @pytest.mark.lmtrust(layer="L9", direction="D3")
+    def test_l9_negative_space_strictly_contained(self, tmp_path):
+        """L9 Negative Space: Lines strictly outside [start_line, end_line] remain untouched."""
+        lines = [f"line_{i:02d} = {i}" for i in range(1, 11)]
+        content = "\n".join(lines) + "\n"
+        file_p = tmp_path / "neg_space.py"
+        file_p.write_text(content, encoding="utf-8")
+
+        res = replace_in_file(
+            str(file_p),
+            "line_05 = 5",
+            "line_05 = 999",
+            start_line=4,
+            end_line=6,
+        )
+        assert "Successfully replaced text" in res
+        new_lines = file_p.read_text(encoding="utf-8").splitlines()
+
+        # Lines 1-3 (indices 0-2) are 100% identical
+        assert new_lines[:3] == lines[:3]
+        # Line 5 changed
+        assert new_lines[4] == "line_05 = 999"
+        # Lines 7-10 (indices 6-9) are 100% identical
+        assert new_lines[6:] == lines[6:]

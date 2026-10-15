@@ -9,6 +9,7 @@ Each check returns (status, detail) where status is "ok" / "warn" / "fail".
 
 import importlib.util
 import platform
+import host_os
 import sys
 from pathlib import Path
 
@@ -50,7 +51,7 @@ def _check_version():
 
 def _check_python():
     v = sys.version_info
-    detail = f"Python {v.major}.{v.minor}.{v.micro} on {platform.system()}"
+    detail = f"Python {v.major}.{v.minor}.{v.micro} on {host_os.system()}"
     return (OK if v >= (3, 10) else WARN, detail)
 
 
@@ -173,7 +174,7 @@ def _check_optional_deps():
     deps = {
         "json5": "tolerant JSON parsing for weak models",
         "tiktoken": "precise token counting fallback",
-        "jedi": "find_definition / find_references",
+        "jedi": "code navigation fallback in grep_search",
         "ddgs": "web search",
     }
     missing = [f"{name} ({why})" for name, why in deps.items() if not _module_available(name)]
@@ -186,14 +187,47 @@ def _check_mcp():
     servers = get_mcp_servers()
     if not servers:
         return (OK, "no servers configured")
-    names = ", ".join(f"{s['name']} ({s.get('type', 'stdio')})" for s in servers)
-    return (OK, f"{len(servers)} configured: {names}")
+
+    import shutil
+    import socket
+
+    status = OK
+    details = []
+
+    for s in servers:
+        name = s["name"]
+        stype = s.get("type", "stdio")
+        cmd = s.get("command")
+        if stype == "stdio" and cmd and not shutil.which(cmd):
+            status = WARN
+            details.append(f"{name} ({stype}: '{cmd}' not in PATH)")
+            continue
+
+        if name == "blender":
+            probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            probe.settimeout(0.2)
+            try:
+                is_listening = (probe.connect_ex(("localhost", 9876)) == 0)
+            except Exception:
+                is_listening = False
+            finally:
+                probe.close()
+
+            if is_listening:
+                details.append(f"{name} ({stype}, Blender online :9876)")
+            else:
+                details.append(f"{name} ({stype}, Blender not running on :9876)")
+        else:
+            details.append(f"{name} ({stype})")
+
+    return (status, f"{len(servers)} configured: " + ", ".join(details))
 
 
 def _check_lsp():
     """LSP (multilspy) provides instant diagnostics after edits and cross-
-    language find_definition / find_references. Without it, Argent falls back
-    to Jedi (Python only) and the model discovers errors only at runtime."""
+    language code navigation inside grep_search (target=definition, references,
+    implementations, call_hierarchy). Without it, Argent falls back to Jedi
+    (Python only) and the model discovers errors only at runtime."""
     if not _module_available("multilspy"):
         return (WARN, "multilspy not installed — LSP diagnostics unavailable "
                       "(pip install multilspy or pip install argent-coder[lsp])")
@@ -201,12 +235,11 @@ def _check_lsp():
         from src.lsp.manager import lsp_manager
         if lsp_manager.is_available():
             exts = sorted(lsp_manager.supported_extensions())
-            ops = ("check_code (diagnostics), find_definition, find_references, "
-                   "find_implementations, search_workspace_symbols, get_call_hierarchy, "
-                   "get_hover, get_document_symbols")
+            ops = ("post-edit diagnostics; grep_search target=definition / references / "
+                   "implementations / call_hierarchy / symbol")
             return (OK, f"multilspy ready — {len(exts)} extensions: "
                         + ", ".join(exts[:8]) + ("…" if len(exts) > 8 else "")
-                        + f"; tools: {ops}")
+                        + f"; used for: {ops}")
         return (WARN, "multilspy installed but no language server could start")
     except Exception as e:
         return (WARN, f"multilspy check failed: {e}")
@@ -239,6 +272,26 @@ def _check_extensions():
     return (OK, f"{plugins} plugin(s) in {hooks_dir.name}/, {skills} skill(s) in {skills_dir.name}/")
 
 
+def _check_local_server():
+    """Is the main model on this PC, and if so: is the request queue on and is the PC under load?"""
+    from src.agent import governor
+    from src.agent.local_backend import classify
+    provider = get_provider()
+    backend = classify(provider, get_current_model())
+    if not backend.local:
+        return (OK, f"{provider} is not on this PC - no local load")
+    cfg = governor.settings()
+    queue = f"queue on (parallelism {cfg['parallelism']})" if cfg["enabled"] else "queue OFF (/lanes on)"
+    try:
+        from src.agent.pressure import monitor
+        mon = monitor()
+        if mon.sample():
+            return (WARN, f"{backend.family} on port {backend.port}, {queue}; the PC is busy: {mon.reason}")
+    except Exception:
+        pass
+    return (OK, f"{backend.family} on port {backend.port}, {queue}")
+
+
 def _check_config():
     return (OK, str(CONFIG_FILE))
 
@@ -249,6 +302,7 @@ CHECKS = [
     ("Provider", _check_provider),
     ("Model & tier", _check_model_tier),
     ("Auxiliary model", _check_auxiliary_model),
+    ("Local model server", _check_local_server),
     ("Browser automation", _check_browser),
     ("RAG / semantic search", _check_rag),
     ("Web search engines", _check_web_search),

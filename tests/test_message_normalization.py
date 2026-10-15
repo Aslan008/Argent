@@ -71,3 +71,47 @@ class TestNormalizeOutgoingMessages:
     def test_available_on_subclasses(self):
         # ZAIProvider inherits the same normalization.
         assert ZAIProvider._normalize_outgoing_messages is OpenAICompatibleProvider._normalize_outgoing_messages
+
+    def test_initial_system_message_preserved(self):
+        msgs = [
+            {"role": "system", "content": "You are Argent."},
+            {"role": "user", "content": "Hello"},
+        ]
+        out = norm(msgs)
+        assert out[0]["role"] == "system"
+        assert out[0]["content"] == "You are Argent."
+        assert out[1]["role"] == "user"
+
+    def test_subsequent_system_messages_converted_to_user(self):
+        msgs = [
+            {"role": "system", "content": "You are Argent."},
+            {"role": "user", "content": "Hello"},
+            {"role": "assistant", "content": "Hi!"},
+            {"role": "system", "content": "# REPOSITORY CONTEXT\nfiles..."},
+            {"role": "system", "content": "[Objective Reminder]\nfocus..."},
+        ]
+        out = norm(msgs)
+        # First remains system
+        assert out[0]["role"] == "system"
+        assert out[0]["content"] == "You are Argent."
+        # Intermediates remain untouched
+        assert out[1]["role"] == "user"
+        assert out[2]["role"] == "assistant"
+        # Non-initial system messages converted to user
+        assert out[3]["role"] == "user"
+        assert out[3]["content"] == "# REPOSITORY CONTEXT\nfiles..."
+        assert out[4]["role"] == "user"
+        assert out[4]["content"] == "[Objective Reminder]\nfocus..."
+        # Original messages list must not be mutated
+        assert msgs[3]["role"] == "system"
+        assert msgs[4]["role"] == "system"
+
+    def test_system_message_at_non_zero_index_without_initial_system(self):
+        msgs = [
+            {"role": "user", "content": "Query without initial system prompt"},
+            {"role": "system", "content": "Tail context"},
+        ]
+        out = norm(msgs)
+        assert out[0]["role"] == "user"
+        assert out[1]["role"] == "user"
+        assert out[1]["content"] == "Tail context"

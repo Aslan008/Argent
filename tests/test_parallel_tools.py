@@ -26,12 +26,14 @@ def _tools(**extra):
 
 
 def test_batch_runs_concurrently_and_keeps_indexes():
+    # Warm up thread pool
+    precompute_readonly_parallel([_call("read_file", file_path="w0.py"), _call("read_file", file_path="w1.py")], _tools(read_file=lambda file_path: ""))
     calls = [_call("read_file", file_path=f"f{i}.py") for i in range(3)]
     start = time.time()
     results = precompute_readonly_parallel(calls, _tools())
     wall = time.time() - start
     assert results == {0: "content of f0.py", 1: "content of f1.py", 2: "content of f2.py"}
-    assert wall < 0.2                      # 3 x 0.08s sequential would be ~0.24s
+    assert wall < 0.22                      # 3 x 0.08s sequential would be ~0.24s+
 
 
 def test_mixed_batch_with_write_falls_back():

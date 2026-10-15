@@ -32,6 +32,9 @@ def bare(monkeypatch):
     a.max_context_tokens = 8192
     a.strategy = _Strategy()
     a._native_tools_unsupported = False
+    a.loop_guard = agent_module.LoopGuard()
+    a.semantic_loop_guard = agent_module.SemanticLoopGuard()
+    a._read_cache = {}
     monkeypatch.setattr(ArgentAgent, "_refresh_system_prompt", lambda self, t=None: False)
     monkeypatch.setattr(ArgentAgent, "_trim_history", lambda self: None)
     monkeypatch.setattr(agent_module.memory, "data", {"objective": "x"}, raising=False)
@@ -143,10 +146,66 @@ class TestAccounting:
             def validate_config(self): return None
             def supports_constrained_decoding(self): return False
             def stream_chat(self, **kw):
-                yield {"content": "done"}
+                yield {"content": "Here is the completed response."}
 
         monkeypatch.setattr(agent_module, "create_provider", lambda p: _P())
         with caplog.at_level(logging.INFO, logger=agent_module.log.name):
             list(bare.process_user_input("hi"))
         line = _reasons(caplog)[0]
         assert "tool call(s) in" in line and line.rstrip().endswith(("s", "s]"))
+
+    def test_non_heartbeat_tool_with_heartbeat_text_does_not_abort_turn(self, bare, monkeypatch, caplog):
+        """Reading code or files containing [HEARTBEAT_REQUEST: must not trigger a heartbeat abort."""
+        class _P:
+            def validate_config(self): return None
+            def supports_constrained_decoding(self): return False
+            def format_tool_result(self, result, call_id=None):
+                return {"role": "tool", "content": result, "tool_call_id": call_id or "c1"}
+            def stream_chat(self, messages, **kw):
+                # If last message is tool result, give final answer
+                if messages and messages[-1].get("role") == "tool":
+                    yield {"content": "I finished analyzing the code."}
+                else:
+                    yield {
+                        "tool_call_deltas": [{
+                            "index": 0,
+                            "id": "c1",
+                            "function_name_delta": "read_file",
+                            "function_arguments_delta": '{"file_path": "agent.py"}',
+                        }]
+                    }
+
+        monkeypatch.setattr(agent_module, "create_provider", lambda p: _P())
+        monkeypatch.setattr(agent_module, "get_available_tools",
+                            lambda: {"read_file": lambda file_path: "code containing [HEARTBEAT_REQUEST: 0|build]"})
+        with caplog.at_level(logging.INFO, logger=agent_module.log.name):
+            list(bare.process_user_input("hi"))
+        joined = " ".join(_reasons(caplog))
+        assert "heartbeat_signal" not in joined
+        assert "final answer" in joined
+
+    def test_wait_heartbeat_tool_triggers_heartbeat_signal(self, bare, monkeypatch, caplog):
+        """wait_heartbeat tool returning [HEARTBEAT_REQUEST: must trigger heartbeat_signal."""
+        class _P:
+            def validate_config(self): return None
+            def supports_constrained_decoding(self): return False
+            def format_tool_result(self, result, call_id=None):
+                return {"role": "tool", "content": result, "tool_call_id": call_id or "c1"}
+            def stream_chat(self, messages, **kw):
+                yield {
+                    "tool_call_deltas": [{
+                        "index": 0,
+                        "id": "c1",
+                        "function_name_delta": "wait_heartbeat",
+                        "function_arguments_delta": '{"delay_seconds": 60}',
+                    }]
+                }
+
+        monkeypatch.setattr(agent_module, "create_provider", lambda p: _P())
+        monkeypatch.setattr(agent_module, "get_available_tools",
+                            lambda: {"wait_heartbeat": lambda **kw: "Heartbeat scheduled. [HEARTBEAT_REQUEST: 60|wait]"})
+        with caplog.at_level(logging.INFO, logger=agent_module.log.name):
+            list(bare.process_user_input("hi"))
+        joined = " ".join(_reasons(caplog))
+        assert "heartbeat_signal" in joined
+

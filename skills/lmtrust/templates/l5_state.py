@@ -33,11 +33,13 @@ class Enemy:
 class TestState:
     """L5: State machine tests — состояния и переходы."""
 
+    @pytest.mark.lmtrust(layer="L5", direction="D2")
     def test_alive_after_creation(self):
         """Начальное состояние — alive."""
         enemy = Enemy(hp=100)
         assert enemy.state == "alive"
 
+    @pytest.mark.lmtrust(layer="L5", direction="D2")
     def test_dead_after_kill(self):
         """Переход alive → dead при HP <= 0."""
         enemy = Enemy(hp=100)
@@ -45,6 +47,7 @@ class TestState:
         assert enemy.state == "dead"
         assert enemy.hp == 0
 
+    @pytest.mark.lmtrust(layer="L5", direction="D2")
     def test_dead_not_healable(self):
         """Dead — терминальное: heal не работает."""
         enemy = Enemy(hp=100)
@@ -54,6 +57,7 @@ class TestState:
         assert enemy.state == "dead", "Dead enemy was healed!"
         assert enemy.hp == 0
 
+    @pytest.mark.lmtrust(layer="L5", direction="D2")
     def test_double_death(self):
         """Повторный урон мёртвому врагу — идемпотентен."""
         enemy = Enemy(hp=100)
@@ -62,6 +66,7 @@ class TestState:
         assert result == 0, "Dead enemy should return 0 from take_damage"
         assert enemy.hp == 0
 
+    @pytest.mark.lmtrust(layer="L5", direction="D2")
     def test_partial_damage_keeps_alive(self):
         """Частичный урон сохраняет alive."""
         enemy = Enemy(hp=100)

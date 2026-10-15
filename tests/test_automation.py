@@ -28,7 +28,7 @@ class TestParseSchedule:
 
     def test_sub_minute_is_refused(self):
         # An unattended loop at this rate is a token fire-hose nobody is watching.
-        with pytest.raises(ScheduleError, match="too small"):
+        with pytest.raises(ScheduleError, match="слишком мал"):
             parse_schedule("every 0m")
 
     @pytest.mark.parametrize("text", ["", "   ", "sometimes", "every banana", "daily at 25:00"])
@@ -312,7 +312,7 @@ class TestAddCommandToolSpec:
     can only set by hand-editing JSON is a limit nobody sets."""
 
     def _parse(self, spec):
-        from main import _parse_task_tools
+        from src.cli.commands.agent_commands import _parse_task_tools
         return _parse_task_tools(spec)
 
     def test_no_segment_means_the_default_set(self):

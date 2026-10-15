@@ -9,5 +9,5 @@ aliases: []
 ---
 ```
 ).
-Use `read_file` and `multi_replace_in_file_chunk` for reading and editing existing notes.
+Use `read_file` and `replace_in_file` for reading and editing existing notes.
 Use `grep_search` to search through notes in the vault.

@@ -26,6 +26,7 @@ class _Proc:
         self.returncode = 0
         self._done = False
         self._closed = False
+        self.pid = -1  # Fake PID so _kill_process_tree can proceed
 
         def _write():
             try:
@@ -53,6 +54,12 @@ class _Proc:
         self._done = True
         self.returncode = -15
         self._close_write()          # unblock the reader -> EOF
+
+    def kill(self):
+        """Called by _kill_process_tree fallback when taskkill fails."""
+        self._done = True
+        self.returncode = -9
+        self._close_write()
 
     def wait(self):
         return self.returncode

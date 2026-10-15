@@ -111,12 +111,19 @@ def _process_running(pid) -> bool:
     return not _process_finished(pid)
 
 
+def _subagent_finished(run_id) -> bool:
+    """True once the background sub-agent has ended (or never existed — a wait on it would never end)."""
+    from src.agent.subagents import MANAGER
+    return MANAGER.is_finished(run_id)
+
+
 PREDICATES = {
     "file_exists": _file_exists,
     "file_missing": _file_missing,
     "file_contains": _file_contains,
     "process_finished": _process_finished,
     "process_running": _process_running,
+    "subagent_finished": _subagent_finished,
 }
 
 
@@ -185,10 +192,23 @@ def evaluate(condition: str) -> bool:
     return _eval_node(tree.body[0].value)
 
 
+def condition_wake_message(until: str, reason: str, met: bool, why: str, waited) -> str:
+    """What the model is told when a wait on a condition ends — shared by every frontend."""
+    return (
+        f"[Heartbeat пробуждение] Ожидалось условие: {until}\n"
+        f"Результат: {why} (ждали {waited} сек.).\n"
+        f"Исходная причина ожидания: {reason}\n"
+        + ("Условие выполнено — продолжай." if met else
+           "Условие НЕ выполнено. Не считай ожидаемое событие произошедшим: "
+           "проверь состояние сам и реши, ждать ли дальше, "
+           "действовать иначе или подвести итог.")
+    )
+
+
 def describe_predicates() -> str:
     """One-line summary for prompts and error messages."""
     return ("file_exists(path), file_missing(path), file_contains(path, text), "
-            "process_finished(pid), process_running(pid); combine with and / or / not")
+            "process_finished(pid), process_running(pid), subagent_finished(id); combine with and / or / not")
 
 
 def wait_for(condition: str, timeout: float = None,

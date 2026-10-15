@@ -52,7 +52,7 @@ _ALLOWED_FUNCTIONS = {
     "together", "collect", "nsolve", "roots", "Eq", "degree", "div", "rem",
     "Ne", "Lt", "Le", "Gt", "Ge", "solve_univariate_inequality", "reduce_inequalities",
     # differential equations
-    "dsolve", "Function", "Derivative", "checkodesol", "classify_ode",
+    "dsolve", "Function", "checkodesol", "classify_ode",
     # linear algebra (methods need attributes, so the functional forms are exposed)
     "Matrix", "det", "trace", "transpose", "eye", "zeros", "ones", "diag",
     "nsimplify", "factorint",

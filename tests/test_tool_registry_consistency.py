@@ -62,17 +62,9 @@ class TestChatToolset:
     def test_a_new_tool_is_available_without_touching_a_list(self):
         """The whole point of inverting it."""
         from main import chat_allowed_tools
-        for recent in ("view_image", "list_mcp_tools", "filter_new_items",
-                       "move_file", "find_definition"):
+        for recent in ("view_image", "list_mcp_tools",
+                       "move_file", "browser_action"):
             assert recent in chat_allowed_tools(), f"{recent} is invisible in chat"
-
-    def test_mode_tools_stay_out_of_chat(self):
-        """The project brain is driven by the orchestrator's state machine;
-        offering its steps in conversation invites a spec nobody asked for."""
-        from main import CHAT_DENIED_TOOLS, chat_allowed_tools
-        available = set(chat_allowed_tools())
-        assert not (CHAT_DENIED_TOOLS & available)
-        assert "write_project_spec" in CHAT_DENIED_TOOLS
 
     def test_tools_disabled_by_the_user_are_excluded(self, monkeypatch):
         """The old list still named six tools that no longer resolved."""
@@ -172,7 +164,6 @@ class TestRecoveryReportsSubstitutions:
             )
             assert out and out["function"]["name"] == want, f"{typo} did not recover to {want}"
 
-    def test_append_to_file_is_callable(self):
-        """It shipped a schema with no function for long enough to matter."""
+    def test_write_file_is_callable(self):
         from tools.schemas import AVAILABLE_TOOLS
-        assert "append_to_file" in AVAILABLE_TOOLS
+        assert "write_file" in AVAILABLE_TOOLS

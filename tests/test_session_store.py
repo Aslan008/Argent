@@ -181,6 +181,19 @@ class TestHousekeeping:
         save_session(_chat(user="второе"), {"model": "m"})
         assert get_last_session()["preview"] == "второе"
 
+    def test_save_stamps_never_repeat_even_if_the_clock_does(self, monkeypatch):
+        """The Windows clock ticks in ~15 ms steps: with equal stamps "newest first" returned the older session."""
+        frozen = session_module.datetime.now()
+
+        class _Frozen(session_module.datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return frozen
+
+        monkeypatch.setattr(session_module, "datetime", _Frozen)
+        stamps = [session_module._save_stamp() for _ in range(5)]
+        assert stamps == sorted(set(stamps))
+
     def test_unserializable_values_do_not_break_the_save(self):
         msgs = _chat()
         msgs.append({"role": "assistant", "content": "x", "obj": object()})
@@ -207,3 +220,35 @@ class TestHousekeeping:
         b = save_session(_chat(user="второе"), {"model": "m"})
         assert a != b
         assert {load_session(a)["preview"], load_session(b)["preview"]} == {"первое", "второе"}
+
+
+class TestSessionEnhancements:
+    def test_filtering_by_current_directory(self, tmp_path, monkeypatch):
+        other = tmp_path / "Other"
+        other.mkdir()
+        save_session(_chat(user="здесь"), {"cwd": str(tmp_path)})
+        save_session(_chat(user="там"), {"cwd": str(other)})
+        
+        monkeypatch.chdir(tmp_path)
+        here_sessions = session_module.list_sessions(".")
+        assert len(here_sessions) == 1
+        assert here_sessions[0]["preview"] == "здесь"
+
+    def test_format_relative_time(self):
+        from datetime import datetime, timedelta
+        from session import format_relative_time
+        
+        now = datetime.now()
+        just_now = now.isoformat()
+        assert format_relative_time(just_now) in ("только что", "0 мин назад")
+        
+        ten_mins_ago = (now - timedelta(minutes=10)).isoformat()
+        assert format_relative_time(ten_mins_ago) == "10 мин назад"
+
+    def test_format_short_path(self, monkeypatch):
+        from pathlib import Path
+        from session import format_short_path
+        home = Path.home()
+        test_path = home / "Desktop" / "Project"
+        assert format_short_path(str(test_path)) == "~/Desktop/Project"
+

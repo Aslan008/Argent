@@ -455,9 +455,9 @@ class TestTryRecoverMalformedTool:
         assert result is not None
         assert result["parsed"]["arguments"]["file_path"] == "z.txt"
 
-    def test_replace_python_function_recovery(self):
-        raw = '{"name": "replace_python_function", "arguments": {"file_path": "z.py", "content": "def f(): pass"}}'
-        result = try_recover_malformed_tool(raw, "replace_python_function")
+    def test_replace_in_file_recovery(self):
+        raw = '{"name": "replace_in_file", "arguments": {"file_path": "z.py", "content": "def f(): pass"}}'
+        result = try_recover_malformed_tool(raw, "replace_in_file")
         assert result is not None
 
     def test_filename_alias_in_recovery(self):

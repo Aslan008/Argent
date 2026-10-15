@@ -62,3 +62,26 @@ def repair_structure(value):
         repaired = [repair_structure(v) for v in value]
         return value if all(a is b for a, b in zip(repaired, value)) else repaired
     return value
+
+
+# ── terminal escape sequences ────────────────────────────────────────────────
+# What a program prints for a terminal is not text for a model: colours, a hidden cursor, a window title,
+# a hyperlink. The old filter knew only `ESC [ digits letter`; `ESC [ ? 25 l` (hide cursor, printed by
+# every progress bar), `ESC ] 0 ; title BEL` and `ESC ( B` went through as garbage.
+import re as _re
+
+_ESCAPES = _re.compile(
+    r"\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)"      # OSC ... BEL or ST: title, hyperlink
+    r"|\x1b[PX^_][^\x1b]*\x1b\\"              # DCS / SOS / PM / APC ... ST
+    r"|\x1b\[[0-?]*[ -/]*[@-~]"               # CSI: parameters, intermediates, final byte
+    r"|\x1b[ -/]+[0-~]"                       # ESC ( B, ESC # 8: intermediates then a final byte
+    r"|\x1b[0-~]"                             # ESC 7, ESC =, ESC c
+    r"|\x9b[0-?]*[ -/]*[@-~]"                 # 8-bit CSI
+)
+
+
+def strip_terminal_escapes(text: str) -> str:
+    """`text` without ANSI/VT escape sequences (colour, cursor, OSC titles and links)."""
+    if not text or ("\x1b" not in text and "\x9b" not in text):
+        return text
+    return _ESCAPES.sub("", text)

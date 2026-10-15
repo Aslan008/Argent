@@ -36,6 +36,7 @@ class Player:
 class TestCompositional:
     """L7: Compositional failure tests — комбинации сбоев."""
 
+    @pytest.mark.lmtrust(layer="L7", direction="D4")
     def test_damage_after_failed_heal(self):
         """Сбой heal (NaN) + последующий take_damage — состояние не повреждено."""
         player = Player(hp=50, shield=0)
@@ -48,6 +49,7 @@ class TestCompositional:
         assert math.isfinite(player.hp), "State corrupted by failed heal"
         assert player.hp == 20, f"HP should be 20, got {player.hp}"
 
+    @pytest.mark.lmtrust(layer="L7", direction="D4")
     def test_shield_depleted_and_heal(self):
         """Shield исчерпан + heal — комбинация двух операций."""
         player = Player(hp=100, shield=20)
@@ -57,6 +59,7 @@ class TestCompositional:
         player.heal(20)  # heal: HP 70→90
         assert player.hp == 90
 
+    @pytest.mark.lmtrust(layer="L7", direction="D4")
     def test_damage_exceeding_shield_and_hp(self):
         """Урон больше shield + больше HP — оба пути задействованы."""
         player = Player(hp=30, shield=20)

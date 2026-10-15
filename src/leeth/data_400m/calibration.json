@@ -1,0 +1,18 @@
+{
+  "choice_temperature": 1.0,
+  "noul_temperature": 1.0,
+  "fitted_candidates": {
+    "choice": 0.88,
+    "noul": 0.3
+  },
+  "decision": "post-hoc fit REJECTED: ECE(choice)=0.0112 at T=1 already < 0.05; fit worsened ECE to 0.0349; noul head saturated (ECE ~0, acc 100%)",
+  "model_internal_temperature": 1.184,
+  "fit": {
+    "val_choice_n": 1012,
+    "val_noul_n": 836,
+    "choice_nll_before": 0.4539030194282532,
+    "choice_nll_after": 0.4411914348602295,
+    "noul_nll_before": 2.987445668622968e-07,
+    "noul_nll_after": 1.1459079019005003e-07
+  }
+}

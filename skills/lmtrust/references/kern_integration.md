@@ -83,7 +83,7 @@ def EXHAUSTIVE():
 ### Команда запуска
 
 ```bash
-python C:\Users\mshat\Desktop\kern\gate.py spec_calculate_damage.py ai_calculate_damage.py
+python C:\Users\user\Desktop\kern\gate.py spec_calculate_damage.py ai_calculate_damage.py
 ```
 
 Ранги: Черновик → Примеры → Свойства → Дифференциал → Исчерпание → Proved

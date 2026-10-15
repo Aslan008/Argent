@@ -195,12 +195,13 @@ class TestWriteFileOverwrite:
 
 class TestWriteFileRestrictions:
     def test_plugin_restricted_py_path(self, tmp_path, monkeypatch):
-        """A .py file inside the plugins/ directory is restricted."""
-        from config import get_hooks_dir
-        # get_hooks_dir defaults to cwd/plugins; with chdir(tmp_path) it is
-        # tmp_path/plugins. Ensure the plugins dir exists so the path resolves.
+        """A .py file inside the plugins/ directory is restricted for small models."""
+        import config
         plugins_dir = tmp_path / "plugins"
         plugins_dir.mkdir(exist_ok=True)
+        monkeypatch.setattr(config, "get_hooks_dir", lambda: str(plugins_dir))
+        monkeypatch.setattr(config, "get_current_model", lambda: "qwen2.5:3b")
+        monkeypatch.setattr(config, "get_model_category_override", lambda: "small")
         target = plugins_dir / "something.py"
         out = write_file(str(target), "x = 1\n")
         assert "restricted" in out.lower() or "plugins" in out.lower()
@@ -375,12 +376,16 @@ class TestDeleteFile:
         """A plugin-restricted path returns the restriction error BEFORE the
         approval check is even reached."""
         import approval
+        import config
         called = {"approval": False}
         monkeypatch.setattr(
             approval, "request_approval", lambda *a, **k: called.__setitem__("approval", True) or False
         )
         plugins_dir = tmp_path / "plugins"
         plugins_dir.mkdir(exist_ok=True)
+        monkeypatch.setattr(config, "get_hooks_dir", lambda: str(plugins_dir))
+        monkeypatch.setattr(config, "get_current_model", lambda: "qwen2.5:3b")
+        monkeypatch.setattr(config, "get_model_category_override", lambda: "small")
         target = plugins_dir / "restricted.py"
         target.write_text("x = 1\n", encoding="utf-8")
         out = delete_file(str(target))

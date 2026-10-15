@@ -1,6 +1,5 @@
 import json
 import re
-import os
 from tools import get_available_tools
 
 # Parameter name aliases for known tools
@@ -29,6 +28,11 @@ _PARAM_ALIASES = {
         "file": "file_path",
         "filepath": "file_path",
     },
+    "multi_replace_in_file": {
+        "changes": "changes_json",
+        "replacements": "changes_json",
+        "edits": "changes_json",
+    },
     "replace_python_function": {
         "filename": "file_path",
         "path": "file_path",
@@ -51,6 +55,11 @@ _PARAM_ALIASES = {
         "dir": "directory",
         "path": "directory",
         "directory_path": "directory",
+        "search_path": "directory",
+        "searchpath": "directory",
+        "query": "pattern",
+        "regex": "pattern",
+        "search_query": "pattern",
     },
     "move_file": {
         "src": "source",
@@ -70,14 +79,26 @@ _PARAM_ALIASES = {
 
 def normalize_tool_params(parsed: dict) -> dict:
     """Normalize parameter names to match expected tool schemas."""
+    if not isinstance(parsed, dict):
+        return parsed
     tool_name = parsed.get("name", "")
-    arguments = parsed.get("arguments", {})
+    arguments = parsed.get("arguments")
+    if not isinstance(arguments, dict):
+        return parsed
     aliases = _PARAM_ALIASES.get(tool_name)
     if aliases:
         normalized = {}
         for key, value in arguments.items():
             canonical = aliases.get(key, key)
-            normalized[canonical] = value
+            if canonical in normalized:
+                # If canonical already holds a non-empty value, an alias cannot overwrite it
+                if normalized[canonical] and (key != canonical or value is None or value == ""):
+                    continue
+                # If current has value and existing was empty/None, overwrite
+                if value is not None and value != "":
+                    normalized[canonical] = value
+            else:
+                normalized[canonical] = value
         parsed["arguments"] = normalized
     return parsed
 
@@ -286,9 +307,28 @@ def fix_common_json_errors(json_str: str) -> str:
     s = re.sub(r',\s*\}', '}', s)
     s = re.sub(r',\s*\]', ']', s)
     
-    # Append missing closers
-    open_braces = s.count('{') - s.count('}')
-    open_brackets = s.count('[') - s.count(']')
+    # Count braces strictly OUTSIDE string literals to avoid corrupting valid code
+    open_braces = 0
+    open_brackets = 0
+    in_string = False
+    escape = False
+    for ch in s:
+        if ch == '"' and not escape:
+            in_string = not in_string
+        elif ch == '\\' and in_string and not escape:
+            escape = True
+            continue
+        elif not in_string:
+            if ch == '{':
+                open_braces += 1
+            elif ch == '}':
+                open_braces = max(0, open_braces - 1)
+            elif ch == '[':
+                open_brackets += 1
+            elif ch == ']':
+                open_brackets = max(0, open_brackets - 1)
+        escape = False
+
     if open_brackets > 0:
         s += ']' * open_brackets
     if open_braces > 0:
@@ -297,13 +337,17 @@ def fix_common_json_errors(json_str: str) -> str:
 
 def try_parse_json_tool(json_str: str) -> dict | None:
     """Try to parse a JSON string as a tool call."""
+    # First repair control chars inside JSON strings
+    repaired_json = repair_json_strings(json_str)
     try:
-        # First repair control chars inside JSON strings
-        repaired_json = repair_json_strings(json_str)
-        repaired_json = fix_common_json_errors(repaired_json)
         parsed = json.loads(repaired_json)
     except json.JSONDecodeError:
-        return None
+        try:
+            # Fall back to aggressive structural error fixing only if raw parse failed
+            fixed_json = fix_common_json_errors(repaired_json)
+            parsed = json.loads(fixed_json)
+        except json.JSONDecodeError:
+            return None
     
     if not isinstance(parsed, dict):
         return None
@@ -330,7 +374,7 @@ def try_parse_json_tool(json_str: str) -> dict | None:
 
 def try_recover_malformed_tool(content: str, tool_name: str) -> dict | None:
     """Last-resort recovery for malformed JSON (e.g., write_file with unescaped newlines)."""
-    CONTENT_TOOLS = ["write_file", "replace_python_function", "replace_in_file"]
+    CONTENT_TOOLS = ["write_file", "replace_in_file"]
     if tool_name not in CONTENT_TOOLS:
         return None
 

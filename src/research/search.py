@@ -74,8 +74,8 @@ def _wikipedia_search(query: str, limit: int = 3) -> list:
     })
     out = []
     for item in data.get("query", {}).get("search", []):
-        title = item.get("title", "")
-        snippet = re.sub("<[^>]+>", "", item.get("snippet", "")).strip()
+        title = _html.unescape(item.get("title", ""))
+        snippet = _html.unescape(re.sub("<[^>]+>", "", item.get("snippet", ""))).strip()
         url = "https://en.wikipedia.org/wiki/" + urllib.parse.quote(title.replace(" ", "_"))
         out.append({"title": title, "url": url, "snippet": snippet, "source": "wikipedia"})
     return out
@@ -328,10 +328,32 @@ def engine_labels(engines=None) -> list:
             for e in (engines if engines is not None else active_engines())]
 
 
+ENGINE_MAP = {
+    "duckduckgo": _ddg_search,
+    "ddg": _ddg_search,
+    "brave": _brave_search,
+    "ollama": _ollama_search,
+    "github": _github_search,
+    "gh": _github_search,
+    "stackoverflow": _stackoverflow_search,
+    "stackexchange": _stackoverflow_search,
+    "so": _stackoverflow_search,
+    "wikipedia": _wikipedia_search,
+    "wiki": _wikipedia_search,
+}
+
+
 def active_engines() -> list:
-    """The engine set for this run: the keyless baseline plus any the user has
-    configured (Brave, Ollama). Built per call so enabling a key takes effect
-    without a restart."""
+    """The engine set for this run: respect user-configured single engine if selected,
+    otherwise return the keyless baseline plus any configured API-key engines (Brave, Ollama)."""
+    try:
+        from config import get_search_engine
+        selected = (get_search_engine() or "all").lower().strip()
+        if selected in ENGINE_MAP:
+            return [ENGINE_MAP[selected]]
+    except Exception:
+        pass
+
     engines = list(DEFAULT_ENGINES)
     try:
         from config import get_brave_api_key, get_ollama_api_key
@@ -433,41 +455,80 @@ def adapt_query_for_engine(query: str, engine) -> str:
                        _OPERATOR_TRANSLATION.get(name))
 
 
+_TRACKING_PARAMS = {
+    "utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content",
+    "ref", "fbclid", "gclid", "yclid", "mc_cid", "mc_eid"
+}
+
+
 def _norm_url(u: str) -> str:
     """Normalise a URL for dedup: host lowercased, trailing slash and fragment
-    dropped. Different sources often return the same page with cosmetic diffs."""
+    dropped, tracking query parameters stripped and remaining parameters sorted.
+    Different sources often return the same page with cosmetic diffs."""
     try:
         p = urllib.parse.urlsplit(u)
-        return f"{p.netloc.lower()}{p.path.rstrip('/')}"
+        base = f"{p.netloc.lower()}{p.path.rstrip('/')}"
+        if p.query:
+            params = urllib.parse.parse_qsl(p.query, keep_blank_values=True)
+            clean_params = sorted(
+                (k, v) for k, v in params
+                if not (k.lower().startswith("utm_") or k.lower() in _TRACKING_PARAMS)
+            )
+            if clean_params:
+                clean_query = urllib.parse.urlencode(clean_params)
+                return f"{base}?{clean_query}"
+        return base
     except Exception:
         return u
 
 
+def _run_single_engine(eng, query: str, per_engine: int) -> list:
+    """Execute a single engine with adapted query and isolated error handling."""
+    try:
+        adapted = adapt_query_for_engine(query, eng)
+        if not adapted:
+            return []
+        return list(eng(adapted, per_engine)) or []
+    except Exception as e:
+        log.debug("search engine %s failed: %s", getattr(eng, "__name__", eng), e)
+        return []
+
+
 def meta_search(query: str, max_results: int = 8, engines=None,
                 per_engine: int = None) -> list:
-    """Federate the engines and return merged, de-duplicated results.
+    """Federate the engines in parallel and return merged, de-duplicated results.
 
-    Engines run independently; one raising is logged and treated as empty.
-    Results are interleaved round-robin so no single source dominates the top.
+    Engines run independently in parallel worker threads; one raising is logged
+    and treated as empty. Results are interleaved round-robin preserving the
+    deterministic engine order so no single source dominates the top.
     ``engines`` is injectable for testing.
     """
+    import concurrent.futures
+    if max_results <= 0:
+        return []
     engines = engines if engines is not None else active_engines()
     if per_engine is None:
         per_engine = max(3, max_results // max(1, len(engines)) + 2)
 
-    buckets = []
-    for eng in engines:
-        try:
-            # Each engine gets the query in the dialect it actually speaks.
-            adapted = adapt_query_for_engine(query, eng)
-            if not adapted:
-                # The query was nothing BUT operators this engine cannot use.
-                buckets.append([])
-                continue
-            buckets.append(list(eng(adapted, per_engine)) or [])
-        except Exception as e:
-            log.debug("search engine %s failed: %s", getattr(eng, "__name__", eng), e)
-            buckets.append([])
+    if not engines:
+        return []
+
+    buckets = [[] for _ in engines]
+    if len(engines) == 1:
+        buckets[0] = _run_single_engine(engines[0], query, per_engine)
+    else:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(engines), 8)) as executor:
+            future_to_idx = {
+                executor.submit(_run_single_engine, eng, query, per_engine): i
+                for i, eng in enumerate(engines)
+            }
+            for future in concurrent.futures.as_completed(future_to_idx):
+                idx = future_to_idx[future]
+                try:
+                    buckets[idx] = future.result()
+                except Exception as e:
+                    log.debug("search engine future failed: %s", e)
+                    buckets[idx] = []
 
     merged, seen = [], set()
     depth = max((len(b) for b in buckets), default=0)

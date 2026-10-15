@@ -1,148 +1,193 @@
-from deep_research import run_deep_research
-from tools.project_tools import (
-    add_project_task, complete_project_task, plan_work_changes,
-    add_work_task, list_project_tasks, write_project_spec,
-    write_project_architecture, write_file_spec,
-)
-from tools.file_ops import (
-    read_file, write_file, append_to_file, delete_file, create_directory,
-    move_file, copy_file, replace_in_file, replace_python_function,
-    multi_replace_in_file, multi_replace_in_file_chunk, get_file_outline, list_directory,
-    run_deep_linter
-)
-from tools.search_ops import search_files, grep_search
-from tools.project_analysis import analyze_project
-from tools.command_ops import (
-    run_command, run_admin_command, start_background_command,
-    read_background_command, send_background_command, stop_background_command,
-    list_background_commands, read_git_diff,
-)
-from tools.web_tools import search_web, read_webpage
-from tools.plugin_tools import create_plugin, delete_plugin
-from tools.system_ops import (
-    read_event_logs, get_process_info, query_registry, search_system_files
-)
-from tools.skill_tools import list_skills, read_skill, create_skill, delete_skill
-from tools.misc_tools import (
-    find_definition, find_references, git_checkpoint, git_rollback,
-    call_mcp_tool, list_mcp_tools, run_subagent, create_svg_image, ask_user_questions,
-    wait_heartbeat, end_auto_mode, create_artifact, request_user_approval,
-    calculate, set_goal, filter_new_items, view_image,
-)
-from tools.lsp_tools import (
-    check_code, find_implementations,
-    search_workspace_symbols, get_call_hierarchy,
-)
-from tools.swarm_tools import run_swarm_workers
-from tools.browser_tools import (
-    run_browser_task, browser_open, browser_state, browser_click, browser_input,
-    browser_screenshot, browser_scroll, browser_get_content, browser_close,
-    browser_switch_tab,
-)
+from tools.lazy_registry import LazyToolRegistry, DEFAULT_TOOL_LOADERS
 
-AVAILABLE_TOOLS = {
-    "add_project_task": add_project_task,
-    "complete_project_task": complete_project_task,
-    "list_project_tasks": list_project_tasks,
-    "write_project_spec": write_project_spec,
-    "write_project_architecture": write_project_architecture,
-    "write_file_spec": write_file_spec,
-    "plan_work_changes": plan_work_changes,
-    "add_work_task": add_work_task,
-    "read_file": read_file,
-    "write_file": write_file,
-    "append_to_file": append_to_file,
-    "delete_file": delete_file,
-    "create_directory": create_directory,
-    "move_file": move_file,
-    "copy_file": copy_file,
-    "run_deep_research": run_deep_research,
-    "replace_in_file": replace_in_file,
-    "replace_python_function": replace_python_function,
-    "run_deep_linter": run_deep_linter,
-    "list_directory": list_directory,
-    "search_files": search_files,
-    "grep_search": grep_search,
-    "analyze_project": analyze_project,
-    "run_command": run_command,
-    "run_admin_command": run_admin_command,
-    "start_background_command": start_background_command,
-    "read_background_command": read_background_command,
-    "send_background_command": send_background_command,
-    "stop_background_command": stop_background_command,
-    "list_background_commands": list_background_commands,
-    "search_web": search_web,
-    "read_webpage": read_webpage,
-    "get_file_outline": get_file_outline,
-    "multi_replace_in_file": multi_replace_in_file,
-    "multi_replace_in_file_chunk": multi_replace_in_file_chunk,
-    "read_git_diff": read_git_diff,
-    "create_plugin": create_plugin,
-    "delete_plugin": delete_plugin,
-    "read_event_logs": read_event_logs,
-    "get_process_info": get_process_info,
-    "query_registry": query_registry,
-    "search_system_files": search_system_files,
-    "list_skills": list_skills,
-    "read_skill": read_skill,
-    "create_skill": create_skill,
-    "delete_skill": delete_skill,
-    "wait_heartbeat": wait_heartbeat,
-    "end_auto_mode": end_auto_mode,
-    "filter_new_items": filter_new_items,
-    "view_image": view_image,
-    "find_definition": find_definition,
-    "find_references": find_references,
-    "git_checkpoint": git_checkpoint,
-    "git_rollback": git_rollback,
-    "call_mcp_tool": call_mcp_tool,
-    "list_mcp_tools": list_mcp_tools,
-    "run_subagent": run_subagent,
-    "run_swarm_workers": run_swarm_workers,
-    "create_svg_image": create_svg_image,
-    "ask_user_questions": ask_user_questions,
-    "set_goal": set_goal,
-    "calculate": calculate,
-    "create_artifact": create_artifact,
-    "request_user_approval": request_user_approval,
-    "run_browser_task": run_browser_task,
-    "browser_open": browser_open,
-    "browser_state": browser_state,
-    "browser_click": browser_click,
-    "browser_input": browser_input,
-    "browser_screenshot": browser_screenshot,
-    "browser_scroll": browser_scroll,
-    "browser_get_content": browser_get_content,
-    "browser_close": browser_close,
-    "browser_switch_tab": browser_switch_tab,
-    "check_code": check_code,
-    "find_implementations": find_implementations,
-    "search_workspace_symbols": search_workspace_symbols,
-    "get_call_hierarchy": get_call_hierarchy,
-}
+AVAILABLE_TOOLS = LazyToolRegistry(DEFAULT_TOOL_LOADERS)
+
 
 # Tools that take over the terminal to ask the user something. The CLI must not
 # run its "Выполнение…" spinner around these: Rich's status display owns the
 # same lines questionary draws on, so the question is rendered and immediately
 # overwritten — the user sees the preamble, no prompt, and a program that will
 # not continue. request_user_approval sat outside this set and did exactly
-# that; git_rollback and browser_input were one report away from the same.
+# that; git_rollback was one report away from the same.
 #
 # Declared here, beside the registry, because the list lived in the CLI and
 # fell behind every tool added since. test_interactive_tools derives the true
 # set from the sources and fails if this one drifts again.
 INTERACTIVE_TOOLS = frozenset({
-    "ask_user_questions", "request_user_approval",
+    "ask_user_questions", "request_user_approval", "exit_plan_mode",
     "run_command", "run_admin_command", "start_background_command",
-    "delete_file", "plan_work_changes", "git_rollback", "browser_input",
+    "delete_file", "git_rollback", "desktop_act",
 })
 
 TOOL_SCHEMAS = [
     {
         "type": "function",
         "function": {
+            "name": "delegate_to_leeth",
+            "description": "Delegates a routine subtask or chain of simple actions (reading files, directory listings, grep search, terminal command execution, calculations, checking background tasks) to the local ultra-fast Leeth coprocessor (10–25 ms, 0 API tokens). Returns an aggregated report of all executed steps.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "task": {
+                        "type": "string",
+                        "description": "Natural language instruction for the routine action or chain (e.g. 'read config.py', 'grep for LeethModel in src/', 'check background tasks')."
+                    }
+                },
+                "required": ["task"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "leeth_map",
+            "description": "Answer ONE question about MANY texts at once with the local Leeth model (milliseconds per item, 0 API tokens): filter ('yesno': is this a complaint? is this a recipe?) or categorise ('categories') a list of posts, bookmarks, file names, tickets. State the criterion once. Returns index lists plus the items Leeth is unsure about -- judge those yourself.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "items": {"type": "string", "description": "The texts: a JSON list or one per line."},
+                    "criterion": {"type": "string", "description": "mode='yesno': a yes/no question about one item. mode='categories': an optional question ('What is this about?')."},
+                    "mode": {"type": "string", "enum": ["yesno", "categories"], "description": "Default 'yesno'."},
+                    "categories": {"type": "string", "description": "For mode='categories': 2+ allowed categories, a JSON list or one per line."},
+                    "accept_above": {"type": "number", "description": "yesno: probability from which an item is 'yes' (default 0.7)."},
+                    "reject_below": {"type": "number", "description": "yesno: probability up to which an item is 'no' (default 0.3); in between it is 'unsure'."}
+                },
+                "required": ["items", "criterion"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "leeth_scan_page",
+            "description": "Read-only: classify the clickable elements (links / buttons) of the CURRENT browser page against a criterion in one batched pass with the local Leeth model. Returns the matching elements (index, label, link, probability) and the unsure ones; changes nothing. Follow with leeth_click_many to act. Use for 'find / remove all bookmarks about X', 'open every post that ...', 'which posts in this feed are about Y' (include='posts', scroll_pages for endless feeds).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "criterion": {"type": "string", "description": "A yes/no question about one element ('Is this a recipe?'), or for mode='categories' the question."},
+                    "mode": {"type": "string", "enum": ["yesno", "categories"]},
+                    "categories": {"type": "string", "description": "For mode='categories': the categories (JSON list or one per line)."},
+                    "include": {"type": "string", "enum": ["links", "buttons", "all", "posts"], "description": "What to judge (default 'links'). 'posts' = the repeated text blocks of the page (posts, cards, rows, comments): their text is judged and each reported post lists its own buttons for leeth_click_many."},
+                    "scroll_pages": {"type": "integer", "description": "Scroll the page down up to this many times and judge what appears too (endless feeds). Default 0, max 30."},
+                    "max_items": {"type": "integer", "description": "How many items are judged at most (default 300)."},
+                    "session": {"type": "string"}
+                },
+                "required": ["criterion"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "leeth_click_many",
+            "description": "Click the elements that the LAST leeth_scan_page returned, one after another; each is re-found by label + link before its click, so a list that re-renders after a delete does not misdirect later clicks. Destructive-looking elements (delete, pay, confirm, purchase) are NOT clicked without confirm=True -- ask the user for approval first and tell them how many items there are.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "indices": {"type": "string", "description": "Element indices from the last leeth_scan_page: a JSON list or comma-separated."},
+                    "confirm": {"type": "boolean", "description": "The user has approved clicking destructive elements."},
+                    "session": {"type": "string"}
+                },
+                "required": ["indices"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "leeth_fill_form",
+            "description": "Fill the form on the CURRENT browser page from ONE instruction in a single pass with the local Leeth model: text fields, dropdowns (matched by meaning: 'Гонконг' -> 'Hong Kong') and checkboxes, then re-read the page to verify. A field whose value is not in the instruction is left empty and reported, never invented. Payment / delete / confirm buttons are never pressed. Use instead of typing field by field.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "instruction": {"type": "string", "description": "What to enter, in the user's own words (e.g. 'логин Валера, рост 175 см, возраст 29, город Гонконг')."},
+                    "dry_run": {"type": "boolean", "description": "Only show the plan; change nothing."},
+                    "submit": {"type": "boolean", "description": "Also press the submit button when it is not a payment / delete / confirm one."},
+                    "min_confidence": {"type": "number", "description": "A value below it is not entered (default 0.55)."},
+                    "session": {"type": "string"}
+                },
+                "required": ["instruction"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_desktop_windows",
+            "description": "List all visible top-level desktop windows on the system (HWND, PID, title, geometry). Use this before capture_desktop_window to find target window title or HWND.",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": []
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "capture_desktop_window",
+            "description": "Capture a screenshot of a specific desktop window by its title substring or numeric HWND. Safe targeted capture using Win32 API.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "target": {
+                        "type": "string",
+                        "description": "Window title substring (e.g. 'Unity', 'Notepad', 'Argent') or numeric HWND."
+                    },
+                    "output_path": {
+                        "type": "string",
+                        "description": "Optional custom path to save PNG image. Defaults to .argent/artifacts/desktop/."
+                    }
+                },
+                "required": ["target"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "capture_desktop_screen",
+            "description": "Capture a screenshot of the entire desktop screen (primary monitor or all virtual monitors). Useful for fullscreen games, Unity Play Mode, or overall desktop view.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "monitor": {
+                        "type": "string",
+                        "description": "'primary' (default) for main display, or 'all' for the full multi-monitor virtual desktop.",
+                        "default": "primary"
+                    },
+                    "output_path": {
+                        "type": "string",
+                        "description": "Optional custom path to save PNG image. Defaults to .argent/artifacts/desktop/."
+                    }
+                },
+                "required": []
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_clipboard_image",
+            "description": "Retrieve an image or screenshot currently stored in the system clipboard (e.g. copied via Win+Shift+S, PrintScreen, or image copy).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "output_path": {
+                        "type": "string",
+                        "description": "Optional custom path to save PNG image. Defaults to .argent/artifacts/desktop/."
+                    }
+                },
+                "required": []
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "create_artifact",
-            "description": "Create a Markdown artifact in the .argent/artifacts/ directory. Useful for documenting plans, research, or long text.",
+            "description": "Create a Markdown artifact in the .argent/artifacts/ directory. Useful for documenting plans, research, or long text. To inspect or resume an artifact, use read_file with path '.argent/artifacts/<filename>'.",
+
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -173,119 +218,6 @@ TOOL_SCHEMAS = [
                     }
                 },
                 "required": ["message"]
-            }
-        }
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "multi_replace_in_file_chunk",
-            "description": "Surgically edit a file by providing multiple chunks of replacements. Specify exact start and end line numbers.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "file_path": {
-                        "type": "string",
-                        "description": "The absolute path of the file to modify."
-                    },
-                    "changes_json": {
-                        "type": "string",
-                        "description": "A JSON array string. Each object must have: start_line (int), end_line (int), target_content (string), replacement_content (string)."
-                    }
-                },
-                "required": ["file_path", "changes_json"]
-            }
-        }
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "add_project_task",
-            "description": "Add a task to the current project plan. Use this to break down the project into steps.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "description": {
-                        "type": "string",
-                        "description": "A concrete description of what this task should accomplish."
-                    }
-                },
-                "required": ["description"]
-            }
-        }
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "plan_work_changes",
-            "description": "Submit your investigation and proposed changes for an existing codebase. Call this ONCE during Phase 1 investigation.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "strategy": {
-                        "type": "string",
-                        "description": "High-level description of what you will change and how you will solve the problem."
-                    },
-                    "files_to_edit": {
-                        "type": "string",
-                        "description": "Comma-separated list of EXISTING files you need to modify."
-                    },
-                    "files_to_create": {
-                        "type": "string",
-                        "description": "Comma-separated list of NEW files you need to create."
-                    }
-                },
-                "required": ["strategy", "files_to_edit", "files_to_create"]
-            }
-        }
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "add_work_task",
-            "description": "Add a micro-task to the project plan during Phase 2. Make tasks small, like modifying a single method.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "description": {
-                        "type": "string",
-                        "description": "Detailed description of the task."
-                    }
-                },
-                "required": ["description"]
-            }
-        }
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "complete_project_task",
-            "description": "Mark a project task as completed. You MUST provide a summary of what you did.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "task_id": {
-                        "type": "integer",
-                        "description": "The ID of the task to complete."
-                    },
-                    "summary": {
-                        "type": "string",
-                        "description": "A brief summary of what was accomplished. Mention files created or modified."
-                    }
-                },
-                "required": ["task_id", "summary"]
-            }
-        }
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "list_project_tasks",
-            "description": "View the current project status with all tasks and their completion summaries.",
-            "parameters": {
-                "type": "object",
-                "properties": {},
-                "required": []
             }
         }
     },
@@ -337,91 +269,27 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "run_subagent",
-            "description": "Spawn a specialized sub-agent to handle a specific part of a complex task in isolation. This is great for research, code reviews, or implementing small isolated modules.",
+            "description": (
+                "Spawn a specialized sub-agent to handle a specific part of a complex task in isolation. Great for "
+                "research, code reviews, or implementing a separate module.\n"
+                "TWO OPTIONS make it much more useful. background=true returns at once and the sub-agent works while "
+                "you do something else — start several in ONE response to run them in parallel (up to 4), then "
+                "collect the reports. isolation='worktree' gives it a private copy of the repository: it can edit "
+                "freely without touching the user's files or its sibling agents, and its work comes back as a patch "
+                "you apply (subagents action='apply') or drop. Use worktree for any sub-agent that WRITES code while "
+                "others or you are working. A sub-agent cannot ask the user anything and can run only shell commands "
+                "the user already allowed; give it a self-contained task, it does not see this conversation."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "role": { "type": "string", "description": "The role of the sub-agent: 'Coder', 'Researcher', 'Reviewer', 'DocWriter'." },
-                    "task": { "type": "string", "description": "The specific task instructions for the sub-agent." },
-                    "tools_json": { "type": "string", "description": "Optional JSON list of tool names allowed for this sub-agent (e.g., '[\"read_file\", \"write_file\"]')." }
+                    "role": { "type": "string", "description": "The role of the sub-agent: 'Coder', 'Researcher', 'Reviewer', 'DocWriter', 'Critic' (adversarial reviewer of plans/ideas)." },
+                    "task": { "type": "string", "description": "The specific, self-contained task instructions for the sub-agent." },
+                    "tools_json": { "type": "string", "description": "Optional JSON list of tool names allowed for this sub-agent (e.g., '[\"read_file\", \"write_file\"]')." },
+                    "background": { "type": "boolean", "description": "Return immediately; the sub-agent keeps running. Default false (wait for its report)." },
+                    "isolation": { "type": "string", "enum": ["none", "worktree"], "description": "'worktree' = work in a private git worktree copy; the result is a patch. Default 'none'." }
                 },
                 "required": ["role", "task"]
-            }
-        }
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "run_swarm_workers",
-            "description": "Decompose a massive, complex goal into smaller micro-tasks and delegate them to a swarm of isolated sub-agents. This is REQUIRED for large refactors or tasks that touch many files, as it prevents context bloat.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "tasks_json": {
-                        "type": "string",
-                        "description": "A JSON array of strings, where each string is a highly detailed instruction for a single micro-task. E.g., '[\"Refactor auth.py to use JWT\", \"Update test_auth.py\"]'."
-                    }
-                },
-                "required": ["tasks_json"]
-            }
-        }
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "write_project_spec",
-            "description": "Write the detailed technical specification for the current project. Describe all files, classes, fields (with types), methods (with parameters), and relationships.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "spec": {
-                        "type": "string",
-                        "description": "The full technical specification text describing all files, classes, fields, methods, and their relationships."
-                    }
-                },
-                "required": ["spec"]
-            }
-        }
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "write_project_architecture",
-            "description": "Write the high-level architecture map for the project. List ALL files needed, their purpose, and dependencies between them. Do NOT describe implementation details — just the structure.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "architecture": {
-                        "type": "string",
-                        "description": "The architecture map: list of all files, their purpose, and which files they depend on."
-                    },
-                    "files": {
-                        "type": "string",
-                        "description": "Comma-separated list of ALL project file paths to be created. Example: 'src/main.py, src/calculator.py, src/utils.py'. Use full paths including folders."
-                    }
-                },
-                "required": ["architecture", "files"]
-            }
-        }
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "write_file_spec",
-            "description": "Write a detailed specification for ONE specific file. Include: file path, all imports, class/function names, method signatures with parameter types and return types, field names with types, and a 1-2 sentence logic description for each method.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "filename": {
-                        "type": "string",
-                        "description": "The file path exactly as it appears in the architecture (e.g., 'src/converter.py')."
-                    },
-                    "spec": {
-                        "type": "string",
-                        "description": "The detailed specification: imports, classes, methods (name, params, return type, logic), fields (name, type, default)."
-                    }
-                },
-                "required": ["filename", "spec"]
             }
         }
     },
@@ -454,7 +322,7 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "write_file",
-            "description": "Writes content to a file. WARNING: DO NOT USE THIS TO EDIT EXISTING FILES >150 LINES! It will be blocked to prevent truncation. Use replace_in_file or multi_replace_in_file_chunk instead. This tool is ONLY for creating NEW files or writing very small scripts.",
+            "description": "Writes content to a file. WARNING: DO NOT USE THIS TO EDIT EXISTING FILES >150 LINES! It will be blocked to prevent truncation. Use replace_in_file instead (it also takes a `changes` list to apply several edits at once). This tool is ONLY for creating NEW files or writing very small scripts.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -472,68 +340,6 @@ TOOL_SCHEMAS = [
                     }
                 },
                 "required": ["file_path", "content"]
-            }
-        }
-    },
-    
-
-    
-    {
-        "type": "function",
-        "function": {
-            "name": "create_svg_image",
-            "description": "Create an SVG image from code and automatically open it in the web browser for the user to see. Use this to explain complex concepts, show UI designs, or create architecture diagrams.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "svg_code": {
-                        "type": "string",
-                        "description": "The complete SVG XML code."
-                    },
-                    "filename": {
-                        "type": "string",
-                        "description": "Optional custom filename (e.g., 'architecture_diagram.svg')."
-                    }
-                },
-                "required": ["svg_code"]
-            }
-        }
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "create_plugin",
-            "description": "Creates a new Python plugin (hook/command) in the './plugins/' directory. Automatically handles imports, syntax validation, and reloads Argent to active the new command immediately.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "name": {
-                        "type": "string",
-                        "description": "The filename of the plugin (e.g., 'weather_plugin' or 'weather_plugin.py')."
-                    },
-                    "code": {
-                        "type": "string",
-                        "description": "The full Python code for the plugin. Remember to use 'command_NAME' for slash-commands and 'from ui import console' for output."
-                    }
-                },
-                "required": ["name", "code"]
-            }
-        }
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "delete_plugin",
-            "description": "Deletes an existing plugin from the './plugins/' directory and reloads Argent.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "name": {
-                        "type": "string",
-                        "description": "The filename of the plugin to delete (e.g., 'weather_plugin.py')."
-                    }
-                },
-                "required": ["name"]
             }
         }
     },
@@ -568,51 +374,8 @@ TOOL_SCHEMAS = [
     {
         "type": "function",
         "function": {
-            "name": "create_skill",
-            "description": "Creates a new markdown-based skill or updates an existing one. Use this to persist complex workflows or expert personas for future use.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "name": {
-                        "type": "string",
-                        "description": "The name of the skill (e.g., 'Code_Reviewer')."
-                    },
-                    "instructions": {
-                        "type": "string",
-                        "description": "The detailed instructions that Argent must follow when this skill is active."
-                    },
-                    "description": {
-                        "type": "string",
-                        "description": "A short one-sentence summary of what this skill does."
-                    }
-                },
-                "required": ["name", "instructions"]
-            }
-        }
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "delete_skill",
-            "description": "Deletes an existing skill.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "name": {
-                        "type": "string",
-                        "description": "The name of the skill to delete."
-                    }
-                },
-                "required": ["name"]
-            }
-        }
-    },
-
-    {
-        "type": "function",
-        "function": {
             "name": "replace_in_file",
-            "description": "Replaces a specific text block in a file with new content. Use this to edit existing files without rewriting them entirely. The target text must be a unique, exact match.",
+            "description": "Replaces a specific text block in a file with new content, or applies a batch of replacements across one or more files with atomic rollback if any edit fails. For single replacement, provide 'file_path', 'target_text', 'replacement_text' (and optional 'start_line', 'end_line' 1-indexed). For batch/multi-diff replacements, provide 'changes' list.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -627,34 +390,31 @@ TOOL_SCHEMAS = [
                     "replacement_text": {
                         "type": "string",
                         "description": "The new text to insert in place of the target_text."
+                    },
+                    "start_line": {
+                        "type": "integer",
+                        "description": "Optional starting line number (1-indexed) to narrow the search range. Omit to search the entire file."
+                    },
+                    "end_line": {
+                        "type": "integer",
+                        "description": "Optional ending line number (1-indexed, inclusive) to narrow the search range. Omit to search the entire file."
+                    },
+                    "changes": {
+                        "type": "array",
+                        "description": "Optional batch of edits to apply atomically. Each item can contain {'file_path', 'target_text', 'replacement_text', 'start_line', 'end_line'}.",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "file_path": {"type": "string"},
+                                "target_text": {"type": "string"},
+                                "replacement_text": {"type": "string"},
+                                "start_line": {"type": "integer"},
+                                "end_line": {"type": "integer"}
+                            }
+                        }
                     }
                 },
-                "required": ["file_path", "target_text", "replacement_text"]
-            }
-        }
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "replace_python_function",
-            "description": "Surgically replace an entire top-level function or class method in a Python file. Extremely reliable. Solves indentation and matching issues.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "file_path": {
-                        "type": "string",
-                        "description": "Path to the python file."
-                    },
-                    "function_name": {
-                        "type": "string",
-                        "description": "Name of the function. Use 'my_func' for top-level, or 'MyClass.my_method' for class methods."
-                    },
-                    "new_code": {
-                        "type": "string",
-                        "description": "The complete replacement code for the function, INCLUDING the 'def' line and full body. Indentation of the new code will be auto-corrected if it's a class method."
-                    }
-                },
-                "required": ["file_path", "function_name", "new_code"]
+                "required": ["file_path"]
             }
         }
     },
@@ -689,27 +449,6 @@ TOOL_SCHEMAS = [
                     }
                 },
                 "required": ["dir_path"]
-            }
-        }
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "append_to_file",
-            "description": "Appends content to the end of an existing file or creates a new one. Ideal for taking notes, compiling research, or logging progress incrementally without overwriting the previous content.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "file_path": {
-                        "type": "string",
-                        "description": "The path to the file."
-                    },
-                    "content": {
-                        "type": "string",
-                        "description": "The content to append."
-                    }
-                },
-                "required": ["file_path", "content"]
             }
         }
     },
@@ -808,28 +547,58 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "grep_search",
-            "description": "Search file contents using a regex pattern. Returns matching lines with file paths and line numbers. Faster and more precise than search_files for finding specific code, function calls, or text patterns.",
+            "description": "Universal search and semantic code navigation. By default (target='all'), performs fast fulltext ripgrep across any file type (.py, .ts, .cs, .env, .json, .md, logs). When target is 'definition', 'references', 'implementations', or 'call_hierarchy', uses LSP semantic intelligence without requiring manual coordinates.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "directory": {
-                        "type": "string",
-                        "description": "The root directory to search in."
-                    },
                     "pattern": {
                         "type": "string",
-                        "description": "Regular expression pattern to search for (e.g., 'def my_func', 'import os', 'class.*Model')."
+                        "description": "Search string, regular expression pattern, or symbol name."
+                    },
+                    "query": {
+                        "type": "string",
+                        "description": "Alias for pattern. Search string or symbol name."
+                    },
+                    "directory": {
+                        "type": "string",
+                        "description": "The directory or specific file path to search in. Default is current directory ('.')."
+                    },
+                    "path": {
+                        "type": "string",
+                        "description": "Alias for directory. The directory or specific file path to search in."
                     },
                     "file_pattern": {
                         "type": "string",
                         "description": "Optional glob pattern to filter files (e.g., '*.py', '*.cs'). Default searches all files."
+                    },
+                    "target": {
+                        "type": "string",
+                        "enum": ["all", "definition", "references", "implementations", "call_hierarchy"],
+                        "description": "Search mode: 'all' (default ripgrep fulltext), 'definition' (jump to definition via LSP/AST), 'references' (find all symbol usages), 'implementations' (find interface/trait implementations), 'call_hierarchy' (caller/callee tree)."
+                    },
+                    "direction": {
+                        "type": "string",
+                        "enum": ["incoming", "outgoing"],
+                        "description": "Direction for target='call_hierarchy': 'incoming' (who calls this function, default) or 'outgoing' (who this function calls)."
+                    },
+                    "symbol": {
+                        "type": "string",
+                        "description": "Optional explicit symbol name when navigating code via LSP."
+                    },
+                    "line": {
+                        "type": "integer",
+                        "description": "Optional 1-indexed line number of the symbol for precise LSP navigation."
+                    },
+                    "column": {
+                        "type": "integer",
+                        "description": "Optional 0-indexed column number of the symbol for precise LSP navigation."
                     },
                     "max_results": {
                         "type": "integer",
                         "description": "Maximum number of matches to return. Default is 30."
                     }
                 },
-                "required": ["directory", "pattern"]
+                "required": ["pattern"]
             }
         }
     },
@@ -837,13 +606,21 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "run_command",
-            "description": "Runs a CLI shell command on the user's system and returns the stdout and stderr.",
+            "description": "Runs a CLI shell command on the user's system and returns the stdout and stderr. Always prefer non-interactive flags (e.g. `npx -y ...`, `npm init -y`, `pip install --no-input ...`, `--no-pager`) so tools do not hang awaiting interactive input.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "command": {
                         "type": "string",
                         "description": "The command string to execute in the shell."
+                    },
+                    "cwd": {
+                        "type": "string",
+                        "description": "Optional working directory in which to run the command. Defaults to the current working directory."
+                    },
+                    "timeout": {
+                        "type": "integer",
+                        "description": "Optional silence timeout in seconds (defaults to 180). Terminate command early if no output is produced for this duration."
                     }
                 },
                 "required": ["command"]
@@ -896,91 +673,18 @@ TOOL_SCHEMAS = [
                     "query": {
                         "type": "string",
                         "description": "The search query, optionally with operators (see the description)."
+                    },
+                    "max_results": {
+                        "type": "integer",
+                        "description": "Maximum number of search results to return. Default is 5."
+                    },
+                    "engine": {
+                        "type": "string",
+                        "description": "Optional: specify a single search engine to query ('duckduckgo', 'brave', 'ollama', 'github', 'stackoverflow', 'wikipedia') or 'all' for federated meta-search across all active engines. Default is 'all'.",
+                        "enum": ["all", "duckduckgo", "brave", "ollama", "github", "stackoverflow", "wikipedia"]
                     }
                 },
                 "required": ["query"]
-            }
-        }
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "read_event_logs",
-            "description": "Reads recent errors and warnings from the Windows Event Log. Extremely useful for diagnosing application crashes and OS issues.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "log_name": {
-                        "type": "string",
-                        "description": "The name of the log to read (e.g., 'Application', 'System'). Default is 'Application'."
-                    },
-                    "entry_type": {
-                        "type": "string",
-                        "description": "Comma-separated list of entry types to filter by (e.g., 'Error,Warning'). Default is 'Error,Warning'."
-                    },
-                    "newest": {
-                        "type": "integer",
-                        "description": "Number of recent events to retrieve. Default is 20."
-                    }
-                }
-            }
-        }
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "get_process_info",
-            "description": "Gets information about running processes on the system.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "process_name": {
-                        "type": "string",
-                        "description": "Optional substring to filter process names (e.g., 'chrome')."
-                    }
-                }
-            }
-        }
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "query_registry",
-            "description": "Reads a key or specific value from the Windows Registry.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "path": {
-                        "type": "string",
-                        "description": "The registry path (e.g., 'HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion')."
-                    },
-                    "name": {
-                        "type": "string",
-                        "description": "Optional name of the specific value to read within the key."
-                    }
-                },
-                "required": ["path"]
-            }
-        }
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "search_system_files",
-            "description": "Performs a fast recursive search for files on the disk. Useful for finding leftover files of deleted applications.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "path": {
-                        "type": "string",
-                        "description": "The root path to search in (e.g., 'C:\\Users\\Username\\AppData')."
-                    },
-                    "filter_pattern": {
-                        "type": "string",
-                        "description": "The pattern to search for (e.g., '*discord*'). Default is '*'."
-                    }
-                },
-                "required": ["path", "filter_pattern"]
             }
         }
     },
@@ -1013,13 +717,21 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "start_background_command",
-            "description": "Starts a command in the background (e.g. dev servers, infinite loops) and returns a PID. Use this instead of run_command for long-running processes.",
+            "description": "Starts a command in the background (e.g. dev servers, infinite loops) and returns a PID. Use this instead of run_command for long-running processes. For a program that asks questions (npm init, ssh, python -i, an installer) set pty=true: it gets a real terminal; read its questions with read_background_command and answer with send_background_command.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "command": {
                         "type": "string",
                         "description": "The command string to execute in the background."
+                    },
+                    "cwd": {
+                        "type": "string",
+                        "description": "Optional working directory in which to run the background command. Defaults to the current working directory."
+                    },
+                    "pty": {
+                        "type": "boolean",
+                        "description": "Run on a real terminal so the program can ask questions. Default false."
                     }
                 },
                 "required": ["command"]
@@ -1057,7 +769,7 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "read_background_command",
-            "description": "Reads newer output (stdout/stderr) from a currently running background process by PID.",
+            "description": "Reads newer output (stdout/stderr) from a currently running background process by PID. If there is no new output, do NOT keep calling this in a loop — use wait_heartbeat(until='process_finished(\"PID\")') to sleep until the process finishes, or proceed with other work.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -1112,7 +824,7 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "get_file_outline",
-            "description": "Get the structural outline (classes and methods) of a Python file without reading the entire file body. Ideal for exploring large projects.",
+            "description": "Get the structural outline (classes and methods) of a Python (.py) or C# (.cs) file without reading the entire file body. Ideal for exploring large projects.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -1122,23 +834,6 @@ TOOL_SCHEMAS = [
                     }
                 },
                 "required": ["file_path"]
-            }
-        }
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "multi_replace_in_file",
-            "description": "Perform multiple target/replacement edits across one or several files in a single tool call.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "changes_json": {
-                        "type": "string",
-                        "description": "A serialized JSON array of objects. Example: '[{\"file_path\": \"app.py\", \"target_text\": \"old\", \"replacement_text\": \"new\"}]'"
-                    }
-                },
-                "required": ["changes_json"]
             }
         }
     },
@@ -1191,38 +886,6 @@ TOOL_SCHEMAS = [
     {
         "type": "function",
         "function": {
-            "name": "find_definition",
-            "description": "Find the definition of a class, function, or variable at a specific line and column. Use this instead of grep for precise navigation.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "file_path": { "type": "string", "description": "The path to the file." },
-                    "line": { "type": "integer", "description": "Line number (1-indexed)." },
-                    "column": { "type": "integer", "description": "Column number (0-indexed)." }
-                },
-                "required": ["file_path", "line", "column"]
-            }
-        }
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "find_references",
-            "description": "Find all usages (references) of a symbol at a specific line and column.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "file_path": { "type": "string", "description": "The path to the file." },
-                    "line": { "type": "integer", "description": "Line number (1-indexed)." },
-                    "column": { "type": "integer", "description": "Column number (0-indexed)." }
-                },
-                "required": ["file_path", "line", "column"]
-            }
-        }
-    },
-    {
-        "type": "function",
-        "function": {
             "name": "git_checkpoint",
             "description": "Create a temporary git commit to save current progress. Use this before making risky changes or running experiments.",
             "parameters": {
@@ -1250,58 +913,20 @@ TOOL_SCHEMAS = [
             }
         }
     },
-    {
+        {
         "type": "function",
         "function": {
             "name": "calculate",
-            "description": (
-                "Evaluate mathematics exactly — ALWAYS use this instead of doing math in your head. "
-                "Handles both plain arithmetic and symbolic math.\n"
-                "Arithmetic: +, -, *, /, //, %, ** (or ^) with sqrt, sin, cos, tan, log, exp, floor, "
-                "ceil, abs, round, min, max, factorial, gcd; constants pi, e, tau.\n"
-                "Symbolic (variables allowed): integrate(x**2, x) and definite integrate(exp(-x), (x, 0, oo)); "
-                "diff(sin(x)*x, x); limit(sin(x)/x, x, 0) and one-sided limit(1/x, x, 0, '+'); "
-                "solve(x**2 - 4, x) or solve(Eq(x + 1, 5), x); inequalities solve(x**2 > 4, x); "
-                "ODEs dsolve(Derivative(f(x), x) - f(x), f(x)); summation(k, (k, 1, n)); "
-                "series(exp(x), x, 0, 5); simplify/expand/factor. Use 'oo' for infinity.\n"
-                "Also: matrices Matrix([[1,2],[3,4]]) with det/trace/M**-1 and methods "
-                ".eigenvals()/.rref()/.T; substitution expr.subs(x, 3); statistics "
-                "variance(Die('D', 6)), probability(Normal('X', 0, 1) > 0), density(...)(x); "
-                "transforms laplace_transform(exp(-2*t), t, s), fourier_transform(...); "
-                "geometry Circle(Point(0,0), 5).area; sets Interval(0,2) | Interval(3,4); "
-                "logic simplify_logic(...); Piecewise((x, x < 1), (2 - x, True)); "
-                "units convert_to(5*meter, foot); special functions gamma/erf/zeta/LambertW."
-            ),
+            "description": "Evaluates exact arithmetic or symbolic math expressions (e.g. arithmetic, trigonometry, calculus, algebra) and returns the result.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "expression": {
                         "type": "string",
-                        "description": "Arithmetic, e.g. '(1847 * 0.15) + sqrt(2)', or symbolic, e.g. 'integrate(x**2, x)'. Never code."
+                        "description": "The mathematical expression to evaluate (e.g., '(15 * 4) + sqrt(144)', 'integrate(x**2, x)', 'solve(x**2 - 4, x)')."
                     }
                 },
                 "required": ["expression"]
-            }
-        }
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "set_goal",
-            "description": "Record the overall OBJECTIVE and/or the CURRENT TASK you are working on. Argent re-pins these at the end of the context as a goal reminder, so keep them accurate: set the objective once you understand what the user really wants, and update current_task when you move to a new sub-step. Does not modify any files.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "objective": {
-                        "type": "string",
-                        "description": "The high-level goal of the whole task, in one sentence."
-                    },
-                    "current_task": {
-                        "type": "string",
-                        "description": "The specific sub-task you are working on right now."
-                    }
-                },
-                "required": []
             }
         }
     },
@@ -1352,21 +977,26 @@ TOOL_SCHEMAS = [
         "function": {
             "name": "wait_heartbeat",
             "description": (
-                "Used in Auto Mode to pause while something finishes: a compilation, a server "
+                "Pause execution while something finishes: a compilation, a server "
                 "starting, a long background task.\n"
+                "IMPORTANT: Do NOT use wait_heartbeat for web pages or browser tasks (such as file/video upload or page loading) — it only monitors local filesystem files and background OS processes. For browser and web tasks, you MUST use browser_action(action=\"wait_for\") instead.\n"
                 "PREFER `until`: waking up costs a full turn, so polling 'is it done yet?' ten "
                 "times costs ten turns, while a condition is checked locally for free and wakes "
                 "you once — when it actually happened. Fall back to `delay_seconds` only when "
                 "nothing observable marks the end.\n"
                 "Checks available to `until`: file_exists(path), file_missing(path), "
-                "file_contains(path, text), process_finished(pid), process_running(pid). "
+                "file_contains(path, text), process_finished(pid), process_running(pid), "
+                "subagent_finished(id). "
                 "Combine them with and / or / not.\n"
                 "Examples:\n"
                 "  until='file_contains(\"build.log\", \"BUILD SUCCESSFUL\")'\n"
                 "  until='process_finished(\"3\")', timeout_seconds=1200\n"
                 "  until='file_exists(\"dist/app.exe\") and file_missing(\".lock\")'\n"
                 "You are told whether the condition was MET or the wait TIMED OUT — a timeout is "
-                "not success, so re-check before assuming the event happened."
+                "not success, so re-check before assuming the event happened.\n"
+                "If the result says the wait does NOT block (a watch was registered), do not sleep or poll: "
+                "finish your turn with a short message to the user (what is running, what you wait for); "
+                "you are woken with a '[Heartbeat ...]' message when it happens."
             ),
             "parameters": {
                 "type": "object",
@@ -1395,54 +1025,28 @@ TOOL_SCHEMAS = [
     {
         "type": "function",
         "function": {
-            "name": "filter_new_items",
-            "description": (
-                "Keep only what you have NOT already reported on a previous run of this "
-                "scheduled task, and remember the rest.\n"
-                "Use it in any monitoring job — job postings, prices, releases, mentions, "
-                "build failures — right after you collect the candidates and BEFORE you "
-                "write the summary. Without it every run repeats the same list and the "
-                "report becomes noise.\n"
-                "Pass stable identifiers: a URL or an id, not a headline that changes "
-                "wording. You get back only the new ones; if none are new, say exactly "
-                "that instead of restating the old list."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "items": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": "Identifiers of everything you found this run (URLs or ids preferred)."
-                    },
-                    "label": {
-                        "type": "string",
-                        "description": "Optional note on what these items are, echoed back in the result."
-                    }
-                },
-                "required": ["items"]
-            }
-        }
-    },
-    {
-        "type": "function",
-        "function": {
             "name": "view_image",
             "description": (
-                "LOOK at an image file — a browser screenshot, a mockup, a diagram, a photo "
+                "LOOK at an image file — a screenshot, a mockup, a diagram, a photo "
                 "the user pointed at. Use it when the answer depends on what something LOOKS "
                 "like: verifying a layout you just changed, reading a chart, checking a "
                 "rendered page.\n"
                 "The image arrives in the NEXT message, not in this tool's result, so "
                 "continue after calling it and describe what you actually see. Do not claim "
                 "to have seen anything before that.\n"
-                "Text is still cheaper: for the CONTENT of a web page use browser_get_content."
+                "Text is still cheaper: for the CONTENT of a web page use read_webpage."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "file_path": {"type": "string", "description": "Path to the image (png, jpg, gif, webp, bmp). `path` is accepted as an alias, since browser_screenshot returns it under that name."},
-                    "question": {"type": "string", "description": "Optional: what you are trying to find out, echoed back to keep you on task."}
+                    "file_path": {"type": "string", "description": "Path to the image (png, jpg, gif, webp, bmp). `path` is accepted as an alias."},
+                    "path": {"type": "string", "description": "Alias for file_path."},
+                    "question": {"type": "string", "description": "Optional: what you are trying to find out, echoed back to keep you on task."},
+                    "crop": {
+                        "type": "array",
+                        "items": {"type": "number"},
+                        "description": "Optional bounding box [ymin, xmin, ymax, xmax] normalized to [0..1000] to crop and focus on a specific region."
+                    }
                 },
                 "required": ["file_path"]
             }
@@ -1451,39 +1055,31 @@ TOOL_SCHEMAS = [
     {
         "type": "function",
         "function": {
-            "name": "end_auto_mode",
-            "description": "Ends the autonomous experimental mode and explicitly returns control to the user. MUST call this when the task is fully completed.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "reason": {
-                        "type": "string",
-                        "description": "The reason for ending auto mode (e.g., 'Task completed successfully', 'Encountered unrecoverable error')."
-                    }
-                },
-                "required": ["reason"]
-            }
-        }
-    },
-    {
-        "type": "function",
-        "function": {
             "name": "browser_open",
-            "description": "Open a URL in the built-in browser. Creates a browser session if needed. Use this to navigate to websites for scraping, form filling, or interaction. After opening, call browser_state to see the interactive elements on the page.",
+            "description": "Open a URL in the browser. Creates a browser session if needed. Automatically returns initial page state (URL, title, and interactive elements).\n\nVISIBILITY: By default, the browser runs silently in the background (headed=false). If the user asks you to OPEN, SHOW, VIEW, or DISPLAY a website on their desktop screen, you MUST set headed=true so a real visible browser window appears.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "url": {
                         "type": "string",
-                        "description": "The URL to navigate to (e.g. 'https://example.com')."
+                        "description": "The URL to navigate to (e.g. 'https://example.com' or 'http://localhost:3000')."
                     },
                     "session": {
                         "type": "string",
-                        "description": "Name of the browser session. Use different names for parallel browsing. Default: 'default'."
+                        "description": "Name of the browser session. Default: 'default'."
                     },
                     "headed": {
                         "type": "boolean",
-                        "description": "If true, shows the browser window. WARNING: DO NOT set this to true unless the user EXPLICITLY asks to see the browser or watch you work. MUST be false (headless) by default to run quietly in the background."
+                        "description": "If true, displays a visible browser window on desktop. If false (default), runs headless."
+                    },
+                    "return_state": {
+                        "type": "boolean",
+                        "description": "If true (default), returns updated page state."
+                    },
+                    "mode": {
+                        "type": "string",
+                        "enum": ["auto", "user", "isolated"],
+                        "description": "Browser environment: 'user' (user's real browser profile with logins/cookies), 'isolated' (clean temporary Chromium), or 'auto' (default)."
                     }
                 },
                 "required": ["url"]
@@ -1493,169 +1089,94 @@ TOOL_SCHEMAS = [
     {
         "type": "function",
         "function": {
-            "name": "browser_state",
-            "description": "Get the current state of the browser page: URL, title, and a numbered list of all interactive elements. Can be filtered by a query keyword. ALWAYS call this after browser_open or after any action to see the updated page. By default uses the accessibility tree (semantic roles, hierarchy, structural context) for richer page understanding. Set mode='dom' for a compact flat list of interactive elements only — useful for quick checks after an action.",
+            "name": "browser_action",
+            "description": "Execute an action on the active browser page. PREFER action='act' with instruction for navigating, clicking, and typing (runs in 15ms via local Leeth coprocessor, 0 tokens, avoiding large DOM dumps). Use manual click/type only as fallback.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "session": {
+                    "action": {
                         "type": "string",
-                        "description": "Browser session name. Default: 'default'."
-                    },
-                    "query": {
-                        "type": "string",
-                        "description": "Optional. Keyword to filter elements by (case-insensitive OR match against text, tags, values, and hrefs. Supports comma-separated list). WARNING: Use ONLY literal keywords expected to physically appear on the page (e.g. 'Videos', 'Sign In'). Do NOT use semantic descriptions of your goal (e.g. do NOT search for 'latest video' because video titles are actual names like 'Game Title Review', not the text 'latest video')."
-                    },
-                    "scroll_depth": {
-                        "type": "integer",
-                        "description": "Optional. Number of viewport heights to pre-scroll down the page to trigger lazy-loaded / infinite scroll elements before extracting state. Default: 0."
-                    },
-                    "mode": {
-                        "type": "string",
-                        "enum": ["a11y", "dom"],
-                        "description": "Optional. 'a11y' = accessibility tree (default, richer semantics with roles and hierarchy). 'dom' = compact flat list of interactive elements only. If omitted, uses the configured default (a11y for capable models, dom for small ones)."
-                    }
-                }
-            }
-        }
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "browser_click",
-            "description": "Click on an element. You must specify either the index (from browser_state), a CSS selector, or the visible text of the element. IMPORTANT: After clicking, call browser_state again to see the updated page.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "index": {
-                        "type": "integer",
-                        "description": "Optional. The element index from browser_state (e.g. 3 for [3] button \"Submit\")."
+                        "enum": ["act", "click", "type", "select", "scroll", "press_key", "upload_file", "wait_for", "back", "reload", "switch_tab", "close_tab", "eval_js"],
+                        "description": "Action type. Preferred: 'act' with instruction for fast semantic execution via Leeth. Deterministic: click, type, select, scroll, press_key, wait_for, etc."
                     },
                     "selector": {
                         "type": "string",
-                        "description": "Optional. CSS selector of the element to click (e.g. '#submit-btn')."
+                        "description": "CSS selector or element text/label to target."
                     },
                     "text": {
                         "type": "string",
-                        "description": "Optional. Visible text of the element to click (e.g. 'Submit')."
+                        "description": "The text an action works with: what to type, the element label to click, the value to set, the JavaScript source for eval_js, the absolute file path for upload_file, the text to wait for in wait_for, or the URL/title match for close_tab."
                     },
-                    "session": {
+                    "value": {
                         "type": "string",
-                        "description": "Browser session name. Default: 'default'."
-                    }
-                },
-                "required": []
-            }
-        }
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "browser_input",
-            "description": "Type text into an input field or textarea. You must specify either the index (from browser_state) or a CSS selector to target the input.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "index": {
-                        "type": "integer",
-                        "description": "Optional. The element index from browser_state."
+                        "description": "Alias for text: input value or dropdown option."
                     },
-                    "selector": {
+                    "key": {
                         "type": "string",
-                        "description": "Optional. CSS selector of the input field (e.g. 'input[type=email]')."
+                        "description": "Key name for press_key action (e.g. 'Enter', 'Tab', 'Escape')."
                     },
-                    "text": {
-                        "type": "string",
-                        "description": "The text to type into the element."
-                    },
-                    "session": {
-                        "type": "string",
-                        "description": "Browser session name. Default: 'default'."
-                    }
-                },
-                "required": ["text"]
-            }
-        }
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "browser_screenshot",
-            "description": (
-                "Save a PNG of the current browser page to disk and return its path. "
-                "This does NOT show it to you — call view_image(path) afterwards to actually "
-                "look at it, and only if the answer depends on how the page LOOKS (layout, "
-                "rendering, a chart). For the page's CONTENT use browser_get_content: text is "
-                "far cheaper than an image."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "path": {
-                        "type": "string",
-                        "description": "Optional file path to save the screenshot. If not provided, saves to the visuals directory with a timestamp."
-                    },
-                    "full_page": {
-                        "type": "boolean",
-                        "description": "If true, captures the entire scrollable page. Default: false (viewport only)."
-                    },
-                    "session": {
-                        "type": "string",
-                        "description": "Browser session name. Default: 'default'."
-                    }
-                }
-            }
-        }
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "browser_scroll",
-            "description": "Scroll the browser page up or down, or scroll a specific element into view.",
-            "parameters": {
-                "type": "object",
-                "properties": {
                     "direction": {
                         "type": "string",
-                        "enum": ["up", "down"],
-                        "description": "Scroll direction. Default: 'down'. Ignored if index is provided."
+                        "enum": ["down", "up"],
+                        "description": "Scroll direction: 'down' (default) or 'up'."
                     },
                     "amount": {
                         "type": "integer",
-                        "description": "Pixels to scroll. Default: 500. Ignored if index is provided."
+                        "description": "Scroll distance in pixels (scroll) or the timeout in seconds (wait_for). Default is 500."
                     },
                     "index": {
                         "type": "integer",
-                        "description": "Optional element index from browser_state to scroll into view."
+                        "description": "Optional numeric index of the interactive element, or tab index for switch_tab / close_tab."
+                    },
+                    "instruction": {
+                        "type": "string",
+                        "description": "Natural language instruction for action='act' (e.g. 'click login', 'type python in search and press Enter', 'select filter Комплект'). Handled instantly by Leeth."
                     },
                     "session": {
                         "type": "string",
                         "description": "Browser session name. Default: 'default'."
+                    },
+                    "return_state": {
+                        "type": "boolean",
+                        "description": "If true (default), returns updated page state after the action."
                     }
-                }
+                },
+                "required": ["action"]
             }
         }
     },
     {
         "type": "function",
         "function": {
-            "name": "browser_get_content",
-            "description": "Extract content from the current browser page. Can return plain text, markdown, or raw HTML. Use 'text' for body text, 'markdown' for structured readable content, 'html' for raw source. Use 'selector' to target a specific part of the page (e.g. '#comments' for YouTube comments, '.vacancy-list' for job listings, 'main' for main content).",
+            "name": "browser_inspect",
+            "description": "Inspect the active browser page state, list open tabs, take a screenshot, check console errors, or extract content. Prefer browser_action(action='act') over dumping dom_interactive repeatedly to manually click elements.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "content_type": {
+                    "mode": {
                         "type": "string",
-                        "enum": ["text", "markdown", "html"],
-                        "description": "Type of content to extract. Default: 'text'."
-                    },
-                    "index": {
-                        "type": "integer",
-                        "description": "Optional element index to get text from a specific element only."
+                        "enum": ["dom_interactive", "tabs", "screenshot", "console_errors", "text_content", "html", "observe", "extract"],
+                        "description": "Inspection target: 'dom_interactive' (compact accessibility tree of buttons/inputs/links, max 15KB), 'tabs' (list all open browser tabs with indices, titles, and URLs), 'screenshot' (captures visual PNG), 'console_errors' (DevTools JS logs/errors), 'text_content' (readable text), 'html' (markup), 'observe' (semantic element discovery via Stagehand), 'extract' (semantic structured data extraction via Stagehand)."
                     },
                     "selector": {
                         "type": "string",
-                        "description": "Optional CSS selector to target a specific section of the page. Examples: '#comments', '.job-list', 'main', 'article'. Much more precise than reading the entire page."
+                        "description": "Optional CSS selector to scope text/html inspection."
+                    },
+                    "index": {
+                        "type": "integer",
+                        "description": "Optional numeric element index to inspect."
+                    },
+                    "path": {
+                        "type": "string",
+                        "description": "Optional custom file path to save screenshot PNG."
+                    },
+                    "instruction": {
+                        "type": "string",
+                        "description": "Guidance instruction or data description for 'observe' or 'extract' modes."
+                    },
+                    "query": {
+                        "type": "string",
+                        "description": "Filter keyword for dom_interactive or instruction alias."
                     },
                     "session": {
                         "type": "string",
@@ -1669,57 +1190,23 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "browser_close",
-            "description": "Close a browser session and free resources. Always close sessions when done with browser automation.",
+            "description": "Close an open browser session and release all associated processes, or close a specific tab if 'index' or 'text' is provided.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "session": {
                         "type": "string",
-                        "description": "Name of the session to close. Default: 'default'."
-                    }
-                }
-            }
-        }
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "browser_switch_tab",
-            "description": "Switch the active tab/page of a named browser session by its 1-based index (e.g. 1, 2). Use this to switch focus when a link opened a new tab.",
-            "parameters": {
-                "type": "object",
-                "properties": {
+                        "description": "Browser session name to close. Default: 'default'."
+                    },
                     "index": {
                         "type": "integer",
-                        "description": "The 1-based index of the tab to switch to (e.g., 2 to switch to the second open tab)."
+                        "description": "Optional 1-based index of a specific tab to close. If provided, only this tab is closed instead of the whole browser session."
                     },
-                    "session": {
+                    "text": {
                         "type": "string",
-                        "description": "Browser session name. Default: 'default'."
+                        "description": "Optional title or URL substring to match and close a specific tab."
                     }
-                },
-                "required": ["index"]
-            }
-        }
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "run_browser_task",
-            "description": "Delegate a browser automation task (like searching the web, logging in, or scraping) to an autonomous headless sub-agent. The sub-agent will automatically navigate, click, type, and extract the final information for you.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "task": {
-                        "type": "string",
-                        "description": "A detailed description of what the browser sub-agent needs to accomplish."
-                    },
-                    "url": {
-                        "type": "string",
-                        "description": "Optional starting URL."
-                    }
-                },
-                "required": ["task"]
+                }
             }
         }
     },
@@ -1742,64 +1229,302 @@ TOOL_SCHEMAS = [
     {
         "type": "function",
         "function": {
-            "name": "check_code",
-            "description": "Check code for errors and warnings using the Language Server Protocol (LSP). Returns instant diagnostics (errors, warnings) for a file. Works with Python, C#, TypeScript, JavaScript, Rust, Go, Java, C++, Ruby, Kotlin, PHP, Dart. Requires the multilspy package (pip install multilspy).",
+            "name": "filter_new_items",
+            "description": "Filter a list of items (URLs, IDs, or titles) to return only those not previously reported by this automated or monitoring task.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "file_path": {
+                    "items": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "List of item identifiers to check against historical run memory."
+                    },
+                    "label": {
                         "type": "string",
-                        "description": "Path to the file to check for diagnostics."
+                        "description": "Optional category or description label for the reported batch."
                     }
                 },
-                "required": ["file_path"]
+                "required": ["items"]
             }
         }
     },
     {
         "type": "function",
         "function": {
-            "name": "find_implementations",
-            "description": "Find all implementations of an interface or abstract method using LSP. Given a symbol position (e.g. an interface method), returns all concrete implementations. More precise than grep because it understands type relationships. Requires multilspy.",
+            "name": "manage_automations",
+            "description": (
+                "Set up, inspect or run work that happens by itself on a schedule while the user is away: "
+                "monitoring a page or repository, a daily digest, a recurring check, a reminder. Use it when "
+                "the user asks for something 'every day', 'every hour', 'by schedule', 'remind me', or 'keep an eye on'. "
+                "Modes: 'agent' (a model works on `task` with limited tools — the default), 'command' (`task` is a shell "
+                "command run as-is, no model, cheapest for tests/backups/health checks), 'remind' (`task` is just a message). "
+                "Schedules: 'every 30m', 'every 2h on weekdays between 09:00 and 18:00', 'daily at 09:00', 'weekdays at 09:00', "
+                "'mon,fri at 18:30', 'monthly on 1 at 09:00', 'in 2h', 'tomorrow at 08:30', 'on start' (Russian works too). "
+                "An unattended run cannot ask questions or get approvals: give it only the `tools` it needs and list in "
+                "`commands` the exact shell commands it may run (`*` matches arguments, never `;` `&` `|`). "
+                "Every change asks the user for approval. Actions: list, show, create, update, remove, enable, disable, run, runs "
+                "(history), templates (ready-made: morning, tests, command, page, releases, news, todo, deps)."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "file_path": {"type": "string", "description": "Path to the file containing the symbol."},
-                    "line": {"type": "integer", "description": "Line number (1-indexed)."},
-                    "column": {"type": "integer", "description": "Column number (0-indexed)."}
+                    "action": {"type": "string",
+                               "enum": ["list", "show", "create", "update", "remove", "enable", "disable",
+                                        "run", "runs", "templates"]},
+                    "name": {"type": "string", "description": "Automation name (for create: a short readable one)."},
+                    "schedule": {"type": "string", "description": "When it runs, e.g. 'weekdays at 09:00'."},
+                    "task": {"type": "string",
+                             "description": "What to do (agent), the command line (command), or the message (remind)."},
+                    "mode": {"type": "string", "enum": ["agent", "command", "remind"]},
+                    "notify": {"type": "string", "enum": ["auto", "failures", "changes", "always", "never"],
+                               "description": "When to tell the user: auto = failure or something new; "
+                                              "changes = report differs from last time; always = every run."},
+                    "tools": {"type": "array", "items": {"type": "string"},
+                              "description": "Tools an agent run may use (narrow is safer)."},
+                    "commands": {"type": "array", "items": {"type": "string"},
+                                 "description": "Shell commands the agent run may execute without approval."},
+                    "channels": {"type": "array", "items": {"type": "string"},
+                                 "description": "Extra delivery besides the desktop: ['telegram']."},
+                    "report_file": {"type": "string",
+                                    "description": "Append each report to this .md/.txt/.log/.jsonl file inside the project; "
+                                                   "{date} {name} {datetime} are filled in."},
+                    "timeout_minutes": {"type": "integer"},
+                    "max_turns": {"type": "integer"},
+                    "retries": {"type": "integer"},
+                    "template": {"type": "string", "description": "For create: start from a ready-made template."},
+                    "template_arg": {"type": "string", "description": "The template's argument (URL, repo, command, topic)."},
+                    "limit": {"type": "integer", "description": "For runs: how many entries."},
                 },
-                "required": ["file_path", "line", "column"]
+                "required": ["action"]
             }
         }
     },
     {
         "type": "function",
         "function": {
-            "name": "search_workspace_symbols",
-            "description": "Search for symbols (classes, functions, methods, variables) across the entire workspace using LSP. Faster and more precise than grep because it understands code structure. Requires multilspy.",
+            "name": "subagents",
+            "description": (
+                "Manage the sub-agents you started with run_subagent. action='list' shows them all; 'result' returns "
+                "one's report (wait=true blocks until it finishes); 'stop' kills a running one; 'apply' puts the "
+                "changes an isolated (worktree) sub-agent made into the real working tree; 'discard' throws them away. "
+                "Read a patch (the path is in the report) before applying it, and run the tests afterwards."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "query": {"type": "string", "description": "Symbol name or partial name to search for."}
+                    "action": {"type": "string", "enum": ["list", "result", "stop", "apply", "discard"]},
+                    "id": {"type": "integer", "description": "The sub-agent number (#N) from run_subagent."},
+                    "wait": {"type": "boolean", "description": "With action='result': block until it is finished."},
+                    "timeout_seconds": {"type": "integer", "description": "Longest wait for wait=true (default 600)."}
                 },
-                "required": ["query"]
+                "required": ["action"]
             }
         }
     },
     {
         "type": "function",
         "function": {
-            "name": "get_call_hierarchy",
-            "description": "Get the call hierarchy for a function/method at the given position. direction='incoming' finds all callers (who calls this function), direction='outgoing' finds all callees (what this function calls). Requires multilspy.",
+            "name": "ultracode",
+            "description": (
+                "Run a BIG job as a planned, checked workflow (Ultracode): a plan of steps, workers in isolated copies "
+                "of the tree, the step's own checks, an independent critic reading every patch, an advisor reviewing "
+                "the plan and the result. Use it for work that touches several files or modules and has checks; NOT "
+                "for questions, explanations or small edits. It works only while the person has switched Ultracode "
+                "on (/ultracode on). Blocks until the workflow ends and returns its report; the report tells which "
+                "steps were done, what failed and what is left. Put the WHOLE job, every requirement and the checks "
+                "the person named into `goal`. action='resume' continues a stopped workflow."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "file_path": {"type": "string", "description": "Path to the file containing the function."},
-                    "line": {"type": "integer", "description": "Line number (1-indexed)."},
-                    "column": {"type": "integer", "description": "Column number (0-indexed)."},
-                    "direction": {"type": "string", "enum": ["incoming", "outgoing"], "description": "'incoming' = find callers, 'outgoing' = find callees. Default: incoming."}
+                    "action": {"type": "string", "enum": ["start", "resume", "status", "stop"]},
+                    "goal": {"type": "string", "description": "For start: the complete job, with how to verify it."},
+                    "run_id": {"type": "string", "description": "For resume: a workflow id (default: the last one)."}
                 },
-                "required": ["file_path", "line", "column"]
+                "required": ["action"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "rooms",
+            "description": (
+                "Run a reusable, bounded RECIPE (a 'room') instead of improvising a procedure: fix_bug, "
+                "debug_loop (red tests -> fix -> re-run until green), code_review (the uncommitted diff), "
+                "implement_feature (plan -> the person approves -> code -> tests -> review), release_check, "
+                "research (web question with sources), explain_repo, analyze. Rooms have hard step/token/time "
+                "limits, verdicts come from processes (the test command's exit code), risky steps (a commit) ask "
+                "the person, and a report comes back. action='list' shows the rooms with their parameters; "
+                "'show' draws one; 'run' executes it AUTONOMOUSLY with real tools and sub-agents (the person is "
+                "asked first, every time) and blocks until the report; 'resume' continues an interrupted run. "
+                "'build' writes a NEW room from the person's description and 'edit' changes one (a second model "
+                "rewrites the whole room). For PRECISE work use 'patch' (change an existing room) and 'create' "
+                "(a new room put together block by block): you give a list of point operations in `ops` and "
+                "nothing else is touched; they apply all together or not at all. Whatever the way, the person "
+                "sees the drawn flow and decides whether it is saved. "
+                "ops (each an object with `op`): "
+                "add_node {node:{id,type,...}} | insert_node {node:{...}, between:[from,to]} (a block ON an arrow) | "
+                "remove_node {node, reconnect:true} | rename_node {node,new_id} | "
+                "set_param {node, field, value} or {node, values:{field:value}} (any block parameter; value null "
+                "resets it; dotted paths like args.file_path, sampling.temperature, budget.max_tokens, sets.ok) | "
+                "connect {from,to, if:'state.ok' | else:true | while:'..',max,id | on_error:true} (to may be "
+                "'EXIT:done') | disconnect {from,to, if|else|all} | set_edge {from,to, if|else (which arrow), "
+                "set:{if,else,while,max,id,on_error,to}} | set_room {field,value} (description, budget, entry, "
+                "defaults, next, tags, report, rules; dotted paths too). Use rooms(action='show') first to see "
+                "the ids and parameters. "
+                "Use a room when the task matches one; for anything else work as usual."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string", "enum": ["list", "show", "run", "resume", "build", "edit", "patch", "create", "last", "history"]},
+                    "room": {"type": "string", "description": "Room name (for show / run / edit / patch; for build and create the name of the new room)."},
+                    "task": {"type": "string", "description": "For run: the task in the person's words, complete. For build: what the new room must do and what to do in each case (on failure, on a 'no'). For edit: what to change."},
+                    "params": {"type": "object", "description": "For run: parameters of the room, e.g. {\"test_command\": \"python -m pytest tests/unit -q\"}."},
+                    "ops": {"type": "array", "items": {"type": "object"}, "description": "For patch / create: the point operations, applied in order to a copy of the room (at most 40). Example: [{\"op\":\"insert_node\",\"node\":{\"id\":\"lint\",\"type\":\"tool\",\"tool\":\"run_command\",\"args\":{\"command\":\"ruff check .\"},\"sets\":{\"lint_ok\":\"ok\"}},\"between\":[\"plan\",\"code\"]},{\"op\":\"set_param\",\"node\":\"critic\",\"field\":\"sampling.temperature\",\"value\":0.2}]"},
+                    "save_as": {"type": "string", "description": "For patch: save the changed copy under this name instead of replacing the room (a packaged room is always saved as <name>_custom)."}
+                },
+                "required": ["action"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "desktop_inspect",
+            "description": (
+                "See another program's window as text (Windows UI Automation): its buttons, fields and labels, each "
+                "with an id like e3. action='windows' lists the windows, 'tree' shows one window's controls, "
+                "'find' filters them by words, 'wait' waits for a window or control to appear. Needs desktop "
+                "control switched on by the person; works only in programs they allowed. Always inspect before "
+                "desktop_act: its ids come from here."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string", "enum": ["windows", "tree", "find", "wait"]},
+                    "window": {"type": "string", "description": "Part of the window title."},
+                    "query": {"type": "string", "description": "For find/wait: words in a control's name, id or value."},
+                    "role": {"type": "string", "description": "Optional control type filter: Button, Edit, CheckBox..."},
+                    "timeout": {"type": "integer", "description": "For wait: seconds, up to 60 (default 10)."}
+                },
+                "required": ["action"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "desktop_act",
+            "description": (
+                "Act in another program's window: click, type, set a field's value, press keys, scroll, drag, bring "
+                "a window to the front. Use element ids from the LATEST desktop_inspect of that window; the answer shows the "
+                "window after the action, so check it before the next step. Every action is shown to the person for "
+                "approval. Never for passwords, payments or security dialogs. Does nothing unless the person "
+                "switched desktop control on and allowed that program."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string",
+                               "enum": ["click", "double_click", "right_click", "type", "set_value", "hotkey", "focus",
+                                        "scroll", "drag"]},
+                    "window": {"type": "string", "description": "Part of the window title."},
+                    "element": {"type": "string", "description": "Element id from desktop_inspect, e.g. e3."},
+                    "text": {"type": "string", "description": "For type / set_value: the text."},
+                    "keys": {"type": "string", "description": "For hotkey: e.g. ctrl+s, alt+f4, enter."},
+                    "x": {"type": "integer", "description": "For a click without an element: screen x."},
+                    "y": {"type": "integer", "description": "For a click without an element: screen y."},
+                    "direction": {"type": "string", "enum": ["up", "down", "left", "right"],
+                                  "description": "For scroll (element = the list or pane; none = the window's middle)."},
+                    "amount": {"type": "integer", "description": "For scroll: small steps, 1-20 (default 3)."},
+                    "to_element": {"type": "string", "description": "For drag: the element to drop it on."},
+                    "to_x": {"type": "integer", "description": "For drag: screen x to drop at."},
+                    "to_y": {"type": "integer", "description": "For drag: screen y to drop at."}
+                },
+                "required": ["action", "window"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "memory",
+            "description": (
+                "Long-term memory: notes kept between sessions, for this project and for the user in general. "
+                "action='list' shows the index, 'read' opens a note, 'search' finds notes by words, 'write' saves "
+                "one (name, description = one line saying what it is for, body), 'forget' moves one to the trash. "
+                "Save what will matter in a later session and cannot be read from the code: the user's preferences "
+                "and corrections, a decision and its reason, a hidden constraint. Never progress notes or secrets."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string", "enum": ["list", "read", "search", "write", "forget"]},
+                    "name": {"type": "string", "description": "Note name (letters, digits, '-'); 'global:name' for a global one."},
+                    "query": {"type": "string", "description": "For search: the words to look for."},
+                    "description": {"type": "string", "description": "For write: one line, what the note is for."},
+                    "body": {"type": "string", "description": "For write: the text; link other notes as [[name]]."},
+                    "type": {"type": "string", "enum": ["user", "feedback", "project", "reference"],
+                             "description": "For write: user = who the person is, feedback = how to work with them, "
+                                            "project = decisions/goals, reference = where things are."},
+                    "scope": {"type": "string", "enum": ["project", "global"],
+                              "description": "For write: 'global' only for what holds in EVERY project."}
+                },
+                "required": ["action"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "todo_write",
+            "description": (
+                "Keep a checklist of the task you are working on and show it to the user. USE IT for any job "
+                "with three or more steps, and whenever the user gives you several things to do: write the steps "
+                "FIRST, then work through them. Each call REPLACES the whole list, so send every item every time. "
+                "Rules: exactly ONE item is in_progress at a time; mark an item completed the moment it is really "
+                "done (tests passed, file written) — not before and not in a batch at the end; add steps you discover "
+                "on the way. Do not use it for a one-step request or a plain question."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "todos": {
+                        "type": "array",
+                        "description": "The complete list, in the order the work will happen.",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "content": {"type": "string",
+                                            "description": "One concrete step, e.g. 'Add the retry to fetch_page()'."},
+                                "status": {"type": "string", "enum": ["pending", "in_progress", "completed"]}
+                            },
+                            "required": ["content", "status"]
+                        }
+                    }
+                },
+                "required": ["todos"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "exit_plan_mode",
+            "description": (
+                "ONLY while plan mode is on: hand the finished plan to the user for approval. Plan mode means you "
+                "may look but not change anything. Explore the code, then call this with the COMPLETE plan — goal, "
+                "files to change and how, order of steps, how you will verify, risks. If the user approves, plan mode "
+                "ends and you can start the work; if not, revise the plan and call it again."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "plan": {"type": "string", "description": "The full plan in Markdown."}
+                },
+                "required": ["plan"]
             }
         }
     }
@@ -1825,6 +1550,13 @@ def get_available_tools() -> dict:
             tools["semantic_search"] = semantic_search
     except ImportError:
         pass
+    try:
+        from config import is_local_agent_enabled
+        if is_local_agent_enabled() and "delegate_local" not in disabled:
+            from local_inference import delegate_local
+            tools["delegate_local"] = delegate_local
+    except Exception:
+        pass
     return tools
 
 def get_tool_schemas(include_hidden: bool = False) -> list[dict]:
@@ -1832,20 +1564,9 @@ def get_tool_schemas(include_hidden: bool = False) -> list[dict]:
     from config import get_disabled_tools
     disabled = get_disabled_tools()
     
-    hidden_tools = {
-        "browser_open", "browser_state", "browser_click", "browser_input", 
-        "browser_screenshot", "browser_scroll", "browser_get_content", 
-        "browser_close", "browser_switch_tab"
-    }
-    
-    schemas = []
-    for s in TOOL_SCHEMAS:
-        name = s["function"]["name"]
-        if name in disabled:
-            continue
-        if not include_hidden and name in hidden_tools:
-            continue
-        schemas.append(s)
+    from src.agent.plan_mode import hides
+    schemas = [s for s in TOOL_SCHEMAS
+               if s["function"]["name"] not in disabled and not hides(s["function"]["name"])]
     try:
         from rag_engine import is_rag_enabled
         if is_rag_enabled() and "semantic_search" not in disabled:
@@ -1896,4 +1617,14 @@ def get_tool_schemas(include_hidden: bool = False) -> list[dict]:
             })
     except ImportError:
         pass
+
+    try:
+        from config import is_local_agent_enabled
+        if is_local_agent_enabled() and "delegate_local" not in disabled:
+            from local_inference import DELEGATE_LOCAL_SCHEMA
+            schemas.append(DELEGATE_LOCAL_SCHEMA)
+    except Exception:
+        pass
+
     return schemas
+

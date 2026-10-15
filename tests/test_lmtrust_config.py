@@ -151,22 +151,22 @@ class TestSetModelCategoryOverride:
 # ─── _CONFIG_CACHE ───────────────────────────────────────────────────────────
 
 class TestConfigCache:
-    def test_second_load_does_not_re_read_disk(self, patched_config_file):
-        """Once loaded, _CONFIG_CACHE is returned on subsequent calls without
-        touching the file — modifying the file on disk must not change the
-        returned config."""
+    def test_second_load_does_not_re_read_disk(self, patched_config_file, monkeypatch):
+        """While the file is unchanged, _CONFIG_CACHE is served without parsing it again.
+
+        (An earlier version of this test rewrote the file and expected the OLD
+        content back. That contradicted the module's contract — the cache exists
+        to be invalidated when another process saves — and only passed when both
+        writes happened to share a timestamp. Invalidation is pinned in
+        test_config_cache and test_lmtrust_multi_instance.)"""
         initial = {"model": "test-model", "version": 1}
         patched_config_file.write_text(json.dumps(initial), encoding="utf-8")
 
-        # First call reads disk and populates cache
-        result1 = config.load_config()
-        assert result1 == initial
+        assert config.load_config() == initial        # first call reads and caches
 
-        # Modify the file on disk
-        modified = {"model": "different-model", "version": 2}
-        patched_config_file.write_text(json.dumps(modified), encoding="utf-8")
+        def _boom(*a, **k):
+            raise AssertionError("the unchanged config file was parsed a second time")
 
-        # Second call must return the cached value, not re-read disk
-        result2 = config.load_config()
-        assert result2 == initial
-        assert result2["version"] == 1
+        monkeypatch.setattr(config.json, "load", _boom)
+        assert config.load_config() == initial
+        assert config.load_config() == initial

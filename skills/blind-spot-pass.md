@@ -12,8 +12,7 @@ trivia. Every task splits into four quadrants; each has its own correct move.
 ## The four quadrants
 
 1. **Known knowns** — requirements stated in the prompt.
-   Move: restate them in 2–4 bullets — this is the contract. Pin it with
-   `set_goal(objective=..., current_task=...)` so it survives long sessions.
+   Move: restate them in 2–4 bullets — this is the contract.
 
 2. **Known unknowns** — things the user KNOWS they haven't decided
    ("which library?", "какой дизайн?"). Move: make each explicit, then route it:
@@ -71,7 +70,7 @@ destructive or hard-to-reverse changes, integrations with external systems.
    answer), one batch — never a wall of prose, never one question per message.
 6. **Refine the task**: restate the improved formulation ("Уточнённая
    постановка: …") — this replaces the original prompt as the working
-   contract. Pin it with `set_goal`.
+   contract.
 
 ## Rules of economy
 

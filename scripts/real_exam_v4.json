@@ -1,0 +1,17 @@
+{
+ "meta": "Real requests (from the owner's own input history) whose right first tool is a tool. Every other request in real_queries.json is \"delegate\" (NO_TOOL/UNFAMILIAR).",
+ "tools": {
+  "сколько будет 1234+4321-1+9*8": "calculate",
+  "cd C:\\Users\\user\\Desktop\\Agem.io": "run_command",
+  "cd C:\\Users\\user\\UnityProjects\\First Proj\\Assets\\Scripts": "run_command",
+  "cd C:\\Users\\user\\Desktop\\test_argent_gate": "run_command",
+  "3.14 * 625": "calculate",
+  "сколько будет 100+32-123*94+(10+2/2)": "calculate",
+  "почисти файлы с помощью cargo clean": "run_command",
+  "сколько будет 2 + 2 * 22": "calculate",
+  "сколько будет 2 + 42 * 7": "calculate",
+  "Сколько будет 231 * 123": "calculate",
+  "19283 / 31": "calculate"
+ },
+ "skip": []
+}

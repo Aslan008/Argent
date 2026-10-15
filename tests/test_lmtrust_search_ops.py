@@ -294,12 +294,19 @@ class TestPythonGrepSearch:
         assert "Error" in result
         assert "does not exist" in result
 
-    def test_file_not_dir_returns_error(self, tmp_path):
+    def test_single_file_search_succeeds(self, tmp_path):
         f = tmp_path / "afile.txt"
-        f.write_text("hi", encoding="utf-8")
-        result = _python_grep_search(str(f), r"hi")
-        assert "Error" in result
-        assert "not a directory" in result
+        f.write_text("line 1\nhello world\nline 3", encoding="utf-8")
+        result = _python_grep_search(str(f), r"hello")
+        assert "Found 1 match(es)" in result
+        assert "hello world" in result
+
+    def test_single_file_search_with_path_param_succeeds(self, tmp_path):
+        f = tmp_path / "afile.txt"
+        f.write_text("target text here", encoding="utf-8")
+        result = _python_grep_search(path=str(f), pattern=r"target")
+        assert "Found 1 match(es)" in result
+        assert "target text here" in result
 
 
 # ---------------------------------------------------------------------------
@@ -440,21 +447,19 @@ class TestGrepSearch:
         # subprocess should not have been called
         assert call_count[0] == 0
 
-    def test_file_not_dir_returns_error(self, tmp_path, monkeypatch):
+    def test_file_target_searches_file_succeeds(self, tmp_path, monkeypatch):
         f = tmp_path / "afile.txt"
-        f.write_text("hi", encoding="utf-8")
+        f.write_text("hi\n", encoding="utf-8")
 
-        call_count = [0]
+        class FakeResult:
+            returncode = 0
+            stdout = f"{f}:1:hi"
+            stderr = ""
 
-        def fake_run(*args, **kwargs):
-            call_count[0] += 1
-            raise FileNotFoundError("should not reach here")
-
-        monkeypatch.setattr(subprocess, "run", fake_run)
+        monkeypatch.setattr(subprocess, "run", lambda *a, **kw: FakeResult())
         result = grep_search(str(f), r"hi")
-        assert "Error" in result
-        assert "not a directory" in result
-        assert call_count[0] == 0
+        assert "Found 1 match(es)" in result
+        assert "hi" in result
 
     # -- file_pattern passed to ripgrep ----------------------------------
     def test_file_pattern_in_command(self, tmp_path, monkeypatch):
@@ -494,3 +499,17 @@ class TestGrepSearch:
         monkeypatch.setattr(subprocess, "run", lambda *a, **kw: FakeResult())
         result = grep_search(str(tmp_path), r"import", max_results=3)
         assert "Found 3 match(es)" in result
+
+    def test_grep_search_single_file_succeeds(self, tmp_path):
+        file_path = tmp_path / "app.py"
+        file_path.write_text("import os\nprint('hello')\n", encoding="utf-8")
+        result = grep_search(str(file_path), r"import")
+        assert "Found" in result
+        assert "import os" in result
+
+    def test_grep_search_path_alias_succeeds(self, tmp_path):
+        file_path = tmp_path / "app.py"
+        file_path.write_text("import sys\n", encoding="utf-8")
+        result = grep_search(path=str(file_path), pattern=r"import")
+        assert "Found" in result
+        assert "import sys" in result

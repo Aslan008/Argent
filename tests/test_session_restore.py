@@ -37,8 +37,8 @@ def store(tmp_path, monkeypatch):
 @pytest.fixture
 def said(monkeypatch):
     lines = []
-    monkeypatch.setattr(main_module, "print_system", lambda t, *a, **k: lines.append(str(t)))
-    monkeypatch.setattr(main_module, "print_error", lambda t, *a, **k: lines.append(str(t)))
+    monkeypatch.setattr("ui.print_system", lambda t, *a, **k: lines.append(str(t)))
+    monkeypatch.setattr("ui.print_error", lambda t, *a, **k: lines.append(str(t)))
     return lines
 
 
@@ -48,7 +48,7 @@ def never_asks(monkeypatch):
     class _Q:
         def confirm(self, *a, **k):
             pytest.fail("nothing here should have asked the user")
-    monkeypatch.setattr(main_module, "questionary", _Q())
+    monkeypatch.setattr("src.startup.questionary", _Q())
 
 
 def _saved(**meta):
@@ -106,7 +106,7 @@ class TestDirectory:
             def confirm(self, *a, **k):
                 return type("A", (), {"ask": lambda s: False})()
 
-        monkeypatch.setattr(main_module, "questionary", _Q())
+        monkeypatch.setattr("src.startup.questionary", _Q())
         restore_session(_Agent(), {"id": sid})
         text = " ".join(said)
         assert "OtherProject" in text and str(tmp_path) in text
@@ -123,7 +123,7 @@ class TestDirectory:
             def confirm(self, *a, **k):
                 return type("A", (), {"ask": lambda s: False})()
 
-        monkeypatch.setattr(main_module, "questionary", _Q())
+        monkeypatch.setattr("src.startup.questionary", _Q())
         restore_session(_Agent(), {"id": sid})
         assert os.getcwd() == before
         assert any("другого" in l for l in said)      # the mismatch is restated
@@ -137,7 +137,7 @@ class TestDirectory:
             def confirm(self, *a, **k):
                 return type("A", (), {"ask": lambda s: True})()
 
-        monkeypatch.setattr(main_module, "questionary", _Q())
+        monkeypatch.setattr("src.startup.questionary", _Q())
         restore_session(_Agent(), {"id": sid})
         assert os.path.samefile(os.getcwd(), other)
 

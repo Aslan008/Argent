@@ -16,3 +16,4 @@ jedi
 pyyaml
 json5
 numpy
+psutil

@@ -1,34 +1,81 @@
 ---
 name: lmtrust
-description: Deep blind spot testing — систематический поиск и тестирование слепых зон в коде через извлечение предположений, нарушение инвариантов и мутационную валидацию.
+description: Deep blind spot testing, logic audit, contract polish, and neuro-symbolic verification (Python, C#, Rust, C++) — систематический поиск скрытых дефектов, доказательство инвариантов через Physics-CDCL SMT solver, мутационная валидация (mutmut, Stryker, cargo-mutants, Mull) и runtime healing.
 ---
 
-# LMTrust — Deep Blind Spot Testing
+# LMTrust — Deep Blind Spot Testing & Quality Intelligence (Python, C#, Rust, C++)
 
-> Обычные тесты спрашивают «код делает то, что должен?» — blind spot тесты
-> спрашивают «что код делает, чего НЕ должен? Какие предположения он делает?
-> Что происходит, когда они ломаются?»
+> Обычные тесты спрашивают: «Код делает то, что должен?»
+> **LMTrust спрашивает:** «Что код делает, чего НЕ должен? Какие неявные предположения он делает? Что происходит, когда они ломаются? Можно ли математически доказать отсутствие багов?»
 
-## Когда запускать
+---
 
-- **Новый код** — написана новая функция, класс, модуль
-- **Модификация критической логики** — combat math, XP/leveling, economy, damage mitigation
-- **Перед мержем** — pre-merge checklist (см. ниже)
-- **Баг-репорт** — регрессионный тест для найденного бага
+## 🎯 Когда запускать
 
-## Pipeline (5 шагов)
+- **Новый код** — написана новая функция, структура, класс или модуль.
+- **Критическая логика и математика** — combat math, XP/leveling, economy, damage mitigation, физика, сериализация, парсеры.
+- **Поиск скрытых багов и несостыковок** — аудит перед релизом, поиск делений на 0, переполнений и уязвимостей с генерацией Proof-of-Concept.
+- **Рефакторинг и укрепление контрактов** — перевод неявных валидаций в типы («Parse, don't validate»).
+- **Перед мержем** — pre-merge checklist и diff-aware проверка PR.
+- **Баг-репорт** — генерация регрессионного теста-нарушителя и автоматический self-healing.
 
+---
+
+## ⚙️ 5 Режимов работы (Modes)
+
+| Режим | Назначение | CLI Команда | Выход |
+|---|---|---|---|
+| **Mode A: Deep Testing** | Генерация blind spot тестов по матрице 11 слоев × 10 направлений | `lmtrust run / generate / scaffold` | Файлы тестов + Coverage Matrix |
+| **Mode B: Logic Audit** | Поиск багов, логических несостыковок и уязвимостей с PoC | `lmtrust audit / review` | Markdown, JSON, SARIF v2.1.0 |
+| **Mode C: Code Polish** | Укрепление контрактов, идиоматичный рефакторинг | `lmtrust polish [--diff]` | Unified Diff / Markdown отчет |
+| **Mode D: Self-Healing** | Замкнутый цикл устранения дефектов с песочницей | `lmtrust heal [--apply]` | Проверенный патч кода |
+| **Mode E: Formal Prove** | Доказательство инвариантов и Translation Validation через CDCL | `lmtrust prove` | 100% доказательство (UNSAT) или контрпример (SAT) |
+
+---
+
+## 🌐 Мультиязычный стек (Python, C#, Rust, C++)
+
+LMTrust автоматически определяет язык по расширению файла или опции `--language`:
+
+| Язык | Расширения | Тестовый фреймворк | Мутационный движок | AST-анализатор | SMT / Формальная верификация |
+|---|---|---|---|---|---|
+| **Python** | `.py` | `pytest` + `hypothesis` | `mutmut` | Python `ast` | `Physics-CDCL SMT` (QF_BV / QF_ABV) |
+| **C#** | `.cs` | `dotnet test` (xUnit/NUnit) | `dotnet-stryker` | `lmtrust-csharp` (Roslyn) | `Physics-CDCL SMT` |
+| **Rust** | `.rs` | `cargo test` + `proptest` | `cargo-mutants` | `lmtrust-rust` (Syn) | `Physics-CDCL SMT` |
+| **C++** | `.cpp`, `.hpp`, `.cc`, `.h` | `GoogleTest` / `ctest` | `Mull` | `lmtrust-cpp` (Clang) | `Physics-CDCL SMT` |
+
+---
+
+## 📋 CLI команды (`lmtrust`)
+
+```bash
+# ── Mode B: Поиск логических багов и несостыковок с Proof-of-Concept ─────────
+lmtrust audit <file_or_dir> [--severity high] [--format text|markdown|json|sarif] [-o report.sarif]
+
+# ── Mode C: Полировка кода и укрепление контрактов (Parse, don't validate) ───
+lmtrust polish <file> [--focus contracts|idiomatic|performance] [--diff]
+
+# ── Mode D: Замкнутый цикл автоисправления дефектов ──────────────────────────
+lmtrust heal <file> [--apply] [--max-retries 3]
+
+# ── Mode E: Формальная верификация через Physics-CDCL SMT Решатель ───────────
+lmtrust prove <file> [--threads 8] [--bits 32]
+
+# ── Diff-aware аудит изменений в PR / ветке ──────────────────────────────────
+lmtrust review [--against main] [--severity high] [--format markdown]
+
+# ── Mode A: Полный конвейер генерации Blind Spot тестов ──────────────────────
+lmtrust run <file> [--test-file <tests>] [--runtime-heal] [--verify]
+
+# ── Каркас тестов на базе AST сигнатур ───────────────────────────────────────
+lmtrust scaffold <file> [-o <output_dir>] [--layers L0,L1,L2,L4,L9]
+
+# ── Анализ матрицы покрытия (11 слоев × 10 направлений = 110 ячеек) ─────────
+lmtrust coverage <test_file> [--format markdown|json|html]
+
+# ── Мутационная валидация качества тестов ────────────────────────────────────
+lmtrust verify <file> [--kill-threshold 0.5]
 ```
-Код → 1. Analyze → 2. Map → 3. Generate → 4. Verify → 5. Report
-```
-
-| Шаг | Что делает | Выход |
-|------|-----------|-------|
-| **1. Analyze** | Извлекает предположения и инварианты из кода | Список предположений |
-| **2. Map** | Картирует слепые зоны — что НЕ протестировано | Coverage matrix |
-| **3. Generate** | Генерирует тесты-нарушители для каждой слепой зоны | Файл тестов |
-| **4. Verify** | Запускает mutmut/Stryker, усиливает слабые тесты | Kill score |
-| **5. Report** | Отчёт: что найдено, что непокрыто, приоритеты | Отчёт |
 
 > **⚠️ Важно: blind spot тесты ДОЛЖНЫ падать.** Падение теста = найденная
 > слепая зона. Не ослабляй assertion — предлагай исправление кода. Workflow:
@@ -305,12 +352,209 @@ assert result.line == 10
 
 ---
 
-## Справочные материалы
+## CLI-автоматизация (lmtrust)
 
-| Файл | Содержание |
-|------|-----------|
+Пайплайн автоматизирован в Python-пакете `lmtrust`. Механика (coverage matrix,
+mutmut, отчёты, scaffolding) — в фреймворке; семантика (извлечение
+предположений, генерация тестов) — в LLM.
+
+### Установка
+
+```bash
+pip install lmtrust                    # базовый пакет
+pip install lmtrust[analyze]           # + openai для LLM-шагов
+pip install lmtrust[test]              # + pytest, hypothesis, mutmut
+```
+
+### Команды
+
+| Команда | Что делает |
+|---------|-----------|
+| `lmtrust run <file.py|file.cs>` | Полный пайплайн: Analyze → Map → Generate → [Verify] → Report |
+| `lmtrust analyze <file.py|file.cs>` | Шаг 1: извлечь предположения через LLM |
+| `lmtrust map <file.py|file.cs> -t <test.py|test.cs>` | Шаг 2: cross-reference с coverage matrix |
+| `lmtrust generate <file.py|file.cs>` | Шаг 3: сгенерировать blind-spot тесты |
+| `lmtrust coverage <test.py|test.cs>` | Показать Layer×Direction matrix для файла |
+| `lmtrust verify <file.py|file.cs>` | Шаг 4: запустить mutmut/stryker, показать kill score |
+| `lmtrust report <module>` | Шаг 5: сгенерировать отчёт |
+| `lmtrust scaffold <file.py|file.cs>` | Шаблоны тестов по сигнатурам функций |
+
+> **💡 Поддержка языков:** Инструмент автоматически определяет язык по расширению файла (`.py` или `.cs`). Для C# исходников он прозрачно запускает парсер на базе Roslyn (`lmtrust-csharp`) и использует `.NET SDK` (`dotnet test`, `dotnet stryker`) на этапах генерации и верификации.
+
+### Пример: полный прогон через Ollama
+
+```bash
+# Локальный LLM через Ollama (OpenAI-compatible API)
+lmtrust run src/lmtrust/coverage.py \
+  --test-file tests/dogfood/test_coverage.py \
+  --base-url http://localhost:11434/v1 \
+  --model kimi-k2.7-code:cloud \
+  --output reports/generated/ \
+  --report reports/pipeline_demo.md
+```
+
+### Dogfood-результат: найден реальный баг
+
+Прогон `lmtrust run` на `coverage.py` сгенерировал 5 blind-spot тестов.
+Один нашёл **реальный баг**: `analyze_coverage()` падал с `UnicodeDecodeError`
+на non-UTF-8 файлах — не было обработки ошибок кодировки.
+
+**Исправление**: добавлен `try/except UnicodeDecodeError` с поднятием `ValueError`
+с понятным сообщением. Регрессионный тест добавлен в dogfood suite.
+
+Остальные 4 теста подтвердили **намеренные design-решения** (пропуск
+неизвестных классов, D10 fallback, пропуск standalone функций без маркеров,
+MemoryError не ловится) — помечены `@pytest.mark.xfail` с объяснением.
+
+### Dogfood-результат: полный прогон на 6 модулях
+
+Прогон `lmtrust run` на всех 6 исходных модулях (map, generate, analyze,
+verify, scaffold, report) через Ollama LLM (`kimi-k2.7-code:cloud`).
+
+**46 LLM-сгенерированных тестов нашли 30 реальных багов** в 4 модулях:
+
+| Модуль | Багов найдено | Багов исправлено | xfail (by-design) |
+|--------|--------------|-----------------|-------------------|
+| `generate.py` | 9 | 4 | 5 |
+| `report.py` | 8 | 2 | 6 |
+| `verify.py` | 6 | 6 | 0 |
+| `scaffold.py` | 7 | 6 | 1 |
+| **Всего** | **30** | **18** | **12** |
+
+**Ключевые исправления**:
+
+- `generate.py`: None-входы для `_parse_generated_code`, `_count_test_functions`,
+  `provider`, `GeneratedTests.code` — теперь raise правильные исключения
+- `report.py`: `generate_report(fmt="html")` — теперь raise `ValueError`;
+  JSON-сериализация — `default=str` для не-serializable объектов
+- `verify.py`: `parse_mutmut_results(None)` → `TypeError`; bytes stderr → decode;
+  runner returning None → `RuntimeError`; regex false positives на датах →
+  требует whitespace после разделителя; timeout → `RuntimeError`
+- `scaffold.py`: missing file → `FileNotFoundError`; invalid Python → `ValueError`;
+  output_dir как файл → `ValueError`; missing template → `FileNotFoundError`;
+  AnnAssign/AugAssign detection; `os.open`/`Path.open` detection
+
+**Итог тест-сьюта**: 695 passed, 1 skipped (mutmut/WSL), 18 xfailed
+
+### Покрытие dogfood-тестов
+
+```
+Coverage: 71/110 (64.5%) — 459 marker, 0 inferred
+```
+
+Все 11 слоёв представлены. Тесты с маркерами `@pytest.mark.lmtrust(layer=...,
+direction=...)` — парсятся из AST, надёжно и однозначно.
+
+### LLM-кеширование
+
+`CacheProvider` оборачивает любой LLM-провайдер (`OpenAIProvider`,
+`CallableProvider`) кешем на диске (`.lmtrust_cache/`). Повторные запросы
+с теми же промптами не вызывают LLM — экономия времени и токенов.
+
+```python
+from lmtrust import CacheProvider, OpenAIProvider
+
+inner = OpenAIProvider(model="gpt-4o-mini", api_key="...")
+cached = CacheProvider(inner, cache_dir=".lmtrust_cache")
+result = cached.complete(system_prompt, user_prompt)  # cache hit/miss
+print(cached.stats)  # {"hits": N, "misses": M, "total": N+M}
+```
+
+### CI (GitHub Actions)
+
+`.github/workflows/ci.yml` — автоматический прогон тестов на push/PR.
+Python 3.11/3.12/3.13, unit + dogfood + generated tests.
+
+### Runtime Healing & Closed-Loop Engine
+
+Флаг `--runtime-heal` запускает сгенерированные тесты в песочнице pytest
+прямо внутри конвейера. Если тесты падают с `ERROR` (неверные импорты,
+отсутствующие фикстуры, неверные моки), ошибки отправляются обратно в LLM
+для исправления.
+
+---
+
+## Расширенные Режимы LMTrust: Audit, Polish, Heal, Review
+
+LMTrust расширен из генератора тестов в комплексную систему обеспечения качества,
+логического аудита и автоматического исправления:
+
+### 1. Режим `Audit` — Поиск багов и логических несостыковок (`lmtrust audit`)
+Статически и семантически находит баги (`LOGIC_BUG`), противоречия контрактов (`INCONSISTENCY`),
+уязвимости (`VULNERABILITY`) и негативное пространство (`NEGATIVE_SPACE`).
+Каждая находка сопровождается **Proof-of-Concept (PoC)** сценарием воспроизведения.
+
+```bash
+# Аудит файла или директории
+lmtrust audit src/payment_service.py --severity high
+lmtrust audit src/ --format sarif -o security_audit.sarif
+```
+
+### 2. Режим `Polish` — Полировка, рефакторинг и Contract Hardening (`lmtrust polish`)
+Анализирует неявные предположения и предлагает переход на строгие типы
+(*"Parse, don't validate"* / `NewType` / `Pydantic` / `records` / `NonZero`), устранение
+антипаттернов AP1–AP8 и генерирует unified diff.
+
+```bash
+# Рекомендации по полировке и hardening
+lmtrust polish src/models.py --focus contracts --diff
+```
+
+### 3. Режим `Heal` — Замкнутый цикл самоисправления (`lmtrust heal`)
+Автоматизирует цикл: `Поиск бага → PoC тест (падает) → Генерация патча → Верификация в песочнице (проходит) → Применение патча`.
+
+```bash
+# Исправление с применением патча к коду
+lmtrust heal src/auth.py --apply
+```
+
+### 4. Режим `Review` — Diff-Aware проверка изменений (`lmtrust review`)
+Проверяет git diff коммита или PR на появление новых слепых зон и логических регрессий.
+
+```bash
+lmtrust review --against main --format markdown
+```
+
+### 5. Режим `Prove` — Формальная верификация через Physics-CDCL SMT (`lmtrust prove`)
+Доказывает инварианты и эквивалентность оптимизаций (Translation Validation) для всех $2^{32}$ или $2^{64}$ состояний через 8-поточный SMT-решатель.
+
+```bash
+# Формальное доказательство
+lmtrust prove src/combat_math.py --threads 8 --bits 32
+```
+
+---
+
+## 🤖 Протокол диалога агента (Agent Interaction Protocol)
+
+При получении запроса `/lmtrust` или задачи на аудит/тестирование, агент следует трёхшаговому протоколу:
+
+1. **Детект стека и фокуса:**
+   * Определить язык проекта (Python, C#, Rust, C++).
+   * Выявить файлы с критической математикой, состоянием (FSM), сетевыми протоколами или контрактами.
+2. **Маршрутизация режима (ROI Routing):**
+   * Если задача — найти скрытые ошибки $\rightarrow$ запустить **Mode B (Audit)** с PoC.
+   * Если код оптимизируется или содержит битовые формулы $\rightarrow$ запустить **Mode E (Prove)** через CDCL SMT.
+   * Если нужно глубокое тестирование $\rightarrow$ выбрать 3–5 слоев по Дереву решений (**Mode A**).
+   * Если код полон неявных проверок $\rightarrow$ предложить **Mode C (Polish)**.
+3. **Формат выдачи:**
+   * Компактный отчет с иконками (`🚨 Bug`, `⚠️ Inconsistency`, `✨ Polish`, `🛡️ Proven`).
+   * Для каждого бага — минимальный воспроизводящий сценарий (PoC).
+   * Для изменений — готовый unified diff.
+
+---
+
+## 📚 Справочные материалы и шаблоны
+
+| Файл / Каталог | Содержание |
+|---|---|
 | `references/layers.md` | Полные описания 11 слоёв с примерами кода |
-| `references/directions.md` | D1–D10 + Named Patterns |
-| `references/examples/` | 4 полных примера прогона |
-| `references/kern_integration.md` | Интеграция с Kern Gate |
-| `templates/l*.py` | Python-шаблоны для каждого слоя |
+| `references/directions.md` | D1–D10 + Named Patterns (Known Coordinates, Cross-Layer) |
+| `references/examples/` | 4 полных сквозных примера прогона |
+| `references/ci_cd.md` | Готовый GitHub Actions workflow для автоматического аудита и SARIF |
+| `references/kern_integration.md` | Интеграция с Kern Gate и игровой математикой |
+| `templates/` (Python) | Python-шаблоны `l0_smoke.py` ... `l9_negative_space.py` |
+| `templates/rust/` (Rust) | Rust-шаблоны `l0_smoke.rs` ... `l9_negative_space.rs` (`cargo test`, `proptest`) |
+| `templates/csharp/` (C#) | C#-шаблоны `L0SmokeTests.cs` ... `L9NegativeSpaceTests.cs` (`xUnit`, `FsCheck`) |
+| `templates/cpp/` (C++) | C++-шаблоны `l0_smoke_test.cpp` ... `l4_adversarial_test.cpp` (`GoogleTest`) |
+| `src/lmtrust/` | Python-пакет: analyze, audit, polish, heal, smt_solver, map, generate, verify, report, cli |

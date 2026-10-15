@@ -149,16 +149,147 @@ _CONVERTERS = {
 }
 
 
+TOOL_ARG_ALIASES: dict = {
+    "replace_in_file": {
+        "old_string": "target_text",
+        "old_str": "target_text",
+        "old_text": "target_text",
+        "target": "target_text",
+        "new_string": "replacement_text",
+        "new_str": "replacement_text",
+        "new_text": "replacement_text",
+        "replacement": "replacement_text",
+        "replace": "replacement_text",
+        "path": "file_path",
+        "start": "start_line",
+        "from_line": "start_line",
+        "start_lineno": "start_line",
+        "end": "end_line",
+        "to_line": "end_line",
+        "end_lineno": "end_line",
+    },
+    "read_file": {
+        "path": "file_path",
+        "file": "file_path",
+        "filename": "file_path",
+    },
+    "write_file": {
+        "path": "file_path",
+        "file": "file_path",
+        "filename": "file_path",
+        "text": "content",
+    },
+    "delete_file": {
+        "path": "file_path",
+        "file": "file_path",
+    },
+    "get_file_outline": {
+        "path": "file_path",
+        "file": "file_path",
+    },
+    "read_file_chunk": {
+        "path": "file_path",
+        "file": "file_path",
+    },
+    "multi_replace_in_file_chunk": {
+        "path": "file_path",
+        "file": "file_path",
+    },
+    "run_command": {
+        "cmd": "command",
+    },
+    "start_background_command": {
+        "cmd": "command",
+    },
+    "read_background_command": {
+        "id": "task_id",
+        "process_id": "task_id",
+    },
+    "stop_background_command": {
+        "id": "task_id",
+        "process_id": "task_id",
+    },
+    # grep_search accepts `query` and `path` itself (it treats query/pattern/symbol
+    # and path/directory as the same inputs), so only the spellings it does NOT
+    # know are renamed. Renaming query->pattern as well made the coercion layer
+    # rewrite a call that was already valid.
+    "grep_search": {
+        "regex": "pattern",
+        "dir": "directory",
+    },
+    # browser_action carries every verb's payload in `text`; these are the names a
+    # model reaches for first (eval_js code, an upload path, a wait timeout).
+    "browser_action": {
+        "expression": "text",
+        "script": "text",
+        "javascript": "text",
+        "js": "text",
+        "code": "text",
+        "file_path": "text",
+        "filepath": "text",
+        "path": "text",
+        "timeout": "amount",
+        "seconds": "amount",
+    },
+    "browser_open": {
+        "show": "headed",
+        "visible": "headed",
+        "gui": "headed",
+        "display": "headed",
+        "window": "headed",
+        "link": "url",
+        "target_url": "url",
+    },
+}
+
+
+def remap_tool_aliases(tool_name: str, arguments: dict) -> tuple:
+    """Remap common argument synonyms (e.g. old_string -> target_text)."""
+    if not isinstance(arguments, dict) or not arguments:
+        return arguments, []
+
+    aliases = TOOL_ARG_ALIASES.get(tool_name)
+    has_headless = tool_name == "browser_open" and "headless" in arguments
+
+    if not aliases and not has_headless:
+        return arguments, []
+
+    if aliases and not any(k in arguments for k in aliases) and not has_headless:
+        return arguments, []
+
+    out = dict(arguments)
+    remapped = []
+
+    # Models often send headless=False to mean headed=True, or headless=True for headed=False
+    if has_headless:
+        val, _ = _to_bool(out.pop("headless"))
+        if "headed" not in out:
+            out["headed"] = not bool(val)
+            remapped.append(f"headless={val!r}->headed={out['headed']!r}")
+        else:
+            remapped.append(f"headless={val!r} dropped (headed={out['headed']!r} already present)")
+
+    if aliases:
+        for old_key, new_key in aliases.items():
+            if old_key in out and new_key not in out:
+                out[new_key] = out.pop(old_key)
+                remapped.append(f"{old_key}->{new_key}")
+    return out, remapped
+
+
 def coerce_arguments(tool_name: str, arguments: dict) -> tuple:
     """(arguments with declared types applied, list of what was changed)."""
     if not isinstance(arguments, dict) or not arguments:
         return arguments, []
 
+    # First remap any well-known parameter aliases (e.g. old_string -> target_text)
+    arguments, changed = remap_tool_aliases(tool_name, arguments)
+
     types = _schema_types(tool_name)
     if not types:
-        return arguments, []
+        return arguments, changed
 
-    out, changed = {}, []
+    out = {}
     for key, value in arguments.items():
         declared = types.get(key)
         convert = _CONVERTERS.get(declared)

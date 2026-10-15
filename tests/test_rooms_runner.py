@@ -96,6 +96,11 @@ class Fakes:
         self.test_runs = self.searches = self.fixes = self.commits = 0
 
     def tool(self, node, state):
+        if node.id == "run_tests":   # the verifier is a PROCESS: its exit code owns tests_passed
+            self.test_runs += 1
+            if self.test_runs >= self.pass_on:
+                return "Exit code: 0\nOUTPUT:\nall passed"
+            return f"Exit code: 1\nOUTPUT:\nFAILED fail{self.test_runs}"
         if node.id == "web_search":
             self.searches += 1
             return {"output": "found"}
@@ -105,11 +110,6 @@ class Fakes:
         return {}
 
     def agent(self, node, context):
-        if node.id == "run_tests":   # the verifier agent — owns tests_passed
-            self.test_runs += 1
-            passed = self.test_runs >= self.pass_on
-            return {"tests_passed": passed,
-                    "error_summary": None if passed else f"fail{self.test_runs}"}
         if node.id == "apply_fix":
             self.fixes += 1
             # The agent LIES: claims the tests pass. writes=["error_summary"]
@@ -120,9 +120,11 @@ class Fakes:
 
 class TestIntegration:
     def test_agent_lie_does_not_short_circuit_verifier(self):
-        room = RoomLibrary().load_dir(default_starter_dir(), {"run_command", "search_web"}).get("debug_loop")
+        from tests.test_rooms_library import STARTER_TOOLS
+        room = RoomLibrary().load_dir(default_starter_dir(), STARTER_TOOLS).get("debug_loop")
         f = Fakes(pass_on=3)
-        runner = NodeRunner(tool_executor=f.tool, agent_executor=f.agent)
+        # the person approves the commit step (`confirm: true`)
+        runner = NodeRunner(tool_executor=f.tool, agent_executor=f.agent, confirm=lambda n, s: True)
         out = Engine().run(room, State(), runner.run_node)
         assert out.exit == "success"
         # If the agent's tests_passed lie had been applied, the loop would have

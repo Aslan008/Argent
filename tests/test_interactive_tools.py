@@ -19,9 +19,11 @@ import pytest
 
 from tools.schemas import AVAILABLE_TOOLS, INTERACTIVE_TOOLS
 
+import re
+
 # Primitives that take the terminal away from the renderer.
 _PROMPT_MARKERS = ("questionary", "ptk_prompt", "prompt_toolkit",
-                   "request_approval", "input(")
+                   "request_approval")
 
 
 def _tools_that_prompt() -> set:
@@ -31,7 +33,7 @@ def _tools_that_prompt() -> set:
             source = inspect.getsource(func)
         except (OSError, TypeError):
             continue
-        if any(marker in source for marker in _PROMPT_MARKERS):
+        if any(marker in source for marker in _PROMPT_MARKERS) or bool(re.search(r"\binput\(", source)):
             found.add(name)
     return found
 
@@ -55,7 +57,7 @@ class TestTheSetIsComplete:
         assert set(INTERACTIVE_TOOLS) <= set(AVAILABLE_TOOLS)
 
     @pytest.mark.parametrize("name", ["request_user_approval", "ask_user_questions",
-                                      "run_command", "git_rollback", "browser_input"])
+                                      "run_command", "git_rollback"])
     def test_the_ones_that_bit_us(self, name):
         assert name in INTERACTIVE_TOOLS
 

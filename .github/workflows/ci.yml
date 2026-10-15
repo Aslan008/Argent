@@ -24,3 +24,48 @@ jobs:
       # they need a real CDP browser and a display.
       - name: Run unit tests
         run: python -m pytest -q
+
+  rust-tui:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: crates/argent-tui
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # The crate builds with pyo3's `extension-module` feature, so it does not
+      # link libpython: the interpreter has to be found at run time instead.
+      # Without PYO3_PYTHON the test binaries fail to start with
+      # STATUS_DLL_NOT_FOUND (0xc0000135).
+      - name: Point pyo3 at the CI interpreter
+        run: |
+          echo "PYO3_PYTHON=$env:pythonLocation\python.exe" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          echo "$env:pythonLocation" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+        shell: pwsh
+
+      # The visual-parity tests run the REPL's own renderer (Rich, Pygments,
+      # prompt_toolkit) next to the TUI and compare the two screens cell by cell,
+      # so the project's Python dependencies must be importable.
+      - name: Install the project's Python dependencies
+        run: pip install -r ../../requirements-ci.txt
+
+      - name: Build
+        run: cargo build --all-targets
+
+      - name: Run unit, parity and LMTrust blind-spot tests
+        run: cargo test --no-fail-fast
+        env:
+          # Without the Python side the parity tests would skip silently; in CI
+          # that has to be a failure.
+          ARGENT_REQUIRE_PARITY: "1"
+
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings

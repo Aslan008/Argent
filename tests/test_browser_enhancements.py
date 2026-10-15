@@ -24,9 +24,10 @@ class TestBrowserEnhancements(unittest.TestCase):
 
     def test_selector_and_text_click(self):
         # 1. Open a page with simple buttons
-        html = "data:text/html,<html><body><button id='btn1'>Button One</button><button id='btn2'>Button Two</button></body></html>"
-        res = browser_engine.run(browser_engine.open_page(html, session="test_click"))
-        self.assertNotIn("Error", res)
+        html = "<html><body><button id='btn1'>Button One</button><button id='btn2'>Button Two</button></body></html>"
+        browser_engine.run(browser_engine.open_page("about:blank", session="test_click"))
+        sc = browser_engine.run(browser_engine._get_session("test_click"))
+        browser_engine.run(sc.page.set_content(html))
 
         # 2. Click by selector
         click_res = browser_engine.run(browser_engine.click(selector="#btn1", session="test_click"))
@@ -38,8 +39,10 @@ class TestBrowserEnhancements(unittest.TestCase):
 
     def test_selector_input(self):
         # 1. Open a page with an input field
-        html = "data:text/html,<html><body><input type='text' id='inp' value='original'/></body></html>"
-        browser_engine.run(browser_engine.open_page(html, session="test_input"))
+        html = "<html><body><input type='text' id='inp' value='original'/></body></html>"
+        browser_engine.run(browser_engine.open_page("about:blank", session="test_input"))
+        sc = browser_engine.run(browser_engine._get_session("test_input"))
+        browser_engine.run(sc.page.set_content(html))
 
         # 2. Fill input by selector
         fill_res = browser_engine.run(browser_engine.fill_input(text="new value", selector="#inp", session="test_input"))
@@ -52,12 +55,13 @@ class TestBrowserEnhancements(unittest.TestCase):
     def test_iframe_element_extraction(self):
         # 1. Open a page containing a nested iframe with an interactive button
         iframe_src = "data:text/html,<html><body><button id='inner-btn'>Inside Frame</button></body></html>"
-        html = f'data:text/html,<html><body><h1>Outer</h1><iframe src="{iframe_src}"></iframe></body></html>'
+        html = f'<html><body><h1>Outer</h1><iframe src="{iframe_src}"></iframe></body></html>'
         
-        browser_engine.run(browser_engine.open_page(html, session="test_iframe"))
+        browser_engine.run(browser_engine.open_page("about:blank", session="test_iframe"))
+        sc = browser_engine.run(browser_engine._get_session("test_iframe"))
+        browser_engine.run(sc.page.set_content(html))
         
         # Wait a bit for iframe to load
-        sc = browser_engine.run(browser_engine._get_session("test_iframe"))
         browser_engine.run(sc.page.wait_for_timeout(2000))
 
         # 2. Get state and verify iframe button is indexed
@@ -82,16 +86,17 @@ class TestBrowserEnhancements(unittest.TestCase):
 
     def test_scroll_to_element(self):
         # 1. Create a tall page with a button at the bottom
-        html = "data:text/html,<html><body><div style='height: 2000px;'>Spacer</div><button id='bot-btn'>Bottom Button</button></body></html>"
-        browser_engine.run(browser_engine.open_page(html, session="test_scroll"))
+        html = "<html><body><div style='height: 2000px;'>Spacer</div><button id='bot-btn'>Bottom Button</button></body></html>"
+        browser_engine.run(browser_engine.open_page("about:blank", session="test_scroll"))
+        sc = browser_engine.run(browser_engine._get_session("test_scroll"))
+        browser_engine.run(sc.page.set_content(html))
 
         # Wait for rendering
-        sc = browser_engine.run(browser_engine._get_session("test_scroll"))
         browser_engine.run(sc.page.wait_for_timeout(1000))
 
         # 2. Extract state to map the element
         state = browser_engine.run(browser_engine.get_state(session="test_scroll", mode="dom"))
-        self.assertIn("bot-btn", state)
+        self.assertIn("Bottom Button", state)
 
         # Get its index
         button_idx = list(browser_engine._element_frames.keys())[0]
@@ -141,8 +146,10 @@ class TestBrowserEnhancements(unittest.TestCase):
 
     def test_keyword_filtering(self):
         # 1. Open a page with multiple different elements
-        html = "data:text/html,<html><body><button id='btn-submit'>Submit Form</button><a href='https://link.com'>Cancel Link</a><input type='text' placeholder='Email Address'/></body></html>"
-        browser_engine.run(browser_engine.open_page(html, session="test_filter"))
+        html = "<html><body><button id='btn-submit'>Submit Form</button><a href='https://link.com'>Cancel Link</a><input type='text' placeholder='Email Address'/></body></html>"
+        browser_engine.run(browser_engine.open_page("about:blank", session="test_filter"))
+        sc = browser_engine.run(browser_engine._get_session("test_filter"))
+        browser_engine.run(sc.page.set_content(html))
 
         # 2. Get state without filter (verify all elements are shown)
         state_all = browser_engine.run(browser_engine.get_state(session="test_filter", mode="dom"))
@@ -174,8 +181,10 @@ class TestBrowserEnhancements(unittest.TestCase):
  
     def test_pointer_cursor_detection(self):
         # 1. Open a page with a div having cursor: pointer in style
-        html = "data:text/html,<html><body><div id='custom-btn' style='cursor: pointer;'>Custom Clickable Div</div></body></html>"
-        browser_engine.run(browser_engine.open_page(html, session="test_pointer"))
+        html = "<html><body><div id='custom-btn' style='cursor: pointer;'>Custom Clickable Div</div></body></html>"
+        browser_engine.run(browser_engine.open_page("about:blank", session="test_pointer"))
+        sc = browser_engine.run(browser_engine._get_session("test_pointer"))
+        browser_engine.run(sc.page.set_content(html))
         
         # 2. Get state and verify the custom div is indexed
         state = browser_engine.run(browser_engine.get_state(session="test_pointer", mode="dom"))
@@ -183,8 +192,10 @@ class TestBrowserEnhancements(unittest.TestCase):
 
     def test_deduplication(self):
         # 1. Open a page where a button has nested elements with text or pointer cursor
-        html = "data:text/html,<html><body><button id='btn'><span style='cursor: pointer;'>Nested Text</span></button></body></html>"
-        browser_engine.run(browser_engine.open_page(html, session="test_dedup"))
+        html = "<html><body><button id='btn'><span style='cursor: pointer;'>Nested Text</span></button></body></html>"
+        browser_engine.run(browser_engine.open_page("about:blank", session="test_dedup"))
+        sc = browser_engine.run(browser_engine._get_session("test_dedup"))
+        browser_engine.run(sc.page.set_content(html))
         
         # 2. Get state and verify only the button is indexed, not the span
         state = browser_engine.run(browser_engine.get_state(session="test_dedup", mode="dom"))
@@ -195,11 +206,13 @@ class TestBrowserEnhancements(unittest.TestCase):
     def test_svg_and_parent_labels(self):
         # 1. Open a page with an SVG icon inside a button, where the SVG has a <title>
         # and another element with a parent aria-label
-        html = """data:text/html,<html><body>
+        html = """<html><body>
             <button id='btn1'><svg><title>Close Modal</title></svg></button>
             <div aria-label='Parent Container Label'><span id='inner' style='cursor: pointer; display: inline-block; width: 10px; height: 10px;'></span></div>
         </body></html>"""
-        browser_engine.run(browser_engine.open_page(html, session="test_labels"))
+        browser_engine.run(browser_engine.open_page("about:blank", session="test_labels"))
+        sc = browser_engine.run(browser_engine._get_session("test_labels"))
+        browser_engine.run(sc.page.set_content(html))
         
         # 2. Get state and verify label extraction
         state = browser_engine.run(browser_engine.get_state(session="test_labels", mode="dom"))
@@ -209,12 +222,14 @@ class TestBrowserEnhancements(unittest.TestCase):
  
     def test_viewport_prioritization(self):
         # 1. Open a page where one button is at the top (in viewport) and one is far below
-        html = """data:text/html,<html><body>
+        html = """<html><body>
             <button id='top-btn'>Top Button</button>
             <div style='height: 2000px;'>Spacer</div>
             <button id='bottom-btn'>Bottom Button</button>
         </body></html>"""
-        browser_engine.run(browser_engine.open_page(html, session="test_viewport"))
+        browser_engine.run(browser_engine.open_page("about:blank", session="test_viewport"))
+        sc = browser_engine.run(browser_engine._get_session("test_viewport"))
+        browser_engine.run(sc.page.set_content(html))
         
         # Wait a bit
         sc = browser_engine.run(browser_engine._get_session("test_viewport"))
@@ -240,6 +255,66 @@ class TestBrowserEnhancements(unittest.TestCase):
         self.assertIsNotNone(top_idx)
         self.assertIsNotNone(bottom_idx)
         self.assertLess(top_idx, bottom_idx)
+
+    def test_click_on_option_element_selects_it(self):
+        html = """<html><body>
+            <select id='cf-prov'>
+                <option value='openai'>OpenAI Cloud</option>
+                <option value='ollama'>Ollama Local</option>
+                <option value='anthropic'>Anthropic Cloud</option>
+            </select>
+        </body></html>"""
+        browser_engine.run(browser_engine.open_page("about:blank", session="test_select_click"))
+        sc = browser_engine.run(browser_engine._get_session("test_select_click"))
+        browser_engine.run(sc.page.set_content(html))
+
+        # Click the option selector directly (used to fail with timeout because option is not visible)
+        res = browser_engine.run(browser_engine.click(selector="#cf-prov option[value='ollama']", session="test_select_click"))
+        self.assertNotIn("Error", res)
+        self.assertIn("Selected option", res)
+
+        # Verify the select value changed in DOM
+        val = browser_engine.run(browser_engine.eval_js("document.getElementById('cf-prov').value", session="test_select_click"))
+        self.assertIn("ollama", val)
+
+    def test_fill_input_on_select_element_selects_option(self):
+        html = """<html><body>
+            <select id='cf-prov'>
+                <option value='openai'>OpenAI Cloud</option>
+                <option value='ollama'>Ollama Local</option>
+            </select>
+        </body></html>"""
+        browser_engine.run(browser_engine.open_page("about:blank", session="test_select_fill"))
+        sc = browser_engine.run(browser_engine._get_session("test_select_fill"))
+        browser_engine.run(sc.page.set_content(html))
+
+        # Fill input on select with value
+        res = browser_engine.run(browser_engine.fill_input(selector="#cf-prov", text="ollama", session="test_select_fill"))
+        self.assertNotIn("Error", res)
+        self.assertIn("Selected option", res)
+
+        val = browser_engine.run(browser_engine.eval_js("document.getElementById('cf-prov').value", session="test_select_fill"))
+        self.assertIn("ollama", val)
+
+    def test_select_option_method(self):
+        from tools.browser_tools import browser_select
+
+        html = """<html><body>
+            <select id='cf-prov'>
+                <option value='openai'>OpenAI Cloud</option>
+                <option value='ollama'>Ollama Local</option>
+            </select>
+        </body></html>"""
+        browser_engine.run(browser_engine.open_page("about:blank", session="test_select_opt"))
+        sc = browser_engine.run(browser_engine._get_session("test_select_opt"))
+        browser_engine.run(sc.page.set_content(html))
+
+        # Select option by label using tool function
+        res = browser_select(selector="#cf-prov", label="Ollama Local", session="test_select_opt")
+        self.assertNotIn("Error", res)
+
+        val = browser_engine.run(browser_engine.eval_js("document.getElementById('cf-prov').value", session="test_select_opt"))
+        self.assertIn("ollama", val)
 
 if __name__ == "__main__":
     unittest.main()

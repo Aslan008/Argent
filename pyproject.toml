@@ -7,7 +7,7 @@ name = "argent-coder"
 dynamic = ["version"]
 description = "Argent — an elite terminal AI coding assistant for local (Ollama/KoboldCPP) and cloud (Z.AI/OpenRouter) models."
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 license = { text = "MIT" }
 authors = [{ name = "Aslan008" }]
 keywords = ["ai", "agent", "cli", "coding-assistant", "rag", "ollama", "llm"]
@@ -22,6 +22,7 @@ dependencies = [
     "rich",
     "ollama",
     "openai>=1.0",
+    "anthropic>=0.40.0",
     "jedi",
     "pyyaml",
     "json5",
@@ -35,16 +36,25 @@ dependencies = [
     # full-page screenshot is sent at full resolution — context spent linearly
     # on detail no model can attend to. view_image degrades but says so.
     "pillow",
+    # Killing a process TREE (a launcher and the server behind it), and telling
+    # a live lock holder from a dead one. Without it Argent falls back to
+    # taskkill / a process group, and a stdio MCP server started through `uv` or
+    # `npx` can outlive Argent holding its pipes.
+    "psutil",
+    # A terminal of its own for a program that asks questions (npm init, ssh, python -i): ConPTY on Windows
+    # (src/agent/pty_process.py). Without it background commands run on pipes and say so.
+    "pywinpty; sys_platform == 'win32'",
+    # Windows UI Automation: the controls of another program as text (desktop_find / desktop_act).
+    # Without it the desktop tools only see window titles.
+    "uiautomation; sys_platform == 'win32'",
 ]
 
 [project.optional-dependencies]
 # Heavy/optional stacks, imported lazily at runtime.
 rag = ["chromadb", "sentence-transformers", "pypdf"]
-browser = ["playwright", "playwright-stealth"]
+browser = ["playwright", "playwright-stealth", "stagehand>=4.1.0"]
 research = ["crawl4ai"]
 lsp = ["multilspy"]
-# Backend for the Tauri/web GUI (the terminal version needs none of these).
-server = ["fastapi", "uvicorn", "websockets"]
 dev = ["pytest"]
 
 [project.scripts]
@@ -54,12 +64,12 @@ argent = "main:main"
 # Flat layout: explicit top-level modules plus the src/ and tools/ packages.
 py-modules = [
     "agent", "approval", "atomic_io", "browser_detect", "browser_engine",
-    "command_handler", "config", "deep_research", "doctor", "error_help",
-    "file_tracker", "hook_manager", "intelligence", "logger", "main",
-    "mcp_client", "memory_manager", "model_limits", "project_manager",
-    "project_paths", "prompt_compressor", "prompts", "providers", "rag_engine",
-    "session", "skill_manager", "text_safety", "tool_profiles", "tool_recovery",
-    "ui", "usage_tracker", "version", "vision",
+    "claude_catalog", "command_handler", "config", "deep_research", "doctor", "error_help",
+    "file_tracker", "hook_manager", "host_os", "intelligence", "local_inference", "logger", "main",
+    "mcp_client", "memory_manager", "model_limits", "model_names",
+    "project_paths", "prompt_compressor", "providers", "rag_engine",
+    "run_scope", "session", "skill_manager", "text_safety", "tool_profiles", "tool_recovery",
+    "ui", "usage_tracker", "version", "vision", "run_tui",
 ]
 
 [tool.setuptools.packages.find]
@@ -67,7 +77,7 @@ include = ["src*", "tools*"]
 
 [tool.setuptools.package-data]
 # Ship the declarative starter rooms with the package.
-"src.rooms" = ["starter/*.json"]
+"src.rooms" = ["starter/*.json", "editor/*.html", "editor/*.json", "editor/*.js", "editor/*.css"]
 
 [tool.setuptools.dynamic]
 version = { attr = "version.__version__" }

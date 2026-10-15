@@ -37,24 +37,28 @@ class Player:
 class TestNegativeSpace:
     """L9: Negative space tests — проверка запретов."""
 
+    @pytest.mark.lmtrust(layer="L9", direction="D3")
     def test_no_negative_hp(self):
         """HP НЕ должен уходить в минус молча."""
         player = Player(hp=100)
         player.take_damage(200)  # больше чем HP
         assert player.hp >= 0, f"HP went negative silently: {player.hp}"
 
+    @pytest.mark.lmtrust(layer="L9", direction="D3")
     def test_no_overheal(self):
         """Heal НЕ должен превышать max_hp молча."""
         player = Player(hp=50, max_hp=100)
         player.heal(200)
         assert player.hp <= 100, f"Heal exceeded max silently: {player.hp}"
 
+    @pytest.mark.lmtrust(layer="L9", direction="D1")
     def test_no_silent_overflow(self):
         """Переполнение НЕ должно происходить молча."""
         result = calculate_damage(1e308, 0, 1.0)
         assert math.isfinite(result), f"Overflow silent: {result}"
 
     @pytest.mark.xfail(reason="Слепая зона: SUT не обрабатывает NaN — ожидаемо для L9")
+    @pytest.mark.lmtrust(layer="L9", direction="D1")
     def test_no_silent_nan_propagation(self):
         """NaN НЕ должен распространяться молча.
 
@@ -69,6 +73,7 @@ class TestNegativeSpace:
     @given(st.floats(allow_nan=True, allow_infinity=True),
            st.floats(allow_nan=True, allow_infinity=True),
            st.floats(allow_nan=True, allow_infinity=True))
+    @pytest.mark.lmtrust(layer="L9", direction="D10")
     def test_result_always_finite(self, base, armor, crit):
         """Результат ВСЕГДА конечный — даже для NaN/Inf входов.
 

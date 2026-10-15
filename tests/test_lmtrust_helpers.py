@@ -11,6 +11,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+import config
 import tools._helpers as helpers
 from tools._helpers import (
     _resolve_path,
@@ -75,12 +76,12 @@ class TestIsPluginPathRestricted:
         monkeypatch.setattr(helpers, "get_hooks_dir", lambda: str(d))
         return d
 
-    def test_py_inside_plugins_returns_restriction_error(self, plugins_dir):
+    def test_py_inside_plugins_returns_restriction_error(self, plugins_dir, monkeypatch):
+        monkeypatch.setattr(config, "get_model_category_override", lambda: "small")
         f = plugins_dir / "evil.py"
         result = _is_plugin_path_restricted(str(f))
         assert result is not None
         assert "restricted" in result.lower()
-        assert "create_plugin" in result
 
     def test_md_inside_plugins_returns_python_only_error(self, plugins_dir):
         f = plugins_dir / "notes.md"

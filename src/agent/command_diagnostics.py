@@ -43,6 +43,86 @@ def diagnose_command_error(command: str, output: str, exit_code: int) -> str | N
         return None
     low = output.lower()
 
+    # 1. Windows NTSTATUS crash codes & POSIX signals
+    nt_crashes = {
+        -1073741819: (
+            "CRASH (STATUS_ACCESS_VIOLATION 0xC0000005): Segmentation Fault / Memory Access Violation. "
+            "The program attempted to read or write an invalid memory address (e.g. null pointer dereference, "
+            "use-after-free, vector out-of-bounds, or uninitialized pointer). "
+            "Inspect pointer usages or recompile with AddressSanitizer (-fsanitize=address / /fsanitize=address)."
+        ),
+        3221225477: (
+            "CRASH (STATUS_ACCESS_VIOLATION 0xC0000005): Segmentation Fault / Memory Access Violation. "
+            "The program attempted to read or write an invalid memory address. "
+            "Inspect pointer usages or recompile with AddressSanitizer."
+        ),
+        -1073741571: (
+            "CRASH (STATUS_STACK_OVERFLOW 0xC00000FD): Stack Overflow. "
+            "Uncontrolled/infinite recursion or excessive local stack allocations (e.g. huge local arrays). "
+            "Allocate large buffers on the heap (std::vector, unique_ptr) or fix recursive base conditions."
+        ),
+        3221225725: (
+            "CRASH (STATUS_STACK_OVERFLOW 0xC00000FD): Stack Overflow. Infinite recursion or huge stack allocation."
+        ),
+        -1073740791: (
+            "CRASH (STATUS_STACK_BUFFER_OVERRUN 0xC0000409): Stack corruption / buffer overrun detected (/GS). "
+            "A buffer write exceeded its boundary and overwrote security cookies or function return address."
+        ),
+        3221226505: (
+            "CRASH (STATUS_STACK_BUFFER_OVERRUN 0xC0000409): Stack corruption / buffer overrun detected."
+        ),
+        -1073741795: (
+            "CRASH (STATUS_ILLEGAL_INSTRUCTION 0xC000001D): Illegal CPU instruction executed. "
+            "Code compiled for newer CPU instruction sets (e.g. AVX2, AVX-512) executed on incompatible CPU, "
+            "or function pointer jumped into data/garbage."
+        ),
+        139: (
+            "CRASH (SIGSEGV 139): Segmentation Fault (Linux/POSIX). Invalid memory access or null pointer dereference. "
+            "Run with AddressSanitizer (-fsanitize=address) or inspect core dump."
+        ),
+        134: (
+            "CRASH (SIGABRT 134): Program called abort() or assertion failed (e.g. assert(), unhandled std::terminate). "
+            "Check assertion messages printed before termination."
+        ),
+    }
+    if exit_code in nt_crashes:
+        return nt_crashes[exit_code]
+
+    # Check for text-embedded NTSTATUS crash signatures (when exit code was wrapped or masked)
+    if "0xc0000005" in low or "status_access_violation" in low:
+        return nt_crashes[-1073741819]
+    if "0xc00000fd" in low or "status_stack_overflow" in low:
+        return nt_crashes[-1073741571]
+    if "0xc0000409" in low or "status_stack_buffer_overrun" in low:
+        return nt_crashes[-1073740791]
+
+    # 2. C / C++ Compiler include errors
+    if "cannot open include file" in low or ("no such file or directory" in low and ("fatal error" in low or "#include" in low or "error:" in low)):
+        return (
+            "C/C++ Include Not Found: The compiler cannot find a header file. "
+            "Check the include path and add the directory to target_include_directories in CMakeLists.txt."
+        )
+
+    # 3. CMake errors
+    if "cmake error" in low:
+        return (
+            "CMake Configuration Error: Read the CMake error above. Check package names (find_package), "
+            "minimum required version, or target dependencies in CMakeLists.txt."
+        )
+
+    # 4. C / C++ Linker errors (MSVC, GCC, Clang, ld)
+    if "lnk2019" in low or "lnk1120" in low or "undefined reference to" in low or "cannot find -l" in low or "symbol(s) not found" in low:
+        return (
+            "C/C++ Linker Error (Unresolved External Symbol / Missing Library): A function, variable, or library "
+            "was declared or linked but could not be found by the linker. Ensure implementation .cpp files are "
+            "compiled, or add the missing library to target_link_libraries in CMakeLists.txt."
+        )
+    if "lnk2005" in low or "multiple definition of" in low:
+        return (
+            "C/C++ Linker Error (Duplicate Symbol): A symbol is defined in multiple translation units. "
+            "Move function bodies from headers into .cpp files, or declare them 'inline'."
+        )
+
     # PowerShell cmdlet executed in cmd.exe (the classic Select-Object case).
     if _contains(low, _NOT_RECOGNIZED):
         if _PS_CMDLET.search(command):

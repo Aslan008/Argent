@@ -1,0 +1,17 @@
+# Build configuration for the argent-tui PyO3 extension.
+#
+# Without PYO3_PYTHON, cargo's build script picks the newest `python.exe` on
+# PATH. On this machine that is CPython 3.14, which pyo3 0.22 refuses to build
+# for ("newer than PyO3's maximum supported version (3.13)") and the whole
+# `cargo build` / `cargo clippy` / `cargo test` cycle fails.
+#
+# Pin it to the project venv so local cargo builds match what
+# `maturin develop` (see run_tui.py) produces: a cp312 extension module.
+[env]
+PYO3_PYTHON = { value = "../../.venv/Scripts/python.exe", relative = true }
+
+[target.x86_64-pc-windows-msvc]
+# Tests that call the Python C API link libpython, which on Windows means the
+# interpreter's python3XX.dll must be resolvable at run time. Use ./test.bat,
+# which puts the interpreter directory on PATH before invoking `cargo test`.
+rustflags = []

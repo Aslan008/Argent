@@ -128,15 +128,14 @@ class TestReadFileEdgeCases:
         assert out == ""
 
     def test_start_line_beyond_file_length(self, tmp_path):
-        """L3xD1: start_line beyond file length → '[Lines X-0 of N]'.
+        """L3xD1: start_line beyond file length is an explicit error.
 
-        shown_to = first + len(numbered) - 1 = first - 1 when no lines match.
-        For start_line=100 on a 5-line file: first=100, shown_to=99.
-        """
+        The old answer, '[Lines 100-99 of 5]' with an empty body, described a range
+        that runs backwards; the sibling check (end_line < start_line) already
+        reports a contract error, and this one now does too."""
         (tmp_path / "short.txt").write_text("a\nb\nc\nd\ne\n", encoding="utf-8")
         out = file_ops.read_file("short.txt", start_line=100)
-        assert out.startswith("[Lines 100-99 of 5]"), (
-            f"Expected '[Lines 100-99 of 5]'; got: {out[:40]!r}")
+        assert out == "Error: 'start_line' (100) exceeds total lines in file (5).", out
 
     def test_start_line_zero_treated_as_one(self, tmp_path):
         """L3xD1: start_line=0 → max(1, 0) = 1."""

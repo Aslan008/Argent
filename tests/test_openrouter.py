@@ -69,6 +69,7 @@ class TestListModels:
     def test_falls_back_to_curated_list_without_network(self):
         p = OpenRouterProvider(api_key=None, base_url="https://openrouter.ai/api/v1")
         models = p.list_models()
+        assert "anthropic/claude-sonnet-5.5" in models
         assert "anthropic/claude-3.5-sonnet" in models
         assert all("/" in m for m in models)
 

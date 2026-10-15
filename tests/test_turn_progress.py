@@ -27,9 +27,12 @@ class TestTheNotice:
 
         source = inspect.getsource(agent_mod)
         assert "TURN_PROGRESS_EVERY" in source
-        for forbidden in ("_turn_tool_calls >", "_turn_tool_calls >=",
-                          "MAX_TURN_TOOL_CALLS", "TURN_HARD_LIMIT"):
+        for forbidden in ("MAX_TURN_TOOL_CALLS", "TURN_HARD_LIMIT"):
             assert forbidden not in source, f"появился потолок хода: {forbidden}"
+        # A hard safety valve against runaway turns IS allowed (added after
+        # the infinite-loop incident burned RAM/CPU) — but it must live in
+        # the tool dispatch path, not inside the progress-notice logic.
+        assert "_turn_tool_calls > 500" in source, "safety valve disappeared"
 
     def test_the_interval_is_sane(self):
         assert 10 <= agent_mod.TURN_PROGRESS_EVERY <= 50

@@ -148,25 +148,88 @@ class TestAssessCommandRisk:
     def test_20_frombase64string_is_warn(self):
         assert approval.assess_command_risk("FromBase64String")[0] == "warn"
 
+    def test_21_call_operator_quoted_binary_is_safe(self):
+        assert approval.assess_command_risk('& "D:\\SteamLibrary\\steamapps\\common\\Blender\\blender.exe" --version')[0] == "safe"
+        assert approval.assess_command_risk('&"D:\\SteamLibrary\\steamapps\\common\\Blender\\blender.exe" --version')[0] == "safe"
+
+    def test_22_call_operator_single_quoted_binary_is_safe(self):
+        assert approval.assess_command_risk("& 'C:\\Program Files\\app.exe'")[0] == "safe"
+
+    def test_23_call_operator_env_var_is_safe(self):
+        assert approval.assess_command_risk('& "$env:LOCALAPPDATA\\Programs\\Python\\python.exe"')[0] == "safe"
+        assert approval.assess_command_risk('& "$HOME\\.cargo\\bin\\uvx.exe"')[0] == "safe"
+
+    def test_24_call_operator_var_is_warn(self):
+        assert approval.assess_command_risk("& $cmd")[0] == "warn"
+
+    def test_25_call_operator_subexpression_is_warn(self):
+        assert approval.assess_command_risk("& ($a + $b)")[0] == "warn"
+
 
 # ---------------------------------------------------------------------------
 # command_grant_key
 # ---------------------------------------------------------------------------
-class TestCommandGrantKey:
-    def test_returns_first_token_lowercased(self):
-        assert approval.command_grant_key("Git status --short") == "git"
-
-    def test_returns_first_token_for_mixed_case(self):
-        assert approval.command_grant_key("PYTHON -c 'x'") == "python"
-
-    def test_empty_string_returns_none(self):
+    # --- L1: Contract ------------------------------------------------------
+    @pytest.mark.lmtrust(layer="L1", direction="D7")
+    def test_l1_contract_empty_and_whitespace(self):
         assert approval.command_grant_key("") is None
-
-    def test_whitespace_only_returns_none(self):
         assert approval.command_grant_key("   ") is None
+        assert approval.command_grant_key("\t\n  ") is None
 
-    def test_single_token(self):
+    @pytest.mark.lmtrust(layer="L1", direction="D7")
+    def test_l1_contract_single_tokens(self):
         assert approval.command_grant_key("ls") == "ls"
+        assert approval.command_grant_key("pytest") == "pytest"
+        assert approval.command_grant_key("CARGO run") == "cargo"
+
+    # --- L2: Boundary ------------------------------------------------------
+    @pytest.mark.lmtrust(layer="L2", direction="D1")
+    def test_l2_boundary_quoted_tokens_and_paths(self):
+        assert approval.command_grant_key('"python.exe" -m pytest') == "python.exe"
+        assert approval.command_grant_key("'git' status") == "git"
+        assert approval.command_grant_key("& 'pytest' -v") == "pytest"
+
+    @pytest.mark.lmtrust(layer="L2", direction="D1")
+    def test_l2_boundary_quoted_chain_operators_are_safe(self):
+        assert approval.command_grant_key('python -c "x = 1; y = 2"') == "python"
+        assert approval.command_grant_key("git commit -m 'feat: A & B; C'") == "git"
+        assert approval.command_grant_key('python -c "a = 1 && b = 2"') == "python"
+
+    # --- L4: Adversarial (Compound Command Injection) ----------------------
+    @pytest.mark.lmtrust(layer="L4", direction="D8")
+    @pytest.mark.parametrize("compound_cmd", [
+        "cd C:\\Users\\proj; npx update",
+        "cd /tmp; rm -rf /",
+        "npm test && npm run build",
+        "type foo.txt | findstr bar",
+        "echo a & echo b",
+        "test || echo fallback",
+        "cmd1\ncmd2",
+        "cd .. ; dir",
+        "dir | more",
+    ])
+    def test_l4_adversarial_compound_commands_return_none(self, compound_cmd):
+        assert approval.command_grant_key(compound_cmd) is None
+
+    # --- L7: Compositional (Session Grant Bypass Prevention) ---------------
+    @pytest.mark.lmtrust(layer="L7", direction="D8")
+    def test_l7_compositional_grant_does_not_leak_to_chained_command(self, monkeypatch):
+        """Allowing 'cd' must NOT allow a chained command starting with 'cd'."""
+        monkeypatch.setattr(approval, "_session_grants", {"cd"})
+        # Chained command has no grant_key -> cannot match 'cd' grant
+        grant_key = approval.command_grant_key("cd C:\\Users\\Desktop; npx impeccable update")
+        assert grant_key is None
+        assert grant_key not in approval.get_session_grants()
+
+    # --- L9: Negative Space -----------------------------------------------
+    @pytest.mark.lmtrust(layer="L9", direction="D10")
+    def test_l9_negative_space_never_grants_first_token_for_pipes_or_chains(self):
+        assert approval.command_grant_key("echo evil | sh") != "echo"
+        assert approval.command_grant_key("cd / && rm -rf /") != "cd"
+        assert approval.command_grant_key("cd /; rm -rf /") != "cd"
+
+
+
 
 
 # ---------------------------------------------------------------------------

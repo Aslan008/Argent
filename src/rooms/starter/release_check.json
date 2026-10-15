@@ -1,0 +1,32 @@
+{
+  "room": "release_check",
+  "description": "Pre-release check by facts: the tests (exit code), the working tree (uncommitted files) and the diff against the last commit, then a short readiness note. Проверка перед релизом: тесты, чистота дерева, итоговая записка.",
+  "tags": ["релиз", "release", "перед релизом", "готов", "ready", "ship", "выпуск", "деплой", "deploy", "чеклист"],
+  "budget": {"max_iterations": 8, "max_tokens": 40000},
+  "entry": "tests",
+  "defaults": {"test_command": "python -m pytest -q"},
+  "next": {"ready": "END", "not_ready": "END"},
+  "report": "Тесты: {{tests_passed}}\nНезакоммичено: {{dirty}}\n{{notes}}",
+  "nodes": [
+    {"id": "tests", "type": "tool", "tool": "run_command",
+     "args": {"command": "{{test_command}}", "total_timeout": 1800},
+     "sets": {"tests_passed": "ok", "error_summary": "tail"},
+     "instruction": "Run the tests."},
+    {"id": "tree", "type": "tool", "tool": "run_command",
+     "args": {"command": "git status --porcelain"},
+     "sets": {"dirty": "body"},
+     "instruction": "List uncommitted files; an empty result means a clean tree."},
+    {"id": "summarize", "type": "agent", "role": "Reviewer",
+     "tools": ["read_file", "read_git_diff", "grep_search", "list_directory"],
+     "budget": {"max_iterations": 5, "max_tokens": 20000},
+     "context": ["tests_passed", "error_summary", "dirty"],
+     "writes": ["notes"],
+     "instruction": "Pre-release note. Tests passed: {{tests_passed}}. Failing output tail: {{error_summary}}. Uncommitted files:\n{{dirty}}\nRead the diff if there is one and write two to five lines: what is about to ship, what worries you. Answer with the JSON object: notes=<the note>."}
+  ],
+  "edges": [
+    {"from": "tests", "to": "tree"},
+    {"from": "tree", "to": "summarize"},
+    {"from": "summarize", "if": "state.tests_passed and not state.dirty", "to": "EXIT:ready"},
+    {"from": "summarize", "else": true, "to": "EXIT:not_ready"}
+  ]
+}

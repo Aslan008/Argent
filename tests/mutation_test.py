@@ -182,40 +182,45 @@ def mutate_module(module_path: str, test_files: list[str], max_mutations: int = 
             desc = f"{op_name} @ pos {m.start()} (match: {m.group()!r} -> {new_text!r})"
 
             try:
-                passed = run_tests(test_files)
-            except subprocess.TimeoutExpired:
-                passed = False  # timeout = likely infinite loop = mutation caught
+                try:
+                    passed = run_tests(test_files)
+                except subprocess.TimeoutExpired:
+                    passed = False  # timeout = likely infinite loop = mutation caught
 
-            if passed:
-                survived += 1
-                details.append(f"  SURVIVED: {desc}")
-            else:
-                killed += 1
-                details.append(f"  killed:   {desc}")
-
-            # Restore original
-            Path(module_path).write_text(source, encoding="utf-8")
+                if passed:
+                    survived += 1
+                    details.append(f"  SURVIVED: {desc}")
+                else:
+                    killed += 1
+                    details.append(f"  killed:   {desc}")
+            finally:
+                # Restore original source code on disk under all circumstances
+                Path(module_path).write_text(source, encoding="utf-8")
 
     return killed, survived, total, details
 
 
 def main():
     modules = [
-        # ── Tier 1: new deep-analysis modules ──────────────────────────
-        ("src/agent/arg_coercion.py", ["tests/test_lmtrust_arg_coercion.py", "tests/test_arg_coercion.py"]),
-        ("src/agent/loop_guard.py", ["tests/test_lmtrust_loop_guard.py", "tests/test_loop_guard.py"]),
-        ("src/agent/wait_conditions.py", ["tests/test_lmtrust_wait_conditions.py", "tests/test_wait_conditions.py"]),
-        ("src/agent/parser.py", ["tests/test_lmtrust_parser.py", "tests/test_agent_parser.py"]),
-        ("prompt_compressor.py", ["tests/test_lmtrust_prompt_compressor.py", "tests/test_prompt_compressor.py"]),
-        ("src/rag/keyword_index.py", ["tests/test_lmtrust_keyword_index.py", "tests/test_keyword_index.py"]),
-        ("error_help.py", ["tests/test_lmtrust_error_help.py"]),
-        ("tool_profiles.py", ["tests/test_lmtrust_tool_profiles.py", "tests/test_tool_profiles.py"]),
-        ("project_paths.py", ["tests/test_lmtrust_project_paths.py", "tests/test_project_paths.py"]),
-        # ── Previously tested (keep for regression) ────────────────────
-        ("usage_tracker.py", ["tests/test_lmtrust_usage_tracker.py", "tests/test_usage_tracker.py"]),
-        ("text_safety.py", ["tests/test_lmtrust_text_safety.py", "tests/test_text_safety.py"]),
-        ("tool_recovery.py", ["tests/test_lmtrust_tool_recovery.py", "tests/test_tool_registry_consistency.py"]),
-        ("atomic_io.py", ["tests/test_lmtrust_atomic_io.py", "tests/test_atomic_io.py"]),
+        # ── Newly tested critical modules ──────────────────────────────
+        ("src/agent/trimmer.py", ["tests/test_lmtrust_trimmer.py"]),
+        ("src/agent/shell.py", ["tests/test_lmtrust_shell.py"]),
+        ("src/automation/schedule.py", ["tests/test_lmtrust_automation_engine.py"]),
+        ("src/automation/memory.py", ["tests/test_lmtrust_automation_engine.py"]),
+        ("src/cli/cd_path.py", ["tests/test_lmtrust_cd_path.py"]),
+        ("memory_manager.py", ["tests/test_lmtrust_memory_manager.py"]),
+        ("session.py", ["tests/test_lmtrust_session_persistence.py"]),
+        ("src/agent/healing.py", ["tests/test_lmtrust_healing_and_diagnostics.py"]),
+        ("src/agent/command_diagnostics.py", ["tests/test_lmtrust_healing_and_diagnostics.py"]),
+        ("src/agent/parallel_tools.py", ["tests/test_lmtrust_parallel_and_salvage.py"]),
+        ("src/agent/salvage.py", ["tests/test_lmtrust_parallel_and_salvage.py"]),
+        ("src/bridge/lmtrust_bridge.py", ["tests/test_lmtrust_bridge_deep.py", "tests/test_lmtrust_bridge.py"]),
+        ("src/rooms/condition.py", ["tests/test_lmtrust_rooms_engine.py"]),
+        ("project_paths.py", ["tests/test_lmtrust_project_paths.py"]),
+        # ── Foundation modules ─────────────────────────────────────────
+        ("src/agent/arg_coercion.py", ["tests/test_lmtrust_arg_coercion.py"]),
+        ("src/agent/loop_guard.py", ["tests/test_lmtrust_loop_guard.py"]),
+        ("atomic_io.py", ["tests/test_lmtrust_atomic_io.py"]),
     ]
 
     import builtins

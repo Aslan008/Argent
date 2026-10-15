@@ -219,6 +219,8 @@ def _extract_info(objective: str, combined_text: str, focus: str = None,
     ``combined_text`` is the chunks already prefixed with [n] source markers
     (see number_sources); the model is told to keep those markers so facts stay
     traceable through to the final report."""
+    if not combined_text or not combined_text.strip():
+        return ""
     focus_clause = f"\nPay special attention to: {focus}." if focus else ""
     context_clause = ""
     if context:
@@ -283,6 +285,7 @@ def run_deep_research(objective: str, focus: str = None,
         console.print(f"  {i}. {q}")
 
     visited_urls, all_chunks, source_map = set(), [], {}
+    session_url_to_num = {}
 
     # Round 1 — gather from the initial queries (federated meta-search + fetch).
     console.print("Searching the web (federated)...")
@@ -291,18 +294,20 @@ def run_deep_research(objective: str, focus: str = None,
     if not all_chunks:
         return f"Deep Research failed to find any text content for: '{objective}'."
 
-    def _rerank_and_extract():
-        # Deduplicate near-identical chunks before reranking (mirrors, syndication).
-        unique = dedup_chunks(all_chunks)
-        if len(unique) < len(all_chunks):
-            console.print(f"  [dim]Dedup: {len(all_chunks)} → {len(unique)} chunks[/dim]")
-        # Cross-encoder rerank (falls back to bi-encoder, then input order),
-        # then extract source-tagged notes from the best fragments.
+    def _rerank_and_extract(target_chunks=None):
+        chunks_to_rank = target_chunks if target_chunks is not None else all_chunks
+        unique = dedup_chunks(chunks_to_rank)
+        if len(unique) < len(chunks_to_rank):
+            console.print(f"  [dim]Dedup: {len(chunks_to_rank)} → {len(unique)} chunks[/dim]")
         console.print(f"  [dim cyan]Reranking {len(unique)} chunks...[/dim cyan]")
         relevant = rerank(objective, unique, top_n=15)
-        annotated, sources = number_sources(relevant, source_map)
+        try:
+            annotated, sources = number_sources(relevant, source_map, url_to_num=session_url_to_num)
+        except TypeError:
+            annotated, sources = number_sources(relevant, source_map)
         console.print("  [dim]Synthesizing extracted knowledge via LLM...[/dim]")
-        return _extract_info(objective, annotated, focus=focus, context=context), sources
+        notes = _extract_info(objective, annotated, focus=focus, context=context)
+        return notes, sources
 
     extracted_notes, sources = _rerank_and_extract()
 
@@ -318,9 +323,17 @@ def run_deep_research(objective: str, focus: str = None,
         console.print(f"Round {round_num}/{max_rounds}: filling coverage gaps...")
         for i, q in enumerate(gap_queries, 1):
             console.print(f"  +{i}. {q}")
+        prev_chunk_count = len(all_chunks)
         if _gather(gap_queries, visited_urls, all_chunks, source_map,
                    max_new_sources=max_sources):
-            extracted_notes, sources = _rerank_and_extract()
+            new_chunks = all_chunks[prev_chunk_count:]
+            round_notes, round_sources = _rerank_and_extract(new_chunks if new_chunks else all_chunks)
+            if round_notes:
+                if extracted_notes:
+                    extracted_notes = f"{extracted_notes}\n\n{round_notes}"
+                else:
+                    extracted_notes = round_notes
+            sources = round_sources
         else:
             console.print(f"[dim]No new sources found in round {round_num}.[/dim]")
             break
@@ -328,15 +341,21 @@ def run_deep_research(objective: str, focus: str = None,
     if not extracted_notes:
         return f"Research completed, but no relevant technical info was found in the {len(source_map)} fragments."
 
-    # Final synthesis with numbered, inline-citable sources.
+    # Final synthesis with numbered, inline-citable sources from the session registry.
     console.print("[bold cyan]Building Final Report...[/bold cyan]")
-    sources_text = "\n".join(sources)
+    if session_url_to_num:
+        sorted_sources = sorted(session_url_to_num.items(), key=lambda item: item[1])
+        sources_text = "\n".join(f"[{num}] {url}" for url, num in sorted_sources)
+    else:
+        sources_text = "\n".join(sources)
+
+    truncated_notes = _smart_truncate(extracted_notes, 15000)
     focus_clause = f"\n\nFocus the report on: {focus}." if focus else ""
     synthesis_prompt = f"""You are an elite expert researcher.
 Your overarching research objective was: '{objective}'{focus_clause}
 
 Here are the extracted findings. Each fact carries a [n] marker identifying its source:
-{extracted_notes}
+{truncated_notes}
 
 Synthesize this into a structured, cohesive, deeply technical Markdown report.
 Group similar concepts together. Include code blocks where applicable. Preserve
@@ -344,6 +363,7 @@ the [n] inline citations next to the claims they support, so every claim stays
 traceable. End with a 'SOURCES' section listing exactly:
 {sources_text}
 
+CRITICAL LANGUAGE RULE: Write the report in the exact same language as the research objective (e.g. if the objective is in Russian, write the report in Russian).
 Do not add conversational fluff. Output ONLY the markdown report.
 """
     final_report = _call_llm_sync(synthesis_prompt, temperature=0.3)

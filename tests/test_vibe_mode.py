@@ -32,7 +32,7 @@ def test_toggle_off_restores_ask_policy(monkeypatch, restore_policy):
 
 
 def test_destructive_actions_still_prompt_in_vibe(monkeypatch, restore_policy):
-    """POLICY_AUTO never auto-approves destructive actions — the safety net
+    """POLICY_AUTO auto-denies destructive actions — the safety net
     /vibe relies on. Pin it here so a policy change can't silently break vibe."""
     import main
     monkeypatch.setattr(main, "print_system", lambda *a, **k: None)
@@ -43,8 +43,19 @@ def test_destructive_actions_still_prompt_in_vibe(monkeypatch, restore_policy):
         lambda action, destructive, grant_key: asked.append(action) or "deny")
     try:
         assert approval.request_approval("rm everything", destructive=True) is False
-        assert asked == ["rm everything"]            # prompted, not auto-approved
+        assert asked == []                           # auto-denied, not prompted
         assert approval.request_approval("safe read", destructive=False) is True
-        assert len(asked) == 1                       # safe one auto-approved
+        assert len(asked) == 0                       # safe one auto-approved
     finally:
         approval.reset_approval_backend()
+
+
+def test_vibe_with_task_enables_mode_and_returns_task(monkeypatch, restore_policy):
+    import main
+    monkeypatch.setattr(main, "print_system", lambda *a, **k: None)
+    monkeypatch.setattr(main, "offer_safety_checkpoint", lambda task: None)
+
+    # Calling toggle_vibe_mode directly sets up state
+    assert main.toggle_vibe_mode(False) is True
+    assert approval.get_policy() == approval.POLICY_AUTO
+

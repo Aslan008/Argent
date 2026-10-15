@@ -1,20 +1,15 @@
-from ui import console
-from rich.table import Table
 import os
-
-from ui import console
 from rich.table import Table
-import os
-import difflib
+from ui import console
 
 def command_todo():
     # Получаем текущую директорию проекта
     project_dir = os.getcwd()
 
     # Создаем таблицу
-    table = Table(title="TODO Items")
+    table = Table(title="TODO Items", title_style="bold #58a6ff", border_style="dim #30363d")
     table.add_column("Файл", style="cyan")
-    table.add_column("Строка", style="magenta")
+    table.add_column("Строка", style="dim cyan", justify="right")
     table.add_column("Текст задачи", style="green")
 
     # Расширение файлов, которые мы хотим сканировать

@@ -35,7 +35,10 @@ class TestSkillContent:
         body = _SKILL.read_text(encoding="utf-8")
         for field in ("Planned:", "Found:", "Did instead:", "Why:"):
             assert field in body, f"journal entry field missing: {field}"
-        assert "append_to_file" in body
+        # The journal is kept with tools that exist. `append_to_file` is not one:
+        # a call to it resolves to read_file and the entry is silently lost.
+        assert "append_to_file" not in body
+        assert "create_artifact" in body or "replace_in_file" in body
         assert "STOP" in body            # approved decisions are not silently overridden
 
     def test_review_and_quiz(self):

@@ -1,0 +1,1730 @@
+[
+  {
+    "name": "ex_fix_until_green",
+    "title": "Тесты → починить → ещё раз",
+    "summary": "Классический цикл: прогнать тесты процессом, при провале позвать агента-кодера и проверить снова (не больше двух кругов). Показывает: вердикт от процесса (sets), цикл while, именованные выходы.",
+    "room": {
+      "room": "ex_fix_until_green",
+      "description": "Run the tests; while they fail, let a coder fix them (two rounds at most). Прогнать тесты и чинить, пока не позеленеют.",
+      "tags": [
+        "починить тесты",
+        "тесты красные",
+        "fix tests"
+      ],
+      "budget": {
+        "max_iterations": 10,
+        "max_tokens": 60000,
+        "max_seconds": 3600
+      },
+      "entry": "run_tests",
+      "defaults": {
+        "test_command": "python -m pytest -q"
+      },
+      "next": {
+        "green": "END",
+        "escalate": "TRIAGE"
+      },
+      "report": "Тесты зелёные: {{tests_passed}}\nЧто менял агент: {{fix_summary}}",
+      "nodes": [
+        {
+          "id": "run_tests",
+          "type": "tool",
+          "tool": "run_command",
+          "args": {
+            "command": "{{test_command}}"
+          },
+          "sets": {
+            "tests_passed": "ok",
+            "error_summary": "tail"
+          },
+          "instruction": "Run the tests; the exit code decides, not anyone's opinion."
+        },
+        {
+          "id": "fix",
+          "type": "agent",
+          "role": "Coder",
+          "budget": {
+            "max_iterations": 8,
+            "max_tokens": 30000
+          },
+          "context": [
+            "error_summary"
+          ],
+          "writes": [
+            "fix_summary"
+          ],
+          "instruction": "The tests fail. Context from the user: {{task}}\nTail of the failing output:\n{{error_summary}}\nFind the root cause and make the smallest fix. Do NOT claim that the tests pass: the room runs them again. Answer with the JSON object: fix_summary=<what you changed>."
+        }
+      ],
+      "edges": [
+        {
+          "from": "run_tests",
+          "if": "state.tests_passed",
+          "to": "EXIT:green"
+        },
+        {
+          "from": "run_tests",
+          "while": "not state.tests_passed",
+          "max": 2,
+          "id": "fix_rounds",
+          "to": "fix"
+        },
+        {
+          "from": "run_tests",
+          "else": true,
+          "to": "EXIT:escalate"
+        },
+        {
+          "from": "fix",
+          "to": "run_tests"
+        }
+      ]
+    }
+  },
+  {
+    "name": "ex_ask_then_decide",
+    "title": "Показать изменения и спросить человека",
+    "summary": "Процесс собирает факты, комната задаёт вопрос, а дальше идёт по ответу. Показывает: human_pause, поле «<into>_approved», уведомление, ветвление по ответу.",
+    "room": {
+      "room": "ex_ask_then_decide",
+      "description": "List the changed files, ask the person whether to go on, then notify. Показать изменённые файлы и спросить, продолжать ли.",
+      "tags": [
+        "спросить",
+        "подтвердить"
+      ],
+      "budget": {
+        "max_iterations": 6,
+        "max_tokens": 10000
+      },
+      "entry": "changes",
+      "next": {
+        "approved": "END",
+        "declined": "END"
+      },
+      "report": "Решение человека: {{go}}",
+      "nodes": [
+        {
+          "id": "changes",
+          "type": "tool",
+          "tool": "run_command",
+          "args": {
+            "command": "git status --short"
+          },
+          "sets": {
+            "files": "body"
+          },
+          "instruction": "List the files that changed (empty output = clean tree)."
+        },
+        {
+          "id": "ask",
+          "type": "human_pause",
+          "prompt": "Изменённые файлы:\n{{files}}\n\nПродолжать? (да / нет)",
+          "into": "go"
+        },
+        {
+          "id": "say_yes",
+          "type": "notify",
+          "channel": "console",
+          "title": "Комната",
+          "message": "Подтверждено человеком: продолжаем."
+        }
+      ],
+      "edges": [
+        {
+          "from": "changes",
+          "to": "ask"
+        },
+        {
+          "from": "ask",
+          "if": "state.go_approved",
+          "to": "say_yes"
+        },
+        {
+          "from": "ask",
+          "else": true,
+          "to": "EXIT:declined"
+        },
+        {
+          "from": "say_yes",
+          "to": "EXIT:approved"
+        }
+      ]
+    }
+  },
+  {
+    "name": "ex_check_and_notify",
+    "title": "Проверить и уведомить (set + notify)",
+    "summary": "Три простых блока без моделей: запустить проверку, записать флаг, прислать уведомление с подставленными полями. Показывает: set, notify, {{поля}} в сообщении.",
+    "room": {
+      "room": "ex_check_and_notify",
+      "description": "Run the tests and send a desktop notification with the verdict. Прогнать тесты и прислать уведомление.",
+      "tags": [
+        "уведомить",
+        "сообщить"
+      ],
+      "budget": {
+        "max_iterations": 5,
+        "max_tokens": 5000
+      },
+      "entry": "tests",
+      "defaults": {
+        "test_command": "python -m pytest -q"
+      },
+      "next": {
+        "done": "END"
+      },
+      "nodes": [
+        {
+          "id": "tests",
+          "type": "tool",
+          "tool": "run_command",
+          "args": {
+            "command": "{{test_command}}"
+          },
+          "sets": {
+            "tests_passed": "ok",
+            "exit_code_seen": "exit_code"
+          }
+        },
+        {
+          "id": "mark",
+          "type": "set",
+          "values": {
+            "stage": "checked"
+          }
+        },
+        {
+          "id": "tell",
+          "type": "notify",
+          "channel": "desktop",
+          "title": "Argent · тесты",
+          "message": "Этап: {{stage}}. Зелёные: {{tests_passed}}. Код возврата: {{exit_code_seen}}."
+        }
+      ],
+      "edges": [
+        {
+          "from": "tests",
+          "to": "mark"
+        },
+        {
+          "from": "mark",
+          "to": "tell"
+        },
+        {
+          "from": "tell",
+          "to": "EXIT:done"
+        }
+      ]
+    }
+  },
+  {
+    "name": "ex_read_only_review",
+    "title": "Ревью, где агент только читает",
+    "summary": "Агент с урезанным набором инструментов (не может ничего менять) оценивает дифф и записывает вердикт; комната ветвится по его значению. Показывает: role, tools, writes, context, сравнение строки в условии.",
+    "room": {
+      "room": "ex_read_only_review",
+      "description": "Review the current diff with a read-only reviewer and branch on the verdict. Ревью диффа агентом, которому нельзя ничего менять.",
+      "tags": [
+        "ревью",
+        "review",
+        "проверь изменения"
+      ],
+      "budget": {
+        "max_iterations": 4,
+        "max_tokens": 30000
+      },
+      "entry": "review",
+      "next": {
+        "clean": "END",
+        "concerns": "END"
+      },
+      "report": "Вердикт: {{review_verdict}}\n{{review_notes}}",
+      "nodes": [
+        {
+          "id": "review",
+          "type": "agent",
+          "role": "Reviewer",
+          "tools": [
+            "read_file",
+            "grep_search",
+            "read_git_diff"
+          ],
+          "budget": {
+            "max_iterations": 5,
+            "max_tokens": 20000
+          },
+          "writes": [
+            "review_verdict",
+            "review_notes"
+          ],
+          "instruction": "Review the uncommitted changes (use read_git_diff). Focus: {{task}}\nIs the change minimal, correct and free of side effects? Answer with the JSON object: review_verdict=\"ok\" or \"concerns\", review_notes=<one or two sentences>."
+        }
+      ],
+      "edges": [
+        {
+          "from": "review",
+          "if": "state.review_verdict == \"ok\"",
+          "to": "EXIT:clean"
+        },
+        {
+          "from": "review",
+          "else": true,
+          "to": "EXIT:concerns"
+        }
+      ]
+    }
+  },
+  {
+    "name": "ex_use_subroom",
+    "title": "Подкомната: готовая комната как один шаг",
+    "summary": "Вместо копирования шагов вызывается комната из комплекта release_check; её итог читается из поля <узел>_exit. Показывает: узел «подкомната», outputs, ветвление по выходу подкомнаты.",
+    "room": {
+      "room": "ex_use_subroom",
+      "description": "Run the release_check room as one step and report what it found. Вызвать release_check как подкомнату.",
+      "tags": [
+        "перед релизом",
+        "подкомната"
+      ],
+      "budget": {
+        "max_iterations": 4,
+        "max_tokens": 60000
+      },
+      "entry": "check",
+      "next": {
+        "ship": "END",
+        "hold": "END"
+      },
+      "report": "Подкомната завершилась выходом: {{check_exit}}\nТесты: {{tests_passed}}\n{{notes}}",
+      "nodes": [
+        {
+          "id": "check",
+          "type": "room",
+          "room": "release_check",
+          "outputs": [
+            "tests_passed",
+            "notes"
+          ]
+        }
+      ],
+      "edges": [
+        {
+          "from": "check",
+          "if": "state.check_exit == \"ready\"",
+          "to": "EXIT:ship"
+        },
+        {
+          "from": "check",
+          "else": true,
+          "to": "EXIT:hold"
+        }
+      ]
+    }
+  },
+  {
+    "name": "ex_leeth_bookmarks",
+    "title": "Посты про животных → в закладки (Leeth)",
+    "summary": "Открыть страницу, Leeth оценит посты по вашему вопросу, нажмёт «закладку» только у подходящих. Показывает: инструмент браузера, Leeth «оценить» и «нажать найденное», подтверждение перед действием. Подставьте адрес в параметр page_url.",
+    "room": {
+      "room": "ex_leeth_bookmarks",
+      "description": "Open a page, let Leeth pick the posts about animals and bookmark them. Открыть страницу, отобрать посты про животных и добавить их в закладки.",
+      "tags": [
+        "закладки",
+        "посты про животных",
+        "bookmark posts"
+      ],
+      "budget": {
+        "max_iterations": 12,
+        "max_tokens": 10000,
+        "max_seconds": 1800
+      },
+      "entry": "open",
+      "defaults": {
+        "page_url": "https://example.com",
+        "question": "В посте говорится про животных?"
+      },
+      "next": {
+        "done": "END",
+        "nothing_found": "END"
+      },
+      "report": "Результат: {{mark.output}}",
+      "nodes": [
+        {
+          "id": "open",
+          "type": "tool",
+          "tool": "browser_open",
+          "args": {
+            "url": "{{page_url}}"
+          },
+          "idempotent": false
+        },
+        {
+          "id": "look",
+          "type": "leeth",
+          "mode": "scan",
+          "instruction": "{{question}}",
+          "args": {
+            "include": "posts",
+            "scroll_pages": 3
+          },
+          "sets": {
+            "found_json": "json",
+            "found_yes": "json:yes"
+          }
+        },
+        {
+          "id": "mark",
+          "type": "leeth",
+          "mode": "click",
+          "input_from": "found_json",
+          "args": {
+            "button": "закладк|bookmark|в избранное"
+          },
+          "confirm": true
+        },
+        {
+          "id": "tell",
+          "type": "notify",
+          "channel": "console",
+          "message": "Готово: {{mark.output}}"
+        }
+      ],
+      "edges": [
+        {
+          "from": "open",
+          "to": "look"
+        },
+        {
+          "from": "look",
+          "if": "state.found_yes",
+          "to": "mark"
+        },
+        {
+          "from": "look",
+          "else": true,
+          "to": "EXIT:nothing_found"
+        },
+        {
+          "from": "mark",
+          "to": "tell"
+        },
+        {
+          "from": "tell",
+          "to": "EXIT:done"
+        }
+      ]
+    }
+  },
+  {
+    "name": "ex_loop_with_hint",
+    "title": "Цикл с подсказкой при зацикливании",
+    "summary": "Агент работает кругами; на третьем круге ему подаётся подсказка, а на пятом комната выходит. Показывает: цикл «Повторить N раз», встроенный счётчик заходов, блок «Подсказка», break, правило «только чтение».",
+    "room": {
+      "room": "ex_loop_with_hint",
+      "description": "Let a researcher try several rounds; after three tries nudge it, after five give up. Несколько попыток исследования с подсказкой при зацикливании.",
+      "tags": [
+        "зациклился",
+        "повторные попытки",
+        "loop hint"
+      ],
+      "budget": {
+        "max_iterations": 40,
+        "max_tokens": 60000,
+        "max_seconds": 3600
+      },
+      "entry": "rounds",
+      "rules": {
+        "read_only": true
+      },
+      "next": {
+        "found": "END",
+        "gave_up": "END"
+      },
+      "nodes": [
+        {
+          "id": "rounds",
+          "type": "loop",
+          "mode": "times",
+          "stop": 5,
+          "item": "round"
+        },
+        {
+          "id": "try",
+          "type": "agent",
+          "role": "Researcher",
+          "budget": {
+            "max_iterations": 6,
+            "max_tokens": 8000
+          },
+          "writes": [
+            "answer"
+          ],
+          "instruction": "Round {{round}}. Task: {{task}}\nFind the answer using read-only tools. Answer with the JSON object: answer=<short answer or empty if not found>."
+        },
+        {
+          "id": "nudge",
+          "type": "hint",
+          "mode": "next",
+          "message": "You have tried several times already. Do not repeat the same query: change the approach or the keywords."
+        },
+        {
+          "id": "stop_now",
+          "type": "break",
+          "loop": "rounds"
+        },
+        {
+          "id": "gave",
+          "type": "notify",
+          "channel": "console",
+          "message": "Не нашёл за {{rounds_index}} кругов."
+        }
+      ],
+      "edges": [
+        {
+          "from": "rounds",
+          "if": "not state.rounds_done",
+          "to": "try"
+        },
+        {
+          "from": "rounds",
+          "if": "state.rounds_broken",
+          "to": "EXIT:found"
+        },
+        {
+          "from": "rounds",
+          "else": true,
+          "to": "gave"
+        },
+        {
+          "from": "try",
+          "if": "state.answer",
+          "to": "stop_now"
+        },
+        {
+          "from": "try",
+          "if": "state.try_visits >= 3",
+          "to": "nudge"
+        },
+        {
+          "from": "try",
+          "else": true,
+          "to": "rounds"
+        },
+        {
+          "from": "nudge",
+          "to": "rounds"
+        },
+        {
+          "from": "stop_now",
+          "to": "rounds"
+        },
+        {
+          "from": "gave",
+          "to": "EXIT:gave_up"
+        }
+      ]
+    }
+  },
+  {
+    "name": "ex_night_run",
+    "title": "Ночной прогон: тесты, Telegram и выключение ПК",
+    "summary": "Комната на ночь: прогнать тесты, написать в Telegram, чем закончилось (текст пишет модель), и выключить компьютер через минуту. Показывает: уведомление с текстом от модели, блок питания, пробный запуск. Блок питания по умолчанию в режиме «пробный запуск» — снимите галочку, когда будете готовы.",
+    "room": {
+      "room": "ex_night_run",
+      "description": "Run the tests overnight, tell me on Telegram how it went, then shut the PC down. Ночной прогон тестов с отчётом в Telegram и выключением ПК.",
+      "tags": [
+        "на ночь",
+        "выключить компьютер",
+        "night run"
+      ],
+      "budget": {
+        "max_iterations": 12,
+        "max_tokens": 20000,
+        "max_seconds": 14400
+      },
+      "entry": "tests",
+      "defaults": {
+        "test_command": "python -m pytest -q"
+      },
+      "next": {
+        "finished": "END"
+      },
+      "nodes": [
+        {
+          "id": "tests",
+          "type": "tool",
+          "tool": "run_command",
+          "args": {
+            "command": "{{test_command}}"
+          },
+          "sets": {
+            "tests_passed": "ok",
+            "tests_tail": "tail"
+          }
+        },
+        {
+          "id": "report",
+          "type": "notify",
+          "channel": "telegram",
+          "compose": true,
+          "message": "Коротко, по-русски: тесты прошли? Если нет — что упало. Данные: ok={{tests_passed}}, хвост вывода: {{tests_tail}}"
+        },
+        {
+          "id": "off",
+          "type": "power",
+          "mode": "shutdown",
+          "seconds": 60,
+          "args": {
+            "dry_run": true
+          },
+          "message": "Argent: комната завершила работу"
+        }
+      ],
+      "edges": [
+        {
+          "from": "tests",
+          "to": "report"
+        },
+        {
+          "from": "report",
+          "to": "off"
+        },
+        {
+          "from": "off",
+          "to": "EXIT:finished"
+        }
+      ]
+    }
+  },
+  {
+    "name": "ex_parallel_research",
+    "title": "Параллельно: поиск и разбор кода, потом вывод",
+    "summary": "Две независимые ветки идут одновременно: одна ищет в интернете, другая читает код; на слиянии результаты собираются и пишется общий вывод. Показывает блоки «Параллельно» и «Слияние», разные поля в разных ветках, поле <слияние>_arrived.",
+    "room": {
+      "room": "ex_parallel_research",
+      "description": "Research a question on the web and in the project's code at the same time, then summarise. Исследовать вопрос в интернете и в коде одновременно, потом свести выводы.",
+      "tags": [
+        "параллельно",
+        "исследование",
+        "parallel research"
+      ],
+      "budget": {
+        "max_iterations": 30,
+        "max_tokens": 80000,
+        "max_seconds": 1800
+      },
+      "entry": "fork",
+      "rules": {
+        "read_only": true
+      },
+      "next": {
+        "done": "END"
+      },
+      "report": "Ветки дошли: {{merge_arrived}}.\n{{summary}}",
+      "nodes": [
+        {
+          "id": "fork",
+          "type": "parallel",
+          "join": "merge"
+        },
+        {
+          "id": "web",
+          "type": "agent",
+          "role": "Researcher",
+          "tools": [
+            "search_web",
+            "read_webpage"
+          ],
+          "budget": {
+            "max_iterations": 6,
+            "max_tokens": 20000
+          },
+          "writes": [
+            "web_findings"
+          ],
+          "instruction": "Find what is known about: {{task}}. Answer with the JSON object: web_findings=<short text>."
+        },
+        {
+          "id": "code",
+          "type": "agent",
+          "role": "Researcher",
+          "tools": [
+            "grep_search",
+            "read_file"
+          ],
+          "budget": {
+            "max_iterations": 6,
+            "max_tokens": 20000
+          },
+          "writes": [
+            "code_findings"
+          ],
+          "instruction": "Find where the project's code is concerned with: {{task}}. Answer with the JSON object: code_findings=<short text>."
+        },
+        {
+          "id": "merge",
+          "type": "join",
+          "wait_for": "all",
+          "merge": "error",
+          "on_branch_fail": "continue"
+        },
+        {
+          "id": "write",
+          "type": "agent",
+          "role": "DocWriter",
+          "tools": [],
+          "budget": {
+            "max_iterations": 2,
+            "max_tokens": 8000
+          },
+          "writes": [
+            "summary"
+          ],
+          "instruction": "Web: {{web_findings}}\nCode: {{code_findings}}\nWrite a short common conclusion. Answer with the JSON object: summary=<text>."
+        }
+      ],
+      "edges": [
+        {
+          "from": "fork",
+          "to": "web"
+        },
+        {
+          "from": "fork",
+          "to": "code"
+        },
+        {
+          "from": "web",
+          "to": "merge"
+        },
+        {
+          "from": "code",
+          "to": "merge"
+        },
+        {
+          "from": "merge",
+          "to": "write"
+        },
+        {
+          "from": "write",
+          "to": "EXIT:done"
+        }
+      ]
+    }
+  },
+  {
+    "name": "ex_branching_task",
+    "title": "Обращение: баг, фича или вопрос — у каждого свой путь",
+    "summary": "Практическая комната с развилкой. Агент-читатель определяет тип обращения; дальше три разных пути: баг (тесты → правка → тесты, не больше трёх кругов), фича (план и ваше решение), вопрос (ответ только чтением). Показывает: развилку по полю, цикл «пока тесты красные», вопрос человеку, разные выходы комнаты.",
+    "room": {
+      "room": "ex_branching_task",
+      "description": "Sort a request into bug, feature or question and handle each its own way: fix failing tests in a bounded loop, draft a plan and ask for approval, or just answer. Разобрать обращение и вести каждый тип своим путём.",
+      "tags": [
+        "обращение",
+        "баг или фича",
+        "развилка",
+        "triage request"
+      ],
+      "budget": {
+        "max_iterations": 30,
+        "max_tokens": 120000,
+        "max_seconds": 3600
+      },
+      "entry": "classify",
+      "defaults": {
+        "test_command": "python -m pytest -q",
+        "kind": ""
+      },
+      "next": {
+        "fixed": "END",
+        "cannot_fix": "TRIAGE",
+        "plan_approved": "END",
+        "plan_waiting": "END",
+        "answered": "END"
+      },
+      "report": "Тип: {{kind}}\n{{summary}}\nТесты: {{tests_passed}}\nПлан: {{plan}}\nОтвет: {{answer}}",
+      "nodes": [
+        {
+          "id": "classify",
+          "type": "agent",
+          "role": "Researcher",
+          "tools": [
+            "read_file",
+            "grep_search",
+            "list_directory",
+            "search_files",
+            "get_file_outline"
+          ],
+          "budget": {
+            "max_iterations": 5,
+            "max_tokens": 20000
+          },
+          "writes": [
+            "kind",
+            "summary"
+          ],
+          "note": "ШАГ 1. Только читает проект и решает, что это за обращение. Он пишет одно слово в поле kind — по нему расходятся стрелки.",
+          "instruction": "Request: {{task}}\nLook at the project if needed. Decide the type: 'bug' (something is broken), 'feature' (something new is wanted) or 'question' (just an explanation is wanted). Answer with the JSON object: kind=<bug|feature|question>, summary=<one sentence>."
+        },
+        {
+          "id": "run_tests",
+          "type": "tool",
+          "tool": "run_command",
+          "args": {
+            "command": "{{test_command}}",
+            "total_timeout": 1800
+          },
+          "sets": {
+            "tests_passed": "ok",
+            "error_summary": "tail"
+          },
+          "idempotent": false,
+          "note": "ПУТЬ «БАГ». Тесты запускает процесс, а не модель: вердикт tests_passed берётся из кода возврата."
+        },
+        {
+          "id": "fix",
+          "type": "agent",
+          "role": "Coder",
+          "budget": {
+            "max_iterations": 8,
+            "max_tokens": 30000
+          },
+          "writes": [
+            "fix_summary"
+          ],
+          "note": "Правит код. Сам тесты не запускает — их заново запустит «run_tests».",
+          "instruction": "Tests fail. Request: {{task}}\nTail of the failing output:\n{{error_summary}}\nFind the cause and apply a minimal fix. Do NOT claim the tests pass. Answer with the JSON object: fix_summary=<what you changed and why>."
+        },
+        {
+          "id": "plan",
+          "type": "agent",
+          "role": "DocWriter",
+          "tools": [
+            "read_file",
+            "grep_search",
+            "list_directory",
+            "search_files",
+            "get_file_outline"
+          ],
+          "budget": {
+            "max_iterations": 5,
+            "max_tokens": 25000
+          },
+          "writes": [
+            "plan"
+          ],
+          "note": "ПУТЬ «ФИЧА». Пишет план, но ничего не меняет.",
+          "instruction": "Feature request: {{task}}\nWrite a short numbered implementation plan for this project. Answer with the JSON object: plan=<the plan as text>."
+        },
+        {
+          "id": "approve",
+          "type": "human_pause",
+          "prompt": "План:\n{{plan}}\n\nПринять этот план?",
+          "into": "decision",
+          "note": "Спрашивает вас. Ответ «да» даёт decision_approved = истина. Если рядом никого нет, комната остановится здесь и её можно продолжить."
+        },
+        {
+          "id": "answer",
+          "type": "agent",
+          "role": "Researcher",
+          "tools": [
+            "read_file",
+            "grep_search",
+            "list_directory",
+            "search_files",
+            "get_file_outline"
+          ],
+          "budget": {
+            "max_iterations": 5,
+            "max_tokens": 20000
+          },
+          "writes": [
+            "answer"
+          ],
+          "note": "ПУТЬ «ВОПРОС». Только читает и отвечает.",
+          "instruction": "Question: {{task}}\nAnswer it from the project's files. Answer with the JSON object: answer=<short answer>."
+        }
+      ],
+      "edges": [
+        {
+          "from": "classify",
+          "if": "state.kind == \"bug\"",
+          "to": "run_tests"
+        },
+        {
+          "from": "classify",
+          "if": "state.kind == \"feature\"",
+          "to": "plan"
+        },
+        {
+          "from": "classify",
+          "else": true,
+          "to": "answer"
+        },
+        {
+          "from": "run_tests",
+          "if": "state.tests_passed",
+          "to": "EXIT:fixed"
+        },
+        {
+          "from": "run_tests",
+          "else": true,
+          "to": "fix"
+        },
+        {
+          "from": "fix",
+          "while": "not state.tests_passed",
+          "max": 3,
+          "id": "fix_rounds",
+          "to": "run_tests"
+        },
+        {
+          "from": "fix",
+          "else": true,
+          "to": "EXIT:cannot_fix"
+        },
+        {
+          "from": "plan",
+          "to": "approve"
+        },
+        {
+          "from": "approve",
+          "if": "state.decision_approved",
+          "to": "EXIT:plan_approved"
+        },
+        {
+          "from": "approve",
+          "else": true,
+          "to": "EXIT:plan_waiting"
+        },
+        {
+          "from": "answer",
+          "to": "EXIT:answered"
+        }
+      ]
+    }
+  },
+  {
+    "name": "ex_plan_critic_loop",
+    "title": "План → критик → правки, пока критик не согласится",
+    "summary": "Агент пишет план в файл-артефакт, подкомната «критик» его проверяет; пока есть критические находки — план правится, но не больше трёх кругов. Показывает: подкомнату как один шаг, цикл с break, поля цикла (_done, _broken), безопасный предел.",
+    "room": {
+      "room": "ex_plan_critic_loop",
+      "description": "Write a plan into an artifact file, have the critic sub-room review it and revise until the critic has no critical findings (at most three rounds). План с проверкой критиком и правками.",
+      "tags": [
+        "план",
+        "критик",
+        "артефакт",
+        "plan critic"
+      ],
+      "budget": {
+        "max_iterations": 30,
+        "max_tokens": 120000,
+        "max_seconds": 3600
+      },
+      "entry": "rounds",
+      "defaults": {
+        "findings": "",
+        "critical_count": 0,
+        "artifact_path": ""
+      },
+      "next": {
+        "approved": "END",
+        "unresolved": "END"
+      },
+      "report": "План: {{artifact_path}}\nПоследние замечания критика:\n{{findings}}",
+      "nodes": [
+        {
+          "id": "rounds",
+          "type": "loop",
+          "mode": "times",
+          "stop": 3,
+          "item": "round",
+          "note": "ЦИКЛ. Не больше трёх кругов «написал → проверил». Поля: round (номер), rounds_done (закончился), rounds_broken (остановлен break'ом = критик согласен)."
+        },
+        {
+          "id": "draft",
+          "type": "agent",
+          "role": "DocWriter",
+          "tools": [
+            "read_file",
+            "grep_search",
+            "list_directory",
+            "search_files",
+            "get_file_outline",
+            "create_artifact"
+          ],
+          "budget": {
+            "max_iterations": 6,
+            "max_tokens": 30000
+          },
+          "writes": [
+            "artifact_path"
+          ],
+          "note": "Пишет (или переписывает) план в файл через create_artifact. В поле artifact_path возвращает путь — сам текст по состоянию не гоняем, он длинный.",
+          "instruction": "Task: {{task}}\nRound {{round}}.\nPrevious critic findings (empty on the first round — then write the plan from scratch; otherwise fix every one of them):\n{{findings}}\nWrite the plan as a Markdown file with create_artifact (filename plan.md). Answer with the JSON object: artifact_path=<the path create_artifact returned>."
+        },
+        {
+          "id": "critic",
+          "type": "room",
+          "room": "critic_review",
+          "inputs": {
+            "subject": "plan",
+            "artifact_path": "{{artifact_path}}",
+            "task": "{{task}}"
+          },
+          "outputs": [
+            "findings",
+            "critical_count"
+          ],
+          "note": "ПОДКОМНАТА. Целая комната «critic_review» — как один шаг. Чем она закончилась (clean или critical), лежит в поле critic_exit."
+        },
+        {
+          "id": "approved",
+          "type": "break",
+          "loop": "rounds",
+          "note": "BREAK. Критик согласен — выходим из цикла досрочно."
+        }
+      ],
+      "edges": [
+        {
+          "from": "rounds",
+          "if": "not state.rounds_done",
+          "to": "draft"
+        },
+        {
+          "from": "rounds",
+          "if": "state.rounds_broken",
+          "to": "EXIT:approved"
+        },
+        {
+          "from": "rounds",
+          "else": true,
+          "to": "EXIT:unresolved"
+        },
+        {
+          "from": "draft",
+          "to": "critic"
+        },
+        {
+          "from": "critic",
+          "if": "state.critic_exit == \"clean\"",
+          "to": "approved"
+        },
+        {
+          "from": "critic",
+          "else": true,
+          "to": "rounds"
+        },
+        {
+          "from": "approved",
+          "to": "rounds"
+        }
+      ]
+    }
+  },
+  {
+    "name": "ex_full_pipeline",
+    "title": "Полный конвейер: анализ → ресерч → артефакт → критик → реализация → тесты → критик",
+    "summary": "Большая подробная комната, в которой есть почти всё: параллельный сбор данных, развилка «нужен ли ресерч», параллельный ресерч, артефакт, критик как подкомната с циклом правок, память и todo, подтверждение у вас, реализация, цикл «тесты → правка» с подсказкой и забыванием, критик реализации, уведомление. Каждый блок объяснён в его заметке: выберите блок — заметка справа.",
+    "room": {
+      "room": "ex_full_pipeline",
+      "description": "Full delivery pipeline: analyse the project, research if needed (web and code in parallel) or let the main model write the plan, save it as an artifact, have the critic review and revise it, pin facts to memory and write the todo list, implement, run tests (fix in a bounded loop), then critic-review the implementation. Полный конвейер от анализа проекта до проверки реализации.",
+      "tags": [
+        "полный конвейер",
+        "от плана до реализации",
+        "ресерч и реализация",
+        "full pipeline"
+      ],
+      "budget": {
+        "max_iterations": 90,
+        "max_tokens": 400000,
+        "max_seconds": 10800
+      },
+      "entry": "gather",
+      "rules": {
+        "memory": "shared",
+        "memory_chars": 8000,
+        "sampling": {
+          "temperature": 0.3
+        },
+        "deny_tools": [
+          "delete_file",
+          "git_rollback"
+        ],
+        "hint": "Держись плана из артефакта. Не расширяй задачу и не переписывай то, что не просили."
+      },
+      "defaults": {
+        "test_command": "python -m pytest -q",
+        "ask_before_implementing": true,
+        "project_known": false,
+        "needs_research": false,
+        "critical_count": 0,
+        "findings": "",
+        "artifact_path": "",
+        "todo_text": "",
+        "memory_note": ""
+      },
+      "next": {
+        "done": "END",
+        "needs_attention": "TRIAGE",
+        "plan_rejected": "END",
+        "stopped_before_implementing": "END"
+      },
+      "report": "Итог: {{task}}\nПроект известен: {{project_known}}; ресерч нужен был: {{needs_research}}\nАртефакт: {{artifact_path}}\nТесты: {{tests_passed}}\nЗамечания критика реализации: {{findings}}",
+      "nodes": [
+        {
+          "id": "gather",
+          "type": "parallel",
+          "join": "gathered",
+          "note": "ШАГ 1 · ПАРАЛЛЕЛЬНО. Три независимых дела запускаются одновременно: осмотреть проект, вспомнить заметки о нём, прочитать скилл о слепых зонах. У каждой ветки своя копия состояния, пишут они в разные поля."
+        },
+        {
+          "id": "scan",
+          "type": "tool",
+          "tool": "analyze_project",
+          "args": {
+            "path": "."
+          },
+          "sets": {
+            "project_scan": "output"
+          },
+          "note": "Ветка 1: структура проекта (инструмент Argent, только читает)."
+        },
+        {
+          "id": "recall",
+          "type": "tool",
+          "tool": "memory",
+          "args": {
+            "action": "list"
+          },
+          "sets": {
+            "memories": "output"
+          },
+          "note": "Ветка 2: что Argent уже помнит об этом проекте. Если заметок нет — ветка просто вернёт пустой список."
+        },
+        {
+          "id": "method",
+          "type": "skill",
+          "skill": "blind-spot-pass",
+          "sets": {
+            "method": "output"
+          },
+          "note": "Ветка 3: блок «Скилл» кладёт текст скилла в состояние. Здесь — методика «сначала найди слепые зоны», её увидят агенты."
+        },
+        {
+          "id": "gathered",
+          "type": "join",
+          "wait_for": "all",
+          "merge": "error",
+          "on_branch_fail": "continue",
+          "note": "СЛИЯНИЕ. Ждёт все три ветки. Если одна упала (например, скилла нет на этом компьютере), остальные не пропадут: on_branch_fail = continue. Какие дошли — в поле gathered_arrived."
+        },
+        {
+          "id": "analyze",
+          "type": "agent",
+          "role": "Researcher",
+          "tools": [
+            "read_file",
+            "grep_search",
+            "list_directory",
+            "search_files",
+            "get_file_outline"
+          ],
+          "budget": {
+            "max_iterations": 6,
+            "max_tokens": 30000
+          },
+          "writes": [
+            "project_known",
+            "needs_research",
+            "summary",
+            "questions"
+          ],
+          "note": "ШАГ 2 · АНАЛИЗ. Агент решает два вопроса: знаком ли ему проект (по заметкам и осмотру) и нужен ли ресерч. Его ответ — данные для развилки, а не действие.",
+          "instruction": "Task: {{task}}\nProject scan:\n{{project_scan}}\nWhat is already remembered about the project:\n{{memories}}\nMethod to follow:\n{{method}}\nDecide: do you already know this project well enough (project_known true/false)? Is research needed before planning — unknown libraries, unclear requirements, facts to look up (needs_research true/false)? Answer with the JSON object: project_known=<true|false>, needs_research=<true|false>, summary=<2-3 sentences>, questions=<what to find out, one per line, empty if none>."
+        },
+        {
+          "id": "research",
+          "type": "parallel",
+          "join": "researched",
+          "workers": 2,
+          "note": "ПУТЬ «РЕСЕРЧ» · ПАРАЛЛЕЛЬНО. Интернет и код исследуются одновременно (workers = 2: не больше двух разом). Сюда идём, если ресерч нужен ИЛИ проект незнаком — незнакомый проект без исследования планировать нельзя."
+        },
+        {
+          "id": "web",
+          "type": "agent",
+          "role": "Researcher",
+          "tools": [
+            "search_web",
+            "read_webpage"
+          ],
+          "skills": [
+            "sourced-researcher"
+          ],
+          "budget": {
+            "max_iterations": 8,
+            "max_tokens": 40000
+          },
+          "writes": [
+            "web_findings"
+          ],
+          "sampling": {
+            "temperature": 0.5
+          },
+          "note": "Ветка «интернет»: агенту выданы только инструменты поиска и скилл «sourced-researcher» (ответ с источниками). Температура выше — чтобы пробовал разные запросы.",
+          "instruction": "Task: {{task}}\nFind out:\n{{questions}}\nAnswer with the JSON object: web_findings=<findings with source URLs>."
+        },
+        {
+          "id": "code",
+          "type": "agent",
+          "role": "Researcher",
+          "tools": [
+            "read_file",
+            "grep_search",
+            "list_directory",
+            "search_files",
+            "get_file_outline"
+          ],
+          "budget": {
+            "max_iterations": 8,
+            "max_tokens": 40000
+          },
+          "writes": [
+            "code_findings"
+          ],
+          "note": "Ветка «код»: ищет в самом проекте, где затронута задача.",
+          "instruction": "Task: {{task}}\nFind where the project's code is concerned with it and what constraints exist.\nAnswer with the JSON object: code_findings=<findings with file paths>."
+        },
+        {
+          "id": "researched",
+          "type": "join",
+          "wait_for": "all",
+          "merge": "error",
+          "on_branch_fail": "continue",
+          "note": "СЛИЯНИЕ ресерча. Поля веток разные (web_findings и code_findings), поэтому конфликтов нет."
+        },
+        {
+          "id": "synthesize",
+          "type": "agent",
+          "role": "DocWriter",
+          "tools": [
+            "create_artifact"
+          ],
+          "budget": {
+            "max_iterations": 4,
+            "max_tokens": 30000
+          },
+          "writes": [
+            "artifact_path"
+          ],
+          "note": "ШАГ «АРТЕФАКТ» после ресерча: сводит находки в Markdown-файл (.argent/artifacts/) и возвращает путь.",
+          "instruction": "Task: {{task}}\nSummary of the project: {{summary}}\nWeb findings:\n{{web_findings}}\nCode findings:\n{{code_findings}}\nWrite a concrete implementation plan, with the research behind it, as a Markdown file using create_artifact (filename plan.md). Answer with the JSON object: artifact_path=<the path create_artifact returned>."
+        },
+        {
+          "id": "plan",
+          "type": "agent",
+          "role": "Coder",
+          "tools": [
+            "read_file",
+            "grep_search",
+            "list_directory",
+            "search_files",
+            "get_file_outline",
+            "create_artifact"
+          ],
+          "budget": {
+            "max_iterations": 8,
+            "max_tokens": 40000
+          },
+          "writes": [
+            "artifact_path"
+          ],
+          "note": "ПУТЬ «БЕЗ РЕСЕРЧА». План и артефакт делает основная модель сама (роль Coder — она видит код). Оба пути сходятся на шаге «has_artifact».",
+          "instruction": "Task: {{task}}\nSummary of the project: {{summary}}\nWrite a concrete implementation plan as a Markdown file using create_artifact (filename plan.md). Answer with the JSON object: artifact_path=<the path create_artifact returned>."
+        },
+        {
+          "id": "has_artifact",
+          "type": "assert",
+          "condition": "state.artifact_path",
+          "message": "План не сохранён: поле artifact_path пусто",
+          "note": "ПРОВЕРКА. Дальше все шаги опираются на файл плана; если агент его не создал, лучше упасть здесь, чем через десять шагов. Стрелка «если шаг упал» ведёт к уведомлению."
+        },
+        {
+          "id": "review_rounds",
+          "type": "loop",
+          "mode": "times",
+          "stop": 3,
+          "item": "review_round",
+          "note": "ЦИКЛ. До трёх кругов «критик → правка». Ограничен намеренно: бесконечный спор с критиком — одна из частых бед."
+        },
+        {
+          "id": "critic",
+          "type": "room",
+          "room": "critic_review",
+          "inputs": {
+            "subject": "plan",
+            "artifact_path": "{{artifact_path}}",
+            "task": "{{task}}"
+          },
+          "outputs": [
+            "findings",
+            "critical_count"
+          ],
+          "note": "КРИТИК — подкомната «critic_review». Её можно заменить любой другой комнатой с теми же выходами (clean / critical): достаточно поменять название комнаты в этом блоке. Критик только читает."
+        },
+        {
+          "id": "revise",
+          "type": "agent",
+          "role": "DocWriter",
+          "tools": [
+            "read_file",
+            "write_file",
+            "replace_in_file"
+          ],
+          "budget": {
+            "max_iterations": 6,
+            "max_tokens": 30000
+          },
+          "writes": [
+            "revision_note"
+          ],
+          "retries": 1,
+          "note": "ПРАВКА. Вносит изменения в тот же файл по замечаниям критика. retries = 1: если шаг упадёт, он выполнится ещё раз.",
+          "instruction": "The plan file is {{artifact_path}}. The critic found these critical problems:\n{{findings}}\nEdit the file so that every one of them is resolved. Answer with the JSON object: revision_note=<what you changed>."
+        },
+        {
+          "id": "plan_ok",
+          "type": "break",
+          "loop": "review_rounds",
+          "note": "BREAK. Критик больше не находит критического — круги кончаются."
+        },
+        {
+          "id": "accept_plan",
+          "type": "human_pause",
+          "prompt": "Критик всё ещё видит проблемы в плане:\n{{findings}}\n\nПродолжить с планом как есть?",
+          "into": "accept",
+          "note": "Если после трёх кругов критик не согласен — решаете вы. Ответ «да» → идём дальше, иначе комната выходит с plan_rejected."
+        },
+        {
+          "id": "memo",
+          "type": "agent",
+          "role": "DocWriter",
+          "tools": [],
+          "budget": {
+            "max_iterations": 1,
+            "max_tokens": 6000
+          },
+          "writes": [
+            "memory_note",
+            "todo_text"
+          ],
+          "note": "Готовит два коротких текста: что стоит запомнить о проекте и список задач. Инструментов у агента нет — только думает.",
+          "instruction": "Task: {{task}}\nPlan file: {{artifact_path}}\nSummary: {{summary}}\nAnswer with the JSON object: memory_note=<2-4 sentences worth remembering about this project and decisions, no secrets>, todo_text=<the work as a bulleted list, one concrete step per line, at most 10 lines>."
+        },
+        {
+          "id": "pin_memory",
+          "type": "tool",
+          "tool": "memory",
+          "args": {
+            "action": "write",
+            "name": "pipeline_notes",
+            "description": "Notes from the delivery pipeline",
+            "body": "{{memory_note}}",
+            "type": "project"
+          },
+          "idempotent": false,
+          "retries": 1,
+          "note": "ЗАКРЕПЛЕНИЕ В ПАМЯТИ: инструмент Argent «memory». Остаётся и после этой комнаты — в следующий раз шаг «recall» его вспомнит."
+        },
+        {
+          "id": "todo",
+          "type": "tool",
+          "tool": "todo_write",
+          "args": {
+            "todos": "{{todo_text}}"
+          },
+          "note": "TODO: инструмент «todo_write» превращает маркированный список в чек-лист задачи."
+        },
+        {
+          "id": "go_ahead",
+          "type": "human_pause",
+          "prompt": "План сохранён: {{artifact_path}}\nTodo:\n{{todo_text}}\n\nПриступать к реализации?",
+          "into": "go",
+          "note": "ПОДТВЕРЖДЕНИЕ. Реализация меняет файлы, поэтому спрашиваем. Для ночного запуска поставьте параметр ask_before_implementing = false — тогда этот шаг пропускается."
+        },
+        {
+          "id": "implement",
+          "type": "agent",
+          "role": "Coder",
+          "tools": [
+            "read_file",
+            "write_file",
+            "replace_in_file",
+            "grep_search",
+            "list_directory",
+            "search_files",
+            "get_file_outline",
+            "run_command"
+          ],
+          "budget": {
+            "max_iterations": 20,
+            "max_tokens": 80000
+          },
+          "writes": [
+            "fix_summary"
+          ],
+          "note": "РЕАЛИЗАЦИЯ. Единственный шаг, которому выданы инструменты записи. Общие правила комнаты (сводка прошлых шагов, подсказка «держись плана», запрет delete_file/git_rollback) действуют и здесь.",
+          "instruction": "Implement the plan in {{artifact_path}} for the task: {{task}}\nWork through the todo list:\n{{todo_text}}\nDo not run the whole test suite yourself — the next step does that. Answer with the JSON object: fix_summary=<what you did>."
+        },
+        {
+          "id": "tests",
+          "type": "tool",
+          "tool": "run_command",
+          "args": {
+            "command": "{{test_command}}",
+            "total_timeout": 1800
+          },
+          "sets": {
+            "tests_passed": "ok",
+            "error_summary": "tail"
+          },
+          "idempotent": false,
+          "note": "ТЕСТЫ. Вердикт — код возврата процесса. Стрелки отсюда: зелёные → критик реализации; красные → правка; четыре правки подряд не помогли → сдаёмся."
+        },
+        {
+          "id": "fix_hint",
+          "type": "hint",
+          "mode": "next",
+          "message": "Две правки не помогли. Перечитай текст ошибки целиком, не повторяй прошлый подход и проверь, что чинишь причину, а не симптом.",
+          "note": "ПОДСКАЗКА. Показывается следующему агенту один раз — после второй неудачи. Условие стоит на стрелке: tests → fix_hint, если fix_visits >= 2 (встроенный счётчик заходов)."
+        },
+        {
+          "id": "fix",
+          "type": "agent",
+          "role": "Coder",
+          "tools": [
+            "read_file",
+            "write_file",
+            "replace_in_file",
+            "grep_search",
+            "list_directory",
+            "search_files",
+            "get_file_outline",
+            "run_command"
+          ],
+          "budget": {
+            "max_iterations": 10,
+            "max_tokens": 40000
+          },
+          "writes": [
+            "fix_summary"
+          ],
+          "note": "ПРАВКА по тестам. Не объявляет «тесты прошли» — шаг «tests» запустится снова.",
+          "instruction": "The tests fail after your implementation of: {{task}}\nTail of the failing output:\n{{error_summary}}\nFind the cause and fix it minimally. Answer with the JSON object: fix_summary=<what you changed>."
+        },
+        {
+          "id": "give_up",
+          "type": "forget",
+          "mode": "all",
+          "note": "ЗАБЫТЬ. Не удалось за четыре правки — стираем память агентов и подсказки, чтобы следующий запуск (или человек) начал с чистого листа, а не с тупика."
+        },
+        {
+          "id": "code_critic",
+          "type": "room",
+          "room": "critic_review",
+          "inputs": {
+            "subject": "implementation",
+            "artifact_path": "{{artifact_path}}",
+            "task": "{{task}}"
+          },
+          "outputs": [
+            "findings",
+            "critical_count"
+          ],
+          "note": "КРИТИК РЕАЛИЗАЦИИ. Та же подкомната, но subject = implementation: она смотрит настоящий diff и файлы, а не план."
+        },
+        {
+          "id": "bugfix",
+          "type": "agent",
+          "role": "Coder",
+          "tools": [
+            "read_file",
+            "write_file",
+            "replace_in_file",
+            "grep_search",
+            "list_directory",
+            "search_files",
+            "get_file_outline",
+            "run_command"
+          ],
+          "budget": {
+            "max_iterations": 10,
+            "max_tokens": 40000
+          },
+          "writes": [
+            "fix_summary"
+          ],
+          "note": "Правит то, что нашёл критик. После этого тесты запускаются заново — зелёные тесты нужны и после правок критика.",
+          "instruction": "The reviewer found these critical problems in the implementation of: {{task}}\n{{findings}}\nFix each of them minimally. Answer with the JSON object: fix_summary=<what you changed>."
+        },
+        {
+          "id": "finish",
+          "type": "notify",
+          "channel": "desktop",
+          "title": "Argent: конвейер завершён",
+          "message": "Готово: {{task}}. Тесты зелёные, критик не нашёл критического.",
+          "note": "УВЕДОМЛЕНИЕ на рабочем столе. Поменяйте channel на telegram — придёт в телефон; включите «Текст пишет модель» — текст сформулирует модель."
+        },
+        {
+          "id": "failed_notice",
+          "type": "notify",
+          "channel": "console",
+          "message": "Конвейер остановился: {{error}}",
+          "note": "Сюда ведёт стрелка «если шаг упал» (on_error) от проверки артефакта."
+        },
+        {
+          "id": "shutdown",
+          "type": "power",
+          "mode": "shutdown",
+          "seconds": 120,
+          "args": {
+            "dry_run": true
+          },
+          "disabled": true,
+          "note": "ВЫКЛЮЧЕН (disabled). Для ночных запусков: включите блок, добавьте стрелку finish → shutdown → EXIT:done, и компьютер выключится через 2 минуты. Пока он в режиме «пробного запуска»."
+        },
+        {
+          "id": "tracker",
+          "type": "mcp",
+          "server": "tracker",
+          "tool": "create_issue",
+          "args": {
+            "title": "{{task}}",
+            "body": "{{findings}}"
+          },
+          "confirm": true,
+          "disabled": true,
+          "note": "ВЫКЛЮЧЕН (disabled). Пример подключения внешнего сервера MCP: когда критик реализации что-то нашёл, завести задачу в трекере. Включите после того, как добавите сервер командой /mcp."
+        }
+      ],
+      "edges": [
+        {
+          "from": "gather",
+          "to": "scan"
+        },
+        {
+          "from": "gather",
+          "to": "recall"
+        },
+        {
+          "from": "gather",
+          "to": "method"
+        },
+        {
+          "from": "scan",
+          "to": "gathered"
+        },
+        {
+          "from": "recall",
+          "to": "gathered"
+        },
+        {
+          "from": "method",
+          "to": "gathered"
+        },
+        {
+          "from": "gathered",
+          "to": "analyze"
+        },
+        {
+          "from": "analyze",
+          "if": "state.needs_research or not state.project_known",
+          "to": "research"
+        },
+        {
+          "from": "analyze",
+          "else": true,
+          "to": "plan"
+        },
+        {
+          "from": "research",
+          "to": "web"
+        },
+        {
+          "from": "research",
+          "to": "code"
+        },
+        {
+          "from": "web",
+          "to": "researched"
+        },
+        {
+          "from": "code",
+          "to": "researched"
+        },
+        {
+          "from": "researched",
+          "to": "synthesize"
+        },
+        {
+          "from": "synthesize",
+          "to": "has_artifact"
+        },
+        {
+          "from": "plan",
+          "to": "has_artifact"
+        },
+        {
+          "from": "has_artifact",
+          "on_error": true,
+          "to": "failed_notice"
+        },
+        {
+          "from": "has_artifact",
+          "to": "review_rounds"
+        },
+        {
+          "from": "failed_notice",
+          "to": "EXIT:needs_attention"
+        },
+        {
+          "from": "review_rounds",
+          "if": "not state.review_rounds_done",
+          "to": "critic"
+        },
+        {
+          "from": "review_rounds",
+          "if": "state.review_rounds_broken",
+          "to": "memo"
+        },
+        {
+          "from": "review_rounds",
+          "else": true,
+          "to": "accept_plan"
+        },
+        {
+          "from": "critic",
+          "if": "state.critic_exit == \"clean\"",
+          "to": "plan_ok"
+        },
+        {
+          "from": "critic",
+          "else": true,
+          "to": "revise"
+        },
+        {
+          "from": "revise",
+          "to": "review_rounds"
+        },
+        {
+          "from": "plan_ok",
+          "to": "review_rounds"
+        },
+        {
+          "from": "accept_plan",
+          "if": "state.accept_approved",
+          "to": "memo"
+        },
+        {
+          "from": "accept_plan",
+          "else": true,
+          "to": "EXIT:plan_rejected"
+        },
+        {
+          "from": "memo",
+          "to": "pin_memory"
+        },
+        {
+          "from": "pin_memory",
+          "to": "todo"
+        },
+        {
+          "from": "todo",
+          "if": "state.ask_before_implementing",
+          "to": "go_ahead"
+        },
+        {
+          "from": "todo",
+          "else": true,
+          "to": "implement"
+        },
+        {
+          "from": "go_ahead",
+          "if": "state.go_approved",
+          "to": "implement"
+        },
+        {
+          "from": "go_ahead",
+          "else": true,
+          "to": "EXIT:stopped_before_implementing"
+        },
+        {
+          "from": "implement",
+          "to": "tests"
+        },
+        {
+          "from": "tests",
+          "if": "state.tests_passed",
+          "to": "code_critic"
+        },
+        {
+          "from": "tests",
+          "if": "state.fix_visits >= 4",
+          "to": "give_up"
+        },
+        {
+          "from": "tests",
+          "if": "state.fix_visits >= 2",
+          "to": "fix_hint"
+        },
+        {
+          "from": "tests",
+          "else": true,
+          "to": "fix"
+        },
+        {
+          "from": "fix_hint",
+          "to": "fix"
+        },
+        {
+          "from": "fix",
+          "to": "tests"
+        },
+        {
+          "from": "give_up",
+          "to": "EXIT:needs_attention"
+        },
+        {
+          "from": "code_critic",
+          "if": "state.code_critic_exit == \"clean\"",
+          "to": "finish"
+        },
+        {
+          "from": "code_critic",
+          "if": "state.bugfix_visits >= 2",
+          "to": "EXIT:needs_attention"
+        },
+        {
+          "from": "code_critic",
+          "else": true,
+          "to": "bugfix"
+        },
+        {
+          "from": "bugfix",
+          "to": "tests"
+        },
+        {
+          "from": "finish",
+          "to": "EXIT:done"
+        },
+        {
+          "from": "shutdown",
+          "to": "EXIT:done"
+        },
+        {
+          "from": "tracker",
+          "to": "EXIT:needs_attention"
+        }
+      ]
+    }
+  }
+]

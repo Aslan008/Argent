@@ -6,17 +6,21 @@ from src.rooms.library import RoomLibrary, default_starter_dir
 
 
 TOOLS = {"run_command", "search_web"}
+#: every tool the starter rooms use (the starter library needs more than a bare minimum)
+STARTER_TOOLS = {"run_command", "search_web", "read_file", "list_directory", "grep_search", "search_files", "get_file_outline", "analyze_project", "read_git_diff", "read_webpage"}
 
 
 def _lib():
-    return RoomLibrary().load_dir(default_starter_dir(), TOOLS)
+    return RoomLibrary().load_dir(default_starter_dir(), STARTER_TOOLS)
 
 
 class TestStarterLoad:
     def test_all_starter_rooms_valid(self):
         lib = _lib()
         assert lib.load_errors == {}
-        assert set(lib.names()) == {"analyze", "debug_loop", "triage"}
+        assert set(lib.names()) == {"analyze", "debug_loop", "triage", "fix_bug", "code_review",
+                                    "implement_feature", "research", "release_check", "explain_repo",
+                                    "critic_review"}
 
     def test_triage_spawn_room_admitted(self):
         # triage carries a spawn_room node; it loads only because triage is a
@@ -59,7 +63,8 @@ class TestValidationGating:
 
 class TestStatsAndQuarantine:
     def test_quarantine_after_repeated_failure(self):
-        lib = _lib()
+        # the guard is for rooms people and the model add; packaged starter rooms are never quarantined
+        lib = RoomLibrary().load_dir(default_starter_dir(), STARTER_TOOLS, origin="user")
         for _ in range(3):
             lib.record_run("debug_loop", success=False)
         assert lib.stats["debug_loop"]["quarantined"] is True

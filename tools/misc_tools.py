@@ -2,10 +2,8 @@ import ast
 import json
 import math
 import operator
-import subprocess
-import webbrowser
-from datetime import datetime
 from pathlib import Path
+from typing import Any
 import questionary
 from memory_manager import memory
 from intelligence import intel
@@ -17,9 +15,19 @@ log = get_logger("tools")
 
 
 def _safe_pow(a, b):
-    # Guard against DoS expressions like 9**9**9 that hang the process.
-    if abs(b) > 10000 or (abs(a) > 1e6 and abs(b) > 100):
+    # Guard against DoS expressions like 9**9**9 or 10**5000 that hang the process
+    # or exceed Python's 4300-digit string conversion limit.
+    if abs(b) > 10000:
         raise ValueError("exponent too large for the calculator")
+    try:
+        abs_a = abs(a)
+        if abs_a > 1 and abs(b) > 0:
+            digits = abs(b) * math.log10(abs_a)
+            if digits > 2000:
+                raise ValueError("power operation result exceeds maximum allowed digits (2000)")
+    except (TypeError, ValueError) as e:
+        if "maximum allowed digits" in str(e):
+            raise
     return operator.pow(a, b)
 
 
@@ -228,10 +236,22 @@ def _normalize_options(raw):
     return texts, rejected
 
 
+def _ask_text(prompt: str, default: str = "") -> str:
+    """Prompt user for text, routing through ReplBridge modal if TUI is active."""
+    import os
+    if os.environ.get("ARGENT_TUI") == "1":
+        try:
+            from src.bridge.repl_bridge import ReplBridge
+            res = ReplBridge.ask_active_select(prompt, options=[], default=default)
+            return res if res is not None else ""
+        except Exception:
+            pass
+    from prompt_toolkit import prompt as ptk_prompt
+    return ptk_prompt(prompt, default=default)
+
+
 def ask_user_questions(questions: list) -> str:
     """Ask the user a series of structured questions."""
-    from prompt_toolkit import prompt as ptk_prompt
-
     if isinstance(questions, str):
         try:
             questions = json.loads(questions)
@@ -246,7 +266,13 @@ def ask_user_questions(questions: list) -> str:
 
     responses = {}
     malformed = []
+    try:
+        from src.cli.sound import play_sound
+        play_sound("prompt")
+    except Exception:
+        pass
     console.print("\n[bold cyan]🔍 Уточнение требований:[/bold cyan]")
+
 
     for q in questions:
         if not isinstance(q, dict):
@@ -273,7 +299,7 @@ def ask_user_questions(questions: list) -> str:
                           "ответьте своими словами)[/dim]" if rejected else
                           "[dim](вариантов не пришло — ответьте своими словами)[/dim]")
             try:
-                answer = ptk_prompt("Ваш ответ ❯ ")
+                answer = _ask_text("Ваш ответ ❯ ")
                 responses[q_text] = answer.strip() or "No answer"
             except (KeyboardInterrupt, EOFError):
                 responses[q_text] = "Skipped"
@@ -284,7 +310,7 @@ def ask_user_questions(questions: list) -> str:
         if q_type == "text":
             console.print("[dim](Введите текст и нажмите Enter)[/dim]")
             try:
-                answer = ptk_prompt("Ваш ответ ❯ ")
+                answer = _ask_text("Ваш ответ ❯ ")
                 responses[q_text] = answer.strip() if answer.strip() else "No answer"
             except (KeyboardInterrupt, EOFError):
                 responses[q_text] = "Skipped"
@@ -306,7 +332,7 @@ def ask_user_questions(questions: list) -> str:
                 try:
                     selected = questionary.select("Выберите:", choices=display_options).ask()
                     if selected == CUSTOM:
-                        custom = ptk_prompt("Введите свой вариант ❯ ")
+                        custom = _ask_text("Введите свой вариант ❯ ")
                         responses[q_text] = custom.strip() if custom.strip() else "No answer"
                     elif selected:
                         responses[q_text] = selected
@@ -320,7 +346,7 @@ def ask_user_questions(questions: list) -> str:
                     selected = questionary.checkbox("Выберите варианты:", choices=display_options).ask()
                     if selected and CUSTOM in selected:
                         selected.remove(CUSTOM)
-                        custom = ptk_prompt("Введите свой(и) вариант(ы) через запятую ❯ ")
+                        custom = _ask_text("Введите свой(и) вариант(ы) через запятую ❯ ")
                         if custom.strip():
                             selected.append(custom.strip())
                     
@@ -344,96 +370,6 @@ def ask_user_questions(questions: list) -> str:
                 "objects. Re-check the schema before asking again.]")
     return out
 
-def create_svg_image(svg_code: str, filename: str = None) -> str:
-    """Creates an SVG image file from the provided SVG code and opens it in the default web browser."""
-    try:
-        from config import get_visuals_dir
-        visuals_dir = Path(get_visuals_dir()).expanduser().resolve()
-        visuals_dir.mkdir(parents=True, exist_ok=True)
-        
-        if not filename:
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            filename = f"svg_{timestamp}.svg"
-        
-        if not filename.endswith(".svg"):
-            filename += ".svg"
-            
-        file_path = visuals_dir / filename
-        
-        if "<?xml" not in svg_code:
-            svg_code = '<?xml version="1.0" encoding="UTF-8" standalone="no"?>\n' + svg_code
-            
-        with open(file_path, "w", encoding="utf-8") as f:
-            f.write(svg_code)
-            
-        webbrowser.open(f"file:///{file_path}")
-        
-        return f"Successfully created SVG image at '{file_path}'. It should now be open in your browser."
-    except Exception as e:
-        return f"Error creating SVG image: {e}"
-
-def find_definition(file_path: str, line: int, column: int) -> str:
-    """Find the definition of a symbol at the given line and column.
-
-    Uses LSP (multilspy) when available — cross-language, type-aware — and
-    falls back to the Jedi-based intelligence module for Python.
-    """
-    # Try LSP first (cross-language, type-aware)
-    try:
-        from src.lsp.manager import lsp_manager
-        if lsp_manager.is_available():
-            results = lsp_manager.find_definition(file_path, line, column)
-            if results:
-                out = "Found definitions (LSP):\n"
-                for d in results:
-                    out += f"- {d['file_path']}:{d['line']}:{d['column']}\n"
-                return out.rstrip()
-    except Exception:
-        pass
-
-    # Fall back to Jedi (Python only)
-    results = intel.find_definitions(file_path, line, column)
-    if not results:
-        return "No definitions found."
-    if "error" in results[0]:
-        return f"Error finding definitions: {results[0]['error']}"
-    
-    out = "Found definitions:\n"
-    for d in results:
-        out += f"- {d['name']} ({d['type']}) in {d['file_path']}:{d['line']}:{d['column']}\n"
-        out += f"  {d['description']}\n"
-    return out.rstrip()
-
-def find_references(file_path: str, line: int, column: int) -> str:
-    """Find all references to a symbol at the given line and column.
-
-    Uses LSP (multilspy) when available — cross-language, type-aware — and
-    falls back to the Jedi-based intelligence module for Python.
-    """
-    # Try LSP first (cross-language, type-aware)
-    try:
-        from src.lsp.manager import lsp_manager
-        if lsp_manager.is_available():
-            results = lsp_manager.find_references(file_path, line, column)
-            if results:
-                out = "Found references (LSP):\n"
-                for r in results:
-                    out += f"- {r['file_path']}:{r['line']}:{r['column']}\n"
-                return out.rstrip()
-    except Exception:
-        pass
-
-    # Fall back to Jedi (Python only)
-    results = intel.find_references(file_path, line, column)
-    if not results:
-        return "No references found."
-    if "error" in results[0]:
-        return f"Error finding references: {results[0]['error']}"
-    
-    out = "Found references:\n"
-    for r in results:
-        out += f"- {r['name']} in {r['file_path']}:{r['line']}:{r['column']}\n"
-    return out.rstrip()
 
 def git_checkpoint(message: str) -> str:
     """Create a temporary git commit (checkpoint) to save state before an experiment."""
@@ -483,7 +419,13 @@ def git_rollback(to_checkpoint: str = None) -> str:
         if not approved:
             return "Rollback aborted by user."
 
-        return checkpoints.rewind_to(target["sha"])
+        msg = checkpoints.rewind_to(target["sha"])
+        try:
+            from file_tracker import clear_session_snapshots
+            clear_session_snapshots()
+        except Exception:
+            pass
+        return msg
     except Exception as e:
         return f"Error rolling back: {e}"
 
@@ -512,10 +454,15 @@ def list_mcp_tools(server_name: str = "", filter: str = "") -> str:
     one-line map up front and comes here when it needs a signature.
     """
     from config import get_mcp_servers
+    from src.rooms import policy as room_policy
 
     configured = get_mcp_servers()
     if not configured:
         return "No MCP servers are configured. Add one with /mcp."
+    # A room's node may be told to ignore some servers / tools (see src/rooms/policy.py).
+    configured = [s for s in configured if room_policy.mcp_tool_blocked(s["name"]) is None]
+    if not configured:
+        return "Every MCP server is ignored by this room's rules."
 
     if not (server_name or "").strip():
         lines = ["Configured MCP servers:"]
@@ -534,7 +481,8 @@ def list_mcp_tools(server_name: str = "", filter: str = "") -> str:
 
     tools = mcp_client.list_tools(server_name)
     broken = [t for t in tools if "error" in t]
-    tools = [t for t in tools if "name" in t and "error" not in t]
+    tools = [t for t in tools if "name" in t and "error" not in t
+             and room_policy.mcp_tool_blocked(server_name, t["name"]) is None]
     if not tools:
         reason = broken[0].get("error") if broken else "server returned no tools"
         return f"Server '{server_name}' offers nothing right now: {reason}"
@@ -587,22 +535,110 @@ def call_mcp_tool(server_name: str, tool_name: str, arguments_json: str) -> str:
             "Fix the syntax and try again."
         )
 
+    from src.rooms import policy as room_policy
+    blocked = room_policy.mcp_tool_blocked(server_name, tool_name)
+    if blocked:
+        return f"Error: {blocked}"
+
     try:
         return mcp_client.call_tool(server_name, tool_name, args)
     except Exception as e:
         return f"Error calling MCP tool: {e}"
 
-def run_subagent(role: str, task: str, tools_json: str = None) -> str:
-    """Spawn a specialized sub-agent for an isolated task."""
-    from agent import ArgentSubAgent
+def _truthy(value) -> bool:
+    if isinstance(value, str):
+        return value.strip().lower() in ("1", "true", "yes", "y", "on")
+    return bool(value)
+
+
+def run_subagent(role: str, task: str, tools_json: str = None, isolation: str = "none",
+                 background: bool = False) -> str:
+    """Spawn a specialized sub-agent for a task.
+
+    With neither isolation nor background it runs in this process and the call returns its
+    report. `isolation="worktree"` gives it a private copy of the tree (its edits come back as a
+    patch); `background=True` returns at once and the sub-agent keeps working beside you.
+    """
     tools = None
     if tools_json:
         try:
             tools = json.loads(tools_json)
         except Exception:
             pass
-    agent = ArgentSubAgent(role, task, tools)
-    return agent.execute()
+
+    model_override = None
+    provider_override = None
+    if role.strip().lower() == "critic":
+        from config import get_critic_model, get_critic_provider
+        model_override = get_critic_model() or None
+        provider_override = get_critic_provider() or None
+        if tools is None:
+            tools = []
+
+    isolation = (isolation or "none").strip().lower()
+    background = _truthy(background)
+    if isolation == "none" and not background:
+        from agent import ArgentSubAgent
+        agent = ArgentSubAgent(
+            role, task, tools_override=tools,
+            model_override=model_override, provider_override=provider_override
+        )
+        return agent.execute()
+
+    from src.agent.subagents import MANAGER, describe
+    from src.agent.worktrees import WorktreeError
+    try:
+        run = MANAGER.spawn(role, task, tools=tools, isolation=isolation,
+                            model=model_override or "", provider=provider_override or "")
+    except (ValueError, WorktreeError) as e:
+        return f"Error: {e}"
+    if not background:
+        MANAGER.wait(run)
+        return describe(run)
+
+    from src.agent.watches import WATCHES, async_enabled
+    if async_enabled():
+        try:
+            WATCHES.add(f"sub-agent #{run.id} ({role})", until=f'subagent_finished("{run.id}")', timeout=3600)
+        except ValueError:
+            pass
+        return (f"Sub-agent #{run.id} ({role}) started in the background. You will be woken when it finishes; "
+                "meanwhile carry on with other work, or end your turn with a short note to the user.")
+    return (f"Sub-agent #{run.id} ({role}) started in the background. When you need its result, call "
+            f"subagents(action=\"result\", id={run.id}, wait=true), or wait_heartbeat("
+            f"until='subagent_finished(\"{run.id}\")').")
+
+
+def subagents(action: str = "list", id: int = None, wait: bool = False, timeout_seconds: int = 600) -> str:
+    """Look at, wait for, stop, apply or discard the sub-agents started with run_subagent."""
+    from src.agent.subagents import MANAGER, describe, table
+
+    action = (action or "list").strip().lower()
+    if action == "list":
+        return table(MANAGER.all())
+    run = MANAGER.get(id)
+    if run is None:
+        return f"Error: there is no sub-agent #{id}. Known: " + (", ".join(f"#{r.id}" for r in MANAGER.all()) or "none")
+    if action == "result":
+        if run.running and _truthy(wait):
+            MANAGER.wait(run, max(1, min(int(timeout_seconds or 600), 6 * 3600)))
+        if not run.running:
+            # The model has the report now; a wake-up for the same run would cost a turn to say nothing new.
+            from src.agent.watches import WATCHES
+            for watch in WATCHES.pending():
+                if watch.until == f'subagent_finished("{run.id}")':
+                    WATCHES.cancel(watch.id)
+        return describe(run)
+    if action == "stop":
+        return (f"Sub-agent #{run.id} stopped." if MANAGER.stop(run) else f"Sub-agent #{run.id} is not running.")
+    if action == "apply":
+        problem = MANAGER.apply(run)
+        return (f"Error: could not apply the patch of sub-agent #{run.id}: {problem}" if problem
+                else f"Applied the changes of sub-agent #{run.id} to the working tree.")
+    if action == "discard":
+        MANAGER.discard(run)
+        return f"Discarded the changes of sub-agent #{run.id}."
+    return "Error: action must be one of list, result, stop, apply, discard."
 
 def create_artifact(filename: str, content: str) -> str:
     """Create a Markdown artifact in the .argent/artifacts/ directory. Useful for plans or long text."""
@@ -612,7 +648,8 @@ def create_artifact(filename: str, content: str) -> str:
         with open(path, "w", encoding="utf-8") as f:
             f.write(content)
         log.info("create_artifact: %s", path)
-        return f"Artifact created at {path.absolute()}. The user can now review it."
+        return (f"Artifact created at {path.as_posix()}. The user can now review it. "
+                f"To review or resume it later, use read_file('{path.as_posix()}').")
     except Exception as e:
         return f"Error creating artifact: {e}"
 
@@ -649,6 +686,7 @@ def wait_heartbeat(delay_seconds: int = 0, condition_to_check: str = "",
     from src.agent.wait_conditions import (
         ConditionError, MAX_TIMEOUT_SECONDS, describe_predicates, evaluate,
     )
+    from src.agent.watches import async_enabled
 
     if until and until.strip():
         # Fail fast on a malformed condition: the alternative is sleeping the
@@ -660,29 +698,52 @@ def wait_heartbeat(delay_seconds: int = 0, condition_to_check: str = "",
                     f"Example: wait_heartbeat(until='file_contains(\"build.log\", "
                     f"\"BUILD SUCCESSFUL\")', timeout_seconds=600)")
         try:
-            timeout = max(1, min(int(timeout_seconds or 600), MAX_TIMEOUT_SECONDS))
+            timeout = max(1, min(int(float(timeout_seconds or 600)), MAX_TIMEOUT_SECONDS))
         except (TypeError, ValueError):
             timeout = 600
         reason = condition_to_check or until
+        if async_enabled():
+            return _register_watch(reason, until=until, timeout=timeout)
         return (f"Waiting until: {until} (timeout {timeout}s). "
                 f"[HEARTBEAT_REQUEST: 0|{reason}|until={until}|timeout={timeout}]")
 
     try:
-        delay = max(0, int(delay_seconds or 0))
+        delay = max(0, int(float(delay_seconds or 0)))
     except (TypeError, ValueError):
         delay = 0
     if delay <= 0:
         return ("Error: provide either delay_seconds (a fixed sleep) or until "
                 f"(a condition to wait for). Available checks: {describe_predicates()}")
+    if async_enabled():
+        return _register_watch(condition_to_check, delay=delay)
     return f"Heartbeat scheduled. [HEARTBEAT_REQUEST: {delay}|{condition_to_check}]"
 
-def view_image(file_path: str = "", question: str = "", path: str = "") -> str:
+
+def _register_watch(reason: str, until: str = "", timeout: int = 600, delay: int = 0) -> str:
+    """Non-blocking wait: the frontend wakes the agent, so the agent can simply finish its turn."""
+    from src.agent.watches import WATCHES
+    try:
+        watch = WATCHES.add(reason, until=until, timeout=timeout, delay=delay)
+    except (ValueError, OSError) as e:
+        return f"Error: {e}"
+    what = f"until {until} (gives up after {watch.timeout}s)" if until else f"for {watch.timeout}s"
+    return (f"Waiting {what}. This does NOT block anything: end your turn now with a short message to the "
+            f"user saying what is running and what you are waiting for. You will be woken with a "
+            f"'[Heartbeat ...]' message when it happens — do not poll or call wait_heartbeat again "
+            f"for the same thing. [watch #{watch.id}]")
+
+def view_image(file_path: str = "", question: str = "", path: str = "", crop: Any = None) -> str:
     """Attach an image to the conversation so the model can actually see it.
 
-    ``path`` is accepted because browser_screenshot RETURNS its file under that
+    ``path`` is accepted because a browser screenshot RETURNS its file under that
     name, so a model chaining the two writes view_image(path=…) — observed on
     the first real use. Rejecting it would be punishing the model for our own
     inconsistent naming.
+
+    ``crop`` allows zooming into a Region of Interest in 100% native resolution
+    (crucial for reading fine console fonts, IDE text, or logs on 4K/2K screens).
+    Format can be a dict ({"x": 100, "y": 200, "width": 800, "height": 400}),
+    a box ([x, y, w, h] or [left, top, right, bottom]), or a string ("x,y,w,h").
 
     The picture cannot travel in a tool result — those are strings — so it is
     queued here and the turn loop attaches it as the next user message. The
@@ -703,9 +764,9 @@ def view_image(file_path: str = "", question: str = "", path: str = "") -> str:
     if supports is False:
         return (f"Error: model '{model}' cannot see images (Ollama reports no "
                 f"'vision' capability). Switch to a vision model with /model, or "
-                f"read the page as text with browser_get_content.")
+                f"read the page as text with read_webpage.")
 
-    payload, media_type, note = encode_image(file_path)
+    payload, media_type, note = encode_image(file_path, crop=crop)
     if payload is None:
         return f"Error: {note}"
 
@@ -720,11 +781,6 @@ def view_image(file_path: str = "", question: str = "", path: str = "") -> str:
     return (f"Image '{label}' attached{detail}. You will SEE it in the next "
             f"message, not in this result — continue and describe what is "
             f"actually there.{asked}{unsure}")
-
-
-def end_auto_mode(reason: str) -> str:
-    """Stops the experimental Auto Mode."""
-    return f"Auto Mode finished. [END_AUTO_MODE] Reason: {reason}"
 
 
 def filter_new_items(items: list, label: str = "") -> str:
@@ -769,3 +825,21 @@ def filter_new_items(items: list, label: str = "") -> str:
     if label:
         header += f" ({label})"
     return f"{header}:\n{listed}{more}"
+
+
+def request_blind_spot_tests(source_file: str, focus_layers: str = "L1,L2,L4,L4b,L7,L9", note: str = "") -> str:
+    """Submit a request for comprehensive LMTrust blind-spot tests to the local agent bridge."""
+    from src.bridge.lmtrust_bridge import create_test_request
+    try:
+        req = create_test_request(source_file, focus_layers=focus_layers, note=note)
+        return (
+            f"LMTrust testing request created successfully.\n"
+            f"- Request ID: {req['id']}\n"
+            f"- Target File: {req['source_file']}\n"
+            f"- Focus Layers: {', '.join(req['focus_layers'])}\n"
+            f"- Status: Pending Antigravity / Agent processing in .argent/lmtrust_bridge/inbox/"
+        )
+    except Exception as e:
+        log.error("request_blind_spot_tests error: %s", e)
+        return f"Error creating LMTrust request for '{source_file}': {e}"
+

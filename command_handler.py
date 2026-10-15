@@ -36,16 +36,36 @@ def switch_model(agent: ArgentAgent, new_model: str) -> None:
     and the model then answers as if the earlier half was never said.
     """
     from config import get_model_size_category
+    from providers import create_provider
+
+    # Spell the name the way the provider lists it ("Claude Sonnet 4.5" -> claude-sonnet-4-5), and
+    # refuse a name the provider certainly does not have rather than save one that 404s.
+    try:
+        provider = create_provider(getattr(agent, "provider", None))
+        resolved = provider.resolve_model(new_model)
+        similar = [] if resolved else provider.suggest_models(new_model)
+    except Exception:
+        resolved, similar = new_model, []
+    if not resolved:
+        print_system(f"[red]Модель '{new_model}' не найдена у провайдера {getattr(agent, 'provider', '?')}.[/red]"
+                     + (f" Похожие: {', '.join(similar)}." if similar else "")
+                     + " Список: /model")
+        return
+    if resolved != new_model.strip():
+        print_system(f"Имя модели исправлено: {new_model.strip()} → [bold]{resolved}[/bold]")
+    new_model = resolved
 
     before_tier = get_model_size_category(agent.model_name)
     before_history = getattr(agent, "max_history_messages", None)
     before_ctx = getattr(agent, "max_context_tokens", None)
 
-    set_current_model(new_model)
+    set_current_model(new_model, getattr(agent, "provider", None))
     agent.set_model(new_model)          # never assign model_name directly
 
     after_tier = get_model_size_category(new_model)
-    print_system(f"Модель изменена: {new_model}"
+    from claude_catalog import label_for
+    shown = label_for(getattr(agent, "provider", None), new_model)
+    print_system(f"Модель изменена: {shown}" + (f" ({new_model})" if shown != new_model else "")
                  + (f" [{before_tier} → {after_tier}]" if before_tier != after_tier else ""))
 
     kept = len([m for m in agent.messages if m.get("role") != "system"])
@@ -116,296 +136,54 @@ def export_chat_history(agent: ArgentAgent, filename: str = None, auto: bool = F
 
 
 def handle_slash_command(command: str, agent: ArgentAgent) -> bool:
-    """Handle slash commands. Returns True if REPL should exit."""
+    """Handle slash commands via CommandRegistry. Returns True if REPL should exit."""
     if not isinstance(command, str):
         return False
-    cmd = command.lower().strip()
-    if cmd in ("/exit", "/quit"):
-        export_chat_history(agent, auto=True)
-        return True
-    elif cmd == "/clear":
-        agent.clear_history()
-        print_system("История диалога очищена.")
-    elif cmd == "/model":
-        current = get_current_model()
-        new_model = select_model(current)
-        if new_model and new_model != current:
-            switch_model(agent, new_model)
-        else:
-            print_system("Модель не изменена.")
-    elif cmd == "/provider":
-        current_prov = get_provider()
-        choices = ["ollama", "zai", "openrouter", "koboldcpp"]
-        new_prov = questionary.select(
-            "Select API Provider:",
-            choices=choices,
-            default=current_prov
-        ).ask()
-        
-        if new_prov:
-            set_provider(new_prov)
-            agent.set_provider(new_prov)
-            options_text = ""
-            if new_prov == "zai":
-                current_key = get_zai_api_key()
-                if not current_key:
-                    new_key = questionary.password("Enter Z.AI API Key:").ask()
-                    if new_key:
-                        set_zai_api_key(new_key)
-                        options_text = " (API Key saved)"
-                else:
-                    change_key = questionary.confirm("Z.AI API Key is already set. Do you want to change it?").ask()
-                    if change_key:
-                        new_key = questionary.password("Enter New Z.AI API Key:").ask()
-                        if new_key:
-                            set_zai_api_key(new_key)
-                            options_text = " (API Key updated)"
 
-                endpoint_choice = questionary.select(
-                    "Select Z.AI Endpoint:",
-                    choices=[
-                        "Coding Plan (api.z.ai/api/coding/paas/v4) - for GLM Coding Plan subscribers",
-                        "General API (api.z.ai/api/paas/v4) - standard pay-per-token",
-                    ],
-                    default="Coding Plan (api.z.ai/api/coding/paas/v4) - for GLM Coding Plan subscribers"
-                ).ask()
-                if endpoint_choice and "Coding Plan" in endpoint_choice:
-                    set_zai_endpoint(ZAI_ENDPOINT_CODING)
-                else:
-                    set_zai_endpoint(ZAI_ENDPOINT_GENERAL)
-            elif new_prov == "openrouter":
-                current_key = get_openrouter_api_key()
-                if not current_key:
-                    new_key = questionary.password("Enter OpenRouter API Key (https://openrouter.ai/keys):").ask()
-                    if new_key:
-                        set_openrouter_api_key(new_key)
-                        options_text = " (API Key saved)"
-                else:
-                    change_key = questionary.confirm("OpenRouter API Key is already set. Do you want to change it?").ask()
-                    if change_key:
-                        new_key = questionary.password("Enter New OpenRouter API Key:").ask()
-                        if new_key:
-                            set_openrouter_api_key(new_key)
-                            options_text = " (API Key updated)"
-            elif new_prov == "koboldcpp":
-                current_url = get_koboldcpp_url()
-                new_url = questionary.text("Enter KoboldCPP API URL:", default=current_url).ask()
-                if new_url:
-                    set_koboldcpp_url(new_url)
-                    options_text = f" (URL: {new_url})"
+    from src.cli.commands import dispatch_command, CommandContext
+    ctx = CommandContext(agent=agent, user_input=command)
+    res = dispatch_command(command, ctx)
+    if res.handled:
+        return res.should_exit
 
-            print_system(f"Провайдер изменён: {new_prov}{options_text}")
-            if new_prov != current_prov:
-                # Every provider, ollama included: a model id almost never
-                # exists on two of them, so keeping the old name means every
-                # request 404s until the user works out they must run /model.
-                print_system(f"Выберите модель {new_prov.upper()}:")
-                new_model = select_model(get_current_model())
-                if new_model and new_model != get_current_model():
-                    switch_model(agent, new_model)
-    elif cmd.startswith("/mcp"):
-        _handle_mcp_command(command)
-    elif cmd.startswith("/kb"):
-        _handle_kb_command(command)
-    elif cmd == "/jobs":
-        from tools.command_ops import list_background_commands
-        print_system(list_background_commands())
-    elif cmd.startswith("/stop"):
-        from tools.command_ops import stop_background_command, list_background_commands
-        parts = command.strip().split()
-        if len(parts) < 2:
-            print_system(list_background_commands())
-            print_system("Использование: /stop <pid>")
-        else:
-            print_system(stop_background_command(parts[1]))
-    elif cmd == "/aux":
-        _handle_aux_command()
-    elif cmd == "/search":
-        _handle_search_command()
-    elif cmd == "/doctor":
-        from doctor import print_diagnostics
-        print_diagnostics()
-    elif cmd == "/help":
-        help_text = (
-            "**Argent Coder — команды**\n"
-            "\n**Модель и провайдер**\n"
-            "- `/provider` — Провайдер API (Ollama / Z.ai / OpenRouter / KoboldCPP), ключ и адрес\n"
-            "- `/model` — Активная модель (окно контекста и ярус по ней)\n"
-            "- `/aux` — Дешёвая/локальная модель для служебных задач (сводки, /commit)\n"
-            "- `/temp [значение]` — Температура генерации (0.0 – 2.0)\n"
-            "- `/thinking` — Вырезать ли блоки рассуждений из истории\n"
-            "\n**Писать и править код**\n"
-            "- `/work [--auto] [задача]` — Менять или чинить СУЩЕСТВУЮЩИЙ код\n"
-            "- `/vibe` — Вайб-режим: безопасное одобряется само, чекпоинт каждый ход (откат — /rewind)\n"
-            "- `/auto [задача]` — Полностью автономный режим (экспериментальный)\n"
-            "- `/tasks` — Автоматизации по расписанию, без присмотра\n"
-            "- `/project [запрос]` — Большой проект с нуля\n"
-            "- `/rooms <задача>` — Экспериментальный движок «комнаты и рельсы»\n"
-            "- `/init` — Изучить проект и создать .argent/AGENTS.md (память о проекте)\n"
-            "- `/commit` — Сгенерировать сообщение коммита и закоммитить\n"
-            "\n**Файлы и изменения**\n"
-            "- `/changes` — Что модель изменила за сессию\n"
-            "- `/diff <файл>` — Дифф файла против снимка до правки\n"
-            "- `/undo <файл>` — Вернуть файл к снимку до правки\n"
-            "- `/rewind` — Машина времени: откат всего дерева к любому чекпоинту\n"
-            "- `/cd [путь]` — Сменить (или показать) рабочую директорию\n"
-            "\n**Знания и поиск**\n"
-            "- `/rag_toggle` — Индексация для семантического поиска\n"
-            "- `/auto_retrieve` — Подставлять результаты поиска в каждый запрос\n"
-            "- `/kb [list|add|remove|toggle|index]` — Внешние базы знаний (документация движка, библиотеки)\n"
-            "- `/kb_toggle` — Загружать внешние базы знаний при старте\n"
-            "- `/research [тема]` — Автономное веб-исследование → заметки\n"
-            "- `/search` — Настройки поиска: ключи Brave и Ollama, языки, reranker\n"
-            "- `/skills` — Список навыков\n"
-            "- `/skill import <источник>` — Установить навык из GitHub или папки\n"
-            "\n**Безопасность и качество**\n"
-            "- `/guard [off|warn|block]` — Защита от опасных команд\n"
-            "- `/critic [текст]` — Разбор плана независимым критиком\n"
-            "- `/critic on|off|model <имя>` — Автокритика диффа перед /commit\n"
-            "- `/goal [текст|clear]` — Цель и прогресс: показать, задать, сбросить\n"
-            "\n**Сессии**\n"
-            "- `/save [метка]` — Экспорт диалога и сохранение сессии\n"
-            "- `/sessions [запрос]` · `/load <номер|метка|фрагмент>` — Список и восстановление\n"
-            "- `/copy <n>` — Скопировать блок кода №n в буфер\n"
-            "- `/clear` — Очистить историю диалога\n"
-            "\n**Инструменты и расширения**\n"
-            "- `/tools` — Включить/выключить инструменты\n"
-            "- `/hooks [путь]` — Каталог плагинов\n"
-            "- `/plugin [auto on|off]` — Плагины: список и авто-создание их самим ИИ\n"
-            "- `/mcp` — MCP-серверы (add/remove/start/stop/test)\n"
-            "- `/browser [режим|браузер|a11y|dom]` — Автоматизация браузера (a11y/dom — режим state extraction)\n"
-            "\n**Фон и диагностика**\n"
-            "- `/jobs` · `/stop <pid>` — Фоновые процессы\n"
-            "- `/doctor` — Самодиагностика окружения\n"
-            "- `/stats` — Диагностика сессии (модель, бюджет контекста, плагины, MCP)\n"
-            "- `/logs [модуль] [n]` — Логи (например /logs tools 20, /logs error)\n"
-            "- `/results` — Показывать полный вывод инструментов (по умолчанию — только сводка)\n"
-            "- `/verbose` · `/debug` — Индикаторы статуса / подробные логи\n"
-            "\n**Прочее**\n"
-            "- `/help` — Эта справка   ·   `/exit` (или `/quit`) — Выход\n"
-        )
-        
-        custom_cmds = hook_manager.get_custom_commands()
-        if custom_cmds:
-            help_text += "\n**Команды плагинов:**\n"
-            for c in custom_cmds:
-                help_text += f"- `/{c}`\n"
-                
-        print_markdown(help_text)
-    elif cmd == "/verbose":
-        current = get_verbose_status()
-        new_val = not current
-        set_verbose_status(new_val)
-        state = "[bold green]ON[/bold green]" if new_val else "[bold red]OFF[/bold red]"
-        print_system(f"Live status indicators: {state}")
-    elif cmd == "/results":
-        from config import get_show_tool_results, set_show_tool_results
-        new_val = not get_show_tool_results()
-        set_show_tool_results(new_val)
-        state = "[bold green]ON[/bold green]" if new_val else "[bold red]OFF[/bold red]"
-        print_system(f"Полный вывод результатов инструментов: {state}")
-        if not new_val:
-            print_system("[dim]Остаётся строка-сводка; ошибки показываются целиком всегда.[/dim]")
-    elif cmd == "/debug":
-        current = get_debug_mode()
-        new_val = not current
-        set_debug_mode(new_val)
-        state = "[bold green]ON[/bold green]" if new_val else "[bold red]OFF[/bold red]"
-        print_system(f"Подробные логи в чате (режим отладки): {state}")
-    elif cmd == "/thinking":
-        current = get_strip_reasoning()
-        new_val = not current
-        set_strip_reasoning(new_val)
-        state = "[bold green]ON[/bold green]" if new_val else "[bold red]OFF[/bold red]"
-        print_system(f"Принудительное удаление блоков рассуждений из истории: {state}")
-    elif cmd == "/temp" or cmd.startswith("/temp ") or cmd == "/temperature" or cmd.startswith("/temperature "):
-        parts = command.strip().split(" ", 1)
-        if len(parts) > 1:
-            val_str = parts[1].strip()
-            try:
-                val = float(val_str)
-                if 0.0 <= val <= 2.0:
-                    set_temperature(val)
-                    print_system(f"Температура модели: {val}")
-                else:
-                    print_error("Температура должна быть от 0.0 до 2.0.")
-            except ValueError:
-                print_error("Температура должна быть числом.")
-        else:
-            current_temp = get_temperature()
-            choices = [
-                "0.2 (Deterministic - Coding)",
-                "0.7 (Balanced - Default)",
-                "1.0 (Creative)",
-                f"Keep Current ({current_temp})",
-                "Custom Value..."
-            ]
-            
-            choice = questionary.select(
-                f"Set Model Temperature (Current: {current_temp}):",
-                choices=choices,
-                default=f"Keep Current ({current_temp})"
-            ).ask()
-            
-            if choice:
-                if choice.startswith("0.2"):
-                    set_temperature(0.2)
-                    print_system("Температура модели: 0.2")
-                elif choice.startswith("0.7"):
-                    set_temperature(0.7)
-                    print_system("Температура модели: 0.7")
-                elif choice.startswith("1.0"):
-                    set_temperature(1.0)
-                    print_system("Температура модели: 1.0")
-                elif choice == "Custom Value...":
-                    custom_val = questionary.text("Enter custom temperature (0.0 to 2.0):").ask()
-                    if custom_val:
-                        try:
-                            val = float(custom_val)
-                            if 0.0 <= val <= 2.0:
-                                set_temperature(val)
-                                print_system(f"Температура модели: {val}")
-                            else:
-                                print_error("Температура должна быть от 0.0 до 2.0.")
-                        except ValueError:
-                            print_error("Введите число.")
-    else:
-        custom_cmds = hook_manager.get_custom_commands()
-        base_cmd = command.strip().split(" ")[0].lstrip("/")
+    # Custom plugin commands via hook_manager
+    from hook_manager import hook_manager
+    custom_cmds = getattr(hook_manager, "custom_commands", {}) or {}
+    cmd_clean = command.strip()
+    if cmd_clean.startswith("/"):
+        base_cmd = cmd_clean.split(" ")[0].lstrip("/")
         if base_cmd in custom_cmds:
             try:
-                args = command.strip().split(" ")[1:]
+                args = cmd_clean.split(" ")[1:]
                 custom_cmds[base_cmd](*args)
+                return False
             except Exception as e:
                 print_error(f"Пользовательская команда '/{base_cmd}' упала: {e}")
-        else:
-            print_error(unknown_command_message(command))
+                return False
+        print_error(unknown_command_message(command))
     return False
 
 
 def known_commands() -> list:
-    """Every slash command the REPL dispatches, read from the source.
+    """Every slash command the REPL dispatches: the registry's names and aliases,
+    plus the commands plugins add.
 
-    Derived rather than hand-listed: a second list of command names would drift
-    from the dispatch the first time one is added, and a "did you mean" that
-    suggests a command that no longer exists is worse than no suggestion.
+    This used to be reconstructed by running regular expressions over main.py
+    and command_handler.py for `cmd == "/x"` idioms. Once dispatch moved into
+    the registry those idioms vanished and the list quietly shrank to whatever
+    the registry held, while the code that still looked healthy kept guarding
+    nothing. The registry is what dispatch consults, so it is the only honest
+    source; a "did you mean" built from anything else can suggest a command
+    that no longer exists.
     """
-    import re
-    from pathlib import Path
+    from src.cli.commands import get_registry
 
-    root = Path(__file__).resolve().parent
-    src = ""
-    for name in ("main.py", "command_handler.py"):
-        try:
-            src += (root / name).read_text(encoding="utf-8")
-        except OSError:
-            continue
-    found = set(re.findall(r'user_input(?:\.strip\(\))?\.startswith\("(/[a-z_]+)"', src))
-    found |= set(re.findall(r'user_input\.strip\(\)\s*==\s*"(/[a-z_]+)"', src))
-    found |= set(re.findall(r'cmd\s*==\s*"(/[a-z_]+)"', src))
-    found |= set(re.findall(r'cmd\.startswith\("(/[a-z_]+)"', src))
-    for group in re.findall(r'cmd in \(([^)]+)\)', src):
-        found |= set(re.findall(r'"(/[a-z_]+)"', group))
+    found = {c for c in get_registry().get_all_commands() if c.startswith("/")}
+    try:
+        from hook_manager import hook_manager
+        found |= {f"/{name}" for name in hook_manager.get_custom_commands()}
+    except Exception:
+        pass
     return sorted(found)
 
 
@@ -428,37 +206,89 @@ def unknown_command_message(command: str) -> str:
 
 # Menu labels live here, not inline: the tests select by label, and a
 # duplicated string drifts the moment either side is reworded.
+SEARCH_MENU_ENGINE = "Основной поисковый движок"
 SEARCH_MENU_BRAVE = "Brave API-ключ (независимый индекс поиска)"
 SEARCH_MENU_OLLAMA = "Ollama API-ключ (независимый индекс поиска)"
 SEARCH_MENU_LANGS = "Языки поисковых запросов"
 SEARCH_MENU_MODEL = "Модель reranker'а"
 
+SEARCH_ENGINE_NAMES = {
+    "all": "Все доступные (мета-поиск)",
+    "duckduckgo": "DuckDuckGo (общий веб)",
+    "brave": "Brave Search",
+    "ollama": "Ollama Web Search",
+    "github": "GitHub Issues/PRs",
+    "stackoverflow": "StackOverflow / StackExchange",
+    "wikipedia": "Wikipedia",
+}
 
-def _handle_search_command():
-    """Configure web research: the optional Brave index, the query languages and
-    the reranker.
 
-    These three are one setting in practice. Adding a language without a
-    multilingual reranker retrieves pages that are then scored so low they never
-    reach the answer, and a multilingual reranker with English-only queries
-    never sees anything to rerank — so the menu shows the mismatch instead of
-    letting you configure half of it.
+def _handle_search_command(command: str = ""):
+    """Configure web research: the default engine, optional Brave index, query languages and
+    the reranker. Supports fast CLI switches: /search ddg, /search brave, /search all, /search status.
     """
     from config import (
         get_brave_api_key, set_brave_api_key,
         get_ollama_api_key, set_ollama_api_key,
         get_reranker_model, set_reranker_model,
         get_search_languages, set_search_languages,
+        get_search_engine, set_search_engine,
     )
     from src.research.rerank import MULTILINGUAL_MODEL, _DEFAULT_MODEL
     from src.research.search import engine_labels
+
+    parts = (command or "").strip().split()
+    if len(parts) > 1:
+        sub = parts[1].lower().strip()
+        if sub in ("status", "info", "check"):
+            curr_engine = get_search_engine()
+            label = SEARCH_ENGINE_NAMES.get(curr_engine, curr_engine)
+            print_system(f"Основной движок: [bold cyan]{label}[/bold cyan]")
+            print_system(f"Активные движки: [bold cyan]{', '.join(engine_labels())}[/bold cyan]")
+            print_system(f"Brave API-ключ: {'задан' if get_brave_api_key() else '[dim]не задан[/dim]'}")
+            print_system(f"Ollama API-ключ: {'задан' if get_ollama_api_key() else '[dim]не задан[/dim]'}")
+            return
+
+        eng_alias_map = {
+            "all": "all",
+            "default": "all",
+            "auto": "all",
+            "meta": "all",
+            "duckduckgo": "duckduckgo",
+            "ddg": "duckduckgo",
+            "brave": "brave",
+            "ollama": "ollama",
+            "github": "github",
+            "gh": "github",
+            "stackoverflow": "stackoverflow",
+            "stackexchange": "stackoverflow",
+            "so": "stackoverflow",
+            "wikipedia": "wikipedia",
+            "wiki": "wikipedia",
+        }
+        if sub in eng_alias_map:
+            target = eng_alias_map[sub]
+            set_search_engine(target)
+            target_label = SEARCH_ENGINE_NAMES.get(target, target)
+            print_system(f"Поисковая система переключена на: [bold cyan]{target_label}[/bold cyan]")
+            if target == "brave" and not get_brave_api_key():
+                print_system("[yellow]Внимание:[/yellow] Brave API-ключ не задан. Настройте его через /search или на brave.com/search/api.")
+            elif target == "ollama" and not get_ollama_api_key():
+                print_system("[yellow]Внимание:[/yellow] Ollama API-ключ не задан. Настройте его через /search или на ollama.com/settings/keys.")
+            return
+        else:
+            print_system(f"[yellow]Неизвестный поисковый движок '{parts[1]}'.[/yellow] Доступные: all, ddg, brave, ollama, github, stackoverflow, wikipedia")
+            return
 
     key = get_brave_api_key()
     ollama_key = get_ollama_api_key()
     langs = get_search_languages()
     model = get_reranker_model() or _DEFAULT_MODEL
     multilingual = model != _DEFAULT_MODEL
+    curr_engine = get_search_engine()
+    curr_engine_label = SEARCH_ENGINE_NAMES.get(curr_engine, curr_engine)
 
+    print_system(f"Основной движок: [bold cyan]{curr_engine_label}[/bold cyan]")
     print_system(f"Движки: [bold cyan]{', '.join(engine_labels())}[/bold cyan]")
     print_system(f"Brave API-ключ: {'задан' if key else '[dim]не задан[/dim]'}")
     print_system(f"Ollama API-ключ: {'задан' if ollama_key else '[dim]не задан[/dim]'}")
@@ -471,8 +301,32 @@ def _handle_search_command():
 
     choice = questionary.select(
         "Что настроить?",
-        choices=[SEARCH_MENU_BRAVE, SEARCH_MENU_OLLAMA, SEARCH_MENU_LANGS,
+        choices=[SEARCH_MENU_ENGINE, SEARCH_MENU_BRAVE, SEARCH_MENU_OLLAMA, SEARCH_MENU_LANGS,
                  SEARCH_MENU_MODEL, "Отмена"]).ask()
+
+    if choice == SEARCH_MENU_ENGINE:
+        picked = questionary.select(
+            "Какую поисковую систему использовать по умолчанию?",
+            choices=[
+                questionary.Choice("Все доступные (мета-поиск по всем источникам)", value="all"),
+                questionary.Choice("DuckDuckGo (общий веб, без ключей)", value="duckduckgo"),
+                questionary.Choice("Brave Search (независимый индекс)", value="brave"),
+                questionary.Choice("Ollama Web Search (облачный поиск)", value="ollama"),
+                questionary.Choice("GitHub (issues и PR)", value="github"),
+                questionary.Choice("StackOverflow / StackExchange", value="stackoverflow"),
+                questionary.Choice("Wikipedia", value="wikipedia"),
+            ],
+            default="all" if curr_engine not in SEARCH_ENGINE_NAMES else curr_engine,
+        ).ask()
+        if picked is None:
+            return
+        set_search_engine(picked)
+        print_system(f"Поисковая система переключена на: [bold cyan]{SEARCH_ENGINE_NAMES.get(picked, picked)}[/bold cyan]")
+        if picked == "brave" and not key:
+            print_system("[yellow]Внимание:[/yellow] Brave API-ключ не задан. Настройте его через /search.")
+        elif picked == "ollama" and not ollama_key:
+            print_system("[yellow]Внимание:[/yellow] Ollama API-ключ не задан. Настройте его через /search.")
+        return
 
     if choice == SEARCH_MENU_BRAVE:
         new_key = questionary.password(
@@ -554,7 +408,47 @@ def _handle_search_command():
         return
 
 
-def _handle_aux_command():
+def _configure_compress_fallback(primary: str):
+    """After an OpenRouter model is picked for context compression: what happens when it is
+    out of quota or down, and which free models to move to."""
+    from config import (
+        get_compress_fallback_models, set_compress_fallback_models,
+        get_compress_on_failure, set_compress_on_failure,
+    )
+    from providers import create_provider
+    from ui import _select_from_list
+
+    AUTO = "Автоматически перейти на другую бесплатную модель"
+    ASK = "Спросить меня, какую выбрать"
+    mode = _select_from_list(
+        "Если модель сжатия исчерпала лимит или не отвечает:",
+        [AUTO, ASK],
+        ASK if get_compress_on_failure() == "ask" else AUTO,
+    )
+    if mode:
+        set_compress_on_failure("ask" if mode == ASK else "auto")
+
+    try:
+        free = [m for m in create_provider("openrouter").list_free_models() if m != primary]
+    except Exception:
+        free = []
+    if not free:
+        return
+    current = set(get_compress_fallback_models())
+    picked = questionary.checkbox(
+        "Резервные бесплатные модели (в порядке списка; ничего не выбрано — любые свободные):",
+        choices=[questionary.Choice(m, checked=m in current) for m in free[:60]],
+    ).ask()
+    if picked is not None:
+        set_compress_fallback_models(picked)
+    shown = ", ".join(get_compress_fallback_models()) or "любые свободные бесплатные"
+    print_system(
+        f"Сжатие контекста: при сбое — {'спросить' if get_compress_on_failure() == 'ask' else 'перейти автоматически'}; "
+        f"резерв: {shown}."
+    )
+
+
+def _handle_aux_command(preset_provider: str | None = None):
     """Configure the auxiliary model used for service tasks (summarization,
     /commit). Lets you point service work at a cheap/local model while the main
     model stays a powerful (possibly paid) one."""
@@ -569,9 +463,9 @@ def _handle_aux_command():
         print_system("Вспомогательная модель не задана — сервисные задачи идут на основной модели.")
 
     DISABLE = "Отключить (использовать основную модель)"
-    prov = questionary.select(
+    prov = preset_provider or questionary.select(
         "Провайдер для вспомогательных задач (суммаризация контекста, /commit):",
-        choices=["ollama", "openrouter", "zai", "koboldcpp", DISABLE],
+        choices=["ollama", "openrouter", "zai", "claude", "deepseek", "xkiro", "wormsoft", "koboldcpp", DISABLE],
     ).ask()
     if not prov:
         return
@@ -587,6 +481,17 @@ def _handle_aux_command():
     except Exception:
         models = []
 
+    if prov == "openrouter" and models:
+        # Hundreds of paid and free models are mixed together; the free ones are what
+        # compression is normally pointed at, and what it falls back among.
+        free = sorted(m for m in models if m.endswith(":free"))
+        if free and len(models) > len(free):
+            only = f"Только бесплатные ({len(free)})"
+            scope = _select_from_list("Какие модели OpenRouter показать?", [only, f"Все ({len(models)})"], only)
+            if scope == only:
+                models = free
+        models = sorted(models, key=lambda m: (not m.endswith(":free"), m))
+
     if models:
         model = _select_from_list(f"Модель {prov} для сервисных задач:", models, models[0])
     else:
@@ -596,6 +501,8 @@ def _handle_aux_command():
         set_auxiliary_provider(prov)
         set_auxiliary_model(model)
         print_system(f"Вспомогательная модель: [bold cyan]{prov}:{model}[/bold cyan]")
+        if prov == "openrouter":
+            _configure_compress_fallback(model)
 
 
 def _handle_mcp_command(command: str):
@@ -680,16 +587,35 @@ def _mcp_add(parts: list):
     """Parse /mcp add arguments and register server."""
     from mcp_client import mcp_client
 
+    _PRESETS = {
+        "blender": {"server_type": "stdio", "command": "uvx", "args": ["blender-mcp"]},
+        "unity": {"server_type": "stdio", "command": "unity", "args": ["mcp"]},
+    }
+
+    if len(parts) == 3:
+        target_name = parts[2].lower()
+        if target_name in _PRESETS:
+            preset = _PRESETS[target_name]
+            add_mcp_server(target_name, **preset)
+            config = {"type": preset["server_type"], "command": preset["command"], "args": preset["args"]}
+            print_system(f"Используется пресет для '{target_name}': {preset['command']} {' '.join(preset['args'])}")
+            result = mcp_client.register_and_start(target_name, config)
+            print_system(result)
+            return
+
     if len(parts) < 4:
         print_error("Usage:")
+        print_system("  /mcp add blender  (preset: uvx blender-mcp)")
+        print_system("  /mcp add unity    (preset: unity mcp)")
         print_system("  /mcp add <name> --stdio <command> [args...]")
         print_system("  /mcp add <name> --sse <url>")
         print_system("  /mcp add <name> --rest <url> [standard|unity_bridge]")
         print_system("")
         print_system("Examples:")
+        print_system("  /mcp add blender")
         print_system('  /mcp add files --stdio npx -y @anthropic/mcp-server-filesystem "C:/Projects"')
         print_system("  /mcp add github --stdio npx -y @anthropic/mcp-server-github")
-        print_system("  /mcp add unity --stdio unity mcp")
+        print_system("  /mcp add unity")
         return
 
     name = parts[2]
@@ -820,3 +746,274 @@ def _handle_kb_command(command: str):
     else:
         print_error(f"Unknown /kb subcommand: '{subcmd}'")
         print_system("Использование: /kb [list|add|remove|toggle|index]")
+
+
+def _handle_lmtrust_command(command: str) -> None:
+    """Handle /lmtrust slash command for local zero-API blind-spot testing bridge."""
+    from src.bridge.lmtrust_bridge import (
+        create_test_request, list_pending_requests,
+        get_test_response, apply_test_response
+    )
+    parts = command.strip().split()
+    if len(parts) == 1 or (len(parts) == 2 and parts[1].lower() in ("help", "-h", "--help")):
+        print_system(
+            "**LMTrust Local Bridge (Zero-API Blind Spot Testing)**\n"
+            "- `/lmtrust <файл>` — Создать запрос на Deep Blind Spot тесты для файла\n"
+            "- `/lmtrust status` — Список ожидающих запросов в очереди `.argent/lmtrust_bridge/`\n"
+            "- `/lmtrust apply <request_id> [целевой_файл]` — Применить готовые тесты в проект\n"
+        )
+        return
+
+    sub = parts[1].lower()
+    if sub == "status":
+        pending = list_pending_requests()
+        if not pending:
+            print_system("В очереди `.argent/lmtrust_bridge/inbox/` нет необработанных запросов.")
+        else:
+            print_system(f"**Ожидающие запросы LMTrust ({len(pending)}):**")
+            for req in pending:
+                print_system(f"- `{req['id']}`: {req['source_file']} (Слои: {', '.join(req['focus_layers'])})")
+    elif sub == "apply" and len(parts) > 2:
+        req_id = parts[2]
+        target = parts[3] if len(parts) > 3 else None
+        res = apply_test_response(req_id, target_file=target)
+        print_system(res)
+    else:
+        source_file = parts[1]
+        layers = parts[2] if len(parts) > 2 else "L1,L2,L4,L4b,L7,L9"
+        try:
+            req = create_test_request(source_file, focus_layers=layers)
+            print_system(
+                f"✅ **Запрос на LMTrust тесты создан в шлюзе:**\n"
+                f"- **ID:** `{req['id']}`\n"
+                f"- **Файл:** `{req['source_file']}`\n"
+                f"- **Слои:** `{', '.join(req['focus_layers'])}`\n"
+                f"- **Статус:** Ожидает обработки в текущем чате Antigravity."
+            )
+        except Exception as e:
+            print_error(f"Не удалось создать запрос LMTrust: {e}")
+
+
+def _handle_telegram_command(command: str) -> None:
+    """Handle /telegram slash command for setup and control of the Telegram bridge."""
+    import time
+    from config import (
+        get_telegram_token, set_telegram_token,
+        get_telegram_chat_id, set_telegram_chat_id,
+        get_telegram_enabled, set_telegram_enabled,
+        get_telegram_mode, set_telegram_mode
+    )
+    from src.telegram.bot import TelegramClient, telegram_bridge
+
+    parts = command.strip().split()
+    sub = parts[1].lower() if len(parts) > 1 else ""
+
+    if sub in ("status", ""):
+        token = get_telegram_token()
+        chat_id = get_telegram_chat_id()
+        mode = get_telegram_mode()
+        mode_label = "Компаньон (shared) — единая сессия с ПК" if mode == "shared" else "Изолированный (isolated) — отдельная сессия"
+        is_running = telegram_bridge.is_running
+        
+        status_text = "[bold green]АКТИВЕН[/bold green]" if is_running else "[bold yellow]ОСТАНОВЛЕН[/bold yellow]"
+        masked_tok = f"{token[:8]}...{token[-4:]}" if token and len(token) > 12 else ("НЕ задан" if not token else "***")
+        
+        bot_line = ""
+        if is_running and telegram_bridge._bot_info:
+            bot_line = f"  • Бот: [bold]@{telegram_bridge._bot_info.get('username', '?')}[/bold]\n"
+        print_system(
+            f"[bold cyan]Telegram Bridge:[/bold cyan]\n"
+            f"  • Статус: {status_text}\n"
+            f"{bot_line}"
+            f"  • Режим: [bold #58a6ff]{mode}[/bold #58a6ff] ({mode_label})\n"
+            f"  • Токен бота: [dim]{masked_tok}[/dim]\n"
+            f"  • Chat ID: {chat_id or '[dim]НЕ привязан[/dim]'}\n"
+            f"\nКоманды управления:\n"
+            f"  • `/telegram setup` — пошаговый мастер настройки и привязки\n"
+            f"  • `/telegram test` — отправить на телефон проверочное сообщение\n"
+            f"  • `/telegram mode [shared|isolated]` — переключить режим работы\n"
+            f"  • `/telegram start` — запустить Telegram-мост\n"
+            f"  • `/telegram stop` — остановить Telegram-мост\n"
+            f"  • `/telegram unlink` — отвязать чат (бот перестанет слушаться)"
+        )
+        return
+
+    if sub == "test":
+        token, chat_id = get_telegram_token(), get_telegram_chat_id()
+        if not token or not chat_id:
+            print_error("Бот не настроен или чат не привязан. Запустите /telegram setup")
+            return
+        from src.telegram.bot import send_welcome
+        client = telegram_bridge.client if telegram_bridge.is_running and telegram_bridge.client else TelegramClient(token)
+        if client.send_message(chat_id, "✅ <b>Связь работает.</b>\nЭто проверочное сообщение от Argent.") is None:
+            print_error(f"Telegram не принял сообщение: {client.last_error or 'нет ответа'}")
+            return
+        send_welcome(client, chat_id)
+        print_system("[green]✓ Проверочное сообщение отправлено — посмотрите в Telegram.[/green]")
+        return
+
+    if sub == "unlink":
+        if not get_telegram_chat_id():
+            print_system("Чат и так не привязан.")
+            return
+        if not questionary.confirm("Отвязать чат? Бот перестанет принимать от него команды.", default=False).ask():
+            print_system("Отменено.")
+            return
+        set_telegram_chat_id(None)
+        print_system("Чат отвязан. Привязать заново — /telegram setup")
+        return
+
+    if sub == "mode":
+        if len(parts) > 2:
+            target_mode = parts[2].lower()
+            if target_mode in ("shared", "companion"):
+                set_telegram_mode("shared")
+                print_system("Режим Telegram: [bold #58a6ff]shared[/bold #58a6ff] (Компаньон — единая сессия с терминалом).")
+                return
+            elif target_mode in ("isolated", "standalone"):
+                set_telegram_mode("isolated")
+                print_system("Режим Telegram: [bold #58a6ff]isolated[/bold #58a6ff] (Изолированный — отдельная сессия).")
+                return
+            else:
+                print_error(f"Неизвестный режим: '{target_mode}'. Допустимые: shared, isolated")
+                return
+        else:
+            current_mode = get_telegram_mode()
+            choice_shared = "shared (Компаньон — единая сессия с терминалом и дублирование на экран ПК)"
+            choice_isolated = "isolated (Изолированный — отдельная сессия в фоне без вывода в консоль)"
+            choice = questionary.select(
+                "Выберите режим работы Telegram-моста:",
+                choices=[choice_shared, choice_isolated],
+                default=choice_shared if current_mode == "shared" else choice_isolated
+            ).ask()
+            if choice:
+                new_mode = "shared" if choice.startswith("shared") else "isolated"
+                set_telegram_mode(new_mode)
+                print_system(f"Режим Telegram изменён на: [bold #58a6ff]{new_mode}[/bold #58a6ff]")
+            return
+
+    if sub == "start":
+        if telegram_bridge.is_running:
+            print_system("Telegram-мост уже запущен.")
+            return
+        token = get_telegram_token()
+        if not token:
+            print_error("Токен бота не настроен. Запустите /telegram setup")
+            return
+        chat_id = get_telegram_chat_id()
+        if not chat_id:
+            print_system("[yellow]⚠ Chat ID ещё не привязан. Любые команды будут отклоняться до привязки через /telegram setup.[/yellow]")
+        ok, msg = telegram_bridge.start()
+        if ok:
+            set_telegram_enabled(True)
+            print_system(f"[green]✓ {msg}[/green]")
+        else:
+            print_error(f"Не удалось запустить: {msg}")
+        return
+
+    if sub == "stop":
+        if not telegram_bridge.is_running:
+            print_system("Telegram-мост не запущен.")
+            return
+        telegram_bridge.stop()
+        set_telegram_enabled(False)
+        print_system("Telegram-мост остановлен.")
+        return
+
+    if sub == "setup":
+        print_system("[bold cyan]── Мастер настройки Telegram Bridge ──[/bold cyan]")
+        current_token = get_telegram_token()
+        if current_token:
+            masked = f"{current_token[:8]}...{current_token[-4:]}" if len(current_token) > 12 else "***"
+            change_token = questionary.confirm(f"Токен бота уже задан ({masked}). Изменить его?", default=False).ask()
+            if change_token:
+                new_token = questionary.password("Введите новый Telegram Bot Token (из @BotFather):").ask()
+                if new_token:
+                    current_token = new_token.strip()
+        else:
+            current_token = questionary.password("Введите Telegram Bot Token (получите у @BotFather в Telegram):").ask()
+
+        if not current_token:
+            print_system("Настройка прервана.")
+            return
+
+        client = TelegramClient(current_token)
+        me = client.get_me()
+        if not me:
+            print_error("Ошибка: не удалось связаться с Telegram API с этим токеном. Проверьте правильность токена.")
+            return
+
+        set_telegram_token(current_token)
+        bot_username = me.get("username", "bot")
+        print_system(f"[green]✓ Бот @{bot_username} успешно авторизован![/green]")
+
+        current_chat = get_telegram_chat_id()
+        print_system("\nДля безопасности Argent принимает команды только от вашего аккаунта Telegram.")
+        choices = [
+            "Автоматически (отправьте /start боту в Telegram прямо сейчас)",
+            "Ввести Chat ID вручную",
+        ]
+        if current_chat:
+            choices.append(f"Оставить текущий ({current_chat})")
+        else:
+            choices.append("Пропустить привязку (сделать позже)")
+
+        pair_method = questionary.select("Как привязать ваш Chat ID?", choices=choices).ask()
+
+        if pair_method and pair_method.startswith("Автоматически"):
+            print_system(f"\n[cyan]Жду сообщение от вас... Откройте Telegram и напишите [bold]@{bot_username}[/bold] любое сообщение или /start[/cyan]")
+            paired = False
+            offset = None
+            start_time = time.time()
+            while time.time() - start_time < 45:
+                updates = client.get_updates(offset=offset, timeout=3)
+                for u in updates:
+                    offset = u.get("update_id", 0) + 1
+                    msg = u.get("message")
+                    if msg:
+                        user_chat_id = msg.get("chat", {}).get("id")
+                        user_name = msg.get("from", {}).get("username") or msg.get("from", {}).get("first_name", "User")
+                        if user_chat_id:
+                            set_telegram_chat_id(user_chat_id)
+                            from src.telegram.bot import send_welcome
+                            client.send_message(user_chat_id, "🎉 <b>Argent успешно привязан к этому чату!</b>")
+                            send_welcome(client, user_chat_id)
+                            print_system(f"[green]✓ Успешно привязан пользователь @{user_name} (Chat ID: {user_chat_id})[/green]")
+                            paired = True
+                            break
+                if paired:
+                    break
+            if not paired:
+                print_system("[yellow]Таймаут ожидания. Вы можете настроить Chat ID позже или ввести вручную.[/yellow]")
+
+        elif pair_method and pair_method.startswith("Ввести Chat ID"):
+            manual_id = questionary.text("Введите ваш Telegram Chat ID (узнать можно у @userinfobot):").ask()
+            if manual_id:
+                set_telegram_chat_id(manual_id.strip())
+                print_system(f"[green]✓ Chat ID {manual_id.strip()} сохранён.[/green]")
+
+        choice_shared = "shared (Компаньон — единая сессия с терминалом и дублирование в консоль ПК)"
+        choice_isolated = "isolated (Изолированный — отдельная фоновая сессия)"
+        mode_choice = questionary.select(
+            "Выберите режим работы бота:",
+            choices=[choice_shared, choice_isolated],
+            default=choice_shared
+        ).ask()
+        if mode_choice:
+            set_telegram_mode("shared" if mode_choice.startswith("shared") else "isolated")
+
+
+        should_start = questionary.confirm("Запустить Telegram-мост прямо сейчас?", default=True).ask()
+        if should_start:
+            ok, msg = telegram_bridge.start()
+            if ok:
+                set_telegram_enabled(True)
+                print_system(f"[green]✓ {msg}[/green]")
+            else:
+                print_error(f"Ошибка запуска: {msg}")
+        return
+
+    print_error(f"Неизвестная подкоманда: {sub}. Доступные: status, setup, test, mode, start, stop, unlink")
+
+
+

@@ -104,10 +104,11 @@ class TestSafety:
         forbidden = {"command_succeeds", "run_command", "shell", "http_ok",
                      "url_responds", "eval"}
         assert not (forbidden & set(PREDICATES))
-        # And the allowed set stays small enough to audit at a glance.
+        # And the allowed set stays small enough to audit at a glance. subagent_finished reads the
+        # sub-agent registry in memory (like process_finished reads the process table): no authority.
         assert set(PREDICATES) == {
             "file_exists", "file_missing", "file_contains",
-            "process_finished", "process_running",
+            "process_finished", "process_running", "subagent_finished",
         }
 
     def test_non_literal_arguments_rejected(self, project):
@@ -221,3 +222,24 @@ class TestSignalParsing:
         _, sleep_t, ctx = self._parse("[HEARTBEAT_REQUEST: 45|check server]")
         assert sleep_t == 45
         assert isinstance(ctx, str) and "check server" in ctx
+
+    def test_handle_tool_end_ignores_non_heartbeat_tool(self):
+        from src.cli.cli_ui import _handle_tool_end
+        chunk = {
+            "name": "read_file",
+            "result": 'code contains [HEARTBEAT_REQUEST: 0|build|until=file_exists("a.exe")|timeout=300]'
+        }
+        is_auto, sleep_t, wake_ctx = _handle_tool_end(chunk, True, 0, "")
+        assert sleep_t == 0
+        assert wake_ctx == ""
+
+    def test_handle_tool_end_parses_wait_heartbeat(self):
+        from src.cli.cli_ui import _handle_tool_end
+        chunk = {
+            "name": "wait_heartbeat",
+            "result": 'Waiting. [HEARTBEAT_REQUEST: 0|build|until=file_exists("a.exe")|timeout=300]'
+        }
+        is_auto, sleep_t, wake_ctx = _handle_tool_end(chunk, True, 0, "")
+        assert sleep_t == 0
+        assert wake_ctx == {"reason": "build", "until": 'file_exists("a.exe")', "timeout": 300}
+

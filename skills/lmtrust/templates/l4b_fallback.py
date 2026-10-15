@@ -32,12 +32,14 @@ class Player:
 class TestFallback:
     """L4b: Fallback tests — запасные пути."""
 
+    @pytest.mark.lmtrust(layer="L4b", direction="D4")
     def test_fallback_activates_when_shield_down(self):
         """Fallback активируется, когда shield = 0 (основной путь недоступен)."""
         player = Player(hp=100, shield=0)
         player.take_damage(30)
         assert player.hp == 70, f"Fallback failed: HP should be 70, got {player.hp}"
 
+    @pytest.mark.lmtrust(layer="L4b", direction="D4")
     def test_primary_used_when_shield_available(self):
         """Primary путь используется, когда shield > 0."""
         player = Player(hp=100, shield=50)
@@ -45,6 +47,7 @@ class TestFallback:
         assert player.shield == 20, "Primary path should be used"
         assert player.hp == 100, "HP should not be damaged when shield active"
 
+    @pytest.mark.lmtrust(layer="L4b", direction="D2")
     def test_transition_primary_to_fallback(self):
         """Переход: shield исчерпан → урон идёт в HP."""
         player = Player(hp=100, shield=20)
@@ -52,6 +55,7 @@ class TestFallback:
         assert player.shield == 0
         assert player.hp == 70, f"Transition failed: HP should be 70, got {player.hp}"
 
+    @pytest.mark.lmtrust(layer="L4b", direction="D4")
     def test_fallback_after_shield_depleted(self):
         """После исчерпания shield — следующий удар идёт в HP (fallback)."""
         player = Player(hp=100, shield=20)

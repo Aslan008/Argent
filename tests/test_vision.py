@@ -197,3 +197,47 @@ class TestTheTool:
 
         assert view_image(str(tmp_path / "nope.png")).startswith("Error:")
         assert vision.drain_images() == []
+
+    def test_view_image_signature_resolves_all_annotations(self):
+        """Regression test: verify inspect.signature(view_image) does not raise NameError for missing types like Any."""
+        import inspect
+        from tools.misc_tools import view_image
+
+        sig = inspect.signature(view_image)
+        assert "crop" in sig.parameters
+        assert "file_path" in sig.parameters
+
+    def test_koboldcpp_vision_probe_and_ornith_heuristic(self, monkeypatch):
+        # 1. Ornith model heuristic (without mmproj probe)
+        vision._CAPABILITY_CACHE.clear()
+        monkeypatch.setattr(vision, "_check_koboldcpp_vision", lambda: None)
+        assert vision.model_supports_vision("ORNITH1.5:35BA3B", "koboldcpp") is False
+        assert vision.model_supports_vision("qwen2.5-coder-32b", "koboldcpp") is False
+        assert vision.model_supports_vision("qwen2-vl-7b", "koboldcpp") is True
+
+        # 2. Live mmproj probe returns True
+        vision._CAPABILITY_CACHE.clear()
+        monkeypatch.setattr(vision, "_check_koboldcpp_vision", lambda: True)
+        assert vision.model_supports_vision("custom-model", "koboldcpp") is True
+
+        # 3. Live mmproj probe returns False
+        vision._CAPABILITY_CACHE.clear()
+        monkeypatch.setattr(vision, "_check_koboldcpp_vision", lambda: False)
+        assert vision.model_supports_vision("custom-model", "koboldcpp") is False
+
+        # 4. mark_vision_unsupported
+        vision.mark_vision_unsupported("koboldcpp", "any-model")
+        assert vision.model_supports_vision("any-model", "koboldcpp") is False
+
+    def test_desktop_tools_notice_when_model_does_not_support_vision(self, monkeypatch):
+        from tools.desktop_tools import _maybe_auto_attach
+        monkeypatch.setattr("config.get_current_model", lambda: "ORNITH1.5:35BA3B")
+        monkeypatch.setattr("config.get_provider", lambda: "koboldcpp")
+        vision.mark_vision_unsupported("koboldcpp", "ORNITH1.5:35BA3B")
+
+        res = {"base64": "fake_b64", "media_type": "image/png", "path": "screen.png"}
+        out = _maybe_auto_attach(res, "Screen")
+        assert "[VISION NOTICE]" in out
+        assert "does not support image/multimodal input" in out
+        assert vision.drain_images() == []
+

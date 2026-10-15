@@ -51,6 +51,10 @@ def make_agent(monkeypatch):
         monkeypatch.setattr(agent_module, "memory", mem)
         monkeypatch.setattr(agent_module, "get_mcp_servers", lambda: [])
         monkeypatch.setattr(agent_module, "create_provider", lambda *a, **k: provider)
+        # These tests are about the provider falling back to prompted tool calls. A working Leeth
+        # fast path would answer "what is 40+2" itself and the scripted provider would never be asked.
+        import config
+        monkeypatch.setattr(config, "get_fast_dispatch_backend", lambda: "off")
         monkeypatch.setattr(agent_module, "estimate_tokens", lambda t, m, p: len(t) // 4)
         a = ArgentAgent()
         a.model_name = "gpt-4o"
