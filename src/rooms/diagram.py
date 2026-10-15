@@ -8,10 +8,15 @@ words what an edit changed.
 
 from src.rooms.models import Edge, Node, Room
 
-_ICON = {"tool": "⚙", "agent": "🤖", "condition": "◇", "human_pause": "✋", "spawn_room": "✚",
-         "set": "＝", "notify": "🔔", "room": "▣", "mcp": "🔌", "skill": "📘", "plugin": "🧩",
-         "leeth": "⚡", "foreach": "↻", "wait": "⏱", "loop": "⟳", "break": "⤓", "continue": "⤒",
-         "power": "⏻", "hint": "💡", "forget": "🧹", "assert": "❗", "parallel": "⑂", "join": "⑃"}
+_ICON = {"tool": "·", "agent": "·", "condition": "◇", "human_pause": "·", "spawn_room": "✚",
+         "set": "＝", "notify": "·", "room": "▣", "mcp": "·", "skill": "·", "plugin": "·",
+         "leeth": "·", "foreach": "↻", "wait": "·", "loop": "⟳", "break": "⤓", "continue": "⤒",
+         "power": "·", "hint": "·", "forget": "·", "assert": "·", "parallel": "⑂", "join": "⑃", "git": "⎇", "http": "·"}
+
+#: What a git node does, in words (the text diagram).
+GIT_WORDS = {"status": "что изменилось", "diff": "разница", "log": "последние коммиты", "add": "добавить в коммит",
+             "commit": "закоммитить", "branch": "ветка", "checkout": "переключить ветку", "stash": "отложить изменения",
+             "pull": "получить с сервера", "push": "отправить на сервер"}
 
 
 def _node_line(n: Node) -> str:
@@ -28,7 +33,7 @@ def _node_line(n: Node) -> str:
         if not n.idempotent:
             extra.append("не повторять")
     elif n.type == "agent":
-        what = f"агент {n.role or 'Coder'}" + (f" · инструменты: {', '.join(n.tools)}" if n.tools is not None else "")
+        what = f"агент {n.role or 'Coder'}" + ("" if n.tools is None else (f" · инструменты: {', '.join(n.tools)}" if n.tools else " · без инструментов"))
         extra = [f"пишет: {', '.join(n.writes)}"] if n.writes else []
         if n.budget:
             extra.append(f"≤{n.budget.max_iterations} шагов, ≤{n.budget.max_tokens} ток")
@@ -49,6 +54,8 @@ def _node_line(n: Node) -> str:
     elif n.type == "human_pause":
         what = "вопрос человеку" + (f": {n.prompt}" if n.prompt else "")
         extra = [f"ответ → {n.into}"] if n.into else []
+        if n.options:
+            extra.append("варианты: " + " / ".join(n.options))
     elif n.type == "condition":
         what = f"проверка {n.condition}"
         extra = []
@@ -111,6 +118,14 @@ def _node_line(n: Node) -> str:
     elif n.type == "forget":
         what = {"all": "забыть память и подсказки", "memory": "забыть память комнаты", "hints": "забыть подсказки"}.get(n.mode or "all")
         extra = [f"очистить поля: {', '.join(n.clear)}"] if n.clear else []
+    elif n.type == "http":
+        what = f"запрос {(n.mode or 'get').upper()} {str((n.args or {}).get('url', ''))[:60]}"
+        extra = ["спрашивает"] if n.confirm else []
+    elif n.type == "git":
+        what = "git: " + GIT_WORDS.get(n.mode or "status", n.mode or "status")
+        if (n.mode or "status") == "commit" and n.message:
+            what += f" «{n.message[:50]}»"
+        extra = ["спрашивает"] if n.confirm else []
     elif n.type == "assert":
         what = f"проверить {n.condition}"
         extra = []
@@ -127,6 +142,8 @@ def _node_line(n: Node) -> str:
     else:
         what = n.type
         extra = []
+    if getattr(n, "save_as", None):
+        extra.append(f"результат → {n.save_as}")
     if n.type == "agent":
         if n.sampling:
             extra.append("модель: " + ", ".join(f"{k}={v}" for k, v in n.sampling.items()))
@@ -149,7 +166,7 @@ def _node_line(n: Node) -> str:
 
 
 def _edge_text(e: Edge) -> str:
-    target = f"⛔ выход «{e.to.split(':', 1)[1]}»" if e.targets_exit() else e.to
+    target = f"выход «{e.to.split(':', 1)[1]}»" if e.targets_exit() else e.to
     if e.kind == "if":
         return f"если {e.if_} → {target}"
     if e.kind == "while":

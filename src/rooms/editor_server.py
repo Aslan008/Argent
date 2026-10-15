@@ -43,6 +43,9 @@ _STATIC = {
     "/app.js": ("app.js", "text/javascript; charset=utf-8"),
     "/ext.js": ("ext.js", "text/javascript; charset=utf-8"),
     "/run.js": ("run.js", "text/javascript; charset=utf-8"),
+    "/simple.js": ("simple.js", "text/javascript; charset=utf-8"),
+    "/profiles.js": ("profiles.js", "text/javascript; charset=utf-8"),
+    "/stack.js": ("stack.js", "text/javascript; charset=utf-8"),
     "/app.css": ("app.css", "text/css; charset=utf-8"),
 }
 
@@ -166,8 +169,18 @@ class EditorServer:
                 "parallel_max_branches": _m.PARALLEL_MAX_BRANCHES, "parallel_max_depth": _m.PARALLEL_MAX_DEPTH,
                 "merge_modes": list(_m.MERGE_MODES), "wait_for_modes": list(_m.WAIT_FOR_MODES),
                 "branch_fail_modes": list(_m.BRANCH_FAIL_MODES),
+                "mcp_call_timeout": self._mcp_call_timeout(),
             },
         }
+
+    @staticmethod
+    def _mcp_call_timeout() -> float:
+        """How long Argent waits for one MCP call (the page warns about slow web-AI questions with it)."""
+        try:
+            from config import get_mcp_call_timeout
+            return float(get_mcp_call_timeout())
+        except Exception:
+            return 120.0
 
     @staticmethod
     def _tool_groups() -> dict:
@@ -225,6 +238,8 @@ class EditorServer:
         reads_only = node.type in ("skill", "set", "wait", "foreach", "loop", "hint", "forget", "assert") or (
             node.type == "notify" and node.channel == "console") or (
             node.type == "tool" and not acts_outside(node.tool)) or (
+            node.type == "git" and (node.mode or "status") in ("status", "diff", "log")) or (
+            node.type == "http" and (node.mode or "get").lower() in ("get", "head")) or (
             node.type == "mcp" and (node.mode or "call") == "list") or (
             node.type == "leeth" and (node.mode or "delegate") in ("filter", "classify", "scan"))
         run = self.runs.start(room, self._params(body.get("params")), node_id=node.id, ask_first=not reads_only)
@@ -294,7 +309,7 @@ class EditorServer:
             return HTTPStatus.NOT_FOUND, {"error": f"no room '{name}'"}
         data = json.loads(room.model_dump_json(by_alias=True, exclude_none=True))
         return HTTPStatus.OK, {"room": data, "source": lib.sources.get(name, "?"),
-                               "layout": self._read_layout(name)}
+                               "layout": self._read_layout(name, getattr(lib, "extra_dirs", ()))}
 
     def api_validate(self, body: dict):
         problems, room = self._check(body.get("room"))
@@ -343,10 +358,11 @@ class EditorServer:
             return HTTPStatus.CONFLICT, {"ok": False, "errors": [f"room is called by: {', '.join(users)}"]}
         lib.user_dir = self.user_dir
         lib.remove_room(name)
-        try:
-            (self.user_dir / f"{name}.layout").unlink()
-        except OSError:
-            pass
+        for folder in [self.user_dir, *getattr(lib, "extra_dirs", ())]:
+            try:
+                (Path(folder) / f"{name}.layout").unlink()
+            except OSError:
+                pass
         return HTTPStatus.OK, {"ok": True}
 
     # -- helpers ----------------------------------------------------------------------------------
@@ -373,12 +389,17 @@ class EditorServer:
     def _layout_path(self, name: str) -> Path:
         return self.user_dir / f"{name}.layout"
 
-    def _read_layout(self, name: str) -> dict:
-        try:
-            data = json.loads(self._layout_path(name).read_text(encoding="utf-8"))
-            return data if isinstance(data, dict) else {}
-        except Exception:
-            return {}
+    def _read_layout(self, name: str, other_dirs=()) -> dict:
+        """The saved arrangement: next to the shared rooms first, then next to the room's own project folder
+        (a room that has lived only in a project has its .layout there until the first save here)."""
+        for folder in [self.user_dir, *other_dirs]:
+            try:
+                data = json.loads((Path(folder) / f"{name}.layout").read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            if isinstance(data, dict):
+                return data
+        return {}
 
     def _write_layout(self, name: str, layout: dict) -> None:
         clean = {}
@@ -548,11 +569,14 @@ def start_editor(library_factory=None, tools=None, user_dir=None) -> EditorServe
     global _running
     if _running is not None:
         return _running
-    from src.rooms.session import available_tool_names, build_library, stats_path, user_rooms_dir
+    from src.rooms.session import (
+        available_tool_names, build_library, project_rooms_dir, stats_path, user_rooms_dir,
+    )
     udir = Path(user_dir).resolve() if user_dir else user_rooms_dir().resolve()
+    local = project_rooms_dir().resolve()      # pinned now too: the project the editor was opened in
     stats = stats_path().resolve()           # pinned now: a later /cd must not move what the editor edits
     _running = EditorServer(
-        library_factory or (lambda: build_library(user_dir=udir, stats_file=stats)),
+        library_factory or (lambda: build_library(user_dir=udir, stats_file=stats, extra_dirs=[local])),
         tools or available_tool_names,
         udir,
     ).start()

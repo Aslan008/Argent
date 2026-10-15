@@ -61,7 +61,7 @@ class SubRoomHandler:
                 state.data[field] = child_state.data[field]
         slot = node.into or f"{node.id}_exit"
         state.data[slot] = outcome.exit
-        report = template.render(child.report, child_state.data, limit=1500).strip() if child.report else ""
+        report = template.render(child.report, child_state.data, limit=3000).strip() if child.report else ""
         state.data[f"{node.id}.output"] = report
         state.usage["tokens"] = state.usage.get("tokens", 0) + child_state.usage.get("tokens", 0)
         try:

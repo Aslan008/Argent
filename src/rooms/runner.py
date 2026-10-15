@@ -154,6 +154,22 @@ def _json_path(value, path: str):
     return cur
 
 
+def match_option(answer, options) -> str:
+    """Which of the offered answers a reply means: the exact text, its number (1-based) or a
+    prefix that only one answer starts with. Empty when it is none of them."""
+    text = str(answer if answer is not None else "").strip()
+    if not text:
+        return ""
+    low = text.casefold()
+    for o in options:
+        if o.casefold() == low:
+            return o
+    if text.isdigit() and 1 <= int(text) <= len(options):
+        return options[int(text) - 1]
+    starts = [o for o in options if o.casefold().startswith(low)]
+    return starts[0] if len(starts) == 1 else ""
+
+
 def derive_value(spec: str, values: dict):
     """One value a node's ``sets`` asked for. `values` is `derive_result_values(result)`; the five
     base names are looked up there, the rest are computed from the result's body."""
@@ -164,6 +180,12 @@ def derive_value(spec: str, values: dict):
         return [ln.strip() for ln in body.splitlines() if ln.strip()]
     if spec == "count":
         return len([ln for ln in body.splitlines() if ln.strip()])
+    if spec.startswith("count:"):
+        # the number of ITEMS of a list the rest of the spec yields (a JSON array, all regex matches)
+        inner = derive_value(spec[6:].strip(), values)
+        if isinstance(inner, (list, tuple, dict)):
+            return len(inner)
+        return 0 if inner in (None, "") else 1
     if spec == "first_line":
         return next((ln.strip() for ln in body.splitlines() if ln.strip()), "")
     if spec in ("int", "float"):
@@ -185,6 +207,12 @@ def derive_value(spec: str, values: dict):
         if not m:
             return ""
         return m.group(1) if m.groups() else m.group(0)
+    if spec.startswith("regex_all:"):
+        try:
+            found = list(re.finditer(spec[10:], body, re.S))
+        except re.error:
+            return []
+        return [m.group(1) if m.groups() else m.group(0) for m in found[:1000]]
     return None
 
 
@@ -194,9 +222,9 @@ def _empty_value(spec: str):
         return False
     if spec in ("exit_code", "int", "float", "json") or spec.startswith("json:"):
         return None
-    if spec == "count":
+    if spec == "count" or spec.startswith("count:"):
         return 0
-    if spec == "lines":
+    if spec == "lines" or spec.startswith("regex_all:"):
         return []
     return ""
 
@@ -233,7 +261,7 @@ class NodeRunner:
         # Parallel branches call run_node from several threads: a question to the person is asked
         # one at a time, and steps that share the one browser page / desktop / Leeth model take turns.
         self._confirm_lock = threading.Lock()
-        self._resource_locks = {name: threading.RLock() for name in ("leeth", "page", "screen")}
+        self._resource_locks = {name: threading.RLock() for name in ("leeth", "page", "repo", "screen")}
 
     def set_on_event(self, callback) -> None:
         """The run's observer, so a sub-room's nodes show up in the same progress and record."""
@@ -253,6 +281,12 @@ class NodeRunner:
                 lock.release()
 
     def _run_node(self, node: Node, state: State) -> None:
+        self._run_node_body(node, state)
+        if node.save_as:
+            # the step's own result under the name the person gave it; a step that did not run leaves it empty
+            state.data[node.save_as] = "" if node.disabled else state.data.get(f"{node.id}.output", "")
+
+    def _run_node_body(self, node: Node, state: State) -> None:
         node = self._materialize(node, state)
         if node.disabled:
             # A switched-off step: the run passes through it, and what it would have set stays empty.
@@ -276,7 +310,7 @@ class NodeRunner:
                 result = self._tool(node, state)
                 self._apply(node, state, result)
                 self._set_derived(node, state, result)
-        elif node.type in ("mcp", "skill", "plugin", "leeth", "power"):
+        elif node.type in ("mcp", "skill", "plugin", "leeth", "power", "git", "http"):
             if node.type in CALLING_TYPES and node.confirm and not self._confirmed(node, state):
                 self._declined(node, state)
                 return
@@ -284,6 +318,8 @@ class NodeRunner:
                 raise RuntimeError(f"{node.type} node '{node.id}': no integrations are wired in")
             result = getattr(self._integrations, node.type)(node, state)
             self._apply(node, state, result)
+            for name, value in (getattr(result, "values", None) or {}).items():   # a git or http node's fields
+                state.data[f"{node.id}.{name}"] = value
             self._set_derived(node, state, result)
         elif node.type == "foreach":
             self._foreach(node, state)
@@ -321,6 +357,9 @@ class NodeRunner:
                 else:
                     result = self._agent(agent_node, context)
                 self._apply(agent_node, state, result or {})
+                answer = getattr(self._agent, "last_text", "") or ""
+                if answer and not (isinstance(result, dict) and result.get("output") is not None):
+                    state.data[f"{node.id}.output"] = answer      # what the worker said is the step's output
                 spent = getattr(self._agent, "last_tokens", 0) or 0
                 if spent:
                     state.usage["tokens"] = state.usage.get("tokens", 0) + spent
@@ -329,8 +368,13 @@ class NodeRunner:
         elif node.type == "human_pause":
             if self._human:
                 self._human(node, state)
+                answer = state.data.get(f"{node.id}.output")
+                if node.options:
+                    # a typed answer is matched to the closest offer, so the room can always branch on it
+                    chosen = match_option(answer, node.options)
+                    state.data[f"{node.id}.choice"] = chosen
+                    answer = chosen or answer
                 if node.into:
-                    answer = state.data.get(f"{node.id}.output")
                     state.data[node.into] = answer
                     state.data[f"{node.into}_approved"] = is_affirmative(answer)
         elif node.type == "spawn_room":

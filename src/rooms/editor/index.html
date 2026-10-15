@@ -32,6 +32,8 @@
     <symbol id="i-assert" viewBox="0 0 24 24"><path d="M12 3.5l8.5 15h-17z"/><path d="M12 10v4M12 16.8h.01"/></symbol>
     <symbol id="i-parallel" viewBox="0 0 24 24"><path d="M12 3.5v5.5"/><path d="M12 9l-6 5v6.5"/><path d="M12 9l6 5v6.5"/><path d="M3.5 17l2.5 3.5 2.5-3.5"/><path d="M15.5 17l2.5 3.5 2.5-3.5"/></symbol>
     <symbol id="i-join" viewBox="0 0 24 24"><path d="M6 3.5V10l6 5"/><path d="M18 3.5V10l-6 5"/><path d="M12 15v5.5"/><path d="M8.5 17.5l3.5 3 3.5-3"/></symbol>
+    <symbol id="i-http" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3c2.8 3 2.8 15 0 18"/><path d="M12 3c-2.8 3-2.8 15 0 18"/></symbol>
+    <symbol id="i-git" viewBox="0 0 24 24"><circle cx="6.5" cy="5.5" r="2"/><circle cx="6.5" cy="18.5" r="2"/><circle cx="17.5" cy="9" r="2"/><path d="M6.5 7.5v9"/><path d="M17.5 11c0 3.5-5 3-9.5 6.2"/></symbol>
     <symbol id="i-play" viewBox="0 0 24 24"><path d="M7 4.5l12 7.5-12 7.5z"/></symbol>
     <symbol id="i-stop" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2"/></symbol>
     <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></symbol>
@@ -65,6 +67,7 @@
   <button id="btnRedo" class="btn icon ghost" title="Вернуть (Ctrl+Y)" aria-label="Вернуть"><svg class="ic"><use href="#i-redo"/></svg></button>
   <span class="sep"></span>
   <button id="btnRun" class="btn run" title="Запустить комнату здесь, не сохраняя (Ctrl+Enter)"><svg class="ic"><use href="#i-play"/></svg>Запустить</button>
+  <button id="btnMode" class="btn ghost" aria-pressed="false" title="Простые формы блоков / все настройки">Режим: простой</button>
   <button id="btnGuide" class="btn" title="Гайд: что где и как (F1)"><svg class="ic"><use href="#i-book"/></svg>Гайд</button>
   <button id="btnSave" class="btn primary" title="Проверить и сохранить (Ctrl+S)">Сохранить</button>
 </header>
@@ -77,6 +80,7 @@
   <section id="center">
     <div id="tabs" role="tablist">
       <button id="tabGraph" role="tab" aria-selected="true">Схема</button>
+      <button id="tabStack" role="tab" aria-selected="false" title="Комната столбиком блоков, как в Scratch: вставляйте, убирайте и переставляйте блоки">Стек</button>
       <button id="tabWords" role="tab" aria-selected="false" title="Комната, пересказанная обычными словами">Словами</button>
       <button id="tabJson" role="tab" aria-selected="false" title="Полный текст комнаты: копировать и править руками">JSON</button>
       <button id="tabRuns" role="tab" aria-selected="false" title="Запуски из этого редактора: что и как прошло">Прогоны</button>
@@ -100,6 +104,7 @@
       </div>
       <div id="connectBanner" hidden></div>
       <div id="emptyHint" hidden></div>
+      <div id="paneStack" class="pane stackpane" hidden><div id="stackBody"></div></div>
       <div id="paneWords" class="pane words" hidden><div id="wordsBody"></div></div>
       <div id="paneJson" class="pane jsonpane" hidden><div id="jsonBody"></div></div>
       <div id="paneRuns" class="pane runspane" hidden><div id="runsBody"></div></div>
@@ -140,6 +145,9 @@
 
 <datalist id="fieldsList"></datalist>
 <script src="/ext.js?t=%%TOKEN%%"></script>
+<script src="/simple.js?t=%%TOKEN%%"></script>
+<script src="/profiles.js?t=%%TOKEN%%"></script>
+<script src="/stack.js?t=%%TOKEN%%"></script>
 <script src="/run.js?t=%%TOKEN%%"></script>
 <script src="/app.js?t=%%TOKEN%%"></script>
 </body>

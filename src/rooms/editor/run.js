@@ -58,7 +58,7 @@ function runMapFrom(steps, roomName) {
 const STATUS_WORDS = {running: "идёт", waiting: "ждёт вас", done: "готово", error: "ошибка", stopped: "остановлен"};
 const KIND_NAME = {tool: "команда", agent: "агент", condition: "развилка", human_pause: "вопрос вам", set: "значение", notify: "уведомление", room: "подкомната",
   mcp: "MCP", skill: "скилл", plugin: "плагин", leeth: "Leeth", foreach: "для каждого", wait: "пауза", loop: "цикл", break: "break", continue: "continue",
-  power: "питание ПК", hint: "подсказка", forget: "забыть", assert: "проверка", parallel: "параллельно", join: "слияние"};
+  power: "питание ПК", hint: "подсказка", forget: "забыть", assert: "проверка", parallel: "параллельно", join: "слияние", git: "git", http: "запрос в сеть"};
 
 function stepView(s, i) {
   const d = el("details", {class: "rstep " + s.status});
@@ -108,6 +108,9 @@ function askView(snap, onAnswer) {
     box.append(el("div", {class: "row"},
       el("button", {class: "btn primary sm", onclick: () => onAnswer(p, true)}, "Да, выполнить"),
       el("button", {class: "btn sm", onclick: () => onAnswer(p, false)}, "Нет")));
+  } else if ((p.options || []).length) {
+    box.append(el("b", {}, `Вопрос от шага «${p.node}»`), el("div", {}, p.text),
+      el("div", {class: "row optrow"}, p.options.map((o) => el("button", {class: "btn primary sm", onclick: () => onAnswer(p, o)}, o))));
   } else {
     const inpt = el("input", {type: "text", placeholder: "ваш ответ"});
     const send = () => onAnswer(p, inpt.value);

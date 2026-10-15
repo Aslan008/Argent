@@ -212,7 +212,9 @@ class TestExecuteRoomRun:
         out = execute_room_run("", "release_check", library=starter_lib(), runner=s.runner(),
                                printer=lines.append, record_dir=tmp_path)
         assert out.result.outcome == "done" and "release_check" in out.report and "all good" in out.report
-        assert any("release_check › tests" in l for l in lines) and any("■ release_check" in l for l in lines)
+        from rich.text import Text
+        plain = [Text.from_markup(l).plain for l in lines]
+        assert any("release_check › tests" in l for l in plain) and any("release_check закончена" in l for l in plain)
         rec = history.load_run("last", tmp_path)
         assert rec["start_room"] == "release_check" and [n["node"] for n in rec["nodes"]] == [
             "tests", "tree", "summarize"]
@@ -288,7 +290,7 @@ class TestCli:
             assert name in t.text
         t2 = Term()
         cli.handle("show fix_bug", t2.io(), library=lib)
-        assert "▶ ⚙ reproduce" in t2.text and "вердикт процесса → tests_passed" in t2.text
+        assert "▶ · reproduce" in t2.text and "вердикт процесса → tests_passed" in t2.text
         assert "Параметры: test_command=" in t2.text and "пока not state.tests_passed" in t2.text
         t3 = Term()
         cli.handle("route почини падающие тесты", t3.io(), library=lib)

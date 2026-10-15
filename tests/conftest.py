@@ -187,3 +187,11 @@ def _no_fast_path_unless_asked(monkeypatch, request):
         return
     import config
     monkeypatch.setattr(config, "get_fast_dispatch_backend", lambda: "off")
+
+
+@pytest.fixture(autouse=True)
+def _own_rooms_folder(tmp_path_factory, monkeypatch):
+    """The person's own rooms live in one folder for the whole Argent (src/rooms/session.user_rooms_dir).
+    A test gets an empty one of its own, so it neither sees the developer's rooms nor leaves any behind."""
+    monkeypatch.setenv("ARGENT_ROOMS_DIR", str(tmp_path_factory.mktemp("own_rooms") / ".argent" / "rooms"))
+    yield

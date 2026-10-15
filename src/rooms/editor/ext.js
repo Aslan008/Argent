@@ -7,10 +7,76 @@
 const CAT = {mcpServers: null, mcpTools: {}, mcpState: {}, skills: null, headings: {}, plugins: null};
 
 async function loadCatalogs() {
+  // Each answer replaces its list only when it came back whole: a hiccup of the server must not
+  // look like «all your skills were deleted».
   const [m, s, p] = await Promise.all([api("/api/mcp"), api("/api/skills"), api("/api/plugins")]);
-  CAT.mcpServers = m.status === 200 ? (m.data.servers || {}) : {};
-  CAT.skills = s.status === 200 ? (s.data.skills || []) : [];
-  CAT.plugins = p.status === 200 ? (p.data.plugins || {}) : {};
+  if (m.status === 200) CAT.mcpServers = m.data.servers || {}; else if (CAT.mcpServers === null) CAT.mcpServers = {};
+  if (s.status === 200) CAT.skills = s.data.skills || []; else if (CAT.skills === null) CAT.skills = [];
+  if (p.status === 200) CAT.plugins = p.data.plugins || {}; else if (CAT.plugins === null) CAT.plugins = {};
+  return m.status === 200 && s.status === 200 && p.status === 200;
+}
+
+// ── живое обновление: скиллы, плагины и MCP-серверы можно добавлять и убирать, пока редактор открыт ──
+function catalogDiff(before, after) {
+  const words = [];
+  const names = (o) => Object.keys(o || {});
+  const cmp = (label, a, b) => {
+    const gone = a.filter((x) => !b.includes(x)), came = b.filter((x) => !a.includes(x));
+    if (came.length) words.push(label + ": + " + came.join(", "));
+    if (gone.length) words.push(label + ": − " + gone.join(", "));
+  };
+  cmp("MCP", names(before.mcp), names(after.mcp));
+  cmp("скиллы", (before.skills || []).map((x) => x.name), (after.skills || []).map((x) => x.name));
+  const cmds = (o) => Object.entries(o || {}).flatMap(([p, d]) => [p, ...(d.commands || []).map((c) => p + "." + c)]);
+  cmp("плагины", cmds(before.plugins), cmds(after.plugins));
+  return words;
+}
+async function refreshCatalogs(manual) {
+  if (CAT.refreshing) return false;
+  CAT.refreshing = true;
+  const snap = () => JSON.stringify([CAT.mcpServers, CAT.skills, CAT.plugins]);
+  const before = {mcp: CAT.mcpServers || {}, skills: CAT.skills || [], plugins: CAT.plugins || {}};
+  const was = snap();
+  let whole = false;
+  try {
+    whole = await loadCatalogs();
+  } catch (e) { whole = false; } finally { CAT.refreshing = false; }
+  // forget what is no longer true: tools of a server that is gone or was pointed elsewhere
+  for (const name of Object.keys(CAT.mcpTools)) {
+    const now = (CAT.mcpServers || {})[name], prev = before.mcp[name];
+    if (manual || !now || (prev && prev.sig !== now.sig)) { delete CAT.mcpTools[name]; delete CAT.mcpState[name]; }
+  }
+  if (manual) CAT.headings = {};
+  const changed = snap() !== was;
+  CAT.stamp = new Date();
+  if (changed || manual) {
+    const q = document.getElementById("palSearch");
+    const query = q ? q.value : "";
+    ensureLists();
+    buildPalette();
+    const q2 = document.getElementById("palSearch");
+    if (q2 && query) { q2.value = query; q2.dispatchEvent(new Event("input")); }
+    const typing = document.activeElement && /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName)
+      && document.activeElement.closest("#inspector");
+    const n = typeof sel !== "undefined" && sel && sel.kind === "node" && typeof nodeById === "function" ? nodeById(sel.id) : null;
+    if (changed && !typing && n && ["mcp", "skill", "plugin"].includes(n.type)) panel();
+  }
+  const what = catalogDiff(before, {mcp: CAT.mcpServers, skills: CAT.skills, plugins: CAT.plugins});
+  if (what.length) say("Каталоги обновились — " + what.join("; "), "ok");
+  else if (manual) say(whole ? "Каталоги актуальны: изменений нет." : "Не удалось получить каталоги — показаны прежние.", whole ? "ok" : "bad");
+  return changed;
+}
+function startCatalogWatch() {
+  let last = Date.now();
+  const tick = (force) => {
+    if (document.hidden) return;
+    if (!force && Date.now() - last < 8000) return;
+    last = Date.now();
+    refreshCatalogs(false).catch(() => { /* следующий круг попробует снова */ });
+  };
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) tick(true); });
+  window.addEventListener("focus", () => tick(true));
+  setInterval(() => tick(false), 20000);
 }
 async function loadMcpTools(server, force) {
   if (!server) return;
@@ -121,7 +187,10 @@ function setsEditor(sets, onChange) {
   const label = (v) => DERIVED_LABEL[v] || v;
   const rows = Object.entries(sets || {}).map(([k, v]) => {
     const s = String(v);
+    if (s.startsWith("count:json:")) return {name: k, spec: "count:json:", arg: s.slice(11)};
+    if (s.startsWith("count:regex_all:")) return {name: k, spec: "count:regex_all:", arg: s.slice(16)};
     if (s.startsWith("json:")) return {name: k, spec: "json:", arg: s.slice(5)};
+    if (s.startsWith("regex_all:")) return {name: k, spec: "regex_all:", arg: s.slice(10)};
     if (s.startsWith("regex:")) return {name: k, spec: "regex:", arg: s.slice(6)};
     return {name: k, spec: s, arg: ""};
   });
@@ -131,22 +200,26 @@ function setsEditor(sets, onChange) {
     for (const r of rows) {
       const n = r.name.trim();
       if (!n) continue;
-      out[n] = r.spec === "json:" ? "json:" + (r.arg || "").trim() : r.spec === "regex:" ? "regex:" + (r.arg || "") : r.spec;
+      out[n] = (r.spec === "json:" || r.spec === "count:json:") ? r.spec + (r.arg || "").trim()
+        : (r.spec === "regex:" || r.spec === "regex_all:" || r.spec === "count:regex_all:") ? r.spec + (r.arg || "") : r.spec;
     }
     onChange(out);
   };
   const render = () => {
     box.replaceChildren();
     rows.forEach((r, i) => {
-      const opts = [...base.map((d) => [d, label(d)]), ["json:", "значение внутри JSON (по пути)"], ["regex:", "по шаблону (regex)"]];
+      const opts = [...base.map((d) => [d, label(d)]), ["json:", "значение внутри JSON (по пути)"], ["regex:", "по шаблону (regex)"],
+        ["regex_all:", "все совпадения по шаблону списком"],
+        ["count:json:", "сколько элементов в списке внутри JSON (по пути)"],
+        ["count:regex_all:", "сколько совпадений по шаблону"]];
       const row = el("div", {class: "kvrow"},
         inp(r.name, (v) => { r.name = v; commit(); }, {ph: "поле, напр. found", list: "fieldsList"}),
         select(opts, r.spec, (v) => { r.spec = v; commit(); render(); }),
         el("button", {class: "btn icon ghost sm", title: "Убрать", "aria-label": "Убрать", onclick: () => { rows.splice(i, 1); commit(); render(); }}, icon("i-close", "sm")));
       box.append(row);
-      if (r.spec === "json:" || r.spec === "regex:") {
+      if (r.spec === "json:" || r.spec === "count:json:" || r.spec === "regex:" || r.spec === "regex_all:" || r.spec === "count:regex_all:") {
         box.append(el("div", {class: "kvrow"}, inp(r.arg, (v) => { r.arg = v; commit(); },
-          {ph: r.spec === "json:" ? "путь, напр. yes или a.b.0" : "шаблон с группой, напр. id=(\\d+)"})));
+          {ph: (r.spec === "json:" || r.spec === "count:json:") ? "путь, напр. posts или a.b.0" : "шаблон с группой, напр. id=(\\d+)"})));
       }
     });
     box.append(el("div", {}, el("button", {class: "btn sm", onclick: () => { rows.push({name: "", spec: (META.derived || ["output"])[0] === "ok" ? "output" : "output", arg: ""}); render(); }},
@@ -277,7 +350,7 @@ function toolNodeForm(side, n, upd) {
   for (const [g, title] of Object.entries(groups)) {
     if (!byGroup[g]) continue;
     const og = el("optgroup", {label: title});
-    for (const t of byGroup[g]) { const op = el("option", {value: t.name}, t.name + (t.mutating ? "  ⚠ меняет" : "")); if (t.name === n.tool) op.selected = true; og.append(op); }
+    for (const t of byGroup[g]) { const op = el("option", {value: t.name}, t.name + (t.mutating ? "  (меняет)" : "")); if (t.name === n.tool) op.selected = true; og.append(op); }
     sel.append(og);
   }
   if (n.tool && !info.some((t) => t.name === n.tool)) sel.prepend(el("option", {value: n.tool, selected: true}, n.tool + " (нет в списке)"));
@@ -719,7 +792,7 @@ function roomRulesPanel(side) {
     for (const t of META.tool_info || []) {
       const c = el("input", {type: "checkbox"}); c.checked = (r.deny_tools || []).includes(t.name);
       c.addEventListener("change", () => { const s = new Set(r.deny_tools || []); c.checked ? s.add(t.name) : s.delete(t.name); set("deny_tools", [...s].sort(), "rdeny"); });
-      box.append(el("label", {class: "check", title: t.description}, c, el("span", {}, t.name + (t.mutating ? " ⚠" : ""))));
+      box.append(el("label", {class: "check", title: t.description}, c, el("span", {}, t.name + (t.mutating ? " (меняет)" : ""))));
     }
     return box;
   })())));
@@ -734,9 +807,16 @@ function roomRulesPanel(side) {
 }
 
 // ── мастер «Switch по полю» ──────────────────────────────────────────────────────
+let SWITCH_SEED = null;        // {field, values}: мастер открыт кнопкой «Развести по вариантам» у вопроса
 function switchPanel(side) {
   const targets = [...room.nodes.map((n) => [n.id, n.id]), ...exitNames().map((x) => ["EXIT:" + x, "выход «" + x + "»"])];
-  const st = {field: "", cases: [{value: "", to: targets[0] ? targets[0][0] : ""}], other: targets[0] ? targets[0][0] : ""};
+  const first = targets[0] ? targets[0][0] : "";
+  const st = {field: "", cases: [{value: "", to: first}], other: first};
+  if (SWITCH_SEED) {
+    st.field = SWITCH_SEED.field;
+    st.cases = SWITCH_SEED.values.map((v) => ({value: v, to: first}));
+    SWITCH_SEED = null;
+  }
   side.append(el("h2", {}, "Switch по значению поля"));
   side.append(el("p", {class: "hint"}, "Создаст развилку со стрелками «если поле равно значению → цель» и запасной «иначе»."));
   side.append(fieldPick("Поле", st.field, (v) => { st.field = v.trim(); }, null, "поле, напр. category"));
@@ -775,9 +855,11 @@ function switchPanel(side) {
 // ── палитра: каталог блоков, поиск, категории ────────────────────────────────────
 function paletteEntries() {
   const E = [];
-  const add = (cat, type, title, sub, preset, kw) => E.push({cat, type, title, sub, preset: preset || {}, kw: (kw || "") + " " + title + " " + sub});
+  const add = (cat, type, title, sub, preset, kw, run) => E.push({cat, type, title, sub, preset: preset || {}, run, kw: (kw || "") + " " + title + " " + sub});
   const C = {logic: "Логика", loops: "Циклы", agent: "Агент и память", people: "Люди и уведомления", pc: "Компьютер",
     argent: "Инструменты Argent", mcp: "MCP", skills: "Скиллы", plugins: "Плагины", leeth: "Leeth", rooms: "Другие комнаты"};
+  if (typeof simplePaletteEntries === "function") simplePaletteEntries(add, C);       // «Частые действия» и Git — первыми (simple.js)
+  if (typeof profilePaletteEntries === "function") profilePaletteEntries(add);        // блоки известных MCP-серверов, напр. Sarper (profiles.js)
   add(C.logic, "condition", "Развилка", "Выбрать путь по условию", {}, "if условие ветка");
   add(C.logic, "set", "Значение", "Записать или посчитать поле", {}, "variable переменная set счётчик");
   add(C.logic, "switch", "Switch по полю", "Несколько веток по значению", {}, "case switch выбор");
@@ -844,6 +926,12 @@ function buildPaletteExt() {
   const search = el("input", {type: "text", id: "palSearch", placeholder: "Найти блок…", autocomplete: "off", "aria-label": "Поиск блока"});
   p.append(el("div", {class: "palsearch"}, el("div", {class: "box"}, icon("i-search", "sm"), search, el("kbd", {}, "Ctrl+K"))));
   const host = el("div", {id: "palHost"});
+  const when = CAT.stamp ? CAT.stamp.toLocaleTimeString("ru-RU", {hour: "2-digit", minute: "2-digit"}) : "";
+  p.append(el("div", {class: "palstamp"},
+    el("span", {title: "Скиллы, плагины и MCP-серверы подхватываются сами; кнопка проверяет прямо сейчас"},
+      "Каталоги обновлены " + (when || "при открытии")),
+    el("button", {class: "btn sm ghost", title: "Обновить скиллы, плагины и MCP-серверы сейчас", "aria-label": "Обновить каталоги",
+      onclick: async (ev) => { const b = ev.currentTarget; b.disabled = true; await refreshCatalogs(true); b.disabled = false; }}, "↻ Обновить")));
   p.append(host);
   const item = (e, hit) => {
     const info = TYPES[e.type === "switch" ? "condition" : e.type] || TYPES.tool;
@@ -864,11 +952,11 @@ function buildPaletteExt() {
     }
     const cats = [];
     for (const e of PAL_ENTRIES) if (!cats.includes(e.cat)) cats.push(e.cat);
-    const open = new Set(["Логика", "Циклы", "Агент и память", "Люди и уведомления"]);
+    const open = new Set(["Частые действия", "Git", "Логика", "Циклы", "Агент и память", "Люди и уведомления"]);
     for (const c of cats) {
       const items = PAL_ENTRIES.filter((e) => e.cat === c);
       const d = el("details", {class: "palcat"}, el("summary", {}, c, el("span", {class: "n"}, String(items.length))));
-      if (open.has(c)) d.setAttribute("open", "");
+      if (open.has(c) || c.startsWith("Веб-ИИ")) d.setAttribute("open", "");
       for (const e of items) d.append(item(e, false));
       host.append(d);
     }
@@ -895,11 +983,14 @@ function buildPaletteExt() {
   p.append(el("div", {class: "tip"}, "Выберите шаг на схеме — новый блок добавится сразу после него и соединится стрелкой. Ctrl+K — поиск блока."));
 }
 function addFromEntry(e) {
+  if (typeof e.run === "function") { e.run(); return; }            // не блок, а действие (например, «показать инструменты»)
   if (e.type === "switch") {
     if (!room) { say("Сначала откройте или создайте комнату.", "bad"); return; }
     inspectMode = "switch"; panel(); return;
   }
-  addNode(e.type, e.preset);
+  const preset = JSON.parse(JSON.stringify(e.preset || {}));
+  if (preset.save_as && typeof uniqueSaveAs === "function") preset.save_as = uniqueSaveAs(preset.save_as);   // два «Спросить» не затирают друг друга
+  addNode(e.type, preset);
 }
 function focusPaletteSearch() {
   const s = $("#palSearch");

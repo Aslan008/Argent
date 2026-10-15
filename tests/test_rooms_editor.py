@@ -144,7 +144,7 @@ def test_state_lists_starter_rooms_and_vocabulary(server):
     assert names["debug_loop"] == "starter"
     assert set(data["node_types"]) == {"tool", "agent", "condition", "human_pause", "set", "notify", "room",
                                          "mcp", "skill", "plugin", "leeth", "foreach", "wait", "loop", "break",
-                                         "continue", "power", "hint", "forget", "assert", "parallel", "join"}
+                                         "continue", "power", "hint", "forget", "assert", "parallel", "join", "git", "http"}
     assert "run_command" in data["tools"] and "Coder" in data["roles"]
     assert "console" in data["channels"]
 
@@ -282,9 +282,15 @@ def test_start_and_stop_editor_module_level(tmp_path, monkeypatch):
 def test_the_page_ships_in_the_package():
     assert editor_server._INDEX.exists()
     folder = editor_server._INDEX.parent
-    html = "".join((folder / f).read_text(encoding="utf-8") for f in ("index.html", "app.js", "app.css", "guide.html"))
-    assert "http://" not in html.replace("http://www.w3.org/2000/svg", "")   # no external resources
-    assert "https://" not in html
+    # no external resources: nothing is loaded from the network (an address may still be *written about*:
+    # the form of an http block asks for one and says it must start with http://)
+    import re
+    external = re.compile(r"""(?:(?:src|href|action)\s*=\s*["']|url\(\s*["']?|@import\s+["']?|fetch\(\s*["'`]|import\(\s*["'`]"""
+                          r"""|new\s+(?:URL|WebSocket|EventSource)\(\s*["'`]|\.open\(\s*["'][A-Z]+["']\s*,\s*["'])https?://""")
+    for f in sorted(folder.iterdir()):
+        if f.suffix in (".html", ".js", ".css"):
+            found = external.findall(f.read_text(encoding="utf-8"))
+            assert not found, f"{f.name} loads something from the network: {found[:3]}"
 
 
 def test_rooms_editor_command(tmp_path, monkeypatch):

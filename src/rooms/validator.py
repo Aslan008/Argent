@@ -15,6 +15,8 @@ cross-cutting checks that need outside knowledge:
 Returns a list of human-readable problems; empty list == valid.
 """
 
+import re
+
 from src.rooms import condition
 from src.rooms import parallel as parallel_mod
 from src.rooms import rules as rules_mod
@@ -187,6 +189,7 @@ def room_warnings(room: Room, catalog=None) -> list:
         notes.append("the agents of this room share memory and nothing in it ever forgets: "
                      "a long run keeps only the most recent part (rules.memory_chars)")
 
+    saved_by = {}
     for n in room.nodes:
         if n.type == "mcp" and servers is not None and n.server not in servers:
             notes.append(f"node '{n.id}': MCP server '{n.server}' is not configured here (add it with /mcp)")
@@ -218,6 +221,22 @@ def room_warnings(room: Room, catalog=None) -> list:
         if n.type == "power" and (n.mode in ("shutdown", "restart", "sleep", "hibernate", "logout")) and not n.confirm and not n.disabled:
             notes.append(f"node '{n.id}': the computer will {n.mode} without asking (unattended runs need that; "
                          "put a notification before it and keep the delay)")
+        if n.type == "http" and (n.mode or "get").lower() not in ("get", "head") and not n.confirm and not n.disabled:
+            notes.append(f"node '{n.id}': a {(n.mode or 'get').upper()} request changes something on the other side without asking — "
+                         "tick «ask before running» unless this room runs unattended on purpose")
+        if n.type == "http" and not n.disabled:
+            for hname, hvalue in ((n.args or {}).get("headers") or {}).items():
+                if re.search(r"authorization|token|api[-_]?key|secret|password", str(hname), re.I) and str(hvalue).strip()                         and "${ENV:" not in str(hvalue) and "{{" not in str(hvalue):
+                    notes.append(f"node '{n.id}': header '{hname}' holds a literal value that would be saved in the room file — "
+                                 "write ${ENV:NAME} and keep the secret in an environment variable")
+        if n.type == "git" and (n.mode or "status") in ("push", "pull") and not n.confirm and not n.disabled:
+            notes.append(f"node '{n.id}': git {n.mode} reaches a server without asking — tick «ask before running» "
+                         "unless this room runs unattended on purpose")
+        if n.save_as and not n.disabled:
+            if n.save_as in saved_by:
+                notes.append(f"node '{n.id}': '{saved_by[n.save_as]}' also keeps its result as '{n.save_as}'; "
+                             "the later step overwrites it")
+            saved_by.setdefault(n.save_as, n.id)
         if n.type == "hint" and n.targets:
             ids = {x.id for x in room.nodes}
             for t in n.targets:

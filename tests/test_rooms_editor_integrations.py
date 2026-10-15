@@ -141,6 +141,7 @@ def test_state_has_every_node_type_and_tool_info(make_server):
     assert state["tool_info"][0]["params"][0]["name"] == "command"
     assert "shell" in state["tool_groups"] and "rooms" in state["not_in_rooms"]
     assert state["leeth"]["available"] is True and "filter" in state["leeth"]["modes"]
+    assert state["vocab"]["mcp_call_timeout"] >= 5        # the page warns about slow web-AI questions with it
 
 
 def test_mcp_servers_and_tools(make_server):

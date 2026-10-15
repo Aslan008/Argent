@@ -37,9 +37,13 @@ HELP = """\
   /rooms triggers schedule <комната> <когда>   запуск по расписанию («каждый день в 03:00»)
   /rooms triggers webhook <комната> [имя]      запуск по HTTP-запросу (секрет показывается один раз)
   /rooms triggers remove|on|off <имя>          убрать | включить | выключить
-  /rooms new <имя>                 пустая заготовка своей комнаты в .argent/rooms/
+  /rooms new <имя>                 пустая заготовка своей комнаты (общая папка комнат Argent)
   /rooms validate <файл.json>      проверить комнату, не добавляя
-  /rooms delete <имя>              удалить свою комнату
+  /rooms delete <имя>              удалить свою комнату (вернуть: /rooms restore <имя>)
+  /rooms versions <имя>            прежние версии комнаты (хранятся 5 последних)
+  /rooms restore <имя> [N]         вернуть версию N (1 — самая свежая из прежних); удалённую тоже
+  /rooms export <имя> [файл]       сохранить комнату файлом, чтобы перенести на другой ПК или показать
+  /rooms import <файл> [новое_имя] добавить комнату из файла (проверка, правила безопасности, вопрос)
   /rooms unquarantine <имя>        вернуть комнату из карантина
   /rooms spawn on|off              ИИ может предлагать новые комнаты (через валидатор и твоё одобрение)
   /rooms hint on|off               подсказывать модели подходящую комнату (одна строка, только если явно подходит)
@@ -84,6 +88,26 @@ def _library(io: Io, library):
         for name, errs in lib.load_errors.items():
             io.err(f"Комната «{name}» не загружена: {'; '.join(errs)}")
     return lib
+
+
+def _first_word(text: str) -> tuple:
+    """(first word, the rest) - split at any whitespace, a line break included."""
+    parts = (text or "").strip().split(None, 1)
+    return (parts[0], parts[1].strip()) if len(parts) == 2 else ((parts[0] if parts else ""), "")
+
+
+def _no_room(name: str, rooms=None) -> str:
+    """«No such room», with the nearest names when the person most likely mistyped one."""
+    name = (name or "").strip()
+    text = f"Нет комнаты «{name}»."
+    names = list(getattr(rooms, "rooms", rooms) or [])
+    if name and names:
+        import difflib
+        near = difflib.get_close_matches(name, names, n=3, cutoff=0.6)
+        near += [n for n in sorted(names) if name.lower() in n.lower() and n not in near][:3 - len(near)]
+        if near:
+            text += " Может быть: " + ", ".join(near) + "."
+    return text + " /rooms list — список."
 
 
 def _short(text: str, n: int = 78) -> str:
@@ -193,8 +217,8 @@ def _cmd_validate(io: Io, lib, path: str) -> None:
 
 def _cmd_delete(io: Io, lib, name: str) -> None:
     if lib.sources.get(name) != "user":
-        io.err("Удалять можно только свои комнаты (из .argent/rooms/)." if name in lib.rooms
-               else f"Нет комнаты «{name}».")
+        io.err("Удалять можно только свои комнаты (не из комплекта)." if name in lib.rooms
+               else _no_room(name, lib))
         return
     if not io.confirm(f"Удалить комнату «{name}»?"):
         io.out("Отменено.")
@@ -204,10 +228,155 @@ def _cmd_delete(io: Io, lib, name: str) -> None:
     io.out(f"Комната «{name}» удалена.")
 
 
+def _version_line(n: int, path) -> str:
+    from datetime import datetime
+    when = path.stem[:15]
+    try:
+        when = datetime.strptime(path.stem[:15], "%Y%m%d-%H%M%S").strftime("%d.%m.%Y %H:%M:%S")
+    except ValueError:
+        pass
+    try:
+        room = Room(**json.loads(path.read_text(encoding="utf-8")))
+        what = f"{len(room.nodes)} узл., {len(room.edges)} рёбер — {short_description(room, 70)}"
+    except Exception:
+        what = "(файл не читается)"
+    return f"  {n}. {when}  {what}"
+
+
+def _cmd_versions(io: Io, lib, name: str) -> None:
+    name = (name or "").strip()
+    if not name:
+        io.err("Использование: /rooms versions <комната>")
+        return
+    found = lib.versions(name)
+    if not found:
+        io.out(f"У комнаты «{name}» нет прежних версий: они появляются, когда её сохраняют поверх или удаляют.")
+        return
+    io.out(f"Прежние версии «{name}» (текущая — /rooms show {name}):")
+    for n, path in enumerate(found, 1):
+        io.out(_version_line(n, path))
+    io.out(f"Вернуть: /rooms restore {name} <номер>")
+
+
+def _cmd_restore(io: Io, lib, rest: str) -> None:
+    name, tail = _first_word(rest)
+    if not name:
+        io.err("Использование: /rooms restore <комната> [номер]   (список: /rooms versions <комната>)")
+        return
+    if tail and not tail.isdigit():
+        io.err("Номер версии — число из /rooms versions.")
+        return
+    which = int(tail) if tail else 1
+    found = lib.versions(name)
+    if not found:
+        io.err(f"У комнаты «{name}» нет сохранённых версий. /rooms versions {name}")
+        return
+    if lib.sources.get(name) == "starter":
+        io.err("Комната из комплекта не менялась — возвращать нечего.")
+        return
+    if 1 <= which <= len(found):
+        io.out(_version_line(which, found[which - 1]).strip())
+    exists = lib.get(name) is not None
+    if not io.confirm(f"Вернуть версию {which} комнаты «{name}»"
+                      + (" вместо текущей (текущая сохранится как версия 1)?" if exists else " (комната удалена — она появится снова)?")):
+        io.out("Отменено.")
+        return
+    errors = lib.restore_version(name, which, _tools(lib))
+    if errors:
+        io.err("Не удалось вернуть: " + "; ".join(errors))
+        return
+    lib.save_stats()
+    io.out(f"Комната «{name}» возвращена к версии {which}.")
+
+
+MAX_IMPORT_BYTES = 512 * 1024
+
+
+def _cmd_export(io: Io, lib, rest: str) -> None:
+    from pathlib import Path
+    name, tail = _first_word(rest)
+    room = lib.get(name)
+    if room is None:
+        io.err(_no_room(name, lib) if name else "Использование: /rooms export <комната> [файл]")
+        return
+    target = Path(tail.strip('"')) if tail else Path.cwd() / f"{name}.room.json"
+    if target.is_dir():
+        target = target / f"{name}.room.json"
+    if target.exists() and not io.confirm(f"Файл {target} уже есть. Перезаписать?"):
+        io.out("Отменено.")
+        return
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(room.model_dump_json(indent=2, by_alias=True, exclude_none=True), encoding="utf-8")
+    except OSError as e:
+        io.err(f"Не получилось записать файл: {e}")
+        return
+    io.out(f"Комната «{name}» сохранена: {target}")
+    io.out("Загляните в файл перед тем как делиться: в текстах шагов могут быть ваши пути и названия. "
+           "Секреты в комнате должны быть записаны как ${ENV:ИМЯ}; сами значения в файл не попадают. "
+           "Добавить на другом ПК: /rooms import <файл>")
+
+
+def _cmd_import(io: Io, lib, rest: str) -> None:
+    """A room from a file. The file is not trusted: schema, validator and the house safety rules run before
+    anything is saved, and the person sees the flow and says yes."""
+    from pathlib import Path
+    from src.agent.plan_mode import _mutates
+    from src.rooms.builder import harden
+    from src.rooms.diagram import render_flow
+    path_text, new_name = _first_word(rest)
+    if not path_text:
+        io.err("Использование: /rooms import <файл.json> [новое_имя]")
+        return
+    p = Path(path_text.strip('"'))
+    if not p.is_file():
+        io.err(f"Нет файла: {p}")
+        return
+    if p.stat().st_size > MAX_IMPORT_BYTES:
+        io.err(f"Файл больше {MAX_IMPORT_BYTES // 1024} КБ — это не комната.")
+        return
+    try:
+        room = Room(**json.loads(p.read_text(encoding="utf-8")))
+    except Exception as e:
+        io.err(f"Не разобралась схема: {str(e)[:300]}")
+        return
+    if new_name:
+        room.room = new_name.strip()
+    if not _NAME.match(room.room or ""):
+        io.err("Имя комнаты: латиница, цифры, _ (начинается с буквы). Укажите своё: /rooms import <файл> <имя>")
+        return
+    if lib.sources.get(room.room) == "starter":
+        renamed = f"{room.room}_custom"
+        io.out(f"Имя «{room.room}» занято комнатой из комплекта; импортирую как «{renamed}».")
+        room.room = renamed
+    errors = validate_room(room, _tools(lib), allow_spawn=False)
+    if not errors:
+        errors = lib.reference_errors({**lib.rooms, room.room: room}).get(room.room, [])
+    if errors:
+        io.err("Комната из файла не годится:")
+        for e in errors[:10]:
+            io.err(f"  - {e}")
+        return
+    for note in harden(room, _mutates):
+        io.out(f"[yellow]Правило безопасности:[/yellow] {note}")
+    io.out(render_flow(room))
+    replaces = lib.get(room.room) is not None
+    if not io.confirm(f"Добавить комнату «{room.room}»"
+                      + (" вместо вашей с тем же именем (прежняя сохранится: /rooms restore)?" if replaces else "?")):
+        io.out("Не добавлено.")
+        return
+    errors = lib.add_room(room, _tools(lib))
+    if errors:
+        io.err("Не сохранена: " + "; ".join(errors))
+        return
+    lib.save_stats()
+    io.out(f"Добавлена: «{room.room}». Запуск: /rooms run {room.room} <задача>")
+
+
 def _start_run(io: Io, lib, room_name: str, task: str, params: dict, runner, journal, record_dir) -> None:
     room = lib.get(room_name)
     if room is None:
-        io.err(f"Нет комнаты «{room_name}». /rooms list — список.")
+        io.err(_no_room(room_name, lib))
         return
     if lib.stats.get(room_name, {}).get("quarantined"):
         io.err(f"Комната «{room_name}» в карантине (часто заканчивалась неудачей). "
@@ -310,7 +479,7 @@ def _cmd_build(io: Io, lib, text: str, builder) -> None:
 def _cmd_edit(io: Io, lib, name: str, instruction: str, builder) -> None:
     room = lib.get(name)
     if room is None:
-        io.err(f"Нет комнаты «{name}». /rooms list — список.")
+        io.err(_no_room(name, lib))
         return
     if not instruction.strip():
         io.err("Скажите, что изменить: /rooms edit <комната> <что изменить>")
@@ -330,10 +499,10 @@ def _cmd_edit(io: Io, lib, name: str, instruction: str, builder) -> None:
 
 def _cmd_diagram(io: Io, lib, rest: str) -> None:
     from src.rooms.diagram import render_flow, render_mermaid
-    name, _, fmt = rest.partition(" ")
+    name, fmt = _first_word(rest)
     room = lib.get(name)
     if room is None:
-        io.err(f"Нет комнаты «{name}». /rooms list — список.")
+        io.err(_no_room(name, lib))
         return
     io.out(render_mermaid(room) if fmt.strip().lower() == "mermaid" else render_flow(room))
 
@@ -380,7 +549,7 @@ def _cmd_triggers(io: Io, lib, rest: str) -> None:
             return
         room, when = words[1], " ".join(words[2:])
         if lib.get(room) is None:
-            io.err(f"Нет комнаты «{room}». /rooms list — список.")
+            io.err(_no_room(room, lib))
             return
         try:
             made = triggers.add_schedule(room, when)
@@ -396,7 +565,7 @@ def _cmd_triggers(io: Io, lib, rest: str) -> None:
             return
         room, name = words[1], (words[2] if len(words) > 2 else None)
         if lib.get(room) is None:
-            io.err(f"Нет комнаты «{room}». /rooms list — список.")
+            io.err(_no_room(room, lib))
             return
         try:
             made, secret = triggers.add_webhook(room, name)
@@ -445,7 +614,8 @@ def _is_command(sub: str, rest: str) -> bool:
     if sub == "editor":
         return rest.lower() in ("", "stop", "status")
     return sub in ("show", "route", "new", "validate", "delete", "rm", "remove", "unquarantine", "run",
-                   "build", "edit", "diagram", "graph", "triggers", "trigger")
+                   "build", "edit", "diagram", "graph", "triggers", "trigger", "versions", "restore",
+                   "export", "import")
 
 
 def handle(arg: str, io: Io, *, library=None, runner=None, journal=None, record_dir=None, builder=None) -> None:
@@ -453,9 +623,8 @@ def handle(arg: str, io: Io, *, library=None, runner=None, journal=None, record_
     if not arg:
         io.out(HELP)
         return
-    head, _, rest = arg.partition(" ")
+    head, rest = _first_word(arg)
     sub = head.lower()
-    rest = rest.strip()
     if not _is_command(sub, rest):
         sub = ""             # "list the files and explain them" is a task, not the `list` command
 
@@ -497,7 +666,7 @@ def handle(arg: str, io: Io, *, library=None, runner=None, journal=None, record_
     elif sub == "show":
         room = lib.get(rest)
         if room is None:
-            io.err(f"Нет комнаты «{rest}». /rooms list — список.")
+            io.err(_no_room(rest, lib))
         else:
             from src.rooms.diagram import render_flow
             io.out(render_flow(room))
@@ -511,7 +680,7 @@ def handle(arg: str, io: Io, *, library=None, runner=None, journal=None, record_
         from src.rooms.builder import production_builder
         _cmd_build(io, lib, rest, builder if builder is not None else production_builder(lib))
     elif sub == "edit":
-        name, _, instruction = rest.partition(" ")
+        name, instruction = _first_word(rest)
         if lib.get(name) is None:      # "edit the README ..." is a task, not this command
             _run_free_text(io, lib, arg, runner, journal, record_dir)
         else:
@@ -524,7 +693,15 @@ def handle(arg: str, io: Io, *, library=None, runner=None, journal=None, record_
     elif sub in ("delete", "rm", "remove"):
         _cmd_delete(io, lib, rest)
     elif sub == "unquarantine":
-        io.out(f"Комната «{rest}» возвращена в работу." if lib.unquarantine(rest) else f"Нет комнаты «{rest}».")
+        io.out(f"Комната «{rest}» возвращена в работу." if lib.unquarantine(rest) else _no_room(rest, lib))
+    elif sub == "versions":
+        _cmd_versions(io, lib, rest)
+    elif sub == "restore":
+        _cmd_restore(io, lib, rest)
+    elif sub == "export":
+        _cmd_export(io, lib, rest)
+    elif sub == "import":
+        _cmd_import(io, lib, rest)
     elif sub == "resume":
         journal = journal if journal is not None else default_journal()
         if journal.last() is None:
@@ -544,7 +721,7 @@ def handle(arg: str, io: Io, *, library=None, runner=None, journal=None, record_
         io.out("")
         io.out(summary.report)
     elif sub == "run":
-        name, _, tail = rest.partition(" ")
+        name, tail = _first_word(rest)
         task, params = parse_params(tail)
         if not name:
             io.err("Использование: /rooms run <комната> [k=v] [задача]")

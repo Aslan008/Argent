@@ -21,7 +21,7 @@ SCREEN_TOOLS = frozenset({"desktop_act", "desktop_inspect", "capture_desktop_scr
 
 def resources_of(node) -> tuple:
     """The shared things a step uses, as sorted names: "page" (the open browser page), "screen" (the
-    desktop) and "leeth" (the one small model). Steps that share one must not run at the same moment."""
+    desktop), "repo" (the git work tree) and "leeth" (the one small model). Steps that share one must not run at the same moment."""
     found = set()
     if node.type == "tool":
         if node.tool in PAGE_TOOLS:
@@ -36,6 +36,8 @@ def resources_of(node) -> tuple:
             found.add("page")
     elif node.type == "power":
         found.add("screen")
+    elif node.type == "git":
+        found.add("repo")                 # one index and one work tree: two git steps take turns
     return tuple(sorted(found))
 
 

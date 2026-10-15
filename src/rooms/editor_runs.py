@@ -149,6 +149,8 @@ class RunManager:
             run._prompt_seq += 1
             run._answered.clear()
             run.prompt = {"id": run._prompt_seq, "kind": kind, "node": node.id, "text": text}
+            if kind == "ask" and getattr(node, "options", None):
+                run.prompt["options"] = list(node.options)
             run.status = "waiting"
         run.add({"type": "ask", "node": node.id, "kind": kind, "text": text})
         got = run._answered.wait(self._ask_timeout)

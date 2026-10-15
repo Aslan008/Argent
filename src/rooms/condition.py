@@ -3,15 +3,18 @@
 Edge conditions are expressions over run state, e.g. ``state.tests_passed``,
 ``state.retries < 3``, ``state.error_type in ["timeout", "network"]``. They are
 NEVER evaluated with eval(): a whitelisted AST walker allows only comparisons,
-boolean logic, ``not``, literals, lists, and ``state.<field>`` reads. Anything
-else — function calls, attribute chains, subscripts, arbitrary names — is
-rejected, so a condition can neither run code nor reach outside the declared
-state. ``validate`` checks a condition statically (for the RoomValidator);
+boolean logic, ``not``, literals, lists, and ``state.<field>`` reads (a field of
+a step is ``state.<step>.<field>``, e.g. ``state.git_step.clean``: a plain dictionary
+lookup, never an attribute access). Anything else — function calls, subscripts,
+arbitrary names — is rejected, so a condition can neither run code nor reach outside
+the declared state. ``validate`` checks a condition statically (for the RoomValidator);
 ``evaluate`` runs it against a state's data.
 """
 
 import ast
 import operator
+
+from src.rooms import template
 
 _COMPARE_OPS = {
     ast.Eq: operator.eq,
@@ -39,8 +42,14 @@ class ConditionError(ValueError):
 
 
 def _read_state_field(node: ast.Attribute) -> str:
-    if isinstance(node.value, ast.Name) and node.value.id == "state":
-        return node.attr
+    """The dotted name `state.a.b` reads: "a.b". Only names, rooted at `state`."""
+    parts = []
+    cur = node
+    while isinstance(cur, ast.Attribute):
+        parts.append(cur.attr)
+        cur = cur.value
+    if isinstance(cur, ast.Name) and cur.id == "state" and parts:
+        return ".".join(reversed(parts))
     raise ConditionError("only 'state.<field>' attribute access is allowed")
 
 
@@ -89,7 +98,10 @@ def _eval(node: ast.AST, data: dict):
     if isinstance(node, (ast.List, ast.Tuple)):
         return [_eval(e, data) for e in node.elts]
     if isinstance(node, ast.Attribute):
-        return data.get(_read_state_field(node))
+        name = _read_state_field(node)
+        if name in data:
+            return data[name]
+        return template.lookup(name, data) if "." in name else None
     raise ConditionError(f"{type(node).__name__} is not allowed in a condition")
 
 

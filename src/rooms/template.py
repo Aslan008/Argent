@@ -24,6 +24,36 @@ def _cut(text: str, limit: int) -> str:
     return f"{text[:half]}\n… [{len(text) - 2 * half} знаков пропущено] …\n{text[-half:]}"
 
 
+def _inline(value: Any) -> str:
+    """One line for a value nested in a list or a dict."""
+    if isinstance(value, dict):
+        return "; ".join(f"{k}: {_inline(v)}" for k, v in value.items())
+    if isinstance(value, (list, tuple)):
+        return ", ".join(_inline(v) for v in value)
+    return " ".join(str(value).split())
+
+
+def as_text(value: Any) -> str:
+    """A state value as the text a person (and a model) reads.
+
+    A list becomes one line per item with a dash and a dict one `key: value` line per key, instead of
+    Python's `['a', 'b']` / `{'k': 'v'}` repr, which is one unreadable line once the items are sentences
+    (a critic's findings, a list of files). Everything else is `str(value)` as before."""
+    if isinstance(value, (list, tuple)):
+        lines = []
+        for item in value:
+            if isinstance(item, str) and "\n" in item.strip():
+                first, *rest = item.strip().splitlines()
+                lines.append("- " + first.strip())
+                lines.extend("  " + r.strip() for r in rest if r.strip())
+            else:
+                lines.append("- " + _inline(item))
+        return "\n".join(lines)
+    if isinstance(value, dict):
+        return "\n".join(f"{k}: {_inline(v)}" for k, v in value.items())
+    return str(value)
+
+
 def lookup(name: str, data: dict) -> Any:
     """A field of the state; `item.title` / `rows.0` reach inside a dict or a list the state holds
     (plain lookups, nothing is evaluated)."""
@@ -63,7 +93,7 @@ def render(text: str, data: dict, limit: int = MAX_VALUE_CHARS) -> str:
         value = lookup(match.group(1), data)
         if value is None:
             return ""
-        return _cut(str(value), limit)
+        return _cut(as_text(value), limit)
 
     return _PLACEHOLDER.sub(sub, text)
 

@@ -122,6 +122,24 @@ class Rules:
             if "plugin" in self.deny_tools:
                 return "the room's rules switch plugins off (deny_tools)"
             return None
+        if t == "git":
+            mode = node.mode or "status"
+            if self.no_tools:
+                return "the room's rules switch all tools off (no_tools)"
+            if "git" in self.deny_tools:
+                return "the room's rules switch git off (deny_tools)"
+            if self.read_only and mode not in ("status", "diff", "log"):
+                return f"the room is read-only, and git '{mode}' changes the repository (read_only)"
+            return None
+        if t == "http":
+            method = (node.mode or "get").lower()
+            if self.no_tools:
+                return "the room's rules switch all tools off (no_tools)"
+            if "http" in self.deny_tools:
+                return "the room's rules switch web requests off (deny_tools)"
+            if self.read_only and method not in ("get", "head"):
+                return f"the room is read-only, and a {method.upper()} request changes something on the other side (read_only)"
+            return None
         if t == "leeth":
             mode = node.mode or "delegate"
             tool = _LEETH_TOOL.get(mode, "delegate_to_leeth")

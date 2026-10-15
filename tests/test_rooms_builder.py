@@ -163,9 +163,9 @@ class TestDiagram:
     def test_flow_reads_like_a_recipe(self):
         text = render_flow(Room(**GOOD))
         assert text.startswith("Комната «lint_then_tell»")
-        assert "▶ ⚙ lint  run_command: {{lint_command}}" in text and "вердикт процесса → lint_ok, lint_tail" in text
+        assert "▶ · lint  run_command: {{lint_command}}" in text and "вердикт процесса → lint_ok, lint_tail" in text
         assert "если state.lint_ok → good" in text and "иначе → bad" in text and "при сбое узла → bad" in text
-        assert "повторов при сбое: 1" in text and "⛔ выход «clean»" in text
+        assert "повторов при сбое: 1" in text and "выход «clean»" in text
         assert "Дальше: clean → END; dirty → END" in text
 
     def test_mermaid_has_every_node_and_edge(self):
@@ -260,7 +260,7 @@ class TestToolBuild:
         out = rooms_action("build", "", "прогони линтер", library=lib, builder=b,
                            ask_save=lambda flow, name: seen.update(flow=flow, name=name) or True)
         assert "saved" in out and lib.get("lint_then_tell") is not None
-        assert seen["name"] == "lint_then_tell" and "▶ ⚙ lint" in seen["flow"]
+        assert seen["name"] == "lint_then_tell" and "▶ · lint" in seen["flow"]
 
     def test_refusal_is_reported_to_the_model(self, lib):
         b, _ = builder_for(lib, answer(GOOD))

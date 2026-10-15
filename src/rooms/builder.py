@@ -44,7 +44,7 @@ Node types (every node has "id" and "type"):
   "context": ["<state fields it reads>"], "instruction": "<what to do; mention what JSON to answer with>"}.
   It can set ONLY the fields in "writes". Never let an agent declare that tests passed - use a tool node with "sets".
 - condition: {"condition": "<expr>"} (no side effect; use edges with "if" instead when possible).
-- human_pause: {"prompt": "<question>", "into": "<field>"} stores the answer in <field> and sets <field>_approved (true for yes).
+- human_pause: {"prompt": "<question>", "into": "<field>", "options": ["<answer>", "<answer>"] (optional: 2-12 answers to pick from; the choice is also in <id>.choice, so edges can branch with state.<id>.choice == "<answer>")} stores the answer in <field> and sets <field>_approved (true for yes).
 - set: {"values": {"<field>": <literal or "text with {{field}}">}}.
 - notify: {"message": "<text>", "title": "<optional>", "channel": "console"|"desktop"|"telegram"}.
 - room: {"room": "<existing room>", "inputs": {"<field>": "{{field}}"}, "outputs": ["<field>"], "into": "<field for its exit name>"}
@@ -81,6 +81,19 @@ Node types (every node has "id" and "type"):
   Sets <join>_arrived and <join>_failed.
 - power: {"mode": "shutdown" | "restart" | "sleep" | "hibernate" | "lock" | "logout" | "cancel", "seconds": 60} acts on the
   computer. Shutdown / restart wait at least 10 seconds. It always asks ("confirm": true) in a room you author.
+- git: {"mode": "status" | "diff" | "log" | "add" | "commit" | "branch" | "checkout" | "stash" | "pull" | "push", "message":
+  "<commit message>", "args": {...}} runs git itself (no shell, never a force). Prefer it to run_command for anything git.
+  args: status {} | diff {"against": "<ref>", "staged": bool, "files": [..], "full": bool} | log {"count": N} |
+  add {"files": [..]} (default everything) | commit {"files": [..], "only_staged": bool} (message required; stages
+  everything unless files/only_staged) | branch {"name": "<branch>"} creates or switches | checkout {"branch": "<b>",
+  "create": bool} | stash {"action": "save"|"pop"|"list"} | pull / push {"remote": "origin", "branch": "<b>"}.
+  It stores <id>.branch, <id>.clean, <id>.changed, <id>.files (list), <id>.ahead, <id>.behind (status); <id>.files,
+  <id>.added, <id>.removed, <id>.changed (diff); <id>.commits, <id>.last (log); <id>.committed, <id>.commit (commit);
+  <id>.pushed / <id>.updated / <id>.stashed. Use "if": "state.<id>.clean" on an arrow. Anything but status/diff/log
+  asks first ("confirm": true).
+- Any tool / agent / mcp / plugin / leeth / skill / git node may carry "save_as": "<field>": its result (the tool's output,
+  the worker's answer text, git's report) is kept in that field. An agent with no "writes" just answers in words and
+  "save_as" keeps the answer - prefer that to making the model answer in JSON.
 - notify may carry "compose": true: its "message" is then an instruction and the model writes the text from the run state.
 - An agent node may carry "sampling": {"temperature": 0.2, "top_p": 0.9, "top_k": 40, "min_p": 0.05, "repeat_penalty": 1.1,
   "reasoning_effort": "low"|"medium"|"high"|"xhigh"|"none"}, "memory": "shared"|"isolated" and "hint": "<note for it>".
@@ -89,7 +102,7 @@ Node types (every node has "id" and "type"):
   room it calls. A "set" value that starts with "=" is computed: {"i": "= state.i + 1"} (numbers and + - * / // % only).
 Built-in fields for conditions: state.<node id>_visits (how many times that step has started) and state._steps.
 Any node may carry "disabled": true (skipped) and "note": "<text>". "sets" on tool/mcp/plugin/leeth/skill nodes also takes
-"lines", "count", "first_line", "int", "float", "bool", "json", "json:<a.b.0>", "regex:<pattern with a group>".
+"lines", "count", "first_line", "int", "float", "bool", "json", "json:<a.b.0>", "regex:<pattern with a group>", "regex_all:<pattern>" (every match, as a list), "count:json:<path>" / "count:regex_all:<pattern>" (how many items / matches; plain "count" counts non-empty LINES).
 An agent node may also have "skills": ["<name>"] (their text is given to it), "mcp": ["<server>"] (the only servers it may
 use) and "ignore": ["mcp:<server>.<tool*>", "skill:<name>#<heading>"] (what it must not see or use).
 
@@ -113,8 +126,7 @@ Example (a short room):
  "nodes": [
   {"id": "tests", "type": "tool", "tool": "run_command", "args": {"command": "{{test_command}}"},
    "sets": {"tests_passed": "ok", "error_summary": "tail"}},
-  {"id": "commit", "type": "tool", "tool": "run_command", "args": {"command": "git commit -am \\"checked\\""},
-   "confirm": true, "idempotent": false}],
+  {"id": "commit", "type": "git", "mode": "commit", "message": "tests pass", "confirm": true}],
  "edges": [{"from": "tests", "if": "state.tests_passed", "to": "commit"},
            {"from": "tests", "else": true, "to": "EXIT:red"},
            {"from": "commit", "to": "EXIT:done"}]}
@@ -179,6 +191,12 @@ def harden(room: Room, mutating: Callable[[str], bool]) -> list:
         elif n.type == "power" and n.mode != "cancel" and not n.confirm:
             n.confirm = True
             notes.append(f"шаг «{n.id}» ({n.mode} ПК) — теперь спрашивает перед запуском; снимите вопрос в редакторе, если комната должна работать без вас")
+        elif n.type == "http" and (n.mode or "get").lower() not in ("get", "head") and not n.confirm:
+            n.confirm = True
+            notes.append(f"шаг «{n.id}» ({(n.mode or 'get').upper()}-запрос) что-то меняет на другой стороне — теперь спрашивает перед запуском")
+        elif n.type == "git" and (n.mode or "status") not in ("status", "diff", "log") and not n.confirm:
+            n.confirm = True
+            notes.append(f"шаг «{n.id}» (git {n.mode}) меняет репозиторий — теперь спрашивает перед запуском")
         elif n.type == "leeth" and (n.mode or "delegate") not in _LEETH_READ_ONLY and not n.confirm:
             n.confirm = True
             notes.append(f"шаг «{n.id}» поручает Leeth действие ({n.mode or 'delegate'}) — теперь спрашивает перед запуском")

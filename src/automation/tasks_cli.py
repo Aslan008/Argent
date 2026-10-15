@@ -5,6 +5,7 @@
     /tasks add <имя> | <расписание> | <задача> [| ключ: значение ...]
     /tasks cmd <имя> | <расписание> | <команда> [| ...]   a command, no model
     /tasks remind <когда> | <текст>                      a reminder, no model
+    /tasks room [имя |] <расписание> | <комната> [задача k=v ...] [| ключ: значение]   a room on a schedule
     /tasks new <шаблон> [аргумент]  |  /tasks templates   ready-made ones
     /tasks edit <имя> | ключ: значение ...
     /tasks on|off <имя|all>   /tasks rm <имя>
@@ -173,7 +174,7 @@ def _next_text(a, now) -> str:
 
 
 def _mode_tag(a) -> str:
-    return {"command": "команда", "remind": "напоминание"}.get(a.mode, "агент")
+    return {"command": "команда", "remind": "напоминание", "room": "комната"}.get(a.mode, "агент")
 
 
 def list_lines(items, now: datetime) -> list:
@@ -201,10 +202,10 @@ def dashboard_lines(now: datetime = None, live=None) -> list:
             "[dim]Запускаются по расписанию, пока Argent открыт; чтобы шли и при закрытом — /tasks service install[/dim]",
         ]
     enabled = [a for a in items if a.enabled]
-    head = f"[bold cyan]⏰ Автоматизации:[/bold cyan] {len(items)} (включено {len(enabled)})"
+    head = f"[bold cyan]Автоматизации:[/bold cyan] {len(items)} (включено {len(enabled)})"
     paused = store.pause_until(now)
     if paused is not None:
-        head += "  [yellow]⏸ на паузе " + (
+        head += "  [yellow]на паузе " + (
             "до /tasks resume" if paused == datetime.max else f"до {humanize_when(paused, now)}") + "[/yellow]"
     lines = [head]
 
@@ -310,6 +311,7 @@ HELP = [
     "                                  [| notify: always] [| report: .argent/reports/{date}.md]",
     "  /tasks cmd имя | расписание | команда   — команда без модели (бэкап, тесты, проверка)",
     "  /tasks remind через 2 часа | позвонить Ане   — напоминание без модели",
+    "  /tasks room [имя |] расписание | комната [задача] [| notify: always]   — комната по расписанию",
     "  /tasks new <шаблон> [аргумент]  /tasks templates   — готовые",
     "  /tasks edit имя | ключ: значение   (schedule, task, notify, tools, commands, report,",
     "                                      channels, timeout, turns, retries, catchup, max_failures)",
@@ -336,6 +338,7 @@ _SUBCOMMANDS = {
     "add": "add", "new-task": "add",
     "cmd": "cmd", "command": "cmd",
     "remind": "remind", "напомни": "remind",
+    "room": "room", "комната": "room",
     "new": "new", "template": "new",
     "templates": "templates", "шаблоны": "templates",
     "edit": "edit", "изменить": "edit",
@@ -381,7 +384,7 @@ def handle(user_input: str, out, err, live=None, now: datetime = None) -> None:
     arg = parts[2].strip() if len(parts) > 2 else ""
     sub = _SUBCOMMANDS.get(word)
     if sub is None:
-        err(f"Неизвестная подкоманда «{word}». Команды: /tasks list | show | add | cmd | remind | "
+        err(f"Неизвестная подкоманда «{word}». Команды: /tasks list | show | add | cmd | remind | room | "
             f"new | edit | on | off | rm | run | stop | runs | last | inbox | pause | resume | "
             f"service | memory | forget (подробно: /tasks help)")
         return
@@ -418,6 +421,8 @@ def handle(user_input: str, out, err, live=None, now: datetime = None) -> None:
         _add(sub, arg, out, err, now)
     elif sub == "remind":
         _remind(arg, out, err, now)
+    elif sub == "room":
+        _room(arg, out, err, now)
     elif sub == "new":
         _new(arg, out, err, now)
     elif sub == "templates":
@@ -459,7 +464,7 @@ def handle(user_input: str, out, err, live=None, now: datetime = None) -> None:
             err("Не понял срок. Примеры: /tasks pause 2h · /tasks pause до 18:00 · /tasks pause")
             return
         store.set_paused(until)
-        out("⏸ Все автоматизации на паузе " + (f"до {humanize_when(until, now)}." if until else
+        out("Все автоматизации на паузе " + (f"до {humanize_when(until, now)}." if until else
                                                "— пока не скажете: /tasks resume.") +
             " [dim]Ручной запуск (/tasks run) работает.[/dim]")
     elif sub == "resume":
@@ -478,9 +483,9 @@ def _announce_saved(a, notes, out, now, verb="сохранена"):
     for line in manage.summary_lines(a, now):
         out(f"  {escape(line)}")
     for note in notes:
-        out(f"  [dim]ℹ {escape(note)}[/dim]")
+        out(f"  [dim]{escape(note)}[/dim]")
     for warning in manage.warnings_for(a):
-        out(f"  [yellow]⚠ {escape(warning)}[/yellow]")
+        out(f"  [yellow]{escape(warning)}[/yellow]")
     if a.mode == "agent":
         out("  [dim]Выполняется БЕЗ участия человека: всё, что требует подтверждения, "
             "будет отклонено и записано (/tasks runs).[/dim]")
@@ -513,6 +518,53 @@ def _add(sub: str, arg: str, out, err, now: datetime) -> None:
     _announce_saved(a, notes, out, now)
 
 
+# What a room on a schedule takes: when it runs and how it tells you. The rest of an automation's keys
+# (tools, commands, turns, ...) belong to a model and mean nothing to a recipe.
+_ROOM_KEYS = {"notify", "channels", "name"}
+
+
+def _room(arg: str, out, err, now: datetime) -> None:
+    """`/tasks room [имя |] <расписание> | <комната> [задача k=v ...] [| notify: always]`."""
+    parsed = split_add(arg)
+    if parsed is None or not all(parsed[1:3]):
+        err("Формат: /tasks room <расписание> | <комната> [задача и k=v] [| notify: always]   "
+            "(имя — по желанию: /tasks room имя | <расписание> | <комната> ...)\n"
+            "Пример: /tasks room каждый день в 3:00 | code_review проверь последние изменения | notify: failures\n"
+            "Комнаты: /rooms list")
+        return
+    name, schedule, text, segments = parsed
+    options, problems = parse_options(segments)
+    foreign = sorted(set(options) - _ROOM_KEYS)
+    if foreign:
+        problems.append("для комнаты не нужны: " + ", ".join(foreign) + " (подходят notify и channels)")
+    if problems:
+        err("\n".join(problems))
+        return
+    room, _, rest = text.strip().partition(" ")
+    room = room.strip()
+    from src.rooms.session import build_library, parse_params
+    library = build_library()
+    if room not in library.rooms:
+        from src.rooms.cli import _no_room
+        err(_no_room(room, library.rooms))
+        return
+    task, params = parse_params(rest)
+    try:
+        from src.rooms import triggers
+        trigger = triggers.add_schedule(room, schedule, task, params, name=name or None,
+                                        notify=options.get("notify", "auto"),
+                                        channels=options.get("channels") or ())
+    except ValueError as e:
+        err(str(e))
+        return
+    a = store.get_automation(trigger["name"])
+    out(f"[green]✓[/green] Комната «{escape(room)}» по расписанию: {escape(trigger['name'])}.")
+    for line in manage.summary_lines(a, now):
+        out(f"  {escape(line)}")
+    out("  [dim]Выполняется без человека: вопросы и подтверждения комнаты отклоняются и попадают в "
+        f"/tasks inbox. Проверить сейчас: /tasks run {escape(trigger['name'])}[/dim]")
+
+
 def _remind(arg: str, out, err, now: datetime) -> None:
     pieces = arg.split("|")
     if len(pieces) < 2 or not pieces[0].strip() or not pieces[1].strip():
@@ -538,7 +590,7 @@ def _remind(arg: str, out, err, now: datetime) -> None:
     out(f"[green]✓[/green] Напомню: «{escape(text)}» — {escape(describe_schedule(a.schedule))} "
         f"({humanize_when(next_fire(a.schedule, None, now), now)}). [dim]Имя: {escape(a.name)}[/dim]")
     for warning in manage.warnings_for(a):
-        out(f"  [yellow]⚠ {escape(warning)}[/yellow]")
+        out(f"  [yellow]{escape(warning)}[/yellow]")
     out("  [dim]Напоминание не использует модель и покажется здесь, на рабочем столе "
         "и в Telegram (если добавить `| channels: telegram`).[/dim]")
 

@@ -27,7 +27,7 @@ _lock = threading.Lock()
 def _announce() -> None:
     try:
         from ui import console
-        console.print("\n[bold red]⛔ Управление рабочим столом остановлено (аварийная клавиша). "
+        console.print("\n[bold red]Управление рабочим столом остановлено (аварийная клавиша). "
                       "Включить снова: /desktop on[/bold red]")
     except Exception:
         pass

@@ -47,24 +47,49 @@ def available_tool_names() -> set:
 
 
 def user_rooms_dir() -> Path:
+    """The folder of the person's own rooms. It is one for the whole Argent, not one per working folder, so
+    a room made once is there after /cd too (ARGENT_ROOMS_DIR moves it; the tests do)."""
+    import os
+    env = os.environ.get("ARGENT_ROOMS_DIR")
+    if env:
+        return Path(env)
+    return Path(__file__).resolve().parents[2] / ".argent" / "rooms"
+
+
+def project_rooms_dir() -> Path:
+    """Rooms that belong to the project in the working folder (older rooms were kept only there)."""
     return Path(".argent") / "rooms"
 
 
 def stats_path() -> Path:
-    return Path(".argent") / "rooms_stats.json"
+    return user_rooms_dir().parent / "rooms_stats.json"
 
 
-def build_library(available_tools=None, user_dir=None, stats_file=None) -> RoomLibrary:
-    """Starter rooms (packaged, read-only) plus any user/AI-authored rooms in
-    .argent/rooms/ (writable). Run counters and quarantines persist in
-    .argent/rooms_stats.json. `user_dir`/`stats_file` pin the locations (the editor
-    server does, so a later `/cd` cannot move what it edits)."""
+def build_library(available_tools=None, user_dir=None, stats_file=None, extra_dirs=None) -> RoomLibrary:
+    """Starter rooms (packaged, read-only) plus the person's own rooms (user_rooms_dir(), writable, the same
+    from any working folder) plus the working folder's .argent/rooms. Run counters and quarantines persist
+    next to the rooms folder (rooms_stats.json). `user_dir`/`stats_file`/`extra_dirs` pin the locations (the
+    editor server does, so a later `/cd` cannot move what it edits)."""
     tools = available_tool_names() if available_tools is None else set(available_tools)
     udir = Path(user_dir) if user_dir else user_rooms_dir()
     lib = RoomLibrary(user_dir=udir, stats_path=stats_file or stats_path())
     lib.load_dir(default_starter_dir(), tools, origin="starter")
     if udir.exists():
         lib.load_dir(udir, tools, origin="user")
+    # The working folder's own rooms are shown as well (rooms used to be kept only there). Pinned callers
+    # (the editor, the tests) say exactly which folders; the default is "this project's".
+    if extra_dirs is None:
+        extra_dirs = [] if user_dir else [project_rooms_dir()]
+    for folder in extra_dirs:
+        folder = Path(folder)
+        try:
+            same = folder.resolve() == udir.resolve()
+        except OSError:
+            same = False
+        if same or not folder.is_dir():
+            continue
+        lib.extra_dirs.append(folder)
+        lib.load_dir(folder, tools, origin="user", defer_to_user=True)
     return lib
 
 
@@ -80,6 +105,11 @@ def describe_call(node) -> str:
     elif node.type == "power":
         delay = f" через {node.seconds:g} с" if node.seconds else ""
         what = f"ПК: {node.mode}{delay}"
+    elif node.type == "git":
+        what = f"git {node.mode or 'status'}" + (f" «{node.message[:60]}»" if node.message else "")
+    elif node.type == "http":
+        what = f"запрос {(node.mode or 'get').upper()} {str((node.args or {}).get('url', ''))[:100]}"
+        args = ""                                      # headers may carry secrets: never shown in a question
     else:
         what = str(node.tool)
     return f"{what}({args})" if args else what
@@ -221,4 +251,6 @@ def parse_params(text: str) -> tuple:
         return " "
 
     rest = _PARAM.sub(take, text or "")
-    return " ".join(rest.split()), params
+    # Spaces are tidied per line; the line breaks stay, so a pasted list of requirements is still a list.
+    lines = [" ".join(line.split()) for line in rest.splitlines()]
+    return "\n".join(lines).strip("\n"), params

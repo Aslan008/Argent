@@ -16,6 +16,7 @@ is there to pick from" for the editor and the validator.
 """
 
 import contextlib
+import hashlib
 import io
 import json
 import re
@@ -314,6 +315,19 @@ class Integrations:
             return str(AVAILABLE_TOOLS["leeth_click_many"](**kw))
         return f"Error: unknown Leeth mode '{mode}' (use {list(LEETH_MODES)})."
 
+    # ── the project's repository ─────────────────────────────────────────────────
+    def git(self, node, state):
+        """Look at, record or share the project's changes (see gitnode.py). The report text carries the
+        fields it produced in `.values`; the runner stores them as `<id>.<name>`."""
+        from src.rooms import gitnode
+        return gitnode.run(node)
+
+    # ── a web address ────────────────────────────────────────────────────────────
+    def http(self, node, state):
+        """One request to a web service (see httpnode.py); its fields come back in `.values`."""
+        from src.rooms import httpnode
+        return httpnode.run(node)
+
     # ── the computer itself ──────────────────────────────────────────────────────
     @staticmethod
     def power_command(mode: str, seconds: float = 60, message: str = "", platform: str = None) -> tuple:
@@ -390,7 +404,11 @@ class Integrations:
         except Exception:
             running = {}
         for name, cfg in self._configured_servers().items():
-            out[name] = {"type": cfg.get("type", "stdio"), "running": bool(running.get(name))}
+            # `sig` changes when the server is pointed somewhere else, so a page can drop what it
+            # remembered about its tools (the secrets in `env` are not part of it)
+            shown = {k: v for k, v in cfg.items() if k != "env"}
+            sig = hashlib.sha1(json.dumps(shown, sort_keys=True, default=str).encode("utf-8")).hexdigest()[:10]
+            out[name] = {"type": cfg.get("type", "stdio"), "running": bool(running.get(name)), "sig": sig}
         return out
 
     def mcp_tools(self, server: str) -> list:
@@ -433,6 +451,11 @@ class Integrations:
     def plugins(self) -> dict:
         """{plugin: {"commands": [...], "hooks": [...]}} for the loaded plugins."""
         out = {}
+        try:                                  # a plugin added or removed since the last look shows up
+            from hook_manager import hook_manager
+            hook_manager.reload_if_changed(quiet=True)
+        except Exception:
+            pass
         for mod in self._plugin_modules():
             name = getattr(mod, "__name__", "?")
             cmds = sorted(a[len("command_"):] for a in dir(mod) if a.startswith("command_") and callable(getattr(mod, a)))

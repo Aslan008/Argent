@@ -20,6 +20,9 @@ from src.rooms.models import Room
 from src.rooms.validator import validate_room
 
 
+HISTORY_KEEP = 5                       # earlier files kept per room
+
+
 def default_starter_dir() -> Path:
     return Path(__file__).parent / "starter"
 
@@ -33,6 +36,9 @@ class RoomLibrary:
         self._spawn_rooms = set(spawn_rooms)
         # Writable directory for user/AI-authored rooms (add_room persists here).
         self.user_dir = Path(user_dir) if user_dir else None
+        # Further folders whose rooms are shown too (a project's own .argent/rooms). They are only read:
+        # saving always goes to user_dir, and a name that user_dir has wins over the same name here.
+        self.extra_dirs: list = []
         self.stats_path = Path(stats_path) if stats_path else None
         self._saved_stats: dict = self._read_stats()
 
@@ -74,13 +80,18 @@ class RoomLibrary:
         self.save_stats()
         return True
 
-    def load_dir(self, directory, available_tools, origin: str = "starter") -> "RoomLibrary":
+    def load_dir(self, directory, available_tools, origin: str = "starter",
+                 defer_to_user: bool = False) -> "RoomLibrary":
+        """Load every room file of a folder. With `defer_to_user`, a room whose name is already a user's
+        room (from the main folder) is left alone: one name, one room."""
         for path in sorted(Path(directory).glob("*.json")):
             try:
                 data = json.loads(path.read_text(encoding="utf-8"))
                 room = Room(**data)
             except Exception as e:
                 self.load_errors[path.stem] = [f"parse/schema error: {e}"]
+                continue
+            if defer_to_user and self.sources.get(room.room) == "user":
                 continue
             errs = validate_room(
                 room, set(available_tools),
@@ -153,11 +164,70 @@ class RoomLibrary:
         self.stats.setdefault(room.room, self._fresh_stats(room.room))
         if self.user_dir:
             self.user_dir.mkdir(parents=True, exist_ok=True)
+            self._snapshot(room.room)
             (self.user_dir / f"{room.room}.json").write_text(
                 room.model_dump_json(indent=2, by_alias=True, exclude_none=True),
                 encoding="utf-8",
             )
         return []
+
+    # -- versions --------------------------------------------------------------------------------------
+    # Every write over a room (editor, /rooms build|edit, patch) and every delete first copies the file to
+    # <user_dir>/.history/<name>/, so a bad edit or a deleted room can be brought back. The folder starts
+    # with a dot and holds no top-level *.json, so load_dir never takes a copy for a room.
+
+    def _history_dir(self, name: str) -> Path:
+        return Path(self.user_dir) / ".history" / name
+
+    def _snapshot(self, name: str) -> None:
+        if not self.user_dir:
+            return
+        # the file that is about to be replaced or deleted: the shared one, else the project's own copy
+        current = next((f for f in (Path(d) / f"{name}.json" for d in [self.user_dir, *self.extra_dirs])
+                        if f.is_file()), None)
+        try:
+            if current is None:
+                return
+            text = current.read_text(encoding="utf-8")
+            folder = self._history_dir(name)
+            folder.mkdir(parents=True, exist_ok=True)
+            kept = sorted(folder.glob("*.json"))
+            if kept and kept[-1].read_text(encoding="utf-8") == text:
+                return                      # nothing changed since the last copy
+            import time
+            stamp = time.strftime("%Y%m%d-%H%M%S") + f"-{int(time.time() * 1000) % 1000:03d}"
+            target = folder / f"{stamp}.json"
+            n = 1
+            while target.exists():
+                n += 1
+                target = folder / f"{stamp}-{n}.json"
+            target.write_text(text, encoding="utf-8")
+            for old in sorted(folder.glob("*.json"))[:-HISTORY_KEEP]:
+                old.unlink()
+        except OSError:
+            pass                            # a copy that cannot be made must not block the save
+
+    def versions(self, name: str) -> list:
+        """Earlier files of a room, newest first (1 = the one just before the current)."""
+        if not self.user_dir:
+            return []
+        try:
+            return sorted(self._history_dir(name).glob("*.json"), reverse=True)
+        except OSError:
+            return []
+
+    def restore_version(self, name: str, which: int, available_tools) -> list:
+        """Put an earlier file back (through the same gate as any save). Returns errors; [] == restored."""
+        found = self.versions(name)
+        if not 1 <= which <= len(found):
+            return [f"нет версии {which} (есть: {len(found)})"]
+        try:
+            room = Room(**json.loads(found[which - 1].read_text(encoding="utf-8")))
+        except Exception as e:
+            return [f"версия не читается: {e}"]
+        if room.room != name:
+            return [f"в файле версии другая комната («{room.room}»)"]
+        return self.add_room(room, available_tools)
 
     def remove_room(self, name: str) -> bool:
         """Remove a room from the library; delete its user-dir file if present.
@@ -167,8 +237,10 @@ class RoomLibrary:
         self.rooms.pop(name)
         self.stats.pop(name, None)
         self.sources.pop(name, None)
-        if self.user_dir:
-            f = self.user_dir / f"{name}.json"
+        self._snapshot(name)             # a deleted room can be brought back: /rooms restore
+        # also from the project folders: a room deleted here must not come back from there
+        for folder in ([self.user_dir] if self.user_dir else []) + list(self.extra_dirs):
+            f = Path(folder) / f"{name}.json"
             if f.exists():
                 f.unlink()
         return True
@@ -291,6 +363,10 @@ def describe_room(room: Room) -> str:
             detail = f" mode={n.mode or 'all'}" + (f" clear={n.clear}" if n.clear else "")
         elif n.type == "assert":
             detail = f" cond={n.condition}"
+        elif n.type == "http":
+            detail = f" {(n.mode or 'get').upper()} {str((n.args or {}).get('url', ''))[:60]}" + (" [спрашивает]" if n.confirm else "")
+        elif n.type == "git":
+            detail = f" mode={n.mode or 'status'}" + (f" message={n.message[:50]!r}" if n.message else "") + (" [спрашивает]" if n.confirm else "")
         elif n.type == "parallel":
             detail = f" join={n.join} workers={n.workers or 'all'}"
         elif n.type == "join":

@@ -118,8 +118,11 @@ class TestRetry:
         assert due_trigger(job, NOW) == "retry"
 
     def test_the_scheduler_passes_the_trigger_on(self, project):
-        job = self._failed()
-        job.last_run = (datetime.now() - timedelta(minutes=10)).isoformat()
+        # The wall clock is real here, so keep the daily slot twelve hours away: a test run
+        # at the slot's own minute would otherwise fire "schedule" instead of "retry".
+        now = datetime.now()
+        job = self._failed(schedule=f"daily at {(now + timedelta(hours=12)):%H:%M}")
+        job.last_run = (now - timedelta(minutes=10)).isoformat()
         job.name = "daily-job"
         store.upsert_automation(job)
         seen = []

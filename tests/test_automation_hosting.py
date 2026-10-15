@@ -370,4 +370,4 @@ class TestStartingTheScheduler:
                           "alert": True, "mode": "remind", "trigger": "schedule", "summary": "Заварить чай"})
         texts = [n.get("text", "") for n in notices]
         assert any("«m»" in t and "all clear" in t for t in texts)
-        assert any(t == "⏰ Напоминание «tea»: Заварить чай" for t in texts)
+        assert any(t == "Напоминание «tea»: Заварить чай" for t in texts)

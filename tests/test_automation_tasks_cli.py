@@ -530,12 +530,12 @@ class TestNotice:
     def test_news_errors_and_refusals_speak(self):
         news = notice.format_event_notice(self._event(alert=True, new_items=2, summary="A, B"))
         assert "нового: 2" in news and "A, B" in news and "/tasks inbox" in news
-        assert "⚠" in notice.format_event_notice(self._event(alert=True, status="error", summary="boom"))
-        assert "🔒" in notice.format_event_notice(self._event(alert=True, status="denied", denied=1))
+        assert "boom" in notice.format_event_notice(self._event(alert=True, status="error", summary="boom"))
+        assert "denied" in notice.format_event_notice(self._event(alert=True, status="denied", denied=1))
 
     def test_a_reminder_is_just_the_message(self):
         text = notice.format_event_notice(self._event(alert=True, mode="remind", summary="Позвонить Ане"))
-        assert text == "⏰ Напоминание «job»: Позвонить Ане"
+        assert text == "Напоминание «job»: Позвонить Ане"
 
     def test_a_manual_run_always_answers(self):
         text = notice.format_event_notice(self._event(trigger="manual", summary="done"))

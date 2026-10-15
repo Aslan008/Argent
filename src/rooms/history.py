@@ -170,7 +170,7 @@ def format_report(result, library=None, task: str = "", seconds: float = None) -
     if library is not None and rooms_run and state is not None:
         last = library.get(rooms_run[-1])
         if last is not None and last.report:
-            custom = template.render(last.report, state.data, limit=1500).strip()
+            custom = template.render(last.report, state.data, limit=3000).strip()
     if custom:
         lines.append("")
         lines.append(custom)

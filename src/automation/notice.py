@@ -42,10 +42,9 @@ def format_event_notice(event: dict):
         return None
 
     if event.get("mode") == "remind" and status == "ok":
-        return f"⏰ Напоминание «{name}»: {_one_line(summary, _NOTICE_LIMIT)}"
+        return f"Напоминание «{name}»: {_one_line(summary, _NOTICE_LIMIT)}"
 
-    icon = {"ok": "⏰", "error": "⚠", "denied": "🔒"}.get(status, "⏰")
-    head = f"{icon} Автоматизация «{name}»"
+    head = f"Автоматизация «{name}»"
     if manual:
         head += " выполнена" if status == "ok" else f": {status}"
     else:
@@ -95,7 +94,7 @@ def startup_digest(now: datetime = None, limit_names: int = 4):
     if paused is not None:
         until = "пока не включите: /tasks resume" if paused == datetime.max else (
             f"до {humanize_when(paused, now)}")
-        lines.append(f"⏸ Автоматизации на паузе {until}")
+        lines.append(f"Автоматизации на паузе {until}")
 
     since = store.last_seen()
     if since is None:
@@ -118,6 +117,6 @@ def startup_digest(now: datetime = None, limit_names: int = 4):
             if blocked:
                 parts.append(f"отказов без человека: {blocked}")
             shown = ", ".join(names[:limit_names]) + (" и др." if len(names) > limit_names else "")
-            lines.append(f"⏰ Пока вас не было — {'; '.join(parts)} ({shown}). Смотреть: /tasks inbox")
+            lines.append(f"Пока вас не было — {'; '.join(parts)} ({shown}). Смотреть: /tasks inbox")
 
     return "\n".join(lines) if lines else None

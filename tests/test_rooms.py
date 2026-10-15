@@ -110,11 +110,19 @@ class TestCondition:
         assert condition.evaluate("state.a and not state.b", {"a": True, "b": False}) is True
         assert condition.evaluate("state.a or state.b", {"a": False, "b": False}) is False
 
+    def test_a_steps_field_is_a_dotted_state_name(self):
+        """`state.<step>.<field>` is a dictionary lookup (git's `clean`, an answer's `output`), not an attribute access."""
+        assert condition.evaluate("state.look.clean", {"look.clean": True}) is True
+        assert condition.evaluate("state.look.clean", {}) is False
+        assert condition.evaluate("state.cfg.mode == 'fast'", {"cfg": {"mode": "fast"}}) is True
+
     @pytest.mark.parametrize("expr", [
         "foo()",                 # function call
         "state.x[0]",            # subscript
         "os",                    # bare name
-        "state.x.y",             # attribute chain beyond state.<field>
+        "state.x.y()",           # a call on a step's field
+        "state.x.y[0]",          # a subscript on it
+        "x.y",                   # a dotted name that does not start at state
         "__import__('os')",      # call
         "",                      # empty
         "state.x = 1",           # not an expression

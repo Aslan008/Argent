@@ -176,18 +176,18 @@ def notification_for(name: str, result: dict):
         return None
 
     if status == "error":
-        return f"⚠ {name}: сбой", summary or "Прогон завершился ошибкой — /tasks runs"
+        return f"{name}: сбой", summary or "Прогон завершился ошибкой — /tasks runs"
     if denied:
         actions = ", ".join(d.get("action", "?") for d in denied[:3])
-        return f"🔒 {name}: нужен ты", f"Отклонено без человека: {actions}"
+        return f"{name}: нужен ты", f"Отклонено без человека: {actions}"
     if result.get("mode") == "remind":
-        return f"⏰ {name}", summary or "Напоминание"
+        return f"{name}", summary or "Напоминание"
     if new_items > 0:
         word = "новое" if new_items == 1 else "новых"
-        return f"🔔 {name}: {new_items} {word}", summary or "Подробности — /tasks runs"
+        return f"{name}: {new_items} {word}", summary or "Подробности — /tasks runs"
     if result.get("silent"):
-        return f"📋 {name}", summary or "Без изменений"
-    return f"📋 {name}", summary or "Прогон завершён — /tasks runs"
+        return f"{name}", summary or "Без изменений"
+    return f"{name}", summary or "Прогон завершён — /tasks runs"
 
 
 def notify_run(name: str, result: dict, channels=()) -> bool:

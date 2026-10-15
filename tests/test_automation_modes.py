@@ -300,7 +300,7 @@ class TestRemindMode:
         sent = []
         monkeypatch.setattr(notify, "desktop_notify", lambda t, b: sent.append((t, b)) or True)
         result = run_and_record(_a(name="anna", mode="remind", task="Call Anna"))
-        assert result["alert"] is True and sent == [("⏰ anna", "Call Anna")]
+        assert result["alert"] is True and sent == [("anna", "Call Anna")]
 
     def test_unless_you_silenced_it(self, project, monkeypatch):
         monkeypatch.setattr(notify, "desktop_notify", lambda t, b: pytest.fail("silenced"))
@@ -348,12 +348,12 @@ class TestRunAndRecordDelivery:
     def test_always_sends_a_digest(self, project, monkeypatch):
         sent = self._capture(monkeypatch)
         run_and_record(_a(name="digest", notify="always"), agent=_Agent([_say("3 PRs open")]))
-        assert sent == [("📋 digest", "3 PRs open")]
+        assert sent == [("digest", "3 PRs open")]
 
     def test_always_still_says_so_when_there_was_nothing(self, project, monkeypatch):
         sent = self._capture(monkeypatch)
         run_and_record(_a(name="digest", notify="always"), agent=_Agent([_say(SILENT_MARKER)]))
-        assert sent == [("📋 digest", "Ничего нового.")]
+        assert sent == [("digest", "Ничего нового.")]
 
     def test_changes_speaks_once_per_distinct_report(self, project, monkeypatch):
         sent = self._capture(monkeypatch)
@@ -397,7 +397,7 @@ class TestRunAndRecordDelivery:
         monkeypatch.setattr(notify, "telegram_notify", lambda t, b: sent.append(t) or True)
         run_and_record(_a(name="t", notify="always", channels=["telegram"]),
                        agent=_Agent([_say("x")]))
-        assert sent == ["📋 t"]
+        assert sent == ["t"]
 
     def test_no_channel_no_telegram(self, project, monkeypatch):
         self._capture(monkeypatch)
@@ -478,11 +478,11 @@ class TestTelegram:
 class TestNotificationText:
     def test_titles_by_kind(self):
         assert notify.notification_for("j", {"status": "error", "summary": "boom", "alert": True}) \
-            == ("⚠ j: сбой", "boom")
+            == ("j: сбой", "boom")
         assert notify.notification_for("j", {"status": "ok", "new_items": 2, "summary": "a, b",
-                                             "alert": True})[0] == "🔔 j: 2 новых"
+                                             "alert": True})[0] == "j: 2 новых"
         assert notify.notification_for("j", {"status": "denied", "denied_actions": [{"action": "rm x"}],
-                                             "alert": True})[0] == "🔒 j: нужен ты"
+                                             "alert": True})[0] == "j: нужен ты"
 
     def test_an_explicit_alert_flag_wins_over_the_old_derivation(self):
         assert notify.notification_for("j", {"status": "error", "alert": False}) is None

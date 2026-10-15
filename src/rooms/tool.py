@@ -62,9 +62,11 @@ def _ask_run(room, task, params) -> bool:
 
 def _human(node, state) -> None:
     import questionary
-    ans = questionary.text(f"[{node.id}] {node.prompt or 'Ваш ввод:'}").ask()
-    if ans:
-        state.data[f"{node.id}.output"] = ans
+    from src.rooms.ask import ask_human
+    from ui import print_system
+    ask_human(node, state, print_system,
+              lambda q: questionary.text(q).ask(),
+              lambda q, options: questionary.select(q, choices=options).ask())
 
 
 def _ask_save(flow: str, name: str) -> bool:

@@ -17,12 +17,27 @@ NodeType = Literal[
     "tool", "agent", "condition", "human_pause", "spawn_room", "set", "notify", "room",
     "mcp", "skill", "plugin", "leeth", "foreach", "wait",
     "loop", "break", "continue", "power", "hint", "forget", "assert",
-    "parallel", "join",
+    "parallel", "join", "git", "http",
 ]
 
 #: Node types that reach outside the run (a server, a plugin, another engine): they may change
 #: things, so they are asked about when `confirm` is set and are never replayed blindly on resume.
-CALLING_TYPES = ("tool", "mcp", "plugin", "leeth", "power")
+CALLING_TYPES = ("tool", "mcp", "plugin", "leeth", "power", "git", "http")
+
+#: What a `git` node does in the project's repository. It runs git itself (no shell, no model), so a
+#: commit message or a branch name can never be taken for a command, and it has no force option at all.
+#: status: where we are and what changed; diff: what changed (against HEAD, or `args.against`);
+#: log: the last commits; add: stage files; commit: record what is staged; branch: the current branch,
+#: the list, or create one; checkout: switch branches; stash: save / pop / list; pull and push: sync.
+GIT_MODES = ("status", "diff", "log", "add", "commit", "branch", "checkout", "stash", "pull", "push")
+#: The modes that only look: they are safe to run again after an interruption, and to try from the editor.
+GIT_READ_MODES = ("status", "diff", "log")
+#: What an `http` node does: the request method. Looking (get, head) is repeatable and may be tried from
+#: the editor; the others change something on the other side and are asked about by default.
+HTTP_MODES = ("get", "post", "put", "patch", "delete", "head")
+HTTP_READ_MODES = ("get", "head")
+#: Where a node's own result may be kept under a name of the person's choosing (`save_as`).
+SAVE_AS_TYPES = ("tool", "agent", "mcp", "plugin", "leeth", "skill", "git", "http")
 
 #: What a `mcp` node does: call one tool of a server, or list the server's tools.
 MCP_MODES = ("call", "list")
@@ -91,22 +106,35 @@ DERIVED_VALUES = ("ok", "exit_code", "output", "body", "tail")
 #: More ways to take a value out of a result, for anything that returns more than a verdict:
 #: ``lines`` (a list of the non-empty lines), ``count`` (how many), ``first_line``, ``int`` /
 #: ``float`` (the first number), ``bool`` (a plain yes in the text), ``json`` (the parsed answer),
-#: ``json:a.b.0`` (one value inside it) and ``regex:<pattern>`` (the first group, or the match).
+#: ``json:a.b.0`` (one value inside it), ``regex:<pattern>`` (the first group, or the match) and
+#: ``regex_all:<pattern>`` (a list of all of them). ``count`` counts non-empty LINES; to count the
+#: items of a list use ``count:json:<path>`` (the length of the list inside the JSON) or
+#: ``count:regex_all:<pattern>`` (how many matches).
 EXTRA_DERIVED = ("lines", "count", "first_line", "int", "float", "bool", "json")
+
+
+#: How many answers a question may offer, and how long one may be.
+OPTIONS_MAX = 12
+OPTION_MAX_LENGTH = 80
 
 
 def is_derived_spec(spec: str) -> bool:
     """Whether `spec` is a value a node's ``sets`` may ask for."""
     if spec in DERIVED_VALUES or spec in EXTRA_DERIVED:
         return True
+    if spec.startswith("count:"):
+        inner = spec[6:].strip()
+        return inner.startswith(("json:", "regex_all:")) and is_derived_spec(inner)
     if spec.startswith("json:"):
         return bool(spec[5:].strip())
-    if spec.startswith("regex:"):
-        try:
-            re.compile(spec[6:])
-        except re.error:
-            return False
-        return bool(spec[6:])
+    for prefix in ("regex:", "regex_all:"):
+        if spec.startswith(prefix):
+            pattern = spec[len(prefix):]
+            try:
+                re.compile(pattern)
+            except re.error:
+                return False
+            return bool(pattern)
     return False
 
 
@@ -189,6 +217,9 @@ class Node(BaseModel):
     # State field that receives the person's answer; `<into>_approved` is set to
     # whether the answer was a "yes" (so an edge can branch on `state.<into>_approved`).
     into: Optional[str] = None
+    # Answers to pick from (buttons in the editor, a menu in the terminal). The chosen one is stored in
+    # `<id>.choice` and, when `into` is set, in that field. Empty means a free-text question.
+    options: list[str] = Field(default_factory=list)
 
     # set nodes: literal values (strings may carry {{field}}) written into the run state
     values: dict[str, Any] = Field(default_factory=dict)
@@ -271,6 +302,10 @@ class Node(BaseModel):
     clear: list[str] = Field(default_factory=list)
     # notify / hint nodes: `message` is an instruction, and the model writes the text from the state.
     compose: bool = False
+    # tool, agent, mcp, plugin, leeth, skill and git nodes: keep the step's result (the tool's output,
+    # the worker's answer, git's report) in a field of this name — the plain way to pass it on, without
+    # `sets` (which derives verdicts) or `writes` (which makes the model answer in JSON).
+    save_as: Optional[str] = None
 
     @model_validator(mode="after")
     def _require_per_type_fields(self) -> "Node":
@@ -302,23 +337,57 @@ class Node(BaseModel):
                 raise ValueError(f"room node '{self.id}': inputs/outputs must be identifiers: {bad}")
         elif self.inputs or self.outputs:
             raise ValueError(f"node '{self.id}': 'inputs'/'outputs' are only for room nodes")
-        if self.retries and self.type not in ("tool", "agent", "room", "mcp", "plugin", "leeth", "skill"):
-            raise ValueError(f"node '{self.id}': 'retries' is only for tool, agent, room, mcp, skill, plugin and leeth nodes")
+        if self.retries and self.type not in ("tool", "agent", "room", "mcp", "plugin", "leeth", "skill", "http"):
+            raise ValueError(f"node '{self.id}': 'retries' is only for tool, agent, room, mcp, skill, plugin, leeth and http nodes")
+        if self.save_as is not None:
+            if self.type not in SAVE_AS_TYPES:
+                raise ValueError(f"node '{self.id}': 'save_as' is only for {', '.join(SAVE_AS_TYPES)} nodes")
+            if not str(self.save_as).isidentifier():
+                raise ValueError(f"node '{self.id}': 'save_as' must be a plain field name (letters, digits, _)")
         if self.sets:
-            if self.type not in ("tool", "mcp", "plugin", "leeth", "skill"):
-                raise ValueError(f"node '{self.id}': 'sets' is only for tool, mcp, skill, plugin and leeth nodes")
+            if self.type not in ("tool", "mcp", "plugin", "leeth", "skill", "git", "http"):
+                raise ValueError(f"node '{self.id}': 'sets' is only for tool, mcp, skill, plugin, leeth, git and http nodes")
             bad = sorted(v for v in self.sets.values() if not is_derived_spec(str(v)))
             if bad:
                 raise ValueError(
                     f"node '{self.id}': unknown derived value {bad} (use {list(DERIVED_VALUES) + list(EXTRA_DERIVED)}, "
-                    "json:<path> or regex:<pattern>)")
+                    "json:<path>, regex:<pattern> or regex_all:<pattern>)")
         if self.confirm and self.type not in CALLING_TYPES:
-            raise ValueError(f"node '{self.id}': 'confirm' is only for tool, mcp, plugin and leeth nodes")
+            raise ValueError(f"node '{self.id}': 'confirm' is only for tool, mcp, plugin, leeth, power, git and http nodes")
+        if self.options:
+            if self.type != "human_pause":
+                raise ValueError(f"node '{self.id}': 'options' is only for human_pause nodes")
+            shown = [str(o).strip() for o in self.options]
+            if any(not o for o in shown) or any(len(o) > OPTION_MAX_LENGTH for o in shown):
+                raise ValueError(f"node '{self.id}': each option is a short non-empty text (up to {OPTION_MAX_LENGTH} characters)")
+            if len(shown) < 2 or len(shown) > OPTIONS_MAX or len({o.casefold() for o in shown}) != len(shown):
+                raise ValueError(f"node '{self.id}': 'options' needs 2 to {OPTIONS_MAX} different answers")
+            self.options = shown
         if self.into and self.type not in ("human_pause", "room"):
             raise ValueError(f"node '{self.id}': 'into' is only for human_pause and room nodes")
         if (self.tools is not None or self.role) and self.type != "agent":
             raise ValueError(f"node '{self.id}': 'role'/'tools' are only for agent nodes")
         return self
+
+    def _check_http(self) -> None:
+        mode = (self.mode or "get").lower()
+        if mode not in HTTP_MODES:
+            raise ValueError(f"http node '{self.id}': mode must be one of {list(HTTP_MODES)}")
+        a = self.args or {}
+        url = str(a.get("url") or "").strip()
+        if not url:
+            raise ValueError(f"http node '{self.id}' requires args.url (the address to call)")
+        if not url.startswith(("http://", "https://", "{{")):
+            raise ValueError(f"http node '{self.id}': args.url must start with http:// or https://")
+        for key in ("headers", "query", "form"):
+            value = a.get(key)
+            if value is not None and not isinstance(value, dict):
+                raise ValueError(f"http node '{self.id}': args.{key} must be an object of name: value")
+        if sum(1 for k in ("json", "form", "body") if a.get(k) not in (None, "", {})) > 1:
+            raise ValueError(f"http node '{self.id}': give one of args.json, args.form or args.body, not several")
+        timeout = a.get("timeout")
+        if timeout is not None and not (isinstance(timeout, (int, float)) and 1 <= timeout <= 120):
+            raise ValueError(f"http node '{self.id}': args.timeout is 1 to 120 seconds")
 
     def _check_integrations(self) -> None:
         """Per-type requirements of the nodes that reach outside the run, and of the properties
@@ -354,8 +423,8 @@ class Node(BaseModel):
             value = getattr(self, field)
             if value not in (None, [], "") and t not in types:
                 raise ValueError(f"node '{self.id}': '{field}' is only for {', '.join(types)} nodes")
-        if self.mode is not None and t not in ("mcp", "plugin", "leeth", "loop", "power", "hint", "forget"):
-            raise ValueError(f"node '{self.id}': 'mode' is only for mcp, plugin, leeth, loop, power, hint and forget nodes")
+        if self.mode is not None and t not in ("mcp", "plugin", "leeth", "loop", "power", "hint", "forget", "git", "http"):
+            raise ValueError(f"node '{self.id}': 'mode' is only for mcp, plugin, leeth, loop, power, hint, forget, git and http nodes")
         if self.sampling and t != "agent":
             raise ValueError(f"node '{self.id}': 'sampling' is only for agent nodes")
         if self.compose and t not in ("notify", "hint"):
@@ -381,8 +450,12 @@ class Node(BaseModel):
                 "skill:<name> or skill:<name>#<heading>")
         if t in ("mcp", "plugin", "leeth", "power") and "idempotent" not in self.model_fields_set:
             self.idempotent = False          # it reaches outside the run: never replay it blindly
-        if self.args and t not in ("tool", "mcp", "plugin", "leeth", "power"):
-            raise ValueError(f"node '{self.id}': 'args' is only for tool, mcp, plugin, leeth and power nodes")
+        if t == "git" and "idempotent" not in self.model_fields_set:
+            self.idempotent = (self.mode or "status") in GIT_READ_MODES     # looking is repeatable, changing is not
+        if t == "http" and "idempotent" not in self.model_fields_set:
+            self.idempotent = (self.mode or "get").lower() in HTTP_READ_MODES      # a GET repeats, a POST must not
+        if self.args and t not in ("tool", "mcp", "plugin", "leeth", "power", "git", "http"):
+            raise ValueError(f"node '{self.id}': 'args' is only for tool, mcp, plugin, leeth, power, git and http nodes")
 
         if t == "mcp":
             mode = self.mode or "call"
@@ -446,6 +519,19 @@ class Node(BaseModel):
         elif t in ("break", "continue"):
             if not self.loop:
                 raise ValueError(f"{t} node '{self.id}' requires 'loop' (the id of the loop it belongs to)")
+        elif t == "git":
+            mode = self.mode or "status"
+            if mode not in GIT_MODES:
+                raise ValueError(f"git node '{self.id}': mode must be one of {list(GIT_MODES)}")
+            if mode == "commit" and not (self.message or "").strip():
+                raise ValueError(f"git node '{self.id}' (commit) requires a 'message' (the commit message)")
+            if mode == "checkout" and not str(self.args.get("branch") or "").strip():
+                raise ValueError(f"git node '{self.id}' (checkout) requires args.branch (the branch to switch to)")
+            bad = [k for k in ("force", "force_with_lease", "hard") if self.args.get(k)]
+            if bad:
+                raise ValueError(f"git node '{self.id}': {bad} is not available — a room never forces or discards history")
+        elif t == "http":
+            self._check_http()
         elif t == "power":
             if self.mode not in POWER_MODES:
                 raise ValueError(f"power node '{self.id}' requires 'mode' (one of {list(POWER_MODES)})")

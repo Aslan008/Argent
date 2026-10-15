@@ -77,6 +77,10 @@ const TYPES = {
     hint: "Каждая исходящая стрелка — отдельная ветка. Все ветки идут одновременно и сходятся в блоке «Слияние»."},
   join: {icon: "i-join", name: "Слияние", short: "Собрать ветки обратно в одну",
     hint: "Ждёт ветки своего блока «Параллельно» и объединяет то, что они записали."},
+  git: {icon: "i-git", name: "Git", short: "Что изменилось, коммит, ветка, отправка",
+    hint: "Работает с репозиторием проекта без модели и без командной строки: смотрит изменения, делает коммит, переключает ветки, отправляет. Результат — готовые поля."},
+  http: {icon: "i-http", name: "Запрос в сеть", short: "Получить или отправить данные по адресу (API, сайт)",
+    hint: "Обращается к веб-адресу без модели и без командной строки: получает страницу или ответ API, отправляет данные. Результат — готовые поля: код ответа, успешно ли, текст, JSON. Всё, что что-то меняет на той стороне, по умолчанию спрашивает вас; секреты берутся из переменных окружения."},
   // Системный блок: есть только в комнате triage, в палитру не попадает.
   spawn_room: {icon: "i-spawn_room", name: "Новая комната", short: "Системный блок: ИИ предлагает комнату",
     hint: "Только для triage: модель предлагает новую комнату как данные, а вы её утверждаете."},
@@ -89,6 +93,23 @@ const DERIVED_LABEL = {ok: "прошла ли команда (код 0)", exit_c
 const ROLE_LABEL = {Coder: "Coder — правит код", Researcher: "Researcher — читает и ищет", Reviewer: "Reviewer — ревью",
   DocWriter: "DocWriter — тексты и документация", BrowserWorker: "BrowserWorker — работает в браузере", Critic: "Critic — критикует и проверяет"};
 const CHANNEL_LABEL = {console: "в консоль", desktop: "всплывающим окном ПК", telegram: "в Telegram"};
+// что делает блок Git и какие поля он оставляет (они видны в «подставить» и в условиях)
+const GIT_LABEL = {status: "Что изменилось", diff: "Разница (что поменялось)", log: "Последние коммиты", add: "Добавить файлы в коммит",
+  commit: "Закоммитить", branch: "Ветка: показать, создать, переключить", checkout: "Переключить ветку", stash: "Отложить изменения",
+  pull: "Получить с сервера", push: "Отправить на сервер"};
+const GIT_FIELDS = {
+  status: {branch: "текущая ветка", clean: "нет ли изменений", changed: "сколько файлов изменено", files: "список изменённых файлов",
+    staged: "что уже в коммите", untracked: "новые файлы", ahead: "сколько коммитов не отправлено", behind: "сколько коммитов не получено"},
+  diff: {files: "изменённые файлы", count: "сколько файлов", added: "добавлено строк", removed: "удалено строк", changed: "есть ли разница"},
+  log: {commits: "список коммитов", count: "сколько коммитов", last: "тема последнего коммита", last_hash: "хэш последнего"},
+  add: {files: "что добавлено", count: "сколько файлов"},
+  commit: {committed: "сделан ли коммит", commit: "хэш коммита", branch: "ветка"},
+  branch: {branch: "текущая ветка", branches: "все ветки"},
+  checkout: {branch: "текущая ветка"},
+  stash: {stashed: "отложено ли что-то", count: "сколько отложено"},
+  pull: {updated: "пришли ли изменения", branch: "ветка"},
+  push: {pushed: "отправлено ли", branch: "ветка"},
+};
 const EXIT_PRESETS = [
   ["done", "Готово", "Успешное завершение"],
   ["failed", "Провал", "Не получилось, но это ожидаемый исход"],
@@ -147,7 +168,7 @@ function say(text, kind, items) {
 function blankRoom(name) {
   return {room: name, description: "", tags: [], budget: {max_iterations: 10, max_tokens: 40000}, entry: "start",
     defaults: {}, next: {done: "END"}, nodes: [{id: "start", type: "agent", role: "Coder", budget: {max_iterations: 6, max_tokens: 20000},
-      writes: ["result"], instruction: "Задача: {{task}}\nСделай работу. В конце ответь JSON-объектом: result=<что сделано>."}],
+      save_as: "result", instruction: "Задача: {{task}}\nСделай работу и коротко опиши, что сделано."}],
     edges: [{from: "start", to: "EXIT:done"}]};
 }
 function nodeById(id) { return room.nodes.find((n) => n.id === id); }
@@ -161,7 +182,7 @@ function uniqueId(base) { let i = 1, id = base; while (nodeById(id)) id = base +
 function defaultNode(type) {
   const id = uniqueId({tool: "command", agent: "agent", condition: "branch", human_pause: "ask", set: "set_values", notify: "notify", room: "sub_room",
     mcp: "mcp_call", skill: "read_skill", plugin: "plugin_cmd", leeth: "leeth", foreach: "each", wait: "pause", loop: "loop", break: "break_out",
-    continue: "next_round", power: "pc_power", hint: "hint", forget: "forget", assert: "check", parallel: "fork", join: "merge_point"}[type] || type);
+    continue: "next_round", power: "pc_power", hint: "hint", forget: "forget", assert: "check", parallel: "fork", join: "merge_point", git: "git_step", http: "web_request"}[type] || type);
   const b = {id, type};
   if (type === "mcp") Object.assign(b, {server: Object.keys((typeof CAT !== "undefined" && CAT.mcpServers) || {})[0] || "", tool: "", args: {}, confirm: true});
   if (type === "skill") Object.assign(b, {skill: ((typeof CAT !== "undefined" && CAT.skills) || [])[0] ? CAT.skills[0].name : ""});
@@ -178,8 +199,10 @@ function defaultNode(type) {
   if (type === "parallel") b.join = (room.nodes.find((x) => x.type === "join" && !room.nodes.some((p) => p.type === "parallel" && p.join === x.id)) || {}).id || "";
   if (type === "join") Object.assign(b, {merge: "error", wait_for: "all", on_branch_fail: "fail"});
   if (type === "tool") Object.assign(b, {tool: "run_command", args: {command: ""}});
+  if (type === "git") Object.assign(b, {mode: "status"});
+  if (type === "http") Object.assign(b, {mode: "get", args: {url: ""}});
   if (type === "agent") Object.assign(b, {role: "Researcher", tools: ["read_file", "grep_search"],
-    budget: {max_iterations: 6, max_tokens: 20000}, writes: ["result"], instruction: ""});
+    budget: {max_iterations: 6, max_tokens: 20000}, instruction: ""});
   if (type === "condition") b.condition = "state.ok";
   if (type === "human_pause") Object.assign(b, {prompt: "Продолжать?", into: "answer"});
   if (type === "set") b.values = {flag: "value"};
@@ -191,17 +214,18 @@ function defaultNode(type) {
 // какие поля умеет нести узел; всё остальное вычищается при смене типа и перед отправкой
 const COMMON = ["disabled", "note"];
 const OWN = {
-  tool: ["tool", "args", "input_from", "instruction", "idempotent", "confirm", "retries", "sets"],
-  agent: ["role", "tools", "budget", "writes", "context", "instruction", "retries", "skills", "mcp", "ignore", "memory", "hint", "sampling"],
+  tool: ["tool", "args", "input_from", "instruction", "idempotent", "confirm", "retries", "sets", "save_as"],
+  agent: ["role", "tools", "budget", "writes", "context", "instruction", "retries", "skills", "mcp", "ignore", "memory", "hint", "sampling", "save_as"],
   condition: ["condition"],
-  human_pause: ["prompt", "into"],
+  human_pause: ["prompt", "into", "options"],
   set: ["values"],
   notify: ["message", "title", "channel", "compose"],
   room: ["room", "inputs", "outputs", "into", "retries"],
-  mcp: ["server", "mode", "tool", "args", "input_from", "sets", "confirm", "retries", "ignore", "idempotent"],
-  skill: ["skill", "ignore", "sets", "retries"],
-  plugin: ["plugin", "mode", "command", "args", "sets", "confirm", "retries", "idempotent"],
-  leeth: ["mode", "instruction", "input_from", "args", "sets", "confirm", "retries", "idempotent"],
+  mcp: ["server", "mode", "tool", "args", "input_from", "sets", "confirm", "retries", "ignore", "idempotent", "save_as"],
+  http: ["mode", "args", "sets", "confirm", "retries", "save_as"],
+  skill: ["skill", "ignore", "sets", "retries", "save_as"],
+  plugin: ["plugin", "mode", "command", "args", "sets", "confirm", "retries", "idempotent", "save_as"],
+  leeth: ["mode", "instruction", "input_from", "args", "sets", "confirm", "retries", "idempotent", "save_as"],
   foreach: ["input_from", "item", "max_items"],
   wait: ["seconds"],
   loop: ["mode", "start", "stop", "step", "condition", "input_from", "item", "item_value", "max_items"],
@@ -213,6 +237,7 @@ const OWN = {
   assert: ["condition", "message"],
   parallel: ["join", "workers"],
   join: ["merge", "wait_for", "on_branch_fail"],
+  git: ["mode", "message", "args", "sets", "confirm", "save_as"],
 };
 function cleaned(obj) {
   const r = clone(obj);
@@ -224,6 +249,8 @@ function cleaned(obj) {
                (n[k] && typeof n[k] === "object" && !Array.isArray(n[k]) && !Object.keys(n[k]).length && k !== "args")) delete n[k];
     }
     if (n.type === "tool" && n.idempotent === true) delete n.idempotent;
+    if (n.type === "git" || n.type === "http") delete n.idempotent;       // его решает режим
+    if (n.type === "http" && n.mode === "get") delete n.mode;
     if (["mcp", "plugin", "leeth", "power"].includes(n.type) && n.idempotent === false) delete n.idempotent;
     for (const k of ["confirm", "disabled", "compose"]) if (n[k] === false) delete n[k];
     if (!n.retries) delete n.retries;
@@ -263,8 +290,12 @@ function knownFields() {
   add("task", "задача, с которой запустили комнату");
   for (const k of Object.keys(room.defaults || {})) add(k, "параметр комнаты");
   for (const n of room.nodes) {
-    if (["tool", "mcp", "plugin", "leeth", "skill"].includes(n.type)) for (const [k, v] of Object.entries(n.sets || {})) add(k, `шаг «${n.id}»: ${DERIVED_LABEL[v] || v}`);
-    if (["tool", "mcp", "plugin", "leeth", "skill", "power", "hint", "assert"].includes(n.type)) add(n.id + ".output", `вывод шага «${n.id}»`);
+    if (["tool", "mcp", "plugin", "leeth", "skill", "git", "http"].includes(n.type)) for (const [k, v] of Object.entries(n.sets || {})) add(k, `шаг «${n.id}»: ${DERIVED_LABEL[v] || v}`);
+    if (["tool", "mcp", "plugin", "leeth", "skill", "power", "hint", "assert", "git"].includes(n.type)) add(n.id + ".output", `вывод шага «${n.id}»`);
+    if (n.type === "agent") add(n.id + ".output", `ответ модели на шаге «${n.id}»`);
+    if (n.save_as) add(n.save_as, `результат шага «${n.id}»`);
+    if (n.type === "git") for (const [k, why] of Object.entries(GIT_FIELDS[n.mode || "status"] || {})) add(n.id + "." + k, `шаг «${n.id}»: ${why}`);
+    if (n.type === "http") { add(n.id + ".output", `текст ответа «${n.id}»`); for (const [k, why] of Object.entries(HTTP_FIELDS)) add(n.id + "." + k, `шаг «${n.id}»: ${why}`); }
     if (n.type === "foreach") { add(n.item || "item", `текущий элемент («${n.id}»)`); add(n.id + "_index", `номер элемента («${n.id}»)`); add(n.id + "_count", `сколько элементов («${n.id}»)`); add(n.id + "_done", `список закончился («${n.id}»)`); }
     if (n.type === "loop") {
       add(n.item || (n.mode === "for_in" ? "key" : "i"), `счётчик цикла «${n.id}»`);
@@ -277,6 +308,7 @@ function knownFields() {
     add(n.id + "_visits", `сколько раз начинался шаг «${n.id}» (для условия «зациклилось»)`);
     if (n.type === "agent") for (const k of n.writes || []) add(k, `шаг «${n.id}»: пишет агент`);
     if (n.type === "human_pause" && n.into) { add(n.into, `ответ на вопрос «${n.id}»`); add(n.into + "_approved", `был ли ответ «да» («${n.id}»)`); }
+    if (n.type === "human_pause" && (n.options || []).length) add(n.id + ".choice", `какой вариант выбрали в «${n.id}»`);
     if (n.type === "set") for (const k of Object.keys(n.values || {})) add(k, `шаг «${n.id}»: записанное значение`);
     if (n.type === "room") { for (const k of n.outputs || []) add(k, `вернула подкомната «${n.room}»`); add(n.into || n.id + "_exit", `чем закончилась подкомната «${n.id}»`); }
   }
@@ -297,6 +329,7 @@ function describeNode(n) {
     const sets = Object.entries(n.sets || {});
     if (sets.length) s += " Запомнит: " + sets.map(([k, v]) => `${k} — ${DERIVED_LABEL[v] || v}`).join("; ") + ".";
     if (n.confirm) s += " Сначала спросит вас.";
+    if (n.save_as) s += ` Результат запомнит как «${n.save_as}».`;
     return s;
   }
   if (n.type === "agent") {
@@ -307,6 +340,7 @@ function describeNode(n) {
     if (Object.keys(n.sampling || {}).length) s += " Модель: " + Object.entries(n.sampling).map(([k, v]) => `${k}=${v}`).join(", ") + ".";
     if ((n.skills || []).length) s += " Скиллы: " + n.skills.join(", ") + ".";
     if (n.hint) s += " Есть своя подсказка.";
+    if (n.save_as) s += ` Ответ запомнит как «${n.save_as}».`;
     return s;
   }
   if (n.type === "mcp") {
@@ -351,6 +385,19 @@ function describeNode(n) {
   }
   if (n.type === "forget") return ({all: "Агенты забывают память и подсказки", memory: "Агенты забывают, что делали прошлые шаги", hints: "Стирает подсказки"}[n.mode || "all"]) +
     ((n.clear || []).length ? "; удаляет поля: " + n.clear.join(", ") : "") + ".";
+  if (n.type === "git") {
+    const m = n.mode || "status", a = n.args || {};
+    const w = {status: "Смотрит, что изменилось в проекте", diff: "Смотрит, что именно поменялось", log: "Берёт последние коммиты",
+      add: "Добавляет файлы в коммит", commit: `Делает коммит «${short(n.message || "", 50)}»`, branch: a.name ? `Переключается на ветку «${a.name}» (создаст, если её нет)` : "Смотрит текущую ветку",
+      checkout: `Переключается на ветку «${a.branch || "?"}»`, stash: ({pop: "Возвращает отложенные изменения", list: "Показывает отложенное"})[a.action] || "Откладывает изменения в сторону",
+      pull: "Получает изменения с сервера (только простое обновление)", push: "Отправляет коммиты на сервер"}[m] || "Работает с git";
+    return w + "." + (n.confirm ? " Сначала спросит вас." : "") + (n.save_as ? ` Отчёт запомнит как «${n.save_as}».` : "");
+  }
+  if (n.type === "http") {
+    const m = (n.mode || "get").toLowerCase(), url = (n.args || {}).url || "адрес не указан";
+    const w = {get: "Получает", head: "Проверяет, что отвечает", post: "Отправляет данные на", put: "Заменяет данные по адресу", patch: "Изменяет данные по адресу", delete: "Удаляет по адресу"}[m];
+    return `${w} ${short(url, 70)}.` + (n.confirm ? " Сначала спросит вас." : "") + (n.save_as ? ` Ответ запомнит как «${n.save_as}».` : "");
+  }
   if (n.type === "assert") return `Проверяет, что ${condWords(n.condition)}${n.message ? " («" + short(n.message, 50) + "»)" : ""}; иначе шаг упадёт.`;
   if (n.type === "parallel") return `Запускает ${room.edges.filter((e) => e.from === n.id).length} ветки одновременно${n.workers ? " (не больше " + n.workers + " разом)" : ""}; они сойдутся в «${n.join || "?"}».`;
   if (n.type === "join") return `Собирает ветки: ${({all: "ждёт все", any: "идёт дальше, когда придёт первая"})[n.wait_for || "all"]}; если ветки записали разное в одно поле — ${({error: "ошибка", first: "берёт значение первой ветки", last: "берёт значение последней ветки", list: "кладёт все значения списком"})[n.merge || "error"]}.`;
@@ -369,11 +416,11 @@ function describeNode(n) {
 }
 function parseCond(expr) {
   const s = String(expr || "").trim();
-  let m = s.match(/^state\.(\w+)$/);
+  let m = s.match(/^state\.(\w[\w.]*)$/);
   if (m) return {field: m[1], op: "true"};
-  m = s.match(/^not\s+state\.(\w+)$/);
+  m = s.match(/^not\s+state\.(\w[\w.]*)$/);
   if (m) return {field: m[1], op: "false"};
-  m = s.match(/^state\.(\w+)\s*(==|!=|>=|<=|>|<)\s*(.+)$/);
+  m = s.match(/^state\.(\w[\w.]*)\s*(==|!=|>=|<=|>|<)\s*(.+)$/);
   if (m) {
     const opMap = {"==": "eq", "!=": "ne", ">": "gt", "<": "lt", ">=": "ge", "<=": "le"};
     let v = m[3].trim();
@@ -396,10 +443,12 @@ function buildCond(p) {
 function condWords(expr) {
   const p = parseCond(expr);
   if (!p) return expr;
-  if (p.op === "true") return `«${p.field}» выполнено`;
-  if (p.op === "false") return `«${p.field}» не выполнено`;
+  let name = typeof pillLabel === "function" ? pillLabel(p.field) : p.field;
+  name = name.startsWith("«") ? name : "«" + name + "»";
+  if (p.op === "true") return `${name} выполнено`;
+  if (p.op === "false") return `${name} не выполнено`;
   const w = {eq: "равно", ne: "не равно", gt: "больше", ge: "не меньше", lt: "меньше", le: "не больше"}[p.op];
-  return `«${p.field}» ${w} ${p.quoted ? "«" + p.value + "»" : p.value}`;
+  return `${name} ${w} ${p.quoted ? "«" + p.value + "»" : p.value}`;
 }
 function edgeKind(e) { return e.on_error ? "error" : e.while != null ? "while" : e.if != null ? "if" : e.else ? "else" : "uncond"; }
 function edgeLabel(e) {
@@ -464,6 +513,7 @@ function touch(key, rebuildPanel) {
   scheduleValidate(); draw(); chrome(); refreshFieldList();
   if (rebuildPanel) panel();
   if (view === "words") renderWords();
+  if (view === "stack") renderStack();
 }
 function restore(s) {
   const o = JSON.parse(s);
@@ -547,6 +597,8 @@ function nodeSub(n) {
   if (n.type === "hint") return ({next: "следующему", all: "всем", clear: "снять"})[n.mode || "next"] + (n.message && n.mode !== "clear" ? ": " + n.message : "");
   if (n.type === "forget") return ({all: "память и подсказки", memory: "память", hints: "подсказки"})[n.mode || "all"];
   if (n.type === "assert") return n.condition || "";
+  if (n.type === "git") return GIT_LABEL[n.mode || "status"] || n.mode;
+  if (n.type === "http") return (n.mode || "get").toUpperCase() + " " + short(((n.args || {}).url || "").replace(/^https?:\/\//, ""), 36);
   if (n.type === "parallel") return room.edges.filter((e) => e.from === n.id).length + " веток → " + (n.join || "?") + (n.workers ? " · по " + n.workers : "");
   if (n.type === "join") return ({all: "ждать все", any: "первая готовая"})[n.wait_for || "all"] + " · " + ({error: "конфликт — ошибка", first: "первая", last: "последняя", list: "списком"})[n.merge || "error"];
   return "";
@@ -911,7 +963,17 @@ function addNode(type, preset) {
   const S = sel && sel.kind === "node" ? nodeById(sel.id) : null;
   room.nodes.push(n);
   let note = "";
-  if (S) {
+  const pend = typeof takePendingInsert === "function" ? takePendingInsert() : null;   // «+» в виде «Стек»
+  if (pend) {
+    const anchor = pend.edge ? pend.edge.from : pend.after || room.entry;
+    const [sx, sy] = layout[anchor] ? pos(anchor) : [40, 56];
+    layout[n.id] = freeSpot(sx, sy + NH + 70);
+    if (pend.edge) { room.edges.push({from: n.id, to: pend.edge.to}); pend.edge.to = n.id; }
+    else if (pend.after) {
+      const next = room.edges.find((e) => e.from === pend.after && edgeKind(e) === "uncond");
+      if (next) { room.edges.push({from: n.id, to: next.to}); next.to = n.id; } else room.edges.push({from: pend.after, to: n.id});
+    } else if (pend.entry) { room.edges.push({from: n.id, to: room.entry}); room.entry = n.id; }
+  } else if (S) {
     const [sx, sy] = pos(S.id);
     layout[n.id] = freeSpot(sx, sy + NH + 70);
     const uncond = room.edges.find((e) => e.from === S.id && edgeKind(e) === "uncond");
@@ -1151,6 +1213,7 @@ function kvEditor(obj, onChange, o = {}) {
 }
 // вставка {{поля}} в текст одним выбором
 function withInserter(control) {
+  if (typeof pillInserter === "function") return pillInserter(control);
   const names = [...knownFields().entries()];
   const s = el("select", {class: "ins", "aria-label": "Вставить поле"}, el("option", {value: ""}, "Вставить {{поле}}…"));
   for (const [k, why] of names) s.append(el("option", {value: k, title: why}, k + " — " + why));
@@ -1402,44 +1465,8 @@ function exitPanel(side) {
   side.append(el("div", {class: "footer"}, el("button", {class: "btn danger", onclick: removeSelected}, icon("i-trash", "sm"), "Удалить выход")));
 }
 
-function nodePanel(side) {
-  const n = nodeById(sel.id);
-  if (!n) { sel = null; roomPanel(side); return; }
-  const says = el("div", {class: "says"}, describeNode(n));
-  const upd = (key) => { says.textContent = describeNode(n); touch(key); };
-  side.append(ihead(n.type, typeLabel(n.type), TYPES[n.type] ? TYPES[n.type].short : ""));
-  side.append(says);
-  if (n.note) side.append(el("div", {class: "notice note"}, el("b", {}, "Зачем этот шаг. "), n.note));
-  const idIn = inp(n.id, () => {});
-  idIn.addEventListener("change", () => { if (renameNode(n.id, idIn.value)) touch("rename", true); else idIn.value = n.id; });
-  side.append(field("Название шага", idIn, "Латиница, цифры, «_». Так шаг виден на схеме и в условиях."));
-  commonProps(side, n, upd);
-
-  const t = n.type;
-  if (extNodeForm(side, n, upd)) {
-    /* форма построена в ext.js */
-  } else if (t === "tool") {
-    side.append(field("Инструмент", select(META.tools, n.tool, (v) => { n.tool = v; touch("tool", true); })));
-    if (n.tool === "run_command") {
-      n.args = n.args || {};
-      const cmd = area(n.args.command || "", (v) => { n.args.command = v; upd("cmd" + n.id); }, 2, true);
-      side.append(field("Команда", withInserter(cmd), "Выполнится как есть. {{параметр}} подставляется из параметров комнаты."));
-    }
-    const rest = {...(n.args || {})}; if (n.tool === "run_command") delete rest.command;
-    if (n.tool !== "run_command" || Object.keys(rest).length) {
-      side.append(field("Параметры инструмента", kvEditor(n.tool === "run_command" ? rest : n.args, (v) => {
-        n.args = n.tool === "run_command" ? {command: (n.args || {}).command || "", ...v} : v; upd("args" + n.id);
-      }, {keyPh: "параметр", valPh: "значение", addLabel: "Добавить параметр"})));
-    }
-    side.append(field("Запомнить из результата", kvEditor(n.sets, (v) => { n.sets = v; upd("sets" + n.id); },
-      {keyPh: "поле, напр. tests_passed", keyList: "fieldsList", valueChoices: META.derived.map((d) => [d, DERIVED_LABEL[d] || d]), addLabel: "Запомнить поле"}),
-      "Вердикт даёт процесс, а не модель. Потом в условии: state.tests_passed."));
-    side.append(check("Спросить вас перед запуском", n.confirm, (v) => { n.confirm = v; upd("confirm"); }, "Нет «да» — шаг не выполнится."));
-    side.append(el("details", {class: "adv"}, el("summary", {}, "Дополнительно"), el("div", {class: "body"},
-      check("Можно безопасно повторить после обрыва", n.idempotent !== false, (v) => { n.idempotent = v; touch("idem"); }, "Снимите для команд, меняющих мир."),
-      field("Повторов при сбое", inp(n.retries || 0, (v) => { n.retries = v || 0; touch("ret"); }, {type: "number"}), "Только если инструмент выбросил ошибку; код возврата 1 — это данные, а не сбой."),
-      field("Взять значение из поля (input_from)", inp(n.input_from, (v) => { n.input_from = v; touch("inf"); }, {ph: "state.поле", list: null})))));
-  } else if (t === "agent") {
+// форма агента целиком (расширенный режим и «Все настройки» простого)
+function agentFormLegacy(side, n, upd) {
     side.append(field("Роль", select(META.roles.map((r) => [r, ROLE_LABEL[r] || r]), n.role || "Coder", (v) => { n.role = v; upd("role"); })));
     const ins = area(n.instruction, (v) => { n.instruction = v; touch("inst" + n.id); }, 6);
     side.append(field("Что сделать", withInserter(ins), "Что делать и что ответить: «… Ответь JSON-объектом: diagnosis=<причина>»."));
@@ -1465,11 +1492,55 @@ function nodePanel(side) {
       field("Показать агенту значения полей (context)", listInput(n.context, (v) => { n.context = v; touch("ctx"); }, "error_summary"), "Они появятся блоком CONTEXT."),
       field("Повторов при сбое", inp(n.retries || 0, (v) => { n.retries = v || 0; touch("ret"); }, {type: "number"}), "Только если агент упал с ошибкой."))));
     agentExtras(side, n, upd);
+}
+
+function nodePanel(side) {
+  const n = nodeById(sel.id);
+  if (!n) { sel = null; roomPanel(side); return; }
+  const says = el("div", {class: "says"}, describeNode(n));
+  const upd = (key) => { says.textContent = describeNode(n); touch(key); };
+  side.append(ihead(n.type, typeLabel(n.type), TYPES[n.type] ? TYPES[n.type].short : ""));
+  side.append(says);
+  if (n.note) side.append(el("div", {class: "notice note"}, el("b", {}, "Зачем этот шаг. "), n.note));
+  const idIn = inp(n.id, () => {});
+  idIn.addEventListener("change", () => { if (renameNode(n.id, idIn.value)) touch("rename", true); else idIn.value = n.id; });
+  side.append(field("Название шага", idIn, "Латиница, цифры, «_». Так шаг виден на схеме и в условиях."));
+  commonProps(side, n, upd);
+
+  const t = n.type;
+  if (typeof simpleNodeForm === "function" && simpleNodeForm(side, n, upd)) {
+    /* простая форма из simple.js (расширенная спрятана под «Все настройки») */
+  } else if (extNodeForm(side, n, upd)) {
+    /* форма построена в ext.js */
+  } else if (t === "tool") {
+    side.append(field("Инструмент", select(META.tools, n.tool, (v) => { n.tool = v; touch("tool", true); })));
+    if (n.tool === "run_command") {
+      n.args = n.args || {};
+      const cmd = area(n.args.command || "", (v) => { n.args.command = v; upd("cmd" + n.id); }, 2, true);
+      side.append(field("Команда", withInserter(cmd), "Выполнится как есть. {{параметр}} подставляется из параметров комнаты."));
+    }
+    const rest = {...(n.args || {})}; if (n.tool === "run_command") delete rest.command;
+    if (n.tool !== "run_command" || Object.keys(rest).length) {
+      side.append(field("Параметры инструмента", kvEditor(n.tool === "run_command" ? rest : n.args, (v) => {
+        n.args = n.tool === "run_command" ? {command: (n.args || {}).command || "", ...v} : v; upd("args" + n.id);
+      }, {keyPh: "параметр", valPh: "значение", addLabel: "Добавить параметр"})));
+    }
+    side.append(field("Запомнить из результата", kvEditor(n.sets, (v) => { n.sets = v; upd("sets" + n.id); },
+      {keyPh: "поле, напр. tests_passed", keyList: "fieldsList", valueChoices: META.derived.map((d) => [d, DERIVED_LABEL[d] || d]), addLabel: "Запомнить поле"}),
+      "Вердикт даёт процесс, а не модель. Потом в условии: state.tests_passed."));
+    side.append(check("Спросить вас перед запуском", n.confirm, (v) => { n.confirm = v; upd("confirm"); }, "Нет «да» — шаг не выполнится."));
+    side.append(el("details", {class: "adv"}, el("summary", {}, "Дополнительно"), el("div", {class: "body"},
+      check("Можно безопасно повторить после обрыва", n.idempotent !== false, (v) => { n.idempotent = v; touch("idem"); }, "Снимите для команд, меняющих мир."),
+      field("Повторов при сбое", inp(n.retries || 0, (v) => { n.retries = v || 0; touch("ret"); }, {type: "number"}), "Только если инструмент выбросил ошибку; код возврата 1 — это данные, а не сбой."),
+      field("Взять значение из поля (input_from)", inp(n.input_from, (v) => { n.input_from = v; touch("inf"); }, {ph: "state.поле", list: null})))));
+  } else if (t === "agent") {
+    agentFormLegacy(side, n, upd);
   } else if (t === "condition") {
     side.append(field("Условие (подпись)", inp(n.condition, (v) => { n.condition = v; upd("cond" + n.id); }, {ph: "state.ok"}),
       "Маршрут выбирают условия на исходящих стрелках — добавьте «если» и «иначе»."));
   } else if (t === "human_pause") {
     side.append(field("Вопрос", withInserter(area(n.prompt, (v) => { n.prompt = v; upd("pr" + n.id); }, 3)), "Покажите факты, по которым вы решаете."));
+    if (typeof optionsEditor === "function") optionsEditor(side, n, upd);
     side.append(field("Сохранить ответ в поле", inp(n.into, (v) => { n.into = v; upd("into" + n.id); }, {ph: "go"}),
       "Дополнительно появится «<поле>_approved» — был ли ответ «да». По нему удобно ветвиться."));
   } else if (t === "set") {
@@ -1495,6 +1566,7 @@ function nodePanel(side) {
       field("Повторов при сбое", inp(n.retries || 0, (v) => { n.retries = v || 0; touch("ret"); }, {type: "number"})))));
   }
 
+  if (typeof afterNodeForm === "function") afterNodeForm(side, n, upd);
   side.append(helpBlock(HELP[n.type], "Что делает этот блок"));
   stepTestBox(side, n);
 
@@ -1639,12 +1711,14 @@ function renderJson() {
 }
 function setView(v) {
   view = v;
-  for (const [id, name] of [["tabGraph", "graph"], ["tabWords", "words"], ["tabJson", "json"], ["tabRuns", "runs"]]) $("#" + id).setAttribute("aria-selected", String(name === v));
+  for (const [id, name] of [["tabGraph", "graph"], ["tabStack", "stack"], ["tabWords", "words"], ["tabJson", "json"], ["tabRuns", "runs"]]) $("#" + id).setAttribute("aria-selected", String(name === v));
   $("#canvasWrap").hidden = v !== "graph";
   $("#canvasTools").hidden = v !== "graph";
+  $("#paneStack").hidden = v !== "stack";
   $("#paneWords").hidden = v !== "words";
   $("#paneJson").hidden = v !== "json";
   $("#paneRuns").hidden = v !== "runs";
+  if (v === "stack") renderStack();
   if (v === "words") renderWords();
   if (v === "json") renderJson();
   if (v === "runs") renderRuns();
@@ -1653,6 +1727,10 @@ function setView(v) {
 
 // ── проверка, загрузка, сохранение ───────────────────────────────────────────────
 const FRIENDLY = [
+  [/http node '([^']+)' requires args\.url/, (m) => [`У шага «${m[1]}» не указан адрес.`, "Впишите адрес, начиная с http:// или https://."]],
+  [/http node '([^']+)': args\.url must start with/, (m) => [`Адрес шага «${m[1]}» должен начинаться с http:// или https://.`, "Другие виды адресов (file:, ftp:) недоступны."]],
+  [/http node '([^']+)': give one of args\.json/, (m) => [`Шаг «${m[1]}»: тело запроса задано несколькими способами сразу.`, "Оставьте один: данные JSON, поля формы или текст."]],
+  [/http node '([^']+)': args\.timeout/, (m) => [`У шага «${m[1]}» неверное время ожидания.`, "От 1 до 120 секунд."]],
   [/nodes cannot reach any EXIT: \[(.*)\]/, (m) => [`Из шагов ${m[1].replace(/'([^']+)'/g, "«$1»")} не дойти до выхода.`,
     "Проведите стрелку к выходу (панель «Завершить комнату») или к шагу, из которого выход есть. Часто забыта стрелка «иначе» на цикле."]],
   [/edge '([^']+)' -> unknown target '([^']+)'/, (m) => [`Стрелка из «${m[1]}» ведёт в несуществующий шаг «${m[2]}».`, "Выберите цель стрелки заново."]],
@@ -1708,7 +1786,37 @@ const FRIENDLY = [
   [/node '([^']+)': (temperature|top_p|top_k|min_p|repeat_penalty|thinking_budget|reasoning_effort) /, (m) => [`Шаг «${m[1]}»: недопустимое значение «${m[2]}».`, "Значения ограничены допустимым диапазоном — он указан под полем."]],
   [/tool '([^']+)' starts another run and cannot be a step of a room/, (m) => [`Инструмент «${m[1]}» запускает другой прогон и не может быть шагом комнаты.`, "Для вызова другой комнаты есть блок «Подкомната»."]],
   [/packaged room and is read-only/, () => ["Комната из комплекта только для чтения.", "Сохраните копию под другим именем."]],
+  [/git node '([^']+)' \(commit\) requires a 'message'/, (m) => [`У коммита «${m[1]}» нет сообщения.`, "Впишите коротко, что сделано."]],
+  [/git node '([^']+)' \(checkout\) requires args.branch/, (m) => [`У шага «${m[1]}» не указана ветка.`, "Впишите имя ветки, на которую переключиться."]],
+  [/git node '([^']+)': mode must be one of/, (m) => [`У шага Git «${m[1]}» не выбрано действие.`, "Выберите действие из списка «Что сделать»."]],
+  [/git node '([^']+)': .* never forces/, (m) => [`Шаг Git «${m[1]}»: принудительных действий (force) нет.`, "Уберите настройку force: комната не переписывает историю."]],
+  [/node '([^']+)': 'save_as' must be a plain field name/, (m) => [`У шага «${m[1]}» имя результата записано неверно.`, "Латиница, цифры и «_», не с цифры."]],
+  [/node '([^']+)': 'save_as' is only for/, (m) => [`Шагу «${m[1]}» нельзя назвать результат: у него нет своего результата.`, "Уберите имя."]],
 ];
+// замечания (не мешают сохранить) — тоже по-человечески
+const FRIENDLY_WARN = [
+  [/node '([^']+)': a (\w+) request changes something on the other side without asking/, (m) => [`Шаг «${m[1]}» отправляет ${m[2]}-запрос и меняет что-то на другой стороне без вопроса вам.`,
+    "Если комната запускается при вас, включите «Спросить вас перед запросом»."]],
+  [/node '([^']+)': header '([^']+)' holds a literal value/, (m) => [`В шаге «${m[1]}» заголовок «${m[2]}» содержит секрет прямо в тексте — он попадёт в файл комнаты.`,
+    "Напишите вместо значения ${ENV:ИМЯ} и положите секрет в переменную окружения."]],
+  [/node '([^']+)': git (push|pull) reaches a server without asking/, (m) => [`Шаг «${m[1]}» ${m[2] === "push" ? "отправляет на сервер" : "получает с сервера"} без вопроса вам.`,
+    "Если комната запускается при вас, включите «Спросить вас перед запуском»."]],
+  [/node '([^']+)': '([^']+)' also keeps its result as '([^']+)'/, (m) => [`Шаги «${m[2]}» и «${m[1]}» запоминают результат под одним именем «${m[3]}».`, "Поздний перезапишет ранний. Дайте им разные имена."]],
+  [/node '([^']+)': MCP server '([^']+)' is not configured here/, (m) => [`Шаг «${m[1]}»: MCP-сервера «${m[2]}» здесь нет.`, "Добавьте сервер командой /mcp или выберите другой."]],
+  [/node '([^']+)': skill '([^']+)' is not installed here/, (m) => [`Шаг «${m[1]}»: скилла «${m[2]}» здесь нет.`, "Установите скилл или выберите другой."]],
+  [/node '([^']+)': Leeth is not loaded here/, (m) => [`Шаг «${m[1]}» просит Leeth, а модель здесь не загружена.`, "Шаг сообщит, что ответить не может."]],
+  [/node '([^']+)': no arrow looks at state\.([^ ]+)_done/, (m) => [`У цикла «${m[1]}» ни одна стрелка не смотрит, закончился ли список.`, "Добавьте стрелку «если не " + m[1] + "_done» в тело и «иначе» дальше."]],
+  [/node '([^']+)' is switched off and is skipped/, (m) => [`Шаг «${m[1]}» выключен и пропускается.`, "Включите его в свойствах шага, если он нужен."]],
+  [/node '([^']+)': the computer will (\w+) without asking/, (m) => [`Шаг «${m[1]}»: компьютер ${({shutdown: "выключится", restart: "перезагрузится", sleep: "уснёт", hibernate: "уйдёт в гибернацию", logout: "завершит сессию"})[m[2]] || m[2]} без вопроса.`,
+    "Для работы без вас так и надо: поставьте перед ним уведомление и оставьте задержку."]],
+];
+function explainWarning(raw) {
+  for (const [re, fn] of FRIENDLY_WARN) {
+    const m = String(raw).match(re);
+    if (m) { const [text, fix] = fn(m); return {raw, text, fix}; }
+  }
+  return {raw, text: String(raw), fix: ""};
+}
 function explain(raw) {
   for (const [re, fn] of FRIENDLY) {
     const m = String(raw).match(re);
@@ -1725,12 +1833,13 @@ async function validate() {
   friendly = errors.map(explain);
   lastFlow = data.flow || ""; lastMermaid = data.mermaid || "";
   if (status !== 200) { say("Ошибка проверки: " + (data.error || status), "bad"); return; }
-  const notes = (data.warnings || []).map((w) => ({raw: w, text: w, fix: ""}));
+  const notes = (data.warnings || []).map(explainWarning);
   if (data.ok) say(`Комната корректна: ${room.nodes.length} ${plural(room.nodes.length, "шаг", "шага", "шагов")}, ${room.edges.length} ${plural(room.edges.length, "стрелка", "стрелки", "стрелок")}.` +
     (dirty ? " Не сохранена." : "") + (notes.length ? ` Замечаний: ${notes.length}.` : ""), "ok", notes);
   else say(`Комната пока не годится (${errors.length}). Нажмите на пункт — подсветится шаг.`, "bad", friendly);
   draw();
   if (view === "words") renderWords();
+  if (view === "stack") renderStack();
 }
 function focusFromError(text) {
   for (const m of String(text).matchAll(/'([^']+)'/g)) {
@@ -1800,7 +1909,7 @@ function chrome() {
   }
   document.title = (dirty ? "● " : "") + (room ? room.room + " · " : "") + "Argent · редактор комнат";
 }
-function fullRender() { chrome(); panel(); draw(); if (view === "words") renderWords(); if (view === "json") renderJson(); }
+function fullRender() { chrome(); panel(); draw(); if (view === "words") renderWords(); if (view === "json") renderJson(); if (view === "stack") renderStack(); }
 
 // ── гайд: выдвижная панель, не модальная ─────────────────────────────────────────
 let guideReady = false;
@@ -1901,6 +2010,7 @@ $("#gclose").onclick = closeGuide;
 $("#btnLayout").onclick = () => { if (room) { autoLayout(); touch("layout"); } };
 $("#btnConnect").onclick = () => { if (!room) return; connectMode = !connectMode; connectFrom = null; draw(); };
 $("#tabGraph").onclick = () => setView("graph");
+$("#tabStack").onclick = () => setView("stack");
 $("#tabWords").onclick = () => setView("words");
 $("#tabJson").onclick = () => setView("json");
 $("#tabRuns").onclick = () => setView("runs");
@@ -1915,8 +2025,9 @@ initRun();
 (async function init() {
   if (!TOKEN) { say("Нет токена доступа: откройте адрес, который напечатала команда /rooms editor.", "bad"); return; }
   await refreshList();
-  try { await loadCatalogs(); } catch (e) { /* без каталогов тоже работает: поля вводятся руками */ }
+  try { await loadCatalogs(); CAT.stamp = new Date(); } catch (e) { /* без каталогов тоже работает: поля вводятся руками */ }
   buildPalette();
+  if (typeof startCatalogWatch === "function") startCatalogWatch();
   try { const ex = await api("/examples"); if (Array.isArray(ex.data)) EXAMPLES = ex.data; } catch (e) { /* без примеров тоже работает */ }
   chrome(); panel(); draw();
   const wanted = params.get("room");

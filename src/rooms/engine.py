@@ -49,6 +49,48 @@ _GONE = object()          # a field a branch deleted
 _COUNTER_SUFFIX = "_visits"
 
 
+_PRODUCED_TEXT = 600      # chars of one produced value the screen may be told about
+_PRODUCED_ITEMS = 12
+
+
+def _show_value(value, depth=0):
+    """A copy of what a node produced, small enough to be put on a screen."""
+    if isinstance(value, str):
+        return value if len(value) <= _PRODUCED_TEXT else value[:_PRODUCED_TEXT] + "…"
+    if isinstance(value, (list, tuple)) and depth < 2:
+        items = [_show_value(v, depth + 1) for v in value[:_PRODUCED_ITEMS]]
+        if len(value) > _PRODUCED_ITEMS:
+            items.append(f"… ещё {len(value) - _PRODUCED_ITEMS}")
+        return items
+    if isinstance(value, dict) and depth < 2:
+        return {str(k): _show_value(v, depth + 1) for k, v in list(value.items())[:_PRODUCED_ITEMS]}
+    if isinstance(value, (int, float, bool)) or value is None:
+        return value
+    return _show_value(str(value), depth)
+
+
+def _produced(node, state) -> dict:
+    """The fields a node has just put into the run state (what it `writes`, `sets`, saves or answers
+    into), shortened for the screen. Only for showing: nothing reads it back."""
+    names = []
+    for n in list(getattr(node, "writes", None) or []) + list(getattr(node, "sets", None) or []) \
+            + list(getattr(node, "outputs", None) or []):
+        names.append(n)
+    for attr in ("into", "save_as"):
+        v = getattr(node, attr, None)
+        if v:
+            names.append(v)
+    out = {}
+    for name in names:
+        if name in out or name not in state.data:
+            continue
+        value = state.data[name]
+        if value in (None, "", [], {}):
+            continue
+        out[name] = _show_value(value)
+    return out
+
+
 @dataclass
 class Outcome:
     exit: str                 # EXIT name, or "human_pause" | "budget" | "stuck"
@@ -202,7 +244,7 @@ class Engine:
                 steps = run.steps
             _emit({"type": "node_end", "room": room.room, "node": node.id, "kind": node.type,
                    "step": steps, "seconds": round(run.clock() - t0, 2), "failed": failed_edge is not None,
-                   "tokens": _spent()})
+                   "tokens": _spent(), "produced": _produced(node, state)})
 
             if forked is not None and failed_edge is None:
                 if forked.exit is not None:           # a branch ended the room (an exit, a pause, a budget)
@@ -506,7 +548,7 @@ def replayable(node, room: Room = None) -> bool:
     if node.type in ("condition", "human_pause", "set", "notify", "foreach", "wait", "skill",
                      "loop", "break", "continue", "hint", "forget", "assert", "join"):
         return True               # only state, a question, a pause or a read: running it again changes nothing real
-    if node.type in ("tool", "mcp", "plugin", "leeth", "power"):
+    if node.type in ("tool", "mcp", "plugin", "leeth", "power", "git", "http"):
         return bool(node.idempotent)
     if node.type == "agent":
         if node.tools is None:
