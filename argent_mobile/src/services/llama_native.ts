@@ -19,6 +19,7 @@ export interface ArgentLlamaPluginInterface {
     durationMs?: number;
     tokensPerSecond?: number;
   }>;
+  formatChat(options: { roles: string[]; contents: string[] }): Promise<{ prompt?: string; supported: boolean }>;
   stopGeneration(): Promise<{ stopped: boolean }>;
   unloadModel(): Promise<{ unloaded: boolean }>;
   addListener(eventName: 'token', listenerFunc: (data: { token: string }) => void): Promise<PluginListenerHandle>;
@@ -78,6 +79,23 @@ export class LlamaNativeService {
     }
     const res = await ArgentLlama.loadModel({ path, threads, context });
     return res.success;
+  }
+
+  /**
+   * Промпт по шаблону чата, записанному в самой модели (метаданные GGUF), или null, если модель шаблона не
+   * сообщает / плагин старой версии этого не умеет — тогда вызывающий собирает ChatML сам.
+   */
+  public static async formatChat(messages: { role: string; content: string }[]): Promise<string | null> {
+    if (!this.isAvailable()) return null;
+    try {
+      const res = await ArgentLlama.formatChat({
+        roles: messages.map(m => m.role),
+        contents: messages.map(m => m.content)
+      });
+      return res.supported && typeof res.prompt === 'string' && res.prompt ? res.prompt : null;
+    } catch {
+      return null;
+    }
   }
 
   public static async generateStream(

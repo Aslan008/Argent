@@ -1,80 +1,87 @@
-// Service Worker для автономной работы Argent Mobile без ПК и интернета
-const CACHE_NAME = 'argent-mobile-v1';
+// Service Worker Argent Mobile (PWA): приложение открывается и без сети.
+//
+// Прошлая версия не работала вовсе: в обычном .js стояло TypeScript-выражение `as Promise<Response>`,
+// воркер не разбирался и не регистрировался. И её стратегия была опасной: «сначала кэш» для index.html
+// навсегда закрепляла старую версию после обновления, а любые чужие GET (веса моделей WebLLM с
+// Hugging Face, API в домашней сети) копировались в кэш воркера.
+//
+// Теперь:
+// - только запросы к своему адресу; всё чужое (API, модели, шрифты) идёт мимо воркера;
+// - страницы — сначала сеть, кэш только без сети (обновление видно сразу);
+// - /assets/* — сначала кэш: у этих файлов хэш в имени, их содержимое не меняется;
+// - прочие свои файлы — из кэша с обновлением в фоне.
 
-const STATIC_PRECACHE = [
-  '/',
-  '/index.html',
-  '/manifest.json',
-  '/icon-192.png',
-  '/icon-512.png'
-];
+const CACHE_NAME = 'argent-mobile-v2';
+const APP_SHELL = ['/', '/index.html', '/manifest.json', '/icon-192.png', '/icon-512.png'];
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => {
-      return cache.addAll(STATIC_PRECACHE);
-    }).then(() => {
-      return self.skipWaiting();
-    })
+    caches.open(CACHE_NAME)
+      .then((cache) => cache.addAll(APP_SHELL))
+      .then(() => self.skipWaiting())
   );
 });
 
 self.addEventListener('activate', (event) => {
   event.waitUntil(
-    caches.keys().then((keys) => {
-      return Promise.all(
-        keys.map((key) => {
-          if (key !== CACHE_NAME) {
-            return caches.delete(key);
-          }
-        })
-      );
-    }).then(() => {
-      return self.clients.claim();
-    })
+    caches.keys()
+      .then((keys) => Promise.all(keys.filter((k) => k !== CACHE_NAME).map((k) => caches.delete(k))))
+      .then(() => self.clients.claim())
   );
 });
 
-self.addEventListener('fetch', (event) => {
-  const url = new URL(event.request.url);
+function isPage(request) {
+  return request.mode === 'navigate' || (request.headers.get('accept') || '').includes('text/html');
+}
 
-  // Игнорируем не-GET запросы и обращения к внешним API нейросетей
-  if (event.request.method !== 'GET') return;
-  if (
-    url.pathname.includes('/chat/completions') ||
-    url.hostname.includes('api.deepseek.com') ||
-    url.hostname.includes('openrouter.ai') ||
-    url.hostname.includes('api.openai.com') ||
-    url.hostname.includes('api.groq.com')
-  ) {
-    return;
+async function networkFirstPage(request) {
+  const cache = await caches.open(CACHE_NAME);
+  try {
+    const response = await fetch(request);
+    if (response && response.ok) cache.put('/index.html', response.clone());
+    return response;
+  } catch (err) {
+    const cached = (await cache.match(request)) || (await cache.match('/index.html'));
+    if (cached) return cached;
+    return new Response('Нет сети, и приложение ещё не сохранено для работы без неё.', {
+      status: 503,
+      headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+    });
   }
+}
 
-  // Для локальных файлов и библиотек: Cache First с динамическим кэшированием
-  event.respondWith(
-    caches.match(event.request).then((cachedResponse) => {
-      if (cachedResponse) {
-        return cachedResponse;
-      }
+async function cacheFirst(request) {
+  const cache = await caches.open(CACHE_NAME);
+  const cached = await cache.match(request);
+  if (cached) return cached;
+  const response = await fetch(request);
+  if (response && response.ok) cache.put(request, response.clone());
+  return response;
+}
 
-      return fetch(event.request).then((networkResponse) => {
-        if (!networkResponse || networkResponse.status !== 200) {
-          return networkResponse;
-        }
-
-        const responseToCache = networkResponse.clone();
-        caches.open(CACHE_NAME).then((cache) => {
-          cache.put(event.request, responseToCache);
-        });
-
-        return networkResponse;
-      }).catch(() => {
-        // Если нет сети и файл не найден, возвращаем главную страницу
-        if (event.request.headers.get('accept')?.includes('text/html')) {
-          return caches.match('/index.html') as Promise<Response>;
-        }
-        return new Response('Offline', { status: 503, statusText: 'Offline' });
-      });
+async function staleWhileRevalidate(request) {
+  const cache = await caches.open(CACHE_NAME);
+  const cached = await cache.match(request);
+  const refresh = fetch(request)
+    .then((response) => {
+      if (response && response.ok) cache.put(request, response.clone());
+      return response;
     })
-  );
+    .catch(() => cached || new Response('Offline', { status: 503, statusText: 'Offline' }));
+  return cached || refresh;
+}
+
+self.addEventListener('fetch', (event) => {
+  const request = event.request;
+  if (request.method !== 'GET') return;
+  const url = new URL(request.url);
+  if (url.origin !== self.location.origin) return;
+
+  if (isPage(request)) {
+    event.respondWith(networkFirstPage(request));
+  } else if (url.pathname.startsWith('/assets/')) {
+    event.respondWith(cacheFirst(request));
+  } else {
+    event.respondWith(staleWhileRevalidate(request));
+  }
 });

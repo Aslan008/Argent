@@ -2,6 +2,7 @@ package com.argent.mobile;
 
 import android.os.Bundle;
 import com.argent.mobile.autopilot.ArgentAutopilotPlugin;
+import com.argent.mobile.files.ArgentFilesPlugin;
 import com.argent.mobile.llama.ArgentLlamaPlugin;
 import com.getcapacitor.BridgeActivity;
 
@@ -10,6 +11,7 @@ public class MainActivity extends BridgeActivity {
     public void onCreate(Bundle savedInstanceState) {
         registerPlugin(ArgentAutopilotPlugin.class);
         registerPlugin(ArgentLlamaPlugin.class);
+        registerPlugin(ArgentFilesPlugin.class);
         super.onCreate(savedInstanceState);
     }
 }

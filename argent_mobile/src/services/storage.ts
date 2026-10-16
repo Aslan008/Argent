@@ -22,15 +22,49 @@ const DEFAULT_SETTINGS: AppSettings = {
   enableRethink: true
 };
 
+/**
+ * Сохранённые настройки поверх значений по умолчанию — с вложенными разделами.
+ * Слияние `{...DEFAULT, ...saved}` было мелким: сохранённый раздел `online`/`offline` заменял раздел по
+ * умолчанию целиком, и поле, добавленное в новой версии, у обновившегося пользователя было undefined.
+ * Значения неверного типа (испорченное хранилище) не принимаются.
+ */
+export function mergeSettings(defaults: AppSettings, saved: any): AppSettings {
+  const out: AppSettings = {
+    ...defaults,
+    online: { ...defaults.online },
+    offline: { ...defaults.offline },
+  };
+  if (!saved || typeof saved !== 'object') return out;
+  for (const key of Object.keys(saved)) {
+    const value = saved[key];
+    if (key === 'online' || key === 'offline') {
+      if (value && typeof value === 'object') Object.assign(out[key], value);
+    } else if (key in defaults && typeof value === typeof (defaults as any)[key]) {
+      (out as any)[key] = value;
+    }
+  }
+  if (out.mode !== 'online' && out.mode !== 'offline') out.mode = defaults.mode;
+  return out;
+}
+
+/** Событие для интерфейса: сохранить не удалось (раньше это видно было только в консоли). */
+export const STORAGE_PROBLEM_EVENT = 'argent-storage-problem';
+function reportStorageProblem(message: string): void {
+  try {
+    window.dispatchEvent(new CustomEvent(STORAGE_PROBLEM_EVENT, { detail: message }));
+  } catch {
+    // нет window (тесты) — сообщить некому
+  }
+}
+
 export class StorageService {
   // Настройки
   public static getSettings(): AppSettings {
     try {
       const raw = localStorage.getItem(STORAGE_KEYS.SETTINGS);
-      if (!raw) return { ...DEFAULT_SETTINGS };
-      return { ...DEFAULT_SETTINGS, ...JSON.parse(raw) };
+      return mergeSettings(DEFAULT_SETTINGS, raw ? JSON.parse(raw) : null);
     } catch {
-      return { ...DEFAULT_SETTINGS };
+      return mergeSettings(DEFAULT_SETTINGS, null);
     }
   }
 
@@ -72,6 +106,7 @@ export class StorageService {
         localStorage.setItem(STORAGE_KEYS.SESSIONS, JSON.stringify(trimmed));
       } catch (err) {
         console.error('Критическая ошибка сохранения сессий:', err);
+        reportStorageProblem('Память браузера заполнена: последние сообщения не сохранились. Удалите старые диалоги в меню.');
       }
     }
   }
@@ -147,6 +182,7 @@ export class StorageService {
       localStorage.setItem(STORAGE_KEYS.FILES, JSON.stringify(files));
     } catch (e) {
       console.warn('Не удалось сохранить файл в хранилище:', e);
+      reportStorageProblem('Файл не сохранён: память браузера заполнена.');
     }
   }
 
@@ -157,18 +193,5 @@ export class StorageService {
     } catch (e) {
       console.warn('Не удалось удалить файл из хранилища:', e);
     }
-  }
-
-  // Скачивание файла на физический накопитель смартфона
-  public static downloadFileToDevice(filename: string, content: string): void {
-    const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
   }
 }

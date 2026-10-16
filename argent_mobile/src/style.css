@@ -1193,3 +1193,36 @@ pre code.hljs {
     display: none;
   }
 }
+
+/* Сообщения внутри ответа: предупреждение, ошибка, информация */
+.notice-box {
+  border-radius: 10px;
+  padding: 12px;
+  font-size: 0.84rem;
+  line-height: 1.4;
+  margin-top: 4px;
+}
+.notice-box.error { background: rgba(239, 68, 68, 0.1); border: 1px solid rgba(239, 68, 68, 0.3); color: #fca5a5; }
+.notice-box.warn { background: rgba(245, 158, 11, 0.1); border: 1px solid rgba(245, 158, 11, 0.3); color: #fde68a; }
+.notice-box.info { background: rgba(59, 130, 246, 0.1); border: 1px solid rgba(59, 130, 246, 0.3); color: #93c5fd; }
+.notice-box .notice-title { font-weight: 600; margin-bottom: 6px; }
+.notice-box.error .notice-title { color: #ef4444; }
+.notice-box.warn .notice-title { color: #f59e0b; }
+.notice-box .notice-body { white-space: pre-wrap; margin-bottom: 4px; }
+.notice-box .btn-open-acc-settings {
+  margin-top: 8px;
+  background: #f59e0b;
+  color: #000;
+  font-weight: 600;
+  border: none;
+  padding: 8px 14px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+/* Заметка над ответом (например: старые сообщения не вошли в окно модели) */
+.turn-note {
+  font-size: 0.74rem;
+  color: var(--text-muted, #94a3b8);
+  margin-bottom: 6px;
+}

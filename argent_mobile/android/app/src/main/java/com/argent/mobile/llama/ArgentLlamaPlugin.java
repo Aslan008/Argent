@@ -37,8 +37,9 @@ public class ArgentLlamaPlugin extends Plugin {
 
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
-    private boolean isModelLoaded = false;
-    private String currentLoadedPath = "";
+    private volatile boolean isModelLoaded = false;
+    // what is loaded: path + threads + context, so a changed thread count or window loads the model again
+    private volatile String currentLoadedKey = "";
 
     static {
         try {
@@ -57,6 +58,10 @@ public class ArgentLlamaPlugin extends Plugin {
     private native int nativeGenerate(String prompt, float temperature, int maxTokens, TokenCallback callback);
     private native void nativeStop();
     private native void nativeUnloadModel();
+    private native String nativeFormatChat(String[] roles, String[] contents);
+
+    /** nativeGenerate: the prompt does not fit the context window */
+    private static final int GEN_PROMPT_TOO_LONG = -2;
 
     @PluginMethod
     public void checkStoragePermission(PluginCall call) {
@@ -183,14 +188,8 @@ public class ArgentLlamaPlugin extends Plugin {
             if (found != null) return found;
         }
 
-        // 5. Если в папке Download есть единственный .gguf файл — используем его
-        if (dl != null && dl.exists()) {
-            File[] ggufs = dl.listFiles((d, name) -> name.toLowerCase().endsWith(".gguf"));
-            if (ggufs != null && ggufs.length == 1) {
-                return ggufs[0];
-            }
-        }
-
+        // Не найдено — значит не найдено. Раньше здесь подставлялся «единственный .gguf в Загрузках»:
+        // просили одну модель, а молча загружалась другая.
         return null;
     }
 
@@ -345,7 +344,8 @@ public class ArgentLlamaPlugin extends Plugin {
 
         Log.i(TAG, "Загрузка модели из: " + finalPath + " (размер: " + file.length() + " байт)");
 
-        if (isModelLoaded && finalPath.equals(currentLoadedPath)) {
+        final String loadKey = finalPath + "|" + threads + "|" + context;
+        if (isModelLoaded && loadKey.equals(currentLoadedKey)) {
             JSObject ret = new JSObject();
             ret.put("success", true);
             ret.put("reused", true);
@@ -359,7 +359,7 @@ public class ArgentLlamaPlugin extends Plugin {
                 boolean ok = nativeLoadModel(finalPath, threads, context);
                 if (ok) {
                     isModelLoaded = true;
-                    currentLoadedPath = finalPath;
+                    currentLoadedKey = loadKey;
                     JSObject ret = new JSObject();
                     ret.put("success", true);
                     ret.put("path", finalPath);
@@ -403,6 +403,10 @@ public class ArgentLlamaPlugin extends Plugin {
                 double tps = (tokensCount > 0 && genElapsed > 0) ? (tokensCount * 1000.0) / genElapsed : 0.0;
                 Log.i(TAG, String.format(Locale.US, "Генерация завершена: токенов=%d, время=%d мс (%.2f ток/с)", tokensCount, genElapsed, tps));
 
+                if (tokensCount == GEN_PROMPT_TOO_LONG) {
+                    call.reject("Запрос не помещается в окно контекста модели. Начните новый диалог или увеличьте окно в настройках.");
+                    return;
+                }
                 if (tokensCount < 0) {
                     call.reject("Ошибка выполнения генерации в движке llama.cpp (декодирование прервано)");
                     return;
@@ -418,6 +422,38 @@ public class ArgentLlamaPlugin extends Plugin {
                 Log.e(TAG, "Ошибка генерации: " + e.getMessage());
                 call.reject("Ошибка генерации: " + e.getMessage());
             }
+        });
+    }
+
+    /**
+     * Промпт по шаблону чата из метаданных модели (llama_chat_apply_template). supported=false, когда модель
+     * не загружена, шаблона нет или llama.cpp его не знает — тогда JS собирает ChatML сам.
+     */
+    @PluginMethod
+    public void formatChat(PluginCall call) {
+        final JSArray roles = call.getArray("roles");
+        final JSArray contents = call.getArray("contents");
+        if (roles == null || contents == null || roles.length() != contents.length()) {
+            call.reject("formatChat: roles и contents должны быть массивами одной длины");
+            return;
+        }
+        executor.execute(() -> {
+            JSObject ret = new JSObject();
+            try {
+                String[] r = new String[roles.length()];
+                String[] c = new String[contents.length()];
+                for (int i = 0; i < r.length; i++) {
+                    r[i] = roles.getString(i);
+                    c[i] = contents.getString(i);
+                }
+                String prompt = isModelLoaded ? nativeFormatChat(r, c) : null;
+                ret.put("supported", prompt != null);
+                if (prompt != null) ret.put("prompt", prompt);
+            } catch (Exception e) {
+                Log.w(TAG, "formatChat: " + e.getMessage());
+                ret.put("supported", false);
+            }
+            call.resolve(ret);
         });
     }
 
@@ -439,7 +475,7 @@ public class ArgentLlamaPlugin extends Plugin {
             try {
                 nativeUnloadModel();
                 isModelLoaded = false;
-                currentLoadedPath = "";
+                currentLoadedKey = "";
                 JSObject ret = new JSObject();
                 ret.put("unloaded", true);
                 call.resolve(ret);

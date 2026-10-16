@@ -8,6 +8,9 @@ export interface ChatMessage {
   rethink?: string;
   timestamp: number;
   durationMs?: number;
+  /** чем был написан ответ (модель, файл GGUF или облачный провайдер) — для подписи под сообщением */
+  engine?: string;
+  mode?: AIMode;
 }
 
 export interface ChatSession {
@@ -38,6 +41,8 @@ export interface AppSettings {
     localFileSize?: string;
     customModelId?: string;
     threads?: number;
+    /** окно контекста нативного llama.cpp, токенов (по умолчанию 2048) */
+    context?: number;
   };
   temperature: number;
   enableRethink: boolean;
@@ -51,6 +56,8 @@ export interface StreamCallbacks {
   onDone: (fullContent: string, fullThinking: string, fullRethink: string) => void;
   onError: (err: Error) => void;
   onPhase?: (phase: string, detail?: string) => void;
+  /** заметка для пользователя, не ошибка (например: старые сообщения не вошли в окно модели) */
+  onNotice?: (text: string) => void;
 }
 
 export interface DownloadProgress {

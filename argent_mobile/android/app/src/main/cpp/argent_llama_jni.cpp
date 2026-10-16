@@ -16,6 +16,51 @@ static struct llama_context * g_ctx = nullptr;
 static const struct llama_vocab * g_vocab = nullptr;
 static std::mutex g_mutex;
 static std::atomic<bool> g_stop{false};
+static bool g_backend_ready = false;
+
+// Java string <-> std::string as real UTF-8.
+// GetStringUTFChars/NewStringUTF speak "Modified UTF-8", where a character outside the BMP (an emoji) is
+// two 3-byte surrogates: an emoji in the prompt reached the tokenizer as garbage, and an emoji in the
+// model's answer passed to NewStringUTF aborts a debug build under CheckJNI ("input is not valid Modified
+// UTF-8"). Going through byte[] and String(byte[], "UTF-8") is exact both ways.
+static std::string jstring_to_utf8(JNIEnv * env, jstring jstr) {
+    if (!jstr) return std::string();
+    jclass stringClass = env->GetObjectClass(jstr);
+    jmethodID getBytes = env->GetMethodID(stringClass, "getBytes", "(Ljava/lang/String;)[B");
+    jstring charset = env->NewStringUTF("UTF-8");
+    jbyteArray bytes = (jbyteArray) env->CallObjectMethod(jstr, getBytes, charset);
+    env->DeleteLocalRef(charset);
+    env->DeleteLocalRef(stringClass);
+    if (env->ExceptionCheck() || !bytes) {
+        env->ExceptionClear();
+        return std::string();
+    }
+    jsize len = env->GetArrayLength(bytes);
+    std::string out(static_cast<size_t>(len), char(0));
+    if (len > 0) env->GetByteArrayRegion(bytes, 0, len, reinterpret_cast<jbyte *>(&out[0]));
+    env->DeleteLocalRef(bytes);
+    return out;
+}
+
+static jstring utf8_to_jstring(JNIEnv * env, const std::string & str) {
+    jbyteArray bytes = env->NewByteArray(static_cast<jsize>(str.size()));
+    if (!bytes) return nullptr;
+    if (!str.empty()) {
+        env->SetByteArrayRegion(bytes, 0, static_cast<jsize>(str.size()), reinterpret_cast<const jbyte *>(str.data()));
+    }
+    jclass stringClass = env->FindClass("java/lang/String");
+    jmethodID ctor = env->GetMethodID(stringClass, "<init>", "([BLjava/lang/String;)V");
+    jstring charset = env->NewStringUTF("UTF-8");
+    jstring result = (jstring) env->NewObject(stringClass, ctor, bytes, charset);
+    env->DeleteLocalRef(charset);
+    env->DeleteLocalRef(bytes);
+    env->DeleteLocalRef(stringClass);
+    if (env->ExceptionCheck()) {
+        env->ExceptionClear();
+        return nullptr;
+    }
+    return result;
+}
 
 // Определяет длину префикса в строке, состоящего из полных, валидных UTF-8 символов.
 // Если в конце буфера осталась неполная многобайтовая последовательность (например, 1 байт кириллицы из 2-х),
@@ -78,8 +123,11 @@ Java_com_argent_mobile_llama_ArgentLlamaPlugin_nativeLoadModel(
 
     std::lock_guard<std::mutex> lock(g_mutex);
 
-    // Обязательная инициализация бэкендов llama.cpp (ARM NEON, CPU)
-    llama_backend_init();
+    // Инициализация бэкендов llama.cpp (ARM NEON, CPU) — один раз на процесс
+    if (!g_backend_ready) {
+        llama_backend_init();
+        g_backend_ready = true;
+    }
 
     const char * model_path = env->GetStringUTFChars(jModelPath, nullptr);
     if (!model_path) {
@@ -156,14 +204,11 @@ Java_com_argent_mobile_llama_ArgentLlamaPlugin_nativeGenerate(
         return -1;
     }
 
-    const char * prompt_text = env->GetStringUTFChars(jPrompt, nullptr);
-    if (!prompt_text) return -1;
-
     g_stop = false;
 
-    // Токенизация промпта
-    std::string prompt_str(prompt_text);
-    env->ReleaseStringUTFChars(jPrompt, prompt_text);
+    // Токенизация промпта (настоящий UTF-8, см. jstring_to_utf8)
+    std::string prompt_str = jstring_to_utf8(env, jPrompt);
+    if (prompt_str.empty()) return -1;
 
     int n_prompt_tokens = -llama_tokenize(g_vocab, prompt_str.c_str(), prompt_str.length(), nullptr, 0, true, true);
     if (n_prompt_tokens <= 0) {
@@ -178,6 +223,14 @@ Java_com_argent_mobile_llama_ArgentLlamaPlugin_nativeGenerate(
     prompt_tokens.resize(n_prompt_tokens);
 
     LOGI("Промпт успешно токенизирован: %zu токенов", prompt_tokens.size());
+
+    // Промпт, который не помещается в окно, падал на первом llama_decode, и пользователь читал
+    // «повреждён файл модели». Это отдельный код (-2), Java говорит о нём прямо.
+    const int n_ctx = (int) llama_n_ctx(g_ctx);
+    if ((int) prompt_tokens.size() >= n_ctx - 8) {
+        LOGE("Промпт (%zu токенов) не помещается в окно контекста (%d)", prompt_tokens.size(), n_ctx);
+        return -2;
+    }
 
     // Очищаем состояние памяти/KV-кэша перед новым запросом
     llama_memory_clear(llama_get_memory(g_ctx), true);
@@ -214,7 +267,7 @@ Java_com_argent_mobile_llama_ArgentLlamaPlugin_nativeGenerate(
         if (valid_len > 0) {
             std::string to_send = utf8_accum.substr(0, valid_len);
             utf8_accum.erase(0, valid_len);
-            jstring jPiece = env->NewStringUTF(to_send.c_str());
+            jstring jPiece = utf8_to_jstring(env, to_send);
             if (jPiece) {
                 env->CallVoidMethod(jCallback, onTokenMethod, jPiece);
                 env->DeleteLocalRef(jPiece);
@@ -227,8 +280,13 @@ Java_com_argent_mobile_llama_ArgentLlamaPlugin_nativeGenerate(
         }
     };
 
-    // Цикл пошаговой генерации токенов
+    // Цикл пошаговой генерации токенов; окно контекста — жёсткий предел: после него llama_decode падает
+    const int n_prompt = (int) prompt_tokens.size();
     while (n_generated < limit && !g_stop.load()) {
+        if (n_prompt + n_generated + 1 >= n_ctx) {
+            LOGI("Окно контекста заполнено (%d токенов): ответ завершён", n_ctx);
+            break;
+        }
         if (llama_decode(g_ctx, batch) != 0) {
             LOGE("Ошибка llama_decode на шаге %d", n_generated);
             break;
@@ -290,6 +348,59 @@ Java_com_argent_mobile_llama_ArgentLlamaPlugin_nativeGenerate(
 
     LOGI("Генерация завершена. Успешно сгенерировано токенов: %d", n_generated);
     return n_generated;
+}
+
+// Промпт по шаблону чата модели (метаданные GGUF) или null: модели нет, шаблона нет или llama.cpp
+// его не распознаёт (тогда JS собирает ChatML сам).
+JNIEXPORT jstring JNICALL
+Java_com_argent_mobile_llama_ArgentLlamaPlugin_nativeFormatChat(
+        JNIEnv * env,
+        jobject /* thiz */,
+        jobjectArray jRoles,
+        jobjectArray jContents) {
+
+    std::lock_guard<std::mutex> lock(g_mutex);
+    if (!g_model || !jRoles || !jContents) return nullptr;
+
+    const char * tmpl = llama_model_chat_template(g_model, nullptr);
+    if (!tmpl) {
+        LOGI("В модели нет шаблона чата — будет ChatML");
+        return nullptr;
+    }
+
+    const jsize n = env->GetArrayLength(jRoles);
+    if (n <= 0 || env->GetArrayLength(jContents) != n) return nullptr;
+
+    std::vector<std::string> roles(n), contents(n);
+    size_t total = 0;
+    for (jsize i = 0; i < n; ++i) {
+        jstring r = (jstring) env->GetObjectArrayElement(jRoles, i);
+        jstring c = (jstring) env->GetObjectArrayElement(jContents, i);
+        roles[i] = jstring_to_utf8(env, r);
+        contents[i] = jstring_to_utf8(env, c);
+        if (r) env->DeleteLocalRef(r);
+        if (c) env->DeleteLocalRef(c);
+        total += roles[i].size() + contents[i].size();
+    }
+
+    std::vector<llama_chat_message> chat(n);
+    for (jsize i = 0; i < n; ++i) {
+        chat[i].role = roles[i].c_str();
+        chat[i].content = contents[i].c_str();
+    }
+
+    std::vector<char> buf(total * 2 + 1024);
+    int32_t len = llama_chat_apply_template(tmpl, chat.data(), chat.size(), true, buf.data(), (int32_t) buf.size());
+    if (len < 0) {
+        LOGI("Шаблон чата модели не поддерживается llama_chat_apply_template — будет ChatML");
+        return nullptr;
+    }
+    if (len > (int32_t) buf.size()) {
+        buf.resize((size_t) len + 1);
+        len = llama_chat_apply_template(tmpl, chat.data(), chat.size(), true, buf.data(), (int32_t) buf.size());
+        if (len < 0) return nullptr;
+    }
+    return utf8_to_jstring(env, std::string(buf.data(), (size_t) len));
 }
 
 JNIEXPORT void JNICALL

@@ -1,10 +1,13 @@
 import { marked } from 'marked';
-import hljs from 'highlight.js';
+// Только распространённые языки: полный highlight.js — это ~1 МБ из 1,08 МБ основного бандла
+import hljs from 'highlight.js/lib/common';
 import 'highlight.js/styles/atom-one-dark.min.css';
-import { StorageService } from './services/storage';
-import { AIEngine } from './services/ai_engine';
+import { Capacitor } from '@capacitor/core';
+import { StorageService, STORAGE_PROBLEM_EVENT } from './services/storage';
+import { AIEngine, isNativeModel } from './services/ai_engine';
 import { AutopilotService } from './services/autopilot';
 import { LlamaNativeService } from './services/llama_native';
+import { FileExport } from './services/file_export';
 import { AppSettings, ChatMessage, ChatSession, VirtualFile } from './types';
 
 // Конфигурация Markdown рендерера с подсветкой синтаксиса
@@ -13,18 +16,48 @@ marked.setOptions({
   gfm: true
 });
 
+/**
+ * Один ответ ассистента: его пузырь, таймер и сессия.
+ * Раньше всё это жило в полях приложения (activeTextContent и т. п.): ответ, прерванный кнопкой «Стоп»,
+ * продолжал присылать события уже ПОСЛЕ отправки следующего сообщения и писал в чужой пузырь, а его
+ * сообщение вставало в историю после нового вопроса.
+ */
+interface Turn {
+  bubble: HTMLElement;
+  thinking: HTMLElement | null;
+  rethink: HTMLElement | null;
+  text: HTMLElement | null;
+  timer: ReturnType<typeof setInterval> | null;
+  startedAt: number;
+  session: ChatSession;
+  userMsgId: string;
+  assistantMsgId: string;
+  firstToken: boolean;
+}
+
+/** Как подписать движок, честно для каждого режима (раньше везде было «Helio G99 ARM NEON», даже для облака). */
+function engineInfo(settings: AppSettings): { chip: string; phase: string; detail: string; name: string } {
+  if (settings.mode === 'online') {
+    return {
+      chip: `🌐 ${settings.online.provider.toUpperCase()}`,
+      phase: 'Соединение с сервером...',
+      detail: 'Ожидание ответа модели...',
+      name: settings.online.model,
+    };
+  }
+  const name = settings.offline.localFileName || settings.offline.model;
+  if (isNativeModel(settings.offline.model, settings.offline.localFileName)) {
+    return { chip: '⚡ llama.cpp', phase: 'Запуск нативного движка...', detail: 'Вычисление на процессоре телефона', name };
+  }
+  return { chip: '⚡ WebLLM', phase: 'Запуск WebLLM...', detail: 'Вычисление на видеочипе (WebGPU)', name };
+}
+
 class ArgentMobileApp {
   private settings: AppSettings;
   private currentSession: ChatSession;
   private isStreaming: boolean = false;
   private isAutopilotEnabled: boolean = false;
-  private activeAssistantBubble: HTMLElement | null = null;
-  private activeThinkingContent: HTMLElement | null = null;
-  private activeRethinkContent: HTMLElement | null = null;
-  private activeTextContent: HTMLElement | null = null;
-  private generationStartTime: number = 0;
-  private thinkingTimerInterval: any = null;
-  private hasReceivedFirstToken: boolean = false;
+  private turn: Turn | null = null;
 
   constructor() {
     this.settings = StorageService.getSettings();
@@ -33,6 +66,13 @@ class ArgentMobileApp {
     this.initDOM();
     this.renderCurrentSession();
     this.updateUIState();
+
+    let lastWarned = 0;
+    window.addEventListener(STORAGE_PROBLEM_EVENT, (e) => {
+      if (Date.now() - lastWarned < 60_000) return;     // не чаще раза в минуту
+      lastWarned = Date.now();
+      alert((e as CustomEvent<string>).detail);
+    });
   }
 
   private initDOM(): void {
@@ -154,263 +194,148 @@ class ArgentMobileApp {
     const welcomeCard = document.getElementById('welcome-card');
     if (welcomeCard) welcomeCard.classList.add('hidden');
 
-    // Добавляем сообщение пользователя
+    // Сообщение пользователя сохраняется сразу: при ошибке или закрытии приложения посреди ответа
+    // вопрос раньше пропадал из истории (он записывался только вместе с готовым ответом).
+    const session = this.currentSession;
     const userMsg: ChatMessage = {
       id: 'msg_' + Date.now(),
       role: 'user',
       content: text,
       timestamp: Date.now()
     };
-    this.currentSession.messages.push(userMsg);
+    session.messages.push(userMsg);
+    StorageService.updateSessionMessages(session.id, session.messages, userMsg.content);
     this.renderMessage(userMsg);
 
-    // Добавляем заготовку под ответ ассистента
-    const assistantMsgId = 'msg_' + (Date.now() + 1);
-    this.prepareAssistantBubble(assistantMsgId);
+    // Заготовка под ответ ассистента
+    const turn = this.prepareAssistantBubble(session, userMsg.id, 'msg_' + (Date.now() + 1));
 
     // Проверка команд автопилота телефона
     const lowerText = text.toLowerCase().trim();
     const isExplicitNavigation = lowerText === 'домой' || lowerText === 'назад' || lowerText.includes('нажми домой');
-    const isExplicitAppLaunch = lowerText.startsWith('открой приложение ') || 
-                                lowerText.startsWith('запусти приложение ') || 
+    const isExplicitAppLaunch = lowerText.startsWith('открой приложение ') ||
+                                lowerText.startsWith('запусти приложение ') ||
                                 lowerText.includes('открой приложение на телефоне');
     const hasAutopilotPrefix = lowerText.startsWith('🚀') || lowerText.startsWith('автопилот:') || lowerText.startsWith('автопилот,');
 
     const shouldHandleWithAutopilot = isExplicitNavigation || isExplicitAppLaunch || (this.isAutopilotEnabled && hasAutopilotPrefix);
 
-    if (shouldHandleWithAutopilot) {
-      const isRunning = await AutopilotService.isServiceEnabled();
-      if (!isRunning) {
-        if (this.activeTextContent) {
-          this.activeTextContent.innerHTML = `
-            <div style="background: rgba(245, 158, 11, 0.1); border: 1px solid rgba(245, 158, 11, 0.3); border-radius: 12px; padding: 14px; margin-top: 4px;">
-              <div style="font-weight: 600; color: #f59e0b; margin-bottom: 6px;">⚠️ Служба автопилота отключена в системе</div>
-              <div style="font-size: 0.82rem; color: #fde68a; margin-bottom: 12px; line-height: 1.4;">
-                Чтобы Argent мог самостоятельно открывать приложения и нажимать кнопки на телефоне, включите службу <b>Argent Autopilot Service</b> в специальных возможностях Android.
-              </div>
-              <button id="btn-open-acc-settings" class="action-btn-sm" style="background: #f59e0b; color: #000; font-weight: 600; border: none; padding: 8px 14px; border-radius: 8px; cursor: pointer;">⚙️ Включить в настройках телефона</button>
-            </div>
-          `;
-          document.getElementById('btn-open-acc-settings')?.addEventListener('click', () => {
-            AutopilotService.openSettings();
-          });
-        }
-        this.finalizeAssistantBubble();
-        this.setStreamingState(false);
-        return;
-      }
-
-      // Выполнение действия
-      let handled = false;
-      if (lowerText.startsWith('открой ') || lowerText.startsWith('запусти ') || lowerText.includes('открой приложение ')) {
-        const appMatch = text.match(/(?:открой|запусти)(?:\s+приложение)?\s+([a-zA-Zа-яА-Я0-9\s]+)/i);
-        const appName = appMatch ? appMatch[1].replace(/на телефоне/i, '').replace(/приложение/i, '').trim() : '';
-        if (appName) {
-          handled = true;
-          try {
-            if (this.activeThinkingContent) {
-              this.activeThinkingContent.textContent = `Анализ цели: запуск системного приложения "${appName}" через Android PackageManager.`;
-              this.activeThinkingContent.closest('.thought-card')?.classList.remove('hidden');
-            }
-            await AutopilotService.launchApp(appName);
-            if (this.activeTextContent) {
-              this.activeTextContent.innerHTML = `🚀 <b>Автопилот:</b> Приложение <b>${this.escapeHtml(appName)}</b> успешно открыто на телефоне!`;
-            }
-          } catch (err: any) {
-            if (this.activeTextContent) {
-              this.activeTextContent.innerHTML = `⚠️ <b>Ошибка автопилота:</b> ${this.escapeHtml(err.message)}`;
-            }
-          }
-        }
-      } else if (lowerText.includes('нажми домой') || lowerText === 'домой') {
-        handled = true;
-        await AutopilotService.pressHome();
-        if (this.activeTextContent) {
-          this.activeTextContent.innerHTML = '🚀 <b>Автопилот:</b> Переход на главный экран телефона выполнен.';
-        }
-      } else if (lowerText.includes('назад')) {
-        handled = true;
-        await AutopilotService.pressBack();
-        if (this.activeTextContent) {
-          this.activeTextContent.innerHTML = '🚀 <b>Автопилот:</b> Нажата кнопка «Назад».';
-        }
-      }
-
-      if (handled) {
-        const assistantMsg: ChatMessage = {
-          id: assistantMsgId,
-          role: 'assistant',
-          content: this.activeTextContent?.textContent || 'Команда выполнена',
-          timestamp: Date.now()
-        };
-        this.currentSession.messages.push(assistantMsg);
-        StorageService.updateSessionMessages(this.currentSession.id, this.currentSession.messages);
-        this.finalizeAssistantBubble();
-        this.setStreamingState(false);
-        return;
-      }
+    if (shouldHandleWithAutopilot && await this.runAutopilotCommand(turn, text, lowerText)) {
+      return;
     }
 
-    const startTime = Date.now();
-    this.generationStartTime = startTime;
-    this.hasReceivedFirstToken = false;
     this.setStreamingState(true);
     const banner = document.getElementById('model-download-banner');
     const bannerPercent = document.getElementById('banner-percent-text');
     const bannerFill = document.getElementById('banner-progress-fill');
     const bannerText = document.getElementById('banner-status-text');
+    const engine = engineInfo(this.settings);
+    const mode = this.settings.mode;
 
     let liveTokenCount = 0;
     let lastContentRenderTime = 0;
+    const statusEl = turn.bubble.querySelector('.thinking-label');
+    const detailEl = turn.bubble.querySelector('.thinking-detail-text');
+    const firstToken = () => {
+      if (!turn.firstToken) {
+        turn.firstToken = true;
+        this.vibrate(15);
+      }
+    };
+    const speed = () => (liveTokenCount / Math.max(0.1, (Date.now() - turn.startedAt) / 1000)).toFixed(1);
 
     try {
       await AIEngine.generate(
-        this.currentSession.messages,
+        session.messages,
         this.settings,
         {
           onPhase: (phase, detail) => {
-            const statusEl = this.activeAssistantBubble?.querySelector('#live-thinking-status');
-            const detailEl = this.activeAssistantBubble?.querySelector('#live-thinking-detail');
             if (statusEl && phase) statusEl.textContent = phase;
             if (detailEl && detail) detailEl.textContent = detail;
           },
+          onNotice: (note) => {
+            this.addTurnNote(turn, note);
+          },
           onContent: (_delta, fullContent) => {
             liveTokenCount++;
-            const elapsedSec = Math.max(0.1, (Date.now() - startTime) / 1000);
-            const liveSpeed = (liveTokenCount / elapsedSec).toFixed(1);
-
-            if (!this.hasReceivedFirstToken) {
-              this.hasReceivedFirstToken = true;
-              if (typeof navigator !== 'undefined' && 'vibrate' in navigator) {
-                try { navigator.vibrate(15); } catch {}
-              }
-            }
-
-            const statusEl = this.activeAssistantBubble?.querySelector('#live-thinking-status');
-            const detailEl = this.activeAssistantBubble?.querySelector('#live-thinking-detail');
+            firstToken();
             if (statusEl) statusEl.textContent = 'Вывод ответа...';
-            if (detailEl) detailEl.textContent = `Токен #${liveTokenCount} (${liveSpeed} т/с) • Helio G99 ARM NEON`;
+            if (detailEl) detailEl.textContent = `Токен #${liveTokenCount} (${speed()} т/с)`;
 
-            if (this.activeTextContent) {
-              this.activeTextContent.classList.remove('is-generating');
+            if (turn.text) {
+              turn.text.classList.remove('is-generating');
               const now = Date.now();
               // Троттлинг отрисовки во время стриминга (~80мс), чтобы не перегружать поток интерфейса
               if (now - lastContentRenderTime > 80) {
                 lastContentRenderTime = now;
-                this.activeTextContent.innerHTML = this.renderMarkdown(fullContent, true);
+                turn.text.innerHTML = this.renderMarkdown(fullContent, true);
                 this.scrollToBottom();
               }
             }
           },
           onThinking: (_delta, fullThinking) => {
             liveTokenCount++;
-            const elapsedSec = Math.max(0.1, (Date.now() - startTime) / 1000);
-            const liveSpeed = (liveTokenCount / elapsedSec).toFixed(1);
-
-            if (!this.hasReceivedFirstToken) {
-              this.hasReceivedFirstToken = true;
-              if (typeof navigator !== 'undefined' && 'vibrate' in navigator) {
-                try { navigator.vibrate(15); } catch {}
-              }
-            }
-            if (this.activeThinkingContent) {
-              this.activeThinkingContent.textContent = fullThinking;
-              const card = this.activeThinkingContent.closest('.thought-card');
-              card?.classList.remove('hidden');
-              const statusEl = this.activeAssistantBubble?.querySelector('#live-thinking-status');
-              const detailEl = this.activeAssistantBubble?.querySelector('#live-thinking-detail');
+            firstToken();
+            if (turn.thinking) {
+              turn.thinking.textContent = fullThinking;
+              turn.thinking.closest('.thought-card')?.classList.remove('hidden');
               if (statusEl) statusEl.textContent = 'Формирование хода мыслей...';
-              if (detailEl) detailEl.textContent = `Мысль #${liveTokenCount} (${liveSpeed} т/с) • ARM NEON DotProd`;
+              if (detailEl) detailEl.textContent = `Мысль #${liveTokenCount} (${speed()} т/с)`;
               this.scrollToBottom();
             }
           },
           onRethink: (_delta, fullRethink) => {
-            if (this.activeRethinkContent) {
-              this.activeRethinkContent.textContent = fullRethink;
-              const card = this.activeRethinkContent.closest('.thought-card');
-              card?.classList.remove('hidden');
+            if (turn.rethink) {
+              turn.rethink.textContent = fullRethink;
+              turn.rethink.closest('.thought-card')?.classList.remove('hidden');
               this.scrollToBottom();
             }
           },
           onDone: (fullContent, fullThinking, fullRethink) => {
-            if (this.thinkingTimerInterval) {
-              clearInterval(this.thinkingTimerInterval);
-              this.thinkingTimerInterval = null;
-            }
+            this.stopTurnTimer(turn);
 
             if (!fullContent.trim() && !fullThinking.trim()) {
-              if (this.activeTextContent) {
-                this.activeTextContent.classList.remove('is-generating');
-                this.activeTextContent.innerHTML = `
-                  <div style="background: rgba(239, 68, 68, 0.1); border: 1px solid rgba(239, 68, 68, 0.3); border-radius: 10px; padding: 12px; color: #fca5a5;">
-                    <div style="font-weight: 600; margin-bottom: 4px; color: #ef4444;">⚠️ Ответ не сгенерирован (0 токенов)</div>
-                    <div style="font-size: 0.84rem; line-height: 1.4;">
-                      Модель завершила вычисления, но не сформировала текст. Проверьте целостность файла модели (.gguf) или повторите отправку.
-                    </div>
-                  </div>
-                `;
-              }
+              this.showTurnProblem(turn, '⚠️ Ответ не сгенерирован (0 токенов)',
+                'Модель завершила вычисления, но не сформировала текст. Повторите отправку; если это локальная модель — проверьте файл модели и свободную память.');
+              this.finalizeAssistantBubble(turn);
               return;
             }
 
-            if (!fullContent.trim() && fullThinking.trim()) {
-              if (this.activeTextContent) {
-                this.activeTextContent.classList.remove('is-generating');
-                this.activeTextContent.innerHTML = `
-                  <div style="background: rgba(59, 130, 246, 0.1); border: 1px solid rgba(59, 130, 246, 0.3); border-radius: 10px; padding: 12px; color: #93c5fd; font-size: 0.84rem; line-height: 1.4;">
-                    🧠 <b>Рассуждения сформированы:</b> Модель завершила ход мыслей, но вывод текста был прерван. Вы можете раскрыть блок «Ход мыслей» выше для ознакомления.
+            if (turn.text) {
+              turn.text.classList.remove('is-generating');
+              if (fullContent.trim()) {
+                turn.text.innerHTML = this.renderMarkdown(fullContent, false);
+                this.attachCodeActionListeners(turn.text);
+              } else {
+                turn.text.innerHTML = `
+                  <div class="notice-box info">
+                    🧠 <b>Рассуждения сформированы:</b> модель закончила ход мыслей, но вывод ответа был прерван. Раскройте блок «Ход мыслей» выше.
                   </div>
                 `;
               }
-            }
-
-            if (this.activeTextContent && fullContent.trim()) {
-              this.activeTextContent.classList.remove('is-generating');
-              this.activeTextContent.innerHTML = this.renderMarkdown(fullContent, false);
-              this.attachCodeActionListeners(this.activeTextContent);
               this.scrollToBottom();
             }
 
-            const durationMs = Date.now() - startTime;
-            const durationSec = (durationMs / 1000).toFixed(1);
-            const engineName = this.settings.mode === 'offline'
-              ? (this.settings.offline.localFileName || this.settings.offline.model)
-              : this.settings.online.model;
-
+            const durationMs = Date.now() - turn.startedAt;
             const assistantMsg: ChatMessage = {
-              id: assistantMsgId,
+              id: turn.assistantMsgId,
               role: 'assistant',
               content: fullContent,
               thinking: fullThinking || undefined,
               rethink: fullRethink || undefined,
               timestamp: Date.now(),
-              durationMs
+              durationMs,
+              engine: engine.name,
+              mode
             };
-            this.currentSession.messages.push(assistantMsg);
-            StorageService.updateSessionMessages(
-              this.currentSession.id,
-              this.currentSession.messages,
-              userMsg.content
-            );
-            this.finalizeAssistantBubble(durationSec, engineName);
-            if (typeof navigator !== 'undefined' && 'vibrate' in navigator) {
-              try { navigator.vibrate([15, 30, 15]); } catch {}
-            }
+            this.storeAssistantMessage(turn, assistantMsg);
+            this.finalizeAssistantBubble(turn, (durationMs / 1000).toFixed(1), engine.name, mode);
+            this.vibrate([15, 30, 15]);
           },
           onError: (err) => {
-            if (this.thinkingTimerInterval) {
-              clearInterval(this.thinkingTimerInterval);
-              this.thinkingTimerInterval = null;
-            }
-            if (this.activeTextContent) {
-              this.activeTextContent.classList.remove('is-generating');
-              this.activeTextContent.innerHTML = `
-                <div style="background: rgba(239, 68, 68, 0.1); border: 1px solid rgba(239, 68, 68, 0.3); border-radius: 10px; padding: 12px; color: #fca5a5;">
-                  <div style="font-weight: 600; margin-bottom: 4px; color: #ef4444;">⚠️ Ошибка:</div>
-                  <div style="font-size: 0.84rem; line-height: 1.4;">${this.escapeHtml(err.message)}</div>
-                </div>
-              `;
-            }
+            this.stopTurnTimer(turn);
+            this.showTurnProblem(turn, '⚠️ Ошибка:', err.message);
+            this.finalizeAssistantBubble(turn);
           }
         },
         (progress) => {
@@ -427,13 +352,134 @@ class ArgentMobileApp {
         }
       );
     } catch (err: any) {
-      if (this.activeTextContent) {
-        this.activeTextContent.classList.remove('is-generating');
-        this.activeTextContent.innerHTML = `<div style="color: #ef4444;">⚠️ Сбой: ${this.escapeHtml(err.message)}</div>`;
-      }
+      this.stopTurnTimer(turn);
+      this.showTurnProblem(turn, '⚠️ Сбой:', err?.message || String(err));
+      this.finalizeAssistantBubble(turn);
     } finally {
+      // Состояние «идёт генерация» принадлежит последнему ответу: прерванный старый, закончившись позже,
+      // не должен снимать его с нового.
+      if (this.turn === turn) {
+        this.setStreamingState(false);
+        banner?.classList.add('hidden');
+      }
+    }
+  }
+
+  /** Команда телефону (открыть приложение, «домой», «назад»). true — обработано, в модель не идёт. */
+  private async runAutopilotCommand(turn: Turn, text: string, lowerText: string): Promise<boolean> {
+    const isRunning = await AutopilotService.isServiceEnabled();
+    if (!isRunning) {
+      if (turn.text) {
+        turn.text.classList.remove('is-generating');
+        turn.text.innerHTML = `
+          <div class="notice-box warn">
+            <div class="notice-title">⚠️ Служба автопилота отключена в системе</div>
+            <div class="notice-body">
+              Чтобы Argent мог самостоятельно открывать приложения и нажимать кнопки на телефоне, включите службу <b>Argent Autopilot Service</b> в специальных возможностях Android.
+            </div>
+            <button class="action-btn-sm btn-open-acc-settings">⚙️ Включить в настройках телефона</button>
+          </div>
+        `;
+        turn.text.querySelector('.btn-open-acc-settings')?.addEventListener('click', () => {
+          AutopilotService.openSettings();
+        });
+      }
+      this.stopTurnTimer(turn);
+      this.finalizeAssistantBubble(turn);
       this.setStreamingState(false);
-      banner?.classList.add('hidden');
+      return true;
+    }
+
+    let reply = '';
+    if (lowerText.startsWith('открой ') || lowerText.startsWith('запусти ') || lowerText.includes('открой приложение ')) {
+      const appMatch = text.match(/(?:открой|запусти)(?:\s+приложение)?\s+([a-zA-Zа-яА-ЯёЁ0-9\s]+)/i);
+      const appName = appMatch ? appMatch[1].replace(/на телефоне/i, '').replace(/приложение/i, '').trim() : '';
+      if (appName) {
+        if (turn.thinking) {
+          turn.thinking.textContent = `Анализ цели: запуск приложения "${appName}" через Android PackageManager.`;
+          turn.thinking.closest('.thought-card')?.classList.remove('hidden');
+        }
+        try {
+          await AutopilotService.launchApp(appName);
+          reply = `🚀 <b>Автопилот:</b> приложение <b>${this.escapeHtml(appName)}</b> открыто на телефоне.`;
+        } catch (err: any) {
+          reply = `⚠️ <b>Ошибка автопилота:</b> ${this.escapeHtml(err.message)}`;
+        }
+      }
+    } else if (lowerText.includes('нажми домой') || lowerText === 'домой') {
+      reply = await AutopilotService.pressHome()
+        ? '🚀 <b>Автопилот:</b> переход на главный экран выполнен.'
+        : '⚠️ <b>Автопилот:</b> система не выполнила «Домой».';
+    } else if (lowerText.includes('назад')) {
+      reply = await AutopilotService.pressBack()
+        ? '🚀 <b>Автопилот:</b> нажата кнопка «Назад».'
+        : '⚠️ <b>Автопилот:</b> система не выполнила «Назад».';
+    }
+
+    if (!reply) return false;
+    if (turn.text) {
+      turn.text.classList.remove('is-generating');
+      turn.text.innerHTML = reply;
+    }
+    this.storeAssistantMessage(turn, {
+      id: turn.assistantMsgId,
+      role: 'assistant',
+      content: turn.text?.textContent || 'Команда выполнена',
+      timestamp: Date.now(),
+      engine: 'Автопилот'
+    });
+    this.stopTurnTimer(turn);
+    this.finalizeAssistantBubble(turn);
+    this.setStreamingState(false);
+    return true;
+  }
+
+  /** Ответ встаёт сразу за своим вопросом (а не в конец: после «Стоп» мог уже прийти новый вопрос)
+   *  и пишется в СВОЮ сессию — пользователь мог переключиться на другой диалог. */
+  private storeAssistantMessage(turn: Turn, msg: ChatMessage): void {
+    const messages = turn.session.messages;
+    const at = messages.findIndex(m => m.id === turn.userMsgId);
+    let insertAt = at === -1 ? messages.length : at + 1;
+    while (insertAt < messages.length && messages[insertAt].role === 'assistant') insertAt++;
+    messages.splice(insertAt, 0, msg);
+    StorageService.updateSessionMessages(turn.session.id, messages);
+    // Тот же диалог мог быть открыт заново (другой объект из хранилища): иначе следующее сохранение
+    // из него затёрло бы этот ответ.
+    if (this.currentSession.id === turn.session.id && this.currentSession !== turn.session) {
+      this.currentSession.messages = messages;
+    }
+  }
+
+  private showTurnProblem(turn: Turn, title: string, body: string): void {
+    if (!turn.text) return;
+    turn.text.classList.remove('is-generating');
+    turn.text.innerHTML = `
+      <div class="notice-box error">
+        <div class="notice-title">${this.escapeHtml(title)}</div>
+        <div class="notice-body">${this.escapeHtml(body)}</div>
+      </div>
+    `;
+  }
+
+  private addTurnNote(turn: Turn, note: string): void {
+    const body = turn.bubble.querySelector('.assistant-body');
+    if (!body) return;
+    const el = document.createElement('div');
+    el.className = 'turn-note';
+    el.textContent = `ℹ️ ${note}`;
+    body.insertBefore(el, body.firstChild);
+  }
+
+  private stopTurnTimer(turn: Turn): void {
+    if (turn.timer) {
+      clearInterval(turn.timer);
+      turn.timer = null;
+    }
+  }
+
+  private vibrate(pattern: number | number[]): void {
+    if (typeof navigator !== 'undefined' && 'vibrate' in navigator) {
+      try { navigator.vibrate(pattern); } catch { /* вибрация недоступна */ }
     }
   }
 
@@ -459,28 +505,12 @@ class ArgentMobileApp {
     }
   }
 
-  private prepareAssistantBubble(msgId: string): void {
+  private prepareAssistantBubble(session: ChatSession, userMsgId: string, msgId: string): Turn {
     const list = document.getElementById('messages-list');
-    if (!list) return;
-
     const item = document.createElement('div');
     item.className = 'message-item assistant';
     item.id = msgId;
-
-    const isOffline = this.settings.mode === 'offline';
-    const engineLabel = isOffline 
-      ? (this.settings.offline.model.endsWith('.gguf') || this.settings.offline.model.endsWith('.bin') 
-          ? '⚡ llama.cpp ARM NEON' 
-          : '⚡ WebLLM GPU')
-      : `🌐 ${this.settings.online.provider.toUpperCase()}`;
-
-    const initialPhase = isOffline
-      ? 'Запуск нативного C++ движка...'
-      : 'Соединение с облачным сервером...';
-
-    const initialDetail = isOffline
-      ? 'Вычисление на процессоре Helio G99'
-      : 'Ожидание ответа модели...';
+    const engine = engineInfo(this.settings);
 
     item.innerHTML = `
       <div class="assistant-body">
@@ -517,13 +547,13 @@ class ArgentMobileApp {
               </div>
               <div class="thinking-info">
                 <div class="thinking-status-line">
-                  <span class="thinking-label" id="live-thinking-status">${initialPhase}</span>
-                  <span class="thinking-timer" id="live-thinking-timer">0.0с</span>
+                  <span class="thinking-label">${this.escapeHtml(engine.phase)}</span>
+                  <span class="thinking-timer">0.0с</span>
                 </div>
                 <div class="thinking-detail-row">
-                  <span class="thinking-chip-engine">${engineLabel}</span>
+                  <span class="thinking-chip-engine">${this.escapeHtml(engine.chip)}</span>
                   <div class="thinking-dots"><span></span><span></span><span></span></div>
-                  <span class="thinking-detail-text" id="live-thinking-detail">${initialDetail}</span>
+                  <span class="thinking-detail-text">${this.escapeHtml(engine.detail)}</span>
                 </div>
               </div>
             </div>
@@ -533,64 +563,56 @@ class ArgentMobileApp {
       </div>
     `;
 
-    list.appendChild(item);
-    this.activeAssistantBubble = item;
-    this.activeThinkingContent = item.querySelector('.thought-content-text');
-    this.activeRethinkContent = item.querySelector('.rethink-content-text');
-    this.activeTextContent = item.querySelector('.assistant-content');
+    list?.appendChild(item);
+    const turn: Turn = {
+      bubble: item,
+      thinking: item.querySelector('.thought-content-text'),
+      rethink: item.querySelector('.rethink-content-text'),
+      text: item.querySelector('.assistant-content'),
+      timer: null,
+      startedAt: Date.now(),
+      session,
+      userMsgId,
+      assistantMsgId: msgId,
+      firstToken: false,
+    };
+    this.turn = turn;
 
     this.attachThoughtCollapsers(item);
     this.scrollToBottom();
 
-    // Запуск живого таймера размышления (100 мс)
-    if (this.thinkingTimerInterval) clearInterval(this.thinkingTimerInterval);
-    const timerEl = item.querySelector('#live-thinking-timer');
-    this.thinkingTimerInterval = setInterval(() => {
-      if (timerEl) {
-        const elapsed = ((Date.now() - this.generationStartTime) / 1000).toFixed(1);
-        timerEl.textContent = `${elapsed}с`;
-      }
+    // Живой таймер размышления (100 мс) — у каждого ответа свой
+    const timerEl = item.querySelector('.thinking-timer');
+    turn.timer = setInterval(() => {
+      if (timerEl) timerEl.textContent = `${((Date.now() - turn.startedAt) / 1000).toFixed(1)}с`;
     }, 100);
 
-    // Тактильный виброотклик при старте генерации
-    if (typeof navigator !== 'undefined' && 'vibrate' in navigator) {
-      try { navigator.vibrate(20); } catch {}
+    this.vibrate(20);
+    return turn;
+  }
+
+  private finalizeAssistantBubble(turn: Turn, durationSec?: string, engineName?: string,
+                                  mode?: 'online' | 'offline'): void {
+    this.stopTurnTimer(turn);
+    turn.text?.classList.remove('is-generating');
+
+    // Авто-сворачивание хода мыслей после завершения генерации
+    turn.bubble.querySelector('.thought-card.thinking')?.classList.add('collapsed');
+    turn.bubble.querySelector('.thought-card.rethink')?.classList.add('collapsed');
+    turn.bubble.querySelectorAll('.thought-indicator').forEach(el => el.remove());
+
+    if (durationSec && !turn.bubble.querySelector('.message-meta-badge')) {
+      turn.bubble.querySelector('.assistant-body')?.appendChild(this.metaBadge(durationSec, engineName, mode));
     }
   }
 
-  private finalizeAssistantBubble(durationSec?: string, engineName?: string): void {
-    if (this.thinkingTimerInterval) {
-      clearInterval(this.thinkingTimerInterval);
-      this.thinkingTimerInterval = null;
-    }
-
-    if (this.activeAssistantBubble) {
-      this.activeTextContent?.classList.remove('is-generating');
-
-      // Авто-сворачивание хода мыслей после завершения генерации
-      const thinkingCard = this.activeAssistantBubble.querySelector('.thought-card.thinking');
-      thinkingCard?.classList.add('collapsed');
-      const rethinkCard = this.activeAssistantBubble.querySelector('.thought-card.rethink');
-      rethinkCard?.classList.add('collapsed');
-
-      // Убираем пульсирующие точки
-      const indicators = this.activeAssistantBubble.querySelectorAll('.thought-indicator');
-      indicators.forEach(el => el.remove());
-
-      // Добавляем красивый мета-бейдж времени генерации и модели
-      if (durationSec && this.activeTextContent && !this.activeAssistantBubble.querySelector('.message-meta-badge')) {
-        const metaBadge = document.createElement('div');
-        metaBadge.className = 'message-meta-badge';
-        const isOffline = this.settings.mode === 'offline';
-        metaBadge.innerHTML = `
-          <span class="meta-icon">${isOffline ? '⚡' : '🌐'}</span>
-          <span>${durationSec}с</span>
-          <span>•</span>
-          <span>${this.escapeHtml(engineName || '')}</span>
-        `;
-        this.activeAssistantBubble.querySelector('.assistant-body')?.appendChild(metaBadge);
-      }
-    }
+  private metaBadge(durationSec: string, engineName?: string, mode?: 'online' | 'offline'): HTMLElement {
+    const badge = document.createElement('div');
+    badge.className = 'message-meta-badge';
+    const parts = [`<span class="meta-icon">${mode === 'online' ? '🌐' : '⚡'}</span>`, `<span>${this.escapeHtml(durationSec)}с</span>`];
+    if (engineName) parts.push('<span>•</span>', `<span>${this.escapeHtml(engineName)}</span>`);
+    badge.innerHTML = parts.join('');
+    return badge;
   }
 
   private attachThoughtCollapsers(container: HTMLElement): void {
@@ -658,15 +680,11 @@ class ArgentMobileApp {
           ` : ''}
 
           <div class="assistant-content">${this.renderMarkdown(msg.content)}</div>
-
-          ${durationSec ? `
-            <div class="message-meta-badge">
-              <span class="meta-icon">⚡</span>
-              <span>${durationSec}с</span>
-            </div>
-          ` : ''}
         </div>
       `;
+      if (durationSec) {
+        item.querySelector('.assistant-body')?.appendChild(this.metaBadge(durationSec, msg.engine, msg.mode));
+      }
 
       this.attachThoughtCollapsers(item);
       this.attachCodeActionListeners(item);
@@ -784,12 +802,12 @@ class ArgentMobileApp {
 
   private attachCodeActionListeners(container: HTMLElement): void {
     container.querySelectorAll('.btn-copy-code').forEach((btn) => {
-      btn.addEventListener('click', (e) => {
+      btn.addEventListener('click', async (e) => {
         const target = e.currentTarget as HTMLElement;
         const codeWrapper = target.closest('.code-block-wrapper');
         const code = codeWrapper?.querySelector('pre code')?.textContent || '';
-        navigator.clipboard.writeText(code);
-        target.textContent = '✓ Скопировано!';
+        const ok = await FileExport.copy(code);
+        target.textContent = ok ? '✓ Скопировано!' : '✕ Не удалось скопировать';
         setTimeout(() => target.textContent = '📋 Копировать', 2000);
       });
     });
@@ -841,6 +859,7 @@ class ArgentMobileApp {
     btnCloseMenu?.addEventListener('click', () => menuDrawer?.classList.add('hidden'));
 
     const startNewChat = () => {
+      if (this.isStreaming) this.abortGeneration();    // ответ допишется в свой диалог (Turn.session)
       this.currentSession = {
         id: 'chat_' + Date.now(),
         title: 'Новый диалог',
@@ -893,7 +912,7 @@ class ArgentMobileApp {
         return;
       }
       const combined = files.map(f => `=== FILE: ${f.name} ===\n${f.content}\n`).join('\n\n');
-      StorageService.downloadFileToDevice('argent_project_export.txt', combined);
+      this.saveToDevice('argent_project_export.txt', combined);
     });
 
     // Окно настроек
@@ -932,18 +951,42 @@ class ArgentMobileApp {
       this.scanAndPopulateGgufModels(true);
     });
 
+    // Ввод пути только показывает выбор в списке; применяется он кнопкой «Сохранить».
+    // Раньше каждая нажатая буква записывалась в настройки и переключала режим на оффлайн.
     manualPathInput?.addEventListener('input', () => {
       const val = manualPathInput.value.trim();
-      if (val) {
-        this.settings.offline.model = val;
-        this.settings.offline.localFileName = val.split('/').pop() || val;
-        this.switchMode('offline');
-        if (optCustomLocal) {
-          optCustomLocal.style.display = 'block';
-          optCustomLocal.textContent = `⚡ ${this.settings.offline.localFileName}`;
-          optCustomLocal.value = val;
-        }
+      if (val && optCustomLocal) {
+        optCustomLocal.style.display = 'block';
+        optCustomLocal.textContent = `⚡ ${val.split('/').pop() || val}`;
+        optCustomLocal.value = val;
         if (selectOfflineModel) selectOfflineModel.value = val;
+      }
+    });
+
+    // Выбор в списке переносится в поле пути: иначе сохранённый путь к GGUF перекрывал выбор модели
+    // WebLLM, и вернуться с файла на модель из списка было нельзя.
+    selectOfflineModel?.addEventListener('change', () => {
+      if (!manualPathInput) return;
+      const val = selectOfflineModel.value;
+      manualPathInput.value = isNativeModel(val) && val !== 'custom_local' ? val : '';
+    });
+
+    // Автозаполнение известных адресов при смене провайдера (обработчик ставится один раз)
+    const providerSelect = document.getElementById('setting-provider') as HTMLSelectElement;
+    providerSelect?.addEventListener('change', () => {
+      const presets: Record<string, { endpoint: string; model: string }> = {
+        deepseek: { endpoint: 'https://api.deepseek.com/v1', model: 'deepseek-chat' },
+        openrouter: { endpoint: 'https://openrouter.ai/api/v1', model: 'deepseek/deepseek-chat' },
+        groq: { endpoint: 'https://api.groq.com/openai/v1', model: 'llama-3.3-70b-versatile' },
+        openai: { endpoint: 'https://api.openai.com/v1', model: 'gpt-4o-mini' },
+        ollama: { endpoint: 'http://192.168.1.50:11434/v1', model: 'qwen2.5:3b' }
+      };
+      const preset = presets[providerSelect.value];
+      const endpointInput = document.getElementById('setting-endpoint') as HTMLInputElement;
+      const modelInput = document.getElementById('setting-model') as HTMLInputElement;
+      if (preset && endpointInput && modelInput) {
+        endpointInput.value = preset.endpoint;
+        modelInput.value = preset.model;
       }
     });
 
@@ -1096,6 +1139,11 @@ class ArgentMobileApp {
       `;
 
       item.querySelector('.item-title')?.addEventListener('click', () => {
+        if (s.id === this.currentSession.id) {
+          document.getElementById('menu-drawer')?.classList.add('hidden');
+          return;
+        }
+        if (this.isStreaming) this.abortGeneration();
         this.currentSession = s;
         StorageService.setCurrentSessionId(s.id);
         this.renderCurrentSession();
@@ -1104,7 +1152,9 @@ class ArgentMobileApp {
 
       item.querySelector('.icon-btn-delete')?.addEventListener('click', (e) => {
         e.stopPropagation();
-        const filtered = sessions.filter(x => x.id !== s.id);
+        if (!confirm(`Удалить диалог «${s.title}»?`)) return;
+        if (s.id === this.currentSession.id && this.isStreaming) this.abortGeneration();
+        const filtered = StorageService.getSessions().filter(x => x.id !== s.id);
         StorageService.saveSessions(filtered);
         if (s.id === this.currentSession.id) {
           this.currentSession = StorageService.getOrCreateActiveSession();
@@ -1176,7 +1226,7 @@ class ArgentMobileApp {
     btnDownload?.replaceWith(btnDownload.cloneNode(true));
     const newBtnDownload = document.getElementById('btn-download-file');
     newBtnDownload?.addEventListener('click', () => {
-      StorageService.downloadFileToDevice(file.name, content.value);
+      this.saveToDevice(file.name, content.value);
     });
 
     modal?.classList.remove('hidden');
@@ -1198,34 +1248,39 @@ class ArgentMobileApp {
     const optCustomLocal = document.getElementById('opt-custom-local') as HTMLOptionElement;
     const localFileInfo = document.getElementById('local-model-file-info');
     const customOfflineInput = document.getElementById('setting-custom-offline-id') as HTMLInputElement;
+    const native = isNativeModel(this.settings.offline.model, this.settings.offline.localFileName);
 
+    // В поле пути — только путь к файлу GGUF; id модели WebLLM там не место (иначе он «перекрывал» список)
     const manualInput = document.getElementById('setting-manual-model-path') as HTMLInputElement;
     if (manualInput) {
-      manualInput.value = this.settings.offline.localFileName || this.settings.offline.model || '';
+      manualInput.value = native ? this.settings.offline.model : '';
     }
 
     const threadsSelect = document.getElementById('setting-offline-threads') as HTMLSelectElement;
     if (threadsSelect) {
       threadsSelect.value = String(this.settings.offline.threads || 2);
     }
+    const contextSelect = document.getElementById('setting-offline-context') as HTMLSelectElement;
+    if (contextSelect) {
+      contextSelect.value = String(this.settings.offline.context || 2048);
+    }
 
-    if (this.settings.offline.localFileName) {
+    if (native && this.settings.offline.localFileName) {
       if (optCustomLocal) {
         optCustomLocal.style.display = 'block';
         optCustomLocal.textContent = `⚡ ${this.settings.offline.localFileName} (${this.settings.offline.localFileSize || 'llama.cpp'})`;
         optCustomLocal.value = this.settings.offline.model;
       }
-      if (offlineModel) offlineModel.value = this.settings.offline.model;
       if (localFileInfo) {
         localFileInfo.style.display = 'block';
         localFileInfo.style.color = '#10b981';
-        localFileInfo.innerHTML = `✅ Выбран файл: <b>${this.escapeHtml(this.settings.offline.localFileName)}</b> (${this.settings.offline.localFileSize || ''}) для нативного llama.cpp`;
+        localFileInfo.innerHTML = `✅ Выбран файл: <b>${this.escapeHtml(this.settings.offline.localFileName)}</b> ${this.settings.offline.localFileSize ? `(${this.escapeHtml(this.settings.offline.localFileSize)})` : ''} для нативного llama.cpp`;
       }
-    } else {
-      if (offlineModel) offlineModel.value = this.settings.offline.model;
     }
+    if (offlineModel) offlineModel.value = this.settings.offline.model;
 
-    // Проверка разрешений на файлы и автосканирование моделей
+    // Проверка разрешений на файлы и поиск моделей на телефоне (только показывает найденное:
+    // раньше открытие настроек само подменяло выбранную модель и включало оффлайн-режим)
     const permBanner = document.getElementById('storage-perm-banner');
     const permStatus = document.getElementById('storage-perm-status');
     const btnReqPerm = document.getElementById('btn-request-storage-perm');
@@ -1263,23 +1318,12 @@ class ArgentMobileApp {
       if (tempVal) tempVal.textContent = temp.value;
       temp.oninput = () => { if (tempVal) tempVal.textContent = temp.value; };
     }
-
-    // Автозаполнение известных URL при смене провайдера
-    provider?.addEventListener('change', () => {
-      const presets: Record<string, { endpoint: string; model: string }> = {
-        deepseek: { endpoint: 'https://api.deepseek.com/v1', model: 'deepseek-chat' },
-        openrouter: { endpoint: 'https://openrouter.ai/api/v1', model: 'deepseek/deepseek-chat' },
-        groq: { endpoint: 'https://api.groq.com/openai/v1', model: 'llama-3.3-70b-versatile' },
-        openai: { endpoint: 'https://api.openai.com/v1', model: 'gpt-4o-mini' },
-        ollama: { endpoint: 'http://192.168.1.50:11434/v1', model: 'nanbeige4.2:3b' }
-      };
-      if (presets[provider.value]) {
-        endpoint.value = presets[provider.value].endpoint;
-        model.value = presets[provider.value].model;
-      }
-    });
   }
 
+  /**
+   * Найти GGUF на телефоне и добавить в список. Выбор меняется только по кнопке «Найти» (userTriggered):
+   * в форме, а сохраняется он вместе с остальными настройками.
+   */
   private async scanAndPopulateGgufModels(userTriggered = false): Promise<void> {
     if (!LlamaNativeService.isAvailable()) return;
     const localFileInfo = document.getElementById('local-model-file-info');
@@ -1305,7 +1349,7 @@ class ArgentMobileApp {
 
       if (res.models && res.models.length > 0) {
         for (const m of res.models) {
-          let opt = selectOfflineModel.querySelector(`option[value="${m.path}"]`) as HTMLOptionElement;
+          let opt = Array.from(selectOfflineModel.options).find(o => o.value === m.path);
           if (!opt) {
             opt = document.createElement('option');
             opt.value = m.path;
@@ -1314,22 +1358,18 @@ class ArgentMobileApp {
           opt.textContent = `⚡ ${m.name} (${m.sizeFormatted}, Найдено)`;
         }
 
-        if (userTriggered || !this.settings.offline.model.endsWith('.gguf')) {
+        if (userTriggered) {
           const first = res.models[0];
-          this.settings.offline.localFileName = first.name;
-          this.settings.offline.localFileSize = first.sizeFormatted;
-          this.settings.offline.model = first.path;
           selectOfflineModel.value = first.path;
           if (manualInput) manualInput.value = first.path;
-          this.switchMode('offline');
-          StorageService.saveSettings(this.settings);
         }
 
         if (localFileInfo) {
           localFileInfo.style.display = 'block';
           localFileInfo.style.color = '#10b981';
-          localFileInfo.innerHTML = `✅ Найдено моделей на телефоне: <b>${res.models.length}</b>.<br>` +
-            res.models.map(m => `• <b>${this.escapeHtml(m.name)}</b> (${m.sizeFormatted})`).join('<br>');
+          localFileInfo.innerHTML = `✅ Найдено моделей на телефоне: <b>${res.models.length}</b>` +
+            (userTriggered ? ' — выбрана первая, нажмите «Сохранить».' : '.') + '<br>' +
+            res.models.map(m => `• <b>${this.escapeHtml(m.name)}</b> (${this.escapeHtml(m.sizeFormatted)})`).join('<br>');
         }
       } else if (userTriggered && localFileInfo) {
         localFileInfo.style.display = 'block';
@@ -1352,34 +1392,49 @@ class ArgentMobileApp {
     const temp = parseFloat((document.getElementById('setting-temp') as HTMLInputElement)?.value || '0.6');
 
     this.settings.online.provider = provider || 'deepseek';
-    this.settings.online.endpoint = endpoint || 'https://api.deepseek.com/v1';
-    this.settings.online.apiKey = apiKey || '';
-    this.settings.online.model = model || 'deepseek-chat';
+    this.settings.online.endpoint = (endpoint || 'https://api.deepseek.com/v1').trim();
+    this.settings.online.apiKey = (apiKey || '').trim();
+    this.settings.online.model = (model || 'deepseek-chat').trim();
 
     const threadsSelect = (document.getElementById('setting-offline-threads') as HTMLSelectElement)?.value;
     const threadsVal = threadsSelect ? parseInt(threadsSelect, 10) : 2;
     this.settings.offline.threads = isNaN(threadsVal) ? 2 : threadsVal;
+    const contextSelect = (document.getElementById('setting-offline-context') as HTMLSelectElement)?.value;
+    const contextVal = contextSelect ? parseInt(contextSelect, 10) : 2048;
+    this.settings.offline.context = isNaN(contextVal) ? 2048 : contextVal;
 
+    // Порядок выбора модели: путь к файлу -> свой id WebLLM -> строка списка.
+    const customId = customOfflineInput?.value?.trim() || '';
+    this.settings.offline.customModelId = customId || undefined;
     if (manualPath) {
+      if (manualPath !== this.settings.offline.model) this.settings.offline.localFileSize = undefined;
       this.settings.offline.model = manualPath;
       this.settings.offline.localFileName = manualPath.split('/').pop() || manualPath;
-    } else {
-      const customId = customOfflineInput?.value?.trim();
-      if (customId) {
-        this.settings.offline.customModelId = customId;
-        if (!this.settings.offline.localFileName) {
-          this.settings.offline.model = customId;
-        }
-      } else if (offlineModel) {
-        this.settings.offline.model = offlineModel;
-        if (offlineModel.endsWith('.gguf') || offlineModel.endsWith('.bin')) {
-          this.settings.offline.localFileName = offlineModel.split('/').pop() || offlineModel;
-        }
+    } else if (customId) {
+      this.settings.offline.model = customId;
+      this.settings.offline.localFileName = undefined;
+      this.settings.offline.localFileSize = undefined;
+    } else if (offlineModel && offlineModel !== 'custom_local') {
+      this.settings.offline.model = offlineModel;
+      if (isNativeModel(offlineModel)) {
+        this.settings.offline.localFileName = offlineModel.split('/').pop() || offlineModel;
+      } else {
+        this.settings.offline.localFileName = undefined;
+        this.settings.offline.localFileSize = undefined;
       }
     }
 
-    this.settings.temperature = temp;
+    this.settings.temperature = isNaN(temp) ? 0.6 : temp;
     StorageService.saveSettings(this.settings);
+  }
+
+  private async saveToDevice(filename: string, content: string): Promise<void> {
+    try {
+      const where = await FileExport.saveText(filename, content);
+      alert(`Файл «${filename}» сохранён в ${where}.`);
+    } catch (err: any) {
+      alert(`Не удалось сохранить файл: ${err?.message || err}`);
+    }
   }
 
   private scrollToBottom(): void {
@@ -1400,12 +1455,18 @@ class ArgentMobileApp {
 document.addEventListener('DOMContentLoaded', () => {
   new ArgentMobileApp();
 
-  // Регистрация Service Worker для полной автономности приложения без ПК
-  if ('serviceWorker' in navigator) {
-    window.addEventListener('load', () => {
-      navigator.serviceWorker.register('/sw.js')
-        .then((reg) => console.log('Argent Mobile Service Worker зарегистрирован:', reg.scope))
-        .catch((err) => console.warn('Ошибка Service Worker:', err));
-    });
+  // Service Worker — только для PWA из собранной версии. В APK ресурсы и так лежат в приложении, а кэш
+  // воркера после обновления APK отдавал бы старую версию; на dev-сервере он ломал бы перезагрузку модулей.
+  if (!('serviceWorker' in navigator)) return;
+  if (Capacitor.isNativePlatform() || !import.meta.env.PROD) {
+    navigator.serviceWorker.getRegistrations()
+      .then((regs) => regs.forEach((r) => r.unregister()))
+      .catch(() => { /* нечего снимать */ });
+    return;
   }
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/sw.js')
+      .then((reg) => console.log('Argent Mobile Service Worker зарегистрирован:', reg.scope))
+      .catch((err) => console.warn('Ошибка Service Worker:', err));
+  });
 });

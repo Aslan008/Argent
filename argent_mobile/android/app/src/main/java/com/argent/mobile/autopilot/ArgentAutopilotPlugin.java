@@ -164,15 +164,25 @@ public class ArgentAutopilotPlugin extends Plugin {
         Intent intent = pm.getLaunchIntentForPackage(appNameOrPkg);
 
         // Если передали не package id, а понятное имя (например "YouTube" или "Telegram")
+        // Сначала точное имя, потом начало имени, потом вхождение — среди приложений, которые можно
+        // запустить. Раньше бралось первое «содержит» в порядке установки: «Telegram» открывал «Telegram X».
         if (intent == null) {
+            String wanted = appNameOrPkg.trim().toLowerCase();
             List<ApplicationInfo> packages = pm.getInstalledApplications(PackageManager.GET_META_DATA);
+            Intent startsWith = null;
+            Intent contains = null;
             for (ApplicationInfo packageInfo : packages) {
-                String label = pm.getApplicationLabel(packageInfo).toString();
-                if (label.equalsIgnoreCase(appNameOrPkg) || label.toLowerCase().contains(appNameOrPkg.toLowerCase())) {
-                    intent = pm.getLaunchIntentForPackage(packageInfo.packageName);
+                Intent launch = pm.getLaunchIntentForPackage(packageInfo.packageName);
+                if (launch == null) continue;
+                String label = pm.getApplicationLabel(packageInfo).toString().trim().toLowerCase();
+                if (label.equals(wanted)) {
+                    intent = launch;
                     break;
                 }
+                if (startsWith == null && label.startsWith(wanted)) startsWith = launch;
+                if (contains == null && label.contains(wanted)) contains = launch;
             }
+            if (intent == null) intent = startsWith != null ? startsWith : contains;
         }
 
         if (intent != null) {

@@ -27,7 +27,9 @@ export interface AutopilotPluginInterface {
   pressBack(): Promise<{ success: boolean }>;
 }
 
-// Регистрируем нативный плагин или создаем безопасную веб-заглушку
+// В браузере управлять телефоном нечем. Заглушка раньше отвечала «успешно» на каждое действие, и чат
+// писал «Приложение открыто», хотя ничего не произошло; теперь она честно отказывает.
+const WEB_ONLY = 'Управление телефоном работает только в установленном приложении (APK).';
 const NativeAutopilot = registerPlugin<AutopilotPluginInterface>('ArgentAutopilot', {
   web: {
     checkAccessibilityStatus: async () => ({ enabled: false }),
@@ -36,16 +38,15 @@ const NativeAutopilot = registerPlugin<AutopilotPluginInterface>('ArgentAutopilo
       return { opened: false };
     },
     getScreenElements: async () => ({ elements: [] }),
-    clickCoordinates: async () => ({ success: true }),
-    clickText: async () => ({ success: true }),
-    typeText: async () => ({ success: true }),
-    scroll: async () => ({ success: true }),
-    launchApp: async (opts: { app: string }) => {
-      console.log('Симуляция запуска приложения:', opts.app);
-      return { launched: true };
+    clickCoordinates: async () => ({ success: false }),
+    clickText: async () => ({ success: false }),
+    typeText: async () => ({ success: false }),
+    scroll: async () => ({ success: false }),
+    launchApp: async () => {
+      throw new Error(WEB_ONLY);
     },
-    pressHome: async () => ({ success: true }),
-    pressBack: async () => ({ success: true })
+    pressHome: async () => ({ success: false }),
+    pressBack: async () => ({ success: false })
   }
 });
 

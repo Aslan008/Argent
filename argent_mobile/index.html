@@ -250,11 +250,21 @@
             <div class="form-group" style="margin-top: 8px;">
               <label for="setting-offline-threads">Потоки процессора (CPU Threads)</label>
               <select id="setting-offline-threads">
-                <option value="2">2 потока (рекомендуется для Helio G99 / 2 Performance ядра)</option>
+                <option value="2">2 потока (по числу больших ядер, напр. 2+6)</option>
                 <option value="4">4 потока (для 4+4 ядер)</option>
                 <option value="1">1 поток (энергосбережение)</option>
               </select>
-              <p class="hint-text">Для архитектуры 2+6 ядер (Helio G99) 2 потока работают строго на ядрах Cortex-A76, устраняя простои.</p>
+              <p class="hint-text">Число потоков лучше ставить равным числу производительных ядер процессора: на схеме 2+6 два потока работают на больших ядрах без простоев.</p>
+            </div>
+
+            <div class="form-group" style="margin-top: 8px;">
+              <label for="setting-offline-context">Окно контекста (GGUF)</label>
+              <select id="setting-offline-context">
+                <option value="2048">2048 токенов (меньше памяти)</option>
+                <option value="4096">4096 токенов (длиннее диалог)</option>
+                <option value="8192">8192 токенов (нужно много свободной памяти)</option>
+              </select>
+              <p class="hint-text">Сколько диалога модель видит за раз. Старые сообщения, которые не помещаются, не отправляются — об этом пишется над ответом.</p>
             </div>
 
             <div class="form-group" style="margin-top: 8px;">
