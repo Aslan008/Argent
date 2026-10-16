@@ -208,10 +208,11 @@ class TestTheTool:
         assert "file_path" in sig.parameters
 
     def test_koboldcpp_vision_probe_and_ornith_heuristic(self, monkeypatch):
-        # 1. Ornith model heuristic (without mmproj probe)
+        # 1. Name heuristics (without an mmproj probe). Ornith-1.5 is multimodal (Qwen3.5 based,
+        #    image-text-to-text): its name decides nothing, the server's mmproj does.
         vision._CAPABILITY_CACHE.clear()
         monkeypatch.setattr(vision, "_check_koboldcpp_vision", lambda: None)
-        assert vision.model_supports_vision("ORNITH1.5:35BA3B", "koboldcpp") is False
+        assert vision.model_supports_vision("ORNITH1.5:35BA3B", "koboldcpp") is None
         assert vision.model_supports_vision("qwen2.5-coder-32b", "koboldcpp") is False
         assert vision.model_supports_vision("qwen2-vl-7b", "koboldcpp") is True
 

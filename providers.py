@@ -67,7 +67,6 @@ def with_retry(fn, max_retries=3, base_delay=1.0):
     max_retries = max(1, max_retries)
     base_delay = max(0.0, base_delay)
     retryable_codes = ("429", "500", "502", "503", "529", "408")
-    last_error = None
     attempt = 0
     while True:
         try:
@@ -83,7 +82,6 @@ def with_retry(fn, max_retries=3, base_delay=1.0):
                 if isinstance(e, ProviderError):
                     raise
                 raise ProviderError(str(e), retryable=retryable, original_error=e)
-            last_error = e
             delay = min(_MAX_RETRY_DELAY, base_delay * (2 ** attempt)) + random.uniform(0, 1)
             logger.warning("Retrying in %.1fs (attempt %d/%d): %s", delay, attempt + 1, limit, e)
             time.sleep(delay)
@@ -167,6 +165,7 @@ def _parse_openai_usage(usage) -> dict:
 _TRANSIENT_HINTS = (
     "idle", "timeout", "timed out", "upstream", "overload", "unavailable",
     "502", "503", "504", "529", "rate limit", "connection reset", "connection error",
+    "internal server error", "server error", "status code: 500",
 )
 
 
@@ -382,6 +381,53 @@ class OllamaProvider(LLMProvider):
     def supports_constrained_decoding(self) -> bool:
         return True
 
+    #: Models that take a depth ("low"/"medium"/"high") in `think` instead of a boolean.
+    _THINK_LEVEL_FAMILIES = ("gpt-oss",)
+    _THINK_LEVELS = {"low": "low", "medium": "medium", "high": "high", "xhigh": "high"}
+    #: model -> does it list the "thinking" capability. Only successful probes are kept.
+    _think_capable: dict = {}
+
+    def _model_can_think(self, model: str) -> bool:
+        """Whether Ollama reports the "thinking" capability for the model.
+
+        Asked rather than guessed: `think` sent to a model without it is an HTTP 400 that fails the
+        whole turn, and a model that cannot think has nothing to switch off anyway. An answer that
+        could not be had is treated as "no" - the request goes out as it did before.
+        """
+        if model in OllamaProvider._think_capable:
+            return OllamaProvider._think_capable[model]
+        try:
+            info = self._ollama.show(model)
+            caps = info.get("capabilities") if isinstance(info, dict) else getattr(info, "capabilities", None)
+            verdict = "thinking" in [str(c).lower() for c in (caps or [])]
+        except Exception as e:
+            logger.info("could not read the capabilities of %r from Ollama (%s); `think` is not sent", model, e)
+            return False
+        OllamaProvider._think_capable[model] = verdict
+        return verdict
+
+    def _think_param(self, model: str):
+        """The value for Ollama's `think` field, or None to leave the model on its default.
+
+        /think off, /think <level> and the effort setting were stored and shown in the badge but never
+        reached Ollama, so "OFF" left a thinking model thinking. Nothing is asked of the server unless
+        the person chose something (the default `auto` with no effort sends nothing and costs no probe).
+        """
+        from config import get_thinking_mode, get_reasoning_effort
+
+        mode = (get_thinking_mode() or "auto").strip().lower()
+        effort = (get_reasoning_effort() or "").strip().lower()
+        if mode == "auto" and not effort:
+            return None
+        if not self._model_can_think(model):
+            return None
+        if mode == "off":
+            return False
+        level = self._THINK_LEVELS.get(effort)
+        if level and any(f in (model or "").lower() for f in self._THINK_LEVEL_FAMILIES):
+            return level
+        return True
+
     def stream_chat(self, model, messages, tools=None, context_window=None, temperature=None,
                     format_schema=None):
         kwargs = {
@@ -395,6 +441,10 @@ class OllamaProvider(LLMProvider):
             # Ollama >= 0.5 constrains generation to the JSON schema at the
             # decoder level: invalid step output becomes impossible.
             kwargs["format"] = format_schema
+
+        think = self._think_param(model)
+        if think is not None:
+            kwargs["think"] = think
 
         options = {}
         if context_window:

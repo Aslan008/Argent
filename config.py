@@ -258,6 +258,32 @@ def set_koboldcpp_url(url: str):
     _set("koboldcpp_url", url)
 
 
+def normalize_koboldcpp_url(raw: str) -> str:
+    """What a person types for the server -> the OpenAI-compatible base URL KoboldCPP serves.
+
+    `192.168.1.5`, `192.168.1.5:5001`, `http://pc:5001/` and `http://pc:5001/v1` all mean the same server.
+    The scheme defaults to http and a bare address gets `/v1`, which is where KoboldCPP exposes the API
+    (the tokenizer and vision probes derive their own paths from it). Raises ValueError on anything that
+    is not an http(s) address with a host."""
+    from urllib.parse import urlsplit, urlunsplit
+    text = (raw or "").strip().strip("\"'")
+    if not text:
+        raise ValueError("адрес пуст")
+    if "://" not in text:
+        text = "http://" + text
+    try:
+        parts = urlsplit(text)
+        host, _port = parts.hostname, parts.port           # `.port` raises on a malformed or out-of-range port
+    except ValueError as e:
+        raise ValueError(f"не похоже на адрес: {raw!r} ({e})") from None
+    if parts.scheme not in ("http", "https"):
+        raise ValueError(f"поддерживаются только http:// и https:// (получено {parts.scheme}://)")
+    if not host:
+        raise ValueError(f"в адресе нет хоста: {raw!r}")
+    path = parts.path.rstrip("/") or "/v1"
+    return urlunsplit((parts.scheme, parts.netloc, path, "", ""))
+
+
 def get_openrouter_api_key() -> str | None:
     return _api_key("openrouter_api_key", "OPENROUTER_API_KEY")
 

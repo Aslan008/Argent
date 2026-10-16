@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 from file_tracker import snapshot
 from memory_manager import memory
+from text_codec import read_text, sniff_file, write_text
 from tools._helpers import (
     _resolve_path,
     _is_plugin_path_restricted,
@@ -58,17 +59,17 @@ def read_file(file_path: str, start_line: int = None, end_line: int = None) -> s
         if not path.is_file():
             return f"Error: '{file_path}' is not a file."
 
-        # Universal binary file check via null bytes in first 4KB
+        # Text or binary, and which encoding: a UTF-16 log (what PowerShell's `>` writes) has NUL bytes
+        # but is text, so a bare "NUL in the first 4 KB" test called it binary.
         try:
-            with open(path, "rb") as probe:
-                chunk = probe.read(4096)
-                if b"\x00" in chunk:
-                    return (
-                        f"Error: Cannot read '{file_path}': file appears to be binary. "
-                        f"Use an appropriate tool (e.g. view_image for images) instead."
-                    )
+            codec = sniff_file(path)
         except Exception as e:
             return f"Error reading file '{file_path}': {e}"
+        if codec is None:
+            return (
+                f"Error: Cannot read '{file_path}': file appears to be binary. "
+                f"Use an appropriate tool (e.g. view_image for images) instead."
+            )
 
         if start_line is not None and start_line < 1:
             start_line = 1
@@ -89,7 +90,7 @@ def read_file(file_path: str, start_line: int = None, end_line: int = None) -> s
         size = 0
         total = 0
         stopped_at_chars = False
-        with open(path, "r", encoding="utf-8", errors="replace") as f:
+        with open(path, "r", encoding=codec, errors="replace") as f:
             for number, line in enumerate(f, start=1):
                 total = number
                 if number < first:
@@ -207,16 +208,15 @@ def write_file(file_path: str, content: str, overwrite: bool = False) -> str:
         path.parent.mkdir(parents=True, exist_ok=True)
         existed = path.exists()
         prior_content = None
+        codec = "utf-8"          # a new file is UTF-8; a rewritten one keeps the encoding it had
         if existed:
             snapshot(str(path))
             try:
-                with open(path, "r", encoding="utf-8", errors="replace", newline="") as f:
-                    prior_content = f.read()
+                prior_content, codec = read_text(path)
             except Exception:
-                prior_content = None
+                prior_content, codec = None, "utf-8"
         content = _maybe_unescape_content(content)
-        with open(path, "w", encoding="utf-8", newline="") as f:
-            f.write(content)
+        write_text(path, content, codec)
 
         validation_error = _validate_code_syntax(str(path))
         if validation_error:
@@ -224,8 +224,7 @@ def write_file(file_path: str, content: str, overwrite: bool = False) -> str:
             # Restore the previous version, or remove a brand-new broken file.
             if existed:
                 if prior_content is not None:
-                    with open(path, "w", encoding="utf-8", newline="") as f:
-                        f.write(prior_content)
+                    write_text(path, prior_content, codec)
                 else:
                     from file_tracker import undo
                     undo(str(path))
@@ -317,8 +316,7 @@ def replace_python_function(file_path: str, function_name: str, new_code: str) -
 
         snapshot(str(path))
         
-        with open(path, "r", encoding="utf-8") as f:
-            source = f.read()
+        source, codec = read_text(path)
 
         try:
             tree = ast.parse(source)
@@ -389,13 +387,11 @@ def replace_python_function(file_path: str, function_name: str, new_code: str) -
         final_lines = prefix + new_lines + suffix
         new_source = '\n'.join(final_lines) + '\n'
 
-        with open(path, "w", encoding="utf-8") as f:
-            f.write(new_source)
+        write_text(path, new_source, codec)
 
         validation_error = _validate_code_syntax(str(path))
         if validation_error:
-            with open(path, "w", encoding="utf-8") as f:
-                f.write(source)
+            write_text(path, source, codec)
             return (f"Edit REJECTED: replacing '{function_name}' would break compilation, so the change "
                     f"was reverted.\n\n{validation_error}\nHint: check indentation (4 spaces per block), "
                     f"then call replace_python_function again with corrected code.")
@@ -501,8 +497,7 @@ def replace_in_file(
         if not path.is_file():
             return f"Error: '{file_path}' is not a file."
 
-        with open(path, "r", encoding="utf-8", errors="replace", newline="") as f:
-            raw_content = f.read()
+        raw_content, codec = read_text(path)
 
         has_crlf = "\r\n" in raw_content
         content = raw_content.replace("\r\n", "\n")
@@ -712,13 +707,11 @@ def replace_in_file(
             write_content = write_content.replace("\r\n", "\n")
 
         snapshot(str(path))
-        with open(path, "w", encoding="utf-8", newline="") as f:
-            f.write(write_content)
+        write_text(path, write_content, codec)
             
         validation_error = _validate_code_syntax(str(path))
         if validation_error:
-            with open(path, "w", encoding="utf-8", newline="") as f:
-                f.write(raw_content)
+            write_text(path, raw_content, codec)
             return f"Modification aborted because it broke code compilation. Changes reverted.\n\n{validation_error}"
             
         _print_diff(content, new_content, file_path)
@@ -761,8 +754,7 @@ def multi_replace_in_file_chunk(file_path: str, changes_json: str) -> str:
             
         snapshot(str(path))
         
-        with open(path, "r", encoding="utf-8", errors="replace", newline="") as f:
-            raw_content = f.read()
+        raw_content, codec = read_text(path)
 
         has_crlf = "\r\n" in raw_content
         has_trailing_newline = raw_content.endswith("\r\n") or raw_content.endswith("\n")
@@ -832,13 +824,11 @@ def multi_replace_in_file_chunk(file_path: str, changes_json: str) -> str:
             elif new_content.endswith("\n"):
                 new_content = new_content[:-1]
 
-        with open(path, "w", encoding="utf-8", newline="") as f:
-            f.write(new_content)
+        write_text(path, new_content, codec)
 
         validation_error = _validate_code_syntax(str(path))
         if validation_error:
-            with open(path, "w", encoding="utf-8", newline="") as f:
-                f.write(original_content)
+            write_text(path, original_content, codec)
             return f"Modification aborted because it broke code compilation. Changes reverted.\n\n{validation_error}"
 
         _print_diff(original_content, new_content, file_path)
@@ -963,8 +953,7 @@ def _apply_atomic_multi_replace(file_path: str, file_edits: list) -> str:
         if not path.is_file():
             return f"Error: '{file_path}' is not a file."
 
-        with open(path, "r", encoding="utf-8", errors="replace", newline="") as f:
-            raw_content = f.read()
+        raw_content, codec = read_text(path)
 
         has_crlf = "\r\n" in raw_content
         content = raw_content.replace("\r\n", "\n")
@@ -1064,13 +1053,11 @@ def _apply_atomic_multi_replace(file_path: str, file_edits: list) -> str:
             write_content = write_content.replace("\r\n", "\n")
 
         snapshot(str(path))
-        with open(path, "w", encoding="utf-8", newline="") as f:
-            f.write(write_content)
+        write_text(path, write_content, codec)
 
         validation_error = _validate_code_syntax(str(path))
         if validation_error:
-            with open(path, "w", encoding="utf-8", newline="") as f:
-                f.write(raw_content)
+            write_text(path, raw_content, codec)
             return f"Modification aborted because it broke code compilation. Changes reverted.\n\n{validation_error}"
 
         _print_diff(content, new_content, file_path)
@@ -1159,8 +1146,7 @@ def get_file_outline(file_path: str) -> str:
         if not path.is_file():
             return f"Error: '{file_path}' is not a file."
 
-        with open(path, "r", encoding="utf-8") as f:
-            source = f.read()
+        source, _codec = read_text(path)
 
         if path.suffix.lower() == ".cs":
             from tools._helpers import _csharp_outline

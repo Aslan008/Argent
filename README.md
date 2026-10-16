@@ -346,7 +346,7 @@ Switch the existing fast-path to it with `LEETH_BACKEND=leeth2` (or `config.set_
 - `/doctor` — Run environment self-diagnostics (provider, model tier, dependencies, browser, MCP).
 - `/aux` — Set a cheap/local auxiliary model for service tasks (summarization, `/commit`).
 - `/init` — Analyze the project and generate `.argent/AGENTS.md` (persistent project memory loaded every session).
-- `/provider` — Select API Provider (Ollama / Z.ai / OpenRouter / KoboldCPP) and endpoint.
+- `/provider` — Select API Provider (Ollama / Z.ai / OpenRouter / KoboldCPP). KoboldCPP address: `/provider koboldcpp http://host:5001/v1` (or `/endpoint <address>` while it is the active provider).
 - `/model [name]` — Select the active LLM model. For Claude the list is read live from Anthropic (newest first, every page, saved for offline use), so new models appear on their own; any spelling is accepted (`Claude Sonnet 4.5`, `claude-sonnet-4.5`, `sonnet`) and turned into the id the API lists. A name the provider certainly does not have is refused with suggestions instead of being saved. An organisation-level Anthropic key (one not scoped to a workspace) needs `/key workspace <ID>`.
 - `/goal [text|clear]` — Show, set or reset the persistent objective.
 - `/critic [text]` — Red-team a plan or the AI's last one with an independent critic.
@@ -400,7 +400,7 @@ Switch the existing fast-path to it with `LEETH_BACKEND=leeth2` (or `config.set_
 - `/tokens` (or `/context`) — Show how the context window is being spent.
 - `/prompt` — Show the current system prompt.
 - `/key` — Set the current provider's API key. Or leave it out of the config file: a key saved here wins, otherwise Argent reads `ZAI_API_KEY`, `OPENROUTER_API_KEY`, `DEEPSEEK_API_KEY`, `ANTHROPIC_API_KEY`, `BRAVE_API_KEY` or `OLLAMA_API_KEY` from the environment.
-- `/endpoint` — Switch the Z.ai endpoint (general / coding).
+- `/endpoint` — Switch the Z.ai endpoint (general / coding); with KoboldCPP active, set its server address.
 - `/sampling` (or `/params`) — Fine-tune sampling: top_p, min_p, top_k, repeat_penalty.
 - `/rethink [on|off|status]` — Self-check pass (`<rethink>`) before the model answers.
 - `/snapshot [compact|verbose|off]` — How much of each turn's metrics to show.
@@ -705,7 +705,7 @@ res["tool"].choice, res["tool"].confidence, res["safe"].probability
 - `/doctor` — Самодиагностика окружения (провайдер, ярус модели, зависимости, браузер, MCP).
 - `/aux` — Задать дешёвую/локальную вспомогательную модель для сервисных задач (суммаризация, `/commit`).
 - `/init` — Изучить проект и сгенерировать `.argent/AGENTS.md` (постоянная память о проекте, загружается каждую сессию).
-- `/provider` — Выбрать провайдера API (Ollama / Z.ai / OpenRouter / KoboldCPP) и эндпоинт.
+- `/provider` — Выбрать провайдера API (Ollama / Z.ai / OpenRouter / KoboldCPP). Адрес KoboldCPP: `/provider koboldcpp http://host:5001/v1` (или `/endpoint <адрес>`, пока он активен).
 - `/model [имя]` — Выбрать активную модель. Для Claude список читается прямо у Anthropic (новые сверху, все страницы, копия сохраняется для работы без сети), поэтому новые модели появляются сами; подойдёт любое написание (`Claude Sonnet 4.5`, `claude-sonnet-4.5`, `sonnet`) — оно превратится в id из списка API. Имя, которого у провайдера заведомо нет, не сохраняется: вместо этого предлагаются похожие. Ключу уровня организации (не привязанному к workspace) нужен `/key workspace <ID>`.
 - `/goal [текст|clear]` — Показать, задать или сбросить постоянную цель работы.
 - `/critic [текст]` — Разобрать план (или последний план ИИ) независимым критиком.
@@ -762,7 +762,7 @@ res["tool"].choice, res["tool"].confidence, res["safe"].probability
 - `/tokens` (или `/context`) — На что расходуется окно контекста.
 - `/prompt` — Показать текущий системный промпт.
 - `/key` — Задать API-ключ текущего провайдера. Можно вообще не хранить его в конфиге: сохранённый здесь ключ главнее, иначе Argent берёт из окружения `ZAI_API_KEY`, `OPENROUTER_API_KEY`, `DEEPSEEK_API_KEY`, `ANTHROPIC_API_KEY`, `BRAVE_API_KEY` или `OLLAMA_API_KEY`.
-- `/endpoint` — Переключить эндпоинт Z.ai (общий / для кода).
+- `/endpoint` — Переключить эндпоинт Z.ai (общий / для кода); при активном KoboldCPP — задать адрес его сервера.
 - `/sampling` (или `/params`) — Тонкая настройка сэмплирования: top_p, min_p, top_k, repeat_penalty.
 - `/rethink [on|off|status]` — Проход самопроверки (`<rethink>`) перед ответом модели.
 - `/snapshot [compact|verbose|off]` — Сколько метрик каждого хода показывать.

@@ -230,9 +230,13 @@ def _cmd_delete(io: Io, lib, name: str) -> None:
 
 def _version_line(n: int, path) -> str:
     from datetime import datetime
-    when = path.stem[:15]
+    stem = path.stem
+    head = stem.split("-", 1)[0]
+    if len(head) == 6 and head.isdigit():          # "000007-20261016-114700": sequence number first
+        stem = stem[7:]
+    when = stem[:15]
     try:
-        when = datetime.strptime(path.stem[:15], "%Y%m%d-%H%M%S").strftime("%d.%m.%Y %H:%M:%S")
+        when = datetime.strptime(stem[:15], "%Y%m%d-%H%M%S").strftime("%d.%m.%Y %H:%M:%S")
     except ValueError:
         pass
     try:

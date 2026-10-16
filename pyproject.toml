@@ -68,7 +68,7 @@ py-modules = [
     "file_tracker", "hook_manager", "host_os", "intelligence", "local_inference", "logger", "main",
     "mcp_client", "memory_manager", "model_limits", "model_names",
     "project_paths", "prompt_compressor", "providers", "rag_engine",
-    "run_scope", "session", "skill_manager", "text_safety", "tool_profiles", "tool_recovery",
+    "run_scope", "session", "skill_manager", "text_codec", "text_safety", "tool_profiles", "tool_recovery",
     "ui", "usage_tracker", "version", "vision", "run_tui",
 ]
 

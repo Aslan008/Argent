@@ -36,11 +36,14 @@ class TestContextBreakdown:
         b = a.get_context_breakdown()
         assert b["tools"] > 0 and b["tool_count"] > 0
 
-    def test_tiny_sends_no_native_schemas(self, make_agent):
-        # Tiny uses an in-prompt catalog, not native schemas -> 0 schema tokens.
+    def test_tiny_counts_its_in_prompt_catalog(self, make_agent):
+        # Tiny gets no native schemas but an in-prompt tool catalog, and that catalog costs context
+        # too: it used to be counted as 0, so the meter and the history budget under-counted.
         a = make_agent("qwen2.5:1.5b")
         b = a.get_context_breakdown()
-        assert b["tools"] == 0 and b["tool_count"] == 0
+        cloud = make_agent("glm-4.7").get_context_breakdown()
+        assert 0 < b["tools"] < cloud["tools"]
+        assert 0 < b["tool_count"] < cloud["tool_count"]
 
     def test_small_tool_count_is_reduced(self, make_agent):
         # Small (3-7B, here 3b) keeps native tools but slimmed to the core

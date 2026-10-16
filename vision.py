@@ -41,8 +41,10 @@ def _ollama_host() -> str:
     return host if host.startswith("http") else f"http://{host}"
 
 
+# Not "ornith": Ornith-1.5 is built on Qwen3.5 (qwen3_5_moe) and its model card lists image-text-to-text
+# with image examples. Whether a given server can take pictures depends on how the model was loaded (a
+# KoboldCPP / llama.cpp GGUF needs its mmproj file), and the server probe answers that, not the name.
 KNOWN_NON_VISION_PATTERNS = (
-    "ornith",
     "deepseek-coder",
     "qwen2.5-coder",
     "deepseek-r1",
@@ -89,6 +91,13 @@ def _check_koboldcpp_vision() -> bool | None:
     except Exception as e:
         log.debug("KoboldCPP vision probe failed: %s", e)
     return None
+
+
+def forget_capabilities(provider: str) -> None:
+    """Drop what was learned about a provider's models. Its address changed, so the server behind it is
+    another one: it may have a different model loaded, or a projector for images this one lacked."""
+    for key in [k for k in _CAPABILITY_CACHE if k[0] == provider]:
+        del _CAPABILITY_CACHE[key]
 
 
 def mark_vision_unsupported(provider: str, model: str) -> None:

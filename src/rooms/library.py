@@ -23,6 +23,15 @@ from src.rooms.validator import validate_room
 HISTORY_KEEP = 5                       # earlier files kept per room
 
 
+def _version_order(path) -> tuple:
+    """Sort key of a saved version: (1, sequence) for "000007-<stamp>.json"; (0, name) for the older
+    "<stamp>.json" files, which therefore count as older than any numbered one."""
+    head = Path(path).stem.split("-", 1)[0]
+    if len(head) == 6 and head.isdigit():
+        return (1, int(head))
+    return (0, Path(path).stem)
+
+
 def default_starter_dir() -> Path:
     return Path(__file__).parent / "starter"
 
@@ -191,18 +200,16 @@ class RoomLibrary:
             text = current.read_text(encoding="utf-8")
             folder = self._history_dir(name)
             folder.mkdir(parents=True, exist_ok=True)
-            kept = sorted(folder.glob("*.json"))
+            kept = sorted(folder.glob("*.json"), key=_version_order)
             if kept and kept[-1].read_text(encoding="utf-8") == text:
                 return                      # nothing changed since the last copy
+            # Ordered by a sequence number, not by the clock: two saves in one millisecond used to get
+            # "<stamp>.json" and "<stamp>-2.json", and "-" sorts before "." - the newer copy came out older.
             import time
-            stamp = time.strftime("%Y%m%d-%H%M%S") + f"-{int(time.time() * 1000) % 1000:03d}"
-            target = folder / f"{stamp}.json"
-            n = 1
-            while target.exists():
-                n += 1
-                target = folder / f"{stamp}-{n}.json"
+            seq = max((_version_order(p)[1] for p in kept if _version_order(p)[0] == 1), default=0) + 1
+            target = folder / f"{seq:06d}-{time.strftime('%Y%m%d-%H%M%S')}.json"
             target.write_text(text, encoding="utf-8")
-            for old in sorted(folder.glob("*.json"))[:-HISTORY_KEEP]:
+            for old in sorted(folder.glob("*.json"), key=_version_order)[:-HISTORY_KEEP]:
                 old.unlink()
         except OSError:
             pass                            # a copy that cannot be made must not block the save
@@ -212,7 +219,7 @@ class RoomLibrary:
         if not self.user_dir:
             return []
         try:
-            return sorted(self._history_dir(name).glob("*.json"), reverse=True)
+            return sorted(self._history_dir(name).glob("*.json"), key=_version_order, reverse=True)
         except OSError:
             return []
 

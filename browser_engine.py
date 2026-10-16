@@ -579,6 +579,36 @@ def _get_stagehand_extension_dir() -> Optional[str]:
     return None
 
 
+def _browser_alive(browser) -> bool:
+    """Playwright's Browser.is_connected is a METHOD: `not browser.is_connected` (no call) is always False,
+    so a browser that had crashed or been closed was reused instead of relaunched."""
+    probe = getattr(browser, "is_connected", None)
+    try:
+        return bool(probe() if callable(probe) else probe)
+    except Exception:
+        return False
+
+
+def _extension_launch_options(ext_dir: Optional[str], headed: bool) -> dict:
+    """Options for chromium.launch that make Playwright's Chromium actually load an unpacked extension.
+
+    `--load-extension` alone did nothing: Playwright adds `--disable-extensions` to its default arguments,
+    so Stagehand's extension never loaded, no extension id was found, and Stagehand fell back to the CDP call
+    Extensions.loadUnpacked - "This Chrome build does not support Extensions.loadUnpacked". The default
+    argument has to be dropped, and without a window the old headless shell cannot run extensions at all:
+    the full Chromium in its new headless mode (channel "chromium") can. Checked live on Playwright 1.63:
+    the extension's service worker shows up only with both."""
+    if not ext_dir:
+        return {"args": []}
+    options = {
+        "args": [f"--disable-extensions-except={ext_dir}", f"--load-extension={ext_dir}"],
+        "ignore_default_args": ["--disable-extensions"],
+    }
+    if not headed:
+        options["channel"] = "chromium"
+    return options
+
+
 class BrowserEngine:
     """
     Singleton Playwright browser manager.
@@ -643,7 +673,8 @@ class BrowserEngine:
         desired_cdp = (mode == "user")
 
         # If the browser exists but headed mode or CDP mode changed, or it is disconnected, restart
-        if self._browser and (self._headed != headed or self._cdp_mode != desired_cdp or not self._browser.is_connected):
+        if self._browser and (self._headed != headed or self._cdp_mode != desired_cdp
+                              or not _browser_alive(self._browser)):
             await self.shutdown()
 
         if self._browser:
@@ -682,15 +713,23 @@ class BrowserEngine:
             "--remote-allow-origins=*",
             "--enable-unsafe-extension-debugging",
         ]
-        ext_dir = _get_stagehand_extension_dir()
-        if ext_dir:
-            launch_args.append(f"--load-extension={ext_dir}")
+        launch_kwargs = _extension_launch_options(_get_stagehand_extension_dir(), headed)
+        launch_args += launch_kwargs.pop("args")
 
         try:
-            self._browser = await self._playwright.chromium.launch(
-                headless=not headed,
-                args=launch_args,
-            )
+            try:
+                self._browser = await self._playwright.chromium.launch(
+                    headless=not headed, args=launch_args, **launch_kwargs)
+            except Exception as e:
+                if "channel" not in launch_kwargs or "Executable doesn't exist" not in str(e):
+                    raise
+                # the full Chromium the new headless mode needs is missing: run without the extension
+                # rather than not at all (Stagehand then falls back to the page's own elements)
+                log.warning("Full Chromium for the new headless mode is not installed; Stagehand's "
+                            "extension will not load: %s", str(e).splitlines()[0])
+                launch_kwargs.pop("channel")
+                self._browser = await self._playwright.chromium.launch(
+                    headless=not headed, args=launch_args, **launch_kwargs)
         except Exception as e:
             if "Executable doesn't exist" in str(e):
                 from browser_detect import bundled_chromium_status
@@ -839,7 +878,9 @@ class BrowserEngine:
             "--test-type",
             "--enable-unsafe-extension-debugging",
             "--whitelisted-extension-id=kmgeemlmoiohlehomoligkpelnhjbahl,kbllhomkfighlohagocmnjkhfehkombc,knkbjekpciapkagiphkcfdmhgaggjilb,hjkgacheefjckdpkhppjbhldfpdmbbmh",
-            "--disable-features=SafeBrowsing,YandexProtect",
+            # DisableLoadExtensionCommandLineSwitch: branded Chrome 137+ ignores --load-extension unless this
+            # feature is switched off (only one --disable-features is honoured, so it joins the list)
+            "--disable-features=SafeBrowsing,YandexProtect,DisableLoadExtensionCommandLineSwitch",
         ]
         ext_dir = _get_stagehand_extension_dir()
         if ext_dir:
@@ -1272,13 +1313,18 @@ class BrowserEngine:
     # -----------------------------------------------------------------------
 
     async def open_page(self, url: str, session: str = "default",
-                        headed: bool = False, return_state: bool = True,
+                        headed: Optional[bool] = False, return_state: bool = True,
                         mode: Optional[str] = None) -> str:
-        """Open a URL in a session. Creates the session if it doesn't exist."""
+        """Open a URL in a session. Creates the session if it doesn't exist.
+
+        `headed=None` keeps the running browser's mode (a new one starts headless)."""
         blocked = _blocked_url_reason(url)
         if blocked:
             return blocked
         target_url = _normalize_url(url)
+        if headed is None:
+            running = self._browser is not None and _browser_alive(self._browser)
+            headed = bool(self._headed) if running else False
         desired_user = (mode == "user") if (mode and mode != "auto") else None
         if session in self._sessions:
             sc = self._sessions[session]

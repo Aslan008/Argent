@@ -66,6 +66,13 @@ def search_web(query: str, max_results: int = 5, engine: str = None) -> str:
     return "\n".join(lines)
 
 
+def _browser_did_not_load(opened) -> bool:
+    """open_page's answer says the page did not load: an error/refusal string, or Chrome's own error page."""
+    text = str(opened or "")
+    return (not text or text.startswith(("Error", "Refus", "Blocked"))
+            or "chrome-error://" in text or "Opened: about:blank" in text)
+
+
 def read_webpage(url: str, timeout: int = 15, raw_mode: bool = False) -> str:
     """Read and extract meaningful text content from a webpage URL.
     If raw_mode is True, bypasses semantic extraction and returns all visible text.
@@ -86,7 +93,12 @@ def read_webpage(url: str, timeout: int = 15, raw_mode: bool = False) -> str:
             from browser_engine import browser_engine
             session_name = "reader_fallback"
             try:
-                browser_engine.run(browser_engine.open_page(url, session=session_name, headed=False, return_state=False))
+                opened = browser_engine.run(browser_engine.open_page(url, session=session_name, headed=False, return_state=False))
+                if _browser_did_not_load(opened):
+                    # The browser could not load it either (DNS, refused, blocked URL). What it would show
+                    # now is ITS OWN error page ("This site can't be reached"), and that used to come back
+                    # as the page's content, marked ok.
+                    raise RuntimeError(str(opened).splitlines()[0] if opened else "no page")
                 browser_engine.run(browser_engine.wait_stable(timeout=5000, session=session_name))
                 rendered_md = browser_engine.run(browser_engine.get_markdown(session=session_name))
                 if rendered_md and len(rendered_md.strip()) > len(text.strip()):

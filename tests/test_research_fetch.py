@@ -125,6 +125,17 @@ class TestFetchPage:
 
 
 class TestReadWebpageIntegration:
+    @pytest.fixture(autouse=True)
+    def no_real_browser(self, monkeypatch):
+        """read_webpage falls back to a headless browser for thin pages; a unit test must not start one
+        (these tests used to launch Chromium and read its error page for http://x)."""
+        import browser_engine
+
+        def refuse(coro):
+            coro.close()
+            raise RuntimeError("no browser in unit tests")
+        monkeypatch.setattr(browser_engine.browser_engine, "run", refuse)
+
     def test_success_format(self, monkeypatch):
         import tools.web_tools as wt
         monkeypatch.setattr("src.research.fetch.fetch_page",
@@ -149,3 +160,40 @@ class TestReadWebpageIntegration:
                             {"ok": True, "url": url, "text": big, "source": "bs4", "error": ""})
         out = wt.read_webpage("http://x")
         assert "[Content Truncated]" in out and len(out) < 20000 + 200
+
+
+class TestBrowserFallbackDoesNotReturnErrorPages:
+    """The browser fallback read Chrome's own "This site can't be reached" page as the site's content."""
+
+    def test_a_failed_navigation_is_not_content(self, monkeypatch):
+        import browser_engine
+        import tools.web_tools as wt
+        monkeypatch.setattr("src.research.fetch.fetch_page",
+                            lambda url, timeout=15, raw=False:
+                            {"ok": False, "url": url, "text": "", "source": "error", "error": "DNS failure"})
+        calls = []
+
+        def fake_run(coro):
+            name = coro.cr_code.co_name
+            coro.close()
+            calls.append(name)
+            if name == "open_page":
+                return "Error navigating to http://x/: net::ERR_NAME_NOT_RESOLVED"
+            if name == "get_markdown":
+                return "# Не удается получить доступ к сайту\n" + "текст страницы ошибки " * 20
+            return None
+        monkeypatch.setattr(browser_engine.browser_engine, "run", fake_run)
+        out = wt.read_webpage("http://x")
+        assert out.startswith("Error reading webpage") and "DNS failure" in out
+        assert "get_markdown" not in calls
+
+    @pytest.mark.parametrize("opened, failed", [
+        ("Error navigating to http://x: net::ERR_CONNECTION_REFUSED", True),
+        ("Error: refusing to open a 'file:' URL", True),
+        ("Opened: chrome-error://chromewebdata/\nTitle: x", True),
+        ("", True),
+        ("Opened: https://example.com/\nTitle: Example", False),
+    ])
+    def test_what_counts_as_not_loaded(self, opened, failed):
+        import tools.web_tools as wt
+        assert wt._browser_did_not_load(opened) is failed

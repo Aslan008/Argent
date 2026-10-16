@@ -1070,7 +1070,7 @@ TOOL_SCHEMAS = [
                     },
                     "headed": {
                         "type": "boolean",
-                        "description": "If true, displays a visible browser window on desktop. If false (default), runs headless."
+                        "description": "true: a visible browser window on the desktop. false: background (headless). Omit it to keep the browser as it is (a new browser starts in the background)."
                     },
                     "return_state": {
                         "type": "boolean",

@@ -512,7 +512,6 @@ def _handle_mcp_command(command: str):
     parts = command.strip().split()
     
     if len(parts) == 1 or (len(parts) == 2 and parts[1] == "list"):
-        servers = mcp_client.get_servers()
         configured = get_mcp_servers()
         if not configured:
             print_system("MCP-серверы не настроены.")

@@ -60,13 +60,15 @@ def run_browser_task(task: str, url: str = None) -> str:
         return f"Error running browser task: {e}"
 
 
-def browser_open(url: str, session: str = "default", headed: bool = False, return_state: bool = True, mode: str = "auto") -> str:
+def browser_open(url: str, session: str = "default", headed: bool = None, return_state: bool = True, mode: str = "auto") -> str:
     """Open a URL in the browser. Creates a new session if needed.
 
     Args:
         url: The URL to navigate to (e.g. 'https://example.com').
         session: Name of the browser session. Default: 'default'.
-        headed: If true, displays a visible browser window on the user's desktop. If false (default), runs in background.
+        headed: True shows a browser window on the user's desktop, False runs in the background, None (not
+            given) keeps the browser as it is - a later call that did not mention it used to close the
+            window the user was watching and restart the browser headless.
         return_state: If true (default), automatically returns updated page state.
         mode: Browser environment to use:
             - 'user': The user's real installed browser (Yandex/Chrome/Edge). Use this when the user asks "в моём браузере" / "через мой браузер" or when the task requires the user's existing logins/cookies.

@@ -32,6 +32,29 @@ _CTX_PATTERNS = (
 )
 
 
+# Patterns to pull the size of the REQUEST that was refused (tokens) out of such an error.
+_PROMPT_PATTERNS = (
+    r"request \((\d+) tokens\)",
+    r"['\"]?n_prompt_tokens['\"]?\s*[:=]\s*(\d+)",
+    r"resulted in (\d+) tokens",
+    r"you requested (\d+) tokens",
+    r"prompt is too long: (\d+) tokens",
+)
+
+
+def parse_prompt_tokens(text: str):
+    """How many tokens the refused request had, as the provider counted them, or None."""
+    s = text or ""
+    for pattern in _PROMPT_PATTERNS:
+        m = re.search(pattern, s)
+        if m:
+            try:
+                return int(m.group(1))
+            except (ValueError, IndexError):
+                continue
+    return None
+
+
 def is_context_overflow(text: str) -> bool:
     """True if `text` looks like a context-window-exceeded error."""
     t = (text or "").lower()
@@ -49,6 +72,57 @@ def parse_context_limit(text: str):
             except (ValueError, IndexError):
                 continue
     return None
+
+
+_PROBE_CACHE: dict = {}          # api root -> (checked at, window or None)
+_PROBE_TTL_S = 300.0
+
+
+def _api_root(base_url: str) -> str:
+    root = (base_url or "").rstrip("/")
+    return root[:-3] if root.endswith("/v1") else root
+
+
+def probe_server_context(base_url: str, timeout: float = 1.0, now: float | None = None):
+    """The context window a local OpenAI-compatible server was STARTED with, or None if it does not say.
+
+    KoboldCPP answers /api/extra/true_max_context_length (and /api/v1/config/max_context_length);
+    llama.cpp's llama-server answers /props with n_ctx. Asked before the first request, the window no
+    longer has to be learnt from an HTTP 400 at the end of a long turn. Cached for a few minutes per
+    server, failures too, so a server that does not answer costs one short timeout, not one per turn."""
+    import time
+    root = _api_root(base_url)
+    if not root:
+        return None
+    now = time.time() if now is None else now
+    hit = _PROBE_CACHE.get(root)
+    if hit and now - hit[0] < _PROBE_TTL_S:
+        return hit[1]
+    window = None
+    try:
+        import requests
+        for path, pick in (
+            ("/api/extra/true_max_context_length", lambda j: j.get("value")),
+            ("/api/v1/config/max_context_length", lambda j: j.get("value")),
+            ("/props", lambda j: (j.get("default_generation_settings") or {}).get("n_ctx") or j.get("n_ctx")),
+        ):
+            try:
+                resp = requests.get(root + path, timeout=timeout)
+            except requests.RequestException:
+                break                       # the server is not there at all: no point asking the rest
+            if resp.status_code != 200:
+                continue
+            try:
+                value = pick(resp.json() or {})
+            except (ValueError, AttributeError):
+                continue
+            if isinstance(value, (int, float)) and value >= 256:
+                window = int(value)
+                break
+    except Exception:
+        window = None
+    _PROBE_CACHE[root] = (now, window)
+    return window
 
 
 def effective_history_budget(window: int, sys_tokens: int,

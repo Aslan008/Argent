@@ -229,9 +229,9 @@ def _validate_code_syntax(file_path: str) -> str | None:
                 
     if lower_path.endswith('.json'):
         try:
-            with open(file_path, 'r', encoding='utf-8-sig') as f:
-                import json
-                json.load(f)
+            import json
+            from text_codec import read_text
+            json.loads(read_text(file_path)[0])     # whatever encoding the file is in (a UTF-16 JSON is valid)
             return None
         except Exception as e:
             return f"JSON Syntax Error in your file:\n{e}\n\nPlease fix this syntax error using the `replace_in_file` tool."

@@ -138,6 +138,9 @@ _BUSY_HINTS = (
     "overload", "unavailable", "provider returned error", "busy", "capacity", "temporar", "timed out",
     "timeout", "connection", "reset by peer", "bad gateway", "gateway", "no choices", "empty response",
     "try again", "high demand", "upstream", "no available",
+    # Ollama reports a failure inside the stream as ResponseError("Internal Server Error (ref: …)", -1):
+    # no HTTP status to go by, only the words
+    "internal server error", "internal error", "service unavailable", "server error",
 )
 _AUTH_HINTS = ("invalid api key", "incorrect api key", "no auth", "unauthorized", "invalid key")
 
@@ -173,7 +176,8 @@ def classify(exc: BaseException, now: Optional[float] = None) -> ErrorInfo:
     for e in _chain(exc):
         texts.append(str(e))
         s = getattr(e, "status_code", None)
-        if isinstance(s, int) and status is None:
+        # -1 is the Ollama client's "error came inside the stream", not an HTTP status
+        if isinstance(s, int) and 100 <= s <= 599 and status is None:
             status = s
         body = getattr(e, "body", None)
         if isinstance(body, dict):
@@ -544,24 +548,71 @@ def _run(prompt, per_call_timeout, total_budget, ui, retries, policy, service, c
 
     retries = max(1, int(retries if retries is not None else get_compress_retries()))
     policy = policy or get_compress_on_failure()
+    main_fallback = None
     if service is None:
         from providers import create_service_provider
         provider, primary = create_service_provider()
+        main_fallback = _main_model_fallback(provider, primary)
     else:
         provider, primary = service
-    problem = provider.validate_config()
-    if problem:
-        ui.notify(f"Сжатие контекста: {problem}. Делаю выжимку без модели")
-        return Result(None, provider=_pname(provider), reason=str(problem))
+
+    def tell(msg: str) -> None:
+        ui.notify(f"Сжатие контекста: {msg}")
 
     deadline = started + (total_budget if total_budget else max(per_call_timeout * 2, 240.0))
+    problem = provider.validate_config()
+    if problem and main_fallback is None:
+        ui.notify(f"Сжатие контекста: {problem}. Делаю выжимку без модели")
+        return Result(None, provider=_pname(provider), reason=str(problem))
+    if problem:
+        tell(f"вспомогательная модель {primary}: {problem} — сжимаю основной моделью {main_fallback[1]}")
+        (provider, primary), main_fallback = main_fallback, None
+
+    while True:
+        result, last_info, tried = _run_with(provider, primary, prompt, per_call_timeout, ui, retries, policy,
+                                             candidates, started, deadline, tell)
+        if result is not None:
+            return result
+        # The auxiliary model (/aux) failed - deleted, a wrong id, no key, out of credit: the logs showed
+        # every compaction falling back to the model-free summary for days while the main model, the one
+        # the person is talking to, answered every turn. It is the fallback before giving up.
+        # (a stop request is an exception, Cancelled, and never gets here)
+        if main_fallback is None or deadline - time.monotonic() < _MIN_SWITCH_LEFT:
+            break
+        why = last_info.why() if last_info else "нет ответа"
+        tell(f"вспомогательная модель {primary} {why} — сжимаю основной моделью {main_fallback[1]}")
+        (provider, primary), main_fallback = main_fallback, None
+
+    why = last_info.why() if last_info else "нет ответа"
+    tell(f"модель {why}; делаю детерминированную выжимку без LLM")
+    return Result(None, provider=_pname(provider), reason=why, tried=list(tried))
+
+
+def _main_model_fallback(service_provider, service_model):
+    """(provider, model) of the main conversation when the service call uses a separate auxiliary model,
+    else None (the service model already is the main one)."""
+    try:
+        from config import get_auxiliary_model, get_current_model, get_provider
+        if not get_auxiliary_model():
+            return None
+        main_model = get_current_model()
+        if not main_model or (main_model == service_model and _pname(service_provider) == get_provider()):
+            return None
+        from providers import create_provider
+        return create_provider(), main_model
+    except Exception:
+        log.debug("no main-model fallback for the service call", exc_info=True)
+        return None
+
+
+def _run_with(provider, primary, prompt, per_call_timeout, ui, retries, policy, candidates, started, deadline,
+              tell):
+    """One provider's round: the model, and for a free OpenRouter model its free siblings.
+    Returns (Result or None, the last failure, the models tried)."""
     # Only a free OpenRouter model has a free sibling to move to.
     can_switch = _pname(provider) == "openrouter" and str(primary).endswith(":free")
     model, tried, switches = primary, [], 0
     last_info: Optional[ErrorInfo] = None
-
-    def tell(msg: str) -> None:
-        ui.notify(f"Сжатие контекста: {msg}")
 
     while True:
         # A model that failed a little while ago is skipped when there is another to take.
@@ -581,7 +632,8 @@ def _run(prompt, per_call_timeout, total_budget, ui, retries, policy, service, c
         if text:
             if model != primary:
                 tell(f"готово, сжатие выполнила {model}")
-            return Result(text, model=model, provider=_pname(provider), switched=model != primary, tried=list(tried))
+            return (Result(text, model=model, provider=_pname(provider), switched=model != primary,
+                           tried=list(tried)), None, tried)
         last_info = info
         now = time.time()
         if info is not None and info.kind is not Kind.AUTH:
@@ -605,6 +657,4 @@ def _run(prompt, per_call_timeout, total_budget, ui, retries, policy, service, c
             switches += 1
         model = nxt
 
-    why = last_info.why() if last_info else "нет ответа"
-    tell(f"модель {why}; делаю детерминированную выжимку без LLM")
-    return Result(None, provider=_pname(provider), reason=why, tried=list(tried))
+    return None, last_info, tried

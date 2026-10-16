@@ -484,3 +484,39 @@ class TestSessionStateRoundTrip:
         todos.TODOS.set(todos.parse_items(["stale"]), "main")
         todos.restore(None)
         assert todos.TODOS.get("main") == []
+
+
+# ── Ollama's in-stream "Internal Server Error" (status -1) is worth waiting out ──
+
+def test_ollama_in_stream_internal_error_is_busy_not_other():
+    """Reported: 'OLLAMA stream error: Internal Server Error (ref: …) (status code: -1)' ended a 25-minute
+    turn. -1 is the Ollama client's marker for an error inside the stream, not an HTTP status, and the
+    words were not among the busy hints, so the failure was classed OTHER and never retried."""
+    from providers import ProviderError
+    from src.agent import service_llm
+
+    class ResponseError(Exception):
+        def __init__(self, error, status_code=-1):
+            super().__init__(error)
+            self.error, self.status_code = error, status_code
+
+        def __str__(self):
+            return f"{self.error} (status code: {self.status_code})"
+
+    inner = ResponseError("Internal Server Error (ref: afd2e76d-509d-4987-b28b-0e188d596e76)")
+    wrapped = ProviderError(f"OLLAMA stream error: {inner}", retryable=False, original_error=inner)
+    info = service_llm.classify(wrapped)
+    assert info.kind is service_llm.Kind.BUSY
+    assert info.status is None
+
+    from agent import ArgentAgent
+    assert ArgentAgent._wait_plan(wrapped)[0] == "busy"
+
+
+def test_kobold_without_mmproj_is_still_unfit_not_busy():
+    from providers import ProviderError
+    from src.agent import service_llm
+    e = ProviderError("KOBOLDCPP error (HTTP 500): Error code: 500 - {'error': {'code': 500, 'message': "
+                      "'image input is not supported - hint: if this is unexpected, you may need to provide "
+                      "the mmproj', 'type': 'server_error'}}")
+    assert service_llm.classify(e).kind is service_llm.Kind.UNFIT

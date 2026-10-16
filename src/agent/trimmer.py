@@ -208,7 +208,37 @@ def _find_active_window_start(messages: List[Dict], keep_cycles: int = 3,
 
     # If even the last cycle exceeds token_budget, return the last user message
     # so the active window never begins on an orphaned tool or assistant message.
+    # (_in_turn_split then decides how much of that cycle is kept.)
     return user_indices[-1]
+
+
+def _in_turn_split(messages: List[Dict], active_start: int, model_name: str, token_budget: int) -> int:
+    """Where the kept part of the active window begins (>= active_start).
+
+    The window starts with a request (a user message) followed by the steps the agent took for it. A step is
+    an assistant message and the tool results that answer it, so a split point is always an assistant
+    message: a tool result is never kept without the call it answers. A window that fits is kept whole
+    (returns active_start); otherwise the split is the earliest step from which the request plus the
+    remaining steps fit. The latest step is kept however big it is - it is what the model is acting on, and
+    `_ensure_fits` clips it if it has to."""
+    end = len(messages)
+    if token_budget <= 0 or active_start >= end - 1:
+        return active_start
+    provider = get_provider()
+    sizes = [estimate_message_tokens(messages[j], model_name, provider) for j in range(active_start, end)]
+    if sum(sizes) <= token_budget:
+        return active_start
+    steps = [j for j in range(active_start + 1, end) if messages[j].get("role") == "assistant"]
+    if not steps:
+        return active_start
+    suffix = [0] * (len(sizes) + 1)
+    for k in range(len(sizes) - 1, -1, -1):
+        suffix[k] = suffix[k + 1] + sizes[k]
+    request = sizes[0]
+    for j in steps:
+        if request + suffix[j - active_start] <= token_budget:
+            return j
+    return steps[-1]
 
 
 # ── Pre-distillation ─────────────────────────────────────────────────────
@@ -853,7 +883,13 @@ def _compression_zone(messages: List[Dict[str, Any]], model_name: str, max_conte
         messages, keep_cycles=3,
         model_name=model_name, token_budget=window_budget,
     )
-    for i in range(active_start, len(messages)):
+    # One long autonomous turn (a task the agent works on for many tool calls) is a single cycle that can be
+    # bigger than the whole window. Pinning it whole left nothing to compress: the history stayed over the
+    # limit, every retry sent the same prompt and /compact reported "82 → 82". Inside the turn the request
+    # itself stays verbatim and only the latest steps that fit are kept; the earlier steps are compressed.
+    keep_from = _in_turn_split(messages, active_start, model_name, window_budget)
+    pinned.add(active_start)
+    for i in range(keep_from, len(messages)):
         pinned.add(i)
 
     # ── The compression zone ──
@@ -888,8 +924,9 @@ def precompute_summary(messages: List[Dict[str, Any]], model_name: str, max_cont
 def soft_trim_with_summarization(
         messages: List[Dict[str, Any]], model_name: str,
         max_history_messages: int,
-        max_context_tokens: int) -> List[Dict[str, Any]]:
-    """Progressive Distillation v3.
+        max_context_tokens: int,
+        force: bool = False) -> List[Dict[str, Any]]:
+    """Progressive Distillation v3. `force` (the /compact command) compresses even a history that fits.
 
     Replaces the old blind summarize-and-drop with a structured pipeline:
 
@@ -909,7 +946,7 @@ def soft_trim_with_summarization(
         estimate_message_tokens(m, model_name, provider)
         for m in cleaned[1:]
     )
-    if len(messages) - 1 <= max_history_messages and total_tokens <= max_context_tokens:
+    if not force and len(messages) - 1 <= max_history_messages and total_tokens <= max_context_tokens:
         return messages
 
     # ── Steps 1-3: pin what must stay, find the active window, collect the compression zone ──
@@ -994,7 +1031,7 @@ def soft_trim_with_summarization(
     latest = last_compaction()
     if latest is not None and latest["id"] == compression_id:
         _announce_compaction(latest, is_thrashing())
-    return new_messages
+    return _ensure_fits(new_messages, model_name, max_context_tokens)
 
 
 def clean_messages_for_llm(messages: List[Dict[str, Any]], strip_reasoning: bool) -> List[Dict[str, Any]]:
@@ -1154,6 +1191,58 @@ def compact_tool_history(messages: List[Dict[str, Any]], keep_recent: int = 2,
     return out if changed else messages
 
 
+def _history_tokens(messages: List[Dict[str, Any]], model_name: str) -> int:
+    """What the history (everything after the system prompt) costs as it is sent."""
+    provider = get_provider()
+    cleaned = clean_messages_for_llm(messages, get_strip_reasoning())
+    return sum(estimate_message_tokens(m, model_name, provider) for m in cleaned[1:])
+
+
+#: the caps (characters) a too-big kept tool result is clipped to, tightest last
+_CLIP_LEVELS = (12000, 6000, 3000, 1500, 600)
+
+
+def _clip_tool_results(messages: List[Dict[str, Any]], cap: int) -> List[Dict[str, Any]]:
+    """Tool results longer than `cap` characters cut to their head and tail. The full output is in the
+    transcript archive and on disk; what matters now is that the request fits."""
+    out, changed = [], False
+    for m in messages:
+        content = m.get("content") if m.get("role") == "tool" else None
+        if isinstance(content, str) and len(content) > cap:
+            head, tail = (cap * 2) // 3, cap // 3
+            mc = dict(m)
+            mc["content"] = (content[:head]
+                             + f"\n…[{len(content) - head - tail} chars of this output cut to fit the context]…\n"
+                             + content[-tail:])
+            out.append(mc)
+            changed = True
+        else:
+            out.append(m)
+    return out if changed else messages
+
+
+def _ensure_fits(messages: List[Dict[str, Any]], model_name: str, budget: int) -> List[Dict[str, Any]]:
+    """The last line of every trim: the history it returns must fit the budget it was trimmed for.
+
+    A compaction that could not reach the budget used to return anyway, and the request was sent over the
+    window - for a provider with a hard limit (KoboldCPP) that is an HTTP 400 on every retry. Escalates from
+    the cheapest loss to the dearest: old tool outputs become stubs, then the kept ones are clipped, and only
+    when even that is not enough is the history reset to the distillate and the request."""
+    if budget <= 0 or _history_tokens(messages, model_name) <= budget:
+        return messages
+    out = compact_tool_history(messages)
+    if _history_tokens(out, model_name) <= budget:
+        log.info("history fitted after stubbing old tool outputs")
+        return out
+    for cap in _CLIP_LEVELS:
+        out = _clip_tool_results(out, cap)
+        if _history_tokens(out, model_name) <= budget:
+            log.info("history fitted after clipping tool outputs to %d chars", cap)
+            return out
+    log.warning("history still over %d tokens after clipping; resetting to the distillate", budget)
+    return hard_reset_with_memory(messages, model_name)
+
+
 def sliding_window_trim(messages: List[Dict[str, Any]], model_name: str,
                         max_history_messages: int, max_context_tokens: int) -> List[Dict[str, Any]]:
     """Keeps the last N complete chat turns, falling back to fewer turns or hard reset if they exceed context limits."""
@@ -1198,7 +1287,43 @@ def sliding_window_trim(messages: List[Dict[str, Any]], model_name: str,
                 log.info("Kept last %d turns after compacting old tool outputs (%d messages)", turns, len(compacted))
                 return compacted
 
-    # Fallback to hard reset if even 1 turn is too large
+    # One turn too big (or longer than the message limit) - a long autonomous task. A hard reset here
+    # dropped every step the agent had taken for it; keep the request and the latest steps instead.
+    in_turn = _keep_latest_steps(messages, user_indices[-1], model_name, max_history_messages,
+                                 int(max_context_tokens * 0.75))
+    if in_turn is not None:
+        return in_turn
+
     log.info("Summarization failed, falling back to hard reset.")
     return hard_reset_with_memory(messages, model_name)
+
+
+def _keep_latest_steps(messages: List[Dict[str, Any]], request_idx: int, model_name: str,
+                       max_messages: int, budget: int) -> Optional[List[Dict[str, Any]]]:
+    """[system, the request, a note, the latest steps of the turn] within `budget` tokens and `max_messages`
+    messages, or None when the turn has no steps to keep. The dropped steps go to the transcript archive
+    and the note says where."""
+    keep_from = _in_turn_split(messages, request_idx, model_name, budget)
+    steps = [j for j in range(request_idx + 1, len(messages)) if messages[j].get("role") == "assistant"]
+    if not steps:
+        return None
+    if keep_from <= request_idx:
+        keep_from = steps[0]
+    later = [j for j in steps if j >= keep_from]
+    # the message limit as well: drop the oldest kept steps until it holds (the latest one always stays)
+    while len(later) > 1 and 3 + (len(messages) - later[0]) > max_messages:
+        later.pop(0)
+    keep_from = later[0]
+    dropped = messages[request_idx + 1:keep_from]
+    kept = [messages[0], messages[request_idx]]
+    if dropped:
+        archive = compaction.archive_transcript(dropped, "window")
+        where = f" Полный журнал: {archive}." if archive else ""
+        kept.append({"role": "system", "content": (
+            f"[Контекст: {len(dropped)} ранних сообщений этой задачи убраны, чтобы поместиться в окно модели; "
+            f"ниже — последние шаги.{where}]")})
+    kept.extend(messages[keep_from:])
+    log.info("Kept the request and the last %d message(s) of a long turn (%d dropped)",
+             len(messages) - keep_from, len(dropped))
+    return _ensure_fits(kept, model_name, budget)
 

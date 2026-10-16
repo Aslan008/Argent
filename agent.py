@@ -38,7 +38,7 @@ from src.agent.semantic_loop_guard import (
 )
 from src.agent.mcp_prompt import build_mcp_section
 from src.agent.arg_coercion import coerce_and_log
-from src.agent.context_limit import is_context_overflow, parse_context_limit
+from src.agent.context_limit import is_context_overflow, parse_context_limit, parse_prompt_tokens
 
 log = get_logger("agent")
 
@@ -980,18 +980,99 @@ When solving non-trivial problems, formulating plans, or taking actions:
         from src.agent.trimmer import estimate_message_tokens
         return estimate_message_tokens(message, self.model_name, self.provider)
 
+    def _request_tools(self, allowed_tools=None):
+        """(tool schemas this model is sent, its size category) - the one place that decides it, so the
+        request, the context meter and the history budget all count the same tools."""
+        active_tools = get_tool_schemas(include_hidden=(allowed_tools is not None))
+        if allowed_tools is not None:
+            active_tools = [t for t in active_tools if t["function"]["name"] in allowed_tools]
+
+        # Tier-based slimming: weak models (tiny/small) get only the core
+        # toolset, cutting the schema budget (~6.5k tokens) and sharpening
+        # tool choice. Larger models keep the full set. An explicit
+        # allowlist is exempt — it is already short, and quietly deleting
+        # a tool the caller hand-picked leaves the task unable to do its
+        # job with nothing in the log to explain why.
+        category = get_model_size_category(self.model_name)
+        is_moe = category == "moe" or is_moe_model(self.model_name)
+        if is_moe:
+            category = "moe"
+        if allowed_tools is None and not is_moe:
+            from tool_profiles import slim_tools_for_category
+            keep = set(slim_tools_for_category([t["function"]["name"] for t in active_tools], category))
+            active_tools = [t for t in active_tools if t["function"]["name"] in keep]
+
+        # Schema minification for small/moe models: shorten verbose descriptions
+        # to save token context and reduce distraction while preserving parameter keys/types.
+        wants_minify = getattr(self.strategy, "wants_minified_schemas", lambda: False)()
+        if (category in ("tiny", "small", "moe") or wants_minify) and active_tools:
+            from tool_profiles import minify_tool_schemas
+            active_tools = minify_tool_schemas(active_tools)
+        return active_tools, category
+
+    def _request_overhead_tokens(self) -> int:
+        """What a request carries besides the history: system prompt, tool schemas (or the in-prompt catalog),
+        the per-turn tail. Measured on the last request sent; before the first one, estimated from the
+        system prompt and the tool schemas this model gets."""
+        measured = getattr(self, "_request_overhead", None)
+        if measured:
+            return measured
+        sys_tokens = self._estimate_tokens(str(self.messages[0])) if self.messages else 0
+        try:
+            tools, _ = self._request_tools()
+            tools_tokens = self._estimate_tokens(json.dumps(tools, ensure_ascii=False)) if tools else 0
+        except Exception:
+            tools_tokens = 2048
+        return sys_tokens + tools_tokens
+
+    def _history_budget(self) -> int:
+        """Tokens the history may take: the window minus the real overhead, the response and a margin."""
+        from config import get_max_generation_tokens
+        from src.agent.context_limit import effective_history_budget
+        sys_tokens = self._estimate_tokens(str(self.messages[0])) if self.messages else 0
+        response_reserve = min(get_max_generation_tokens() or 1024, 2048)
+        other = max(0, self._request_overhead_tokens() - sys_tokens)
+        return effective_history_budget(self.max_context_tokens, sys_tokens, response_reserve,
+                                        tools_reserve=other)
+
     def _history_load(self):
         """(history tokens, message count, budget) of the history as it would be sent."""
         self.max_context_tokens = get_context_window()
 
-        from config import get_strip_reasoning, get_max_generation_tokens
+        from config import get_strip_reasoning
         from src.agent.trimmer import clean_messages_for_llm
-        from src.agent.context_limit import effective_history_budget
         cleaned = clean_messages_for_llm(self.messages, get_strip_reasoning())
-        sys_tokens = self._estimate_tokens(str(self.messages[0])) if self.messages else 0
-        response_reserve = min(get_max_generation_tokens() or 1024, 2048)
-        budget = effective_history_budget(self.max_context_tokens, sys_tokens, response_reserve)
-        return sum(self._estimate_message(m) for m in cleaned[1:]), len(cleaned) - 1, budget
+        return sum(self._estimate_message(m) for m in cleaned[1:]), len(cleaned) - 1, self._history_budget()
+
+    def _preflight_overflow(self, request_messages, tools, history_count: int) -> bool:
+        """Measure the assembled request; True when it would not fit and the history was trimmed for it
+        (the caller assembles the request again).
+
+        `history_count` is how many of `request_messages` are the history (the rest is what this request
+        adds). The trim used to run only when a user turn began, so one long autonomous turn grew past the
+        window and only the provider's HTTP 400 noticed. At most two trims in a row without a request getting
+        through: a trim that cannot get under the limit is left to the reactive path, not repeated forever."""
+        try:
+            from config import get_max_generation_tokens
+            total = sum(self._estimate_message(m) for m in request_messages)
+            if tools:
+                total += self._estimate_tokens(json.dumps(tools, ensure_ascii=False))
+            history = sum(self._estimate_message(m) for m in request_messages[1:history_count])
+            self._request_overhead = max(0, total - history)
+            limit = self.max_context_tokens - min(get_max_generation_tokens() or 1024, 2048)
+            if total <= limit or getattr(self, "_preflight_trims", 0) >= 2:
+                return False
+            if history <= self._history_budget():
+                # over the window although the history is within its share: it is the overhead (tool
+                # schemas, system prompt) that does not fit, and trimming the history cannot change that
+                return False
+            self._preflight_trims = getattr(self, "_preflight_trims", 0) + 1
+            log.info("request ~%d tokens over the %d limit: trimming before sending", total - limit, limit)
+            self._trim_history()
+            return True
+        except Exception:
+            log.debug("pre-flight size check failed", exc_info=True)
+            return False
 
     def _precompute_summary(self) -> None:
         """Between turns: when the history is close to its limit, start writing the summary the next compaction
@@ -1011,12 +1092,43 @@ When solving non-trivial problems, formulating plans, or taking actions:
         except Exception:
             log.debug("summary precompute skipped", exc_info=True)
 
-    def _trim_history(self):
+    #: providers that are a local server started with a fixed context window it can report
+    _WINDOW_PROBE_PROVIDERS = ("koboldcpp",)
+
+    def _sync_server_context(self):
+        """If the local server was started with a smaller window than the one configured, use the server's
+        (with a margin for our token estimate) and say so once. Returns that note, or None.
+
+        Only ever lowers the window: a bigger server window is the person's to use or not."""
+        if self.provider not in self._WINDOW_PROBE_PROVIDERS:
+            return None
+        try:
+            from config import get_koboldcpp_url, set_context_window
+            from src.agent.context_limit import probe_server_context
+            real = probe_server_context(get_koboldcpp_url())
+            if not real:
+                return None
+            fitted = max(2048, int(real * 0.95))
+            current = get_context_window()
+            if current <= fitted:
+                return None
+            set_context_window(fitted)
+            self.max_context_tokens = fitted
+            log.info("server window %d < configured %d: window set to %d", real, current, fitted)
+            return (f"\n[Argent: сервер {self.provider} запущен с окном {real} токенов, а в настройках было "
+                    f"{current} — окно уменьшено до {fitted}, чтобы запросы не упирались в предел сервера. "
+                    f"Больше окно — перезапуском сервера с большим --contextsize.]")
+        except Exception:
+            log.debug("server context probe failed", exc_info=True)
+            return None
+
+    def _trim_history(self, extra_reserve: int = 0):
+        """Bring the history under its budget. `extra_reserve` holds back that many more tokens - the
+        provider said the last request was over by that much although our estimate said it fit."""
         self.max_context_tokens = get_context_window()
 
-        from config import get_strip_reasoning, get_max_generation_tokens
+        from config import get_strip_reasoning
         from src.agent.trimmer import clean_messages_for_llm, age_tool_results
-        from src.agent.context_limit import effective_history_budget
         strip_enabled = get_strip_reasoning()
 
         # Continuous prevention: age old tool outputs before checking budget
@@ -1025,11 +1137,12 @@ When solving non-trivial problems, formulating plans, or taking actions:
         cleaned = clean_messages_for_llm(self.messages, strip_enabled)
 
         # Trim history into the room left AFTER the system prompt, the tool
-        # schemas (sent alongside) and the model's response — not against the
-        # whole window — so the assembled request fits under a hard limit.
-        sys_tokens = self._estimate_tokens(str(self.messages[0])) if self.messages else 0
-        response_reserve = min(get_max_generation_tokens() or 1024, 2048)
-        budget = effective_history_budget(self.max_context_tokens, sys_tokens, response_reserve)
+        # schemas (sent alongside, measured - they were reserved as a flat
+        # 2048 tokens while a full set is ~8k) and the model's response — not
+        # against the whole window — so the assembled request fits under a hard limit.
+        budget = self._history_budget()
+        if extra_reserve > 0:
+            budget = max(1024, budget - extra_reserve)
 
         history_tokens = sum(self._estimate_message(m) for m in cleaned[1:])
         msg_count = len(cleaned) - 1
@@ -1251,6 +1364,9 @@ When solving non-trivial problems, formulating plans, or taking actions:
         if not user_text.startswith("/"):
             self._maybe_auto_retrieve(user_text)
 
+        window_note = self._sync_server_context()
+        if window_note:
+            yield {"type": "error", "content": window_note}
         self._trim_history()
         self._persist_progress()
         self._turn_checkpoint_done = False
@@ -1259,6 +1375,7 @@ When solving non-trivial problems, formulating plans, or taking actions:
         self._truncate_continues = 0
         self._salvage_continues = 0
         self._ctx_overflow_retries = 0
+        self._preflight_trims = 0
         self._no_action_continues = 0
         self._turn_started = time.monotonic()
         self._turn_tool_calls = 0
@@ -1590,33 +1707,10 @@ When solving non-trivial problems, formulating plans, or taking actions:
             from src.agent.trimmer import clean_messages_for_llm
             strip_enabled = get_strip_reasoning()
             cleaned_messages = clean_messages_for_llm(self.messages, strip_enabled)
-            
+            history_count = len(cleaned_messages)
+
             try:
-                active_tools = get_tool_schemas(include_hidden=(allowed_tools is not None))
-                if allowed_tools is not None:
-                    active_tools = [t for t in active_tools if t["function"]["name"] in allowed_tools]
-
-                # Tier-based slimming: weak models (tiny/small) get only the core
-                # toolset, cutting the schema budget (~6.5k tokens) and sharpening
-                # tool choice. Larger models keep the full set. An explicit
-                # allowlist is exempt — it is already short, and quietly deleting
-                # a tool the caller hand-picked leaves the task unable to do its
-                # job with nothing in the log to explain why.
-                category = get_model_size_category(self.model_name)
-                is_moe = category == "moe" or is_moe_model(self.model_name)
-                if is_moe:
-                    category = "moe"
-                if allowed_tools is None and not is_moe:
-                    from tool_profiles import slim_tools_for_category
-                    _slim_names = set(slim_tools_for_category([t["function"]["name"] for t in active_tools], category))
-                    active_tools = [t for t in active_tools if t["function"]["name"] in _slim_names]
-
-                # Schema minification for small/moe models: shorten verbose descriptions
-                # to save token context and reduce distraction while preserving parameter keys/types.
-                wants_minify = getattr(self.strategy, "wants_minified_schemas", lambda: False)()
-                if (category in ("tiny", "small", "moe") or wants_minify) and active_tools:
-                    from tool_profiles import minify_tool_schemas
-                    active_tools = minify_tool_schemas(active_tools)
+                active_tools, category = self._request_tools(allowed_tools)
 
                 # No native tool channel — either the strategy never had one
                 # (tiny/local) or a cloud model rejected native tools at runtime
@@ -1659,6 +1753,15 @@ When solving non-trivial problems, formulating plans, or taking actions:
                         {"role": "assistant", "content": resume_prefix},
                         {"role": "user", "content": RESUME_NOTE},
                     ]
+
+                # Pre-flight: measure the request as it will be sent (system prompt, tool schemas or catalog,
+                # the per-turn tail, the history) and trim BEFORE sending when it would not fit. What is not
+                # history is remembered, so the next trim reserves the real overhead instead of a guess.
+                if self._preflight_overflow(cleaned_messages, active_tools, history_count):
+                    yield {"type": "error", "content": (
+                        "\n[Argent: the next request would not fit the context window — "
+                        "compacting the history first...]")}
+                    continue
 
                 response_stream = provider.stream_chat(
                     model=self.model_name,
@@ -1886,18 +1989,22 @@ When solving non-trivial problems, formulating plans, or taking actions:
                             f"3×. Start a fresh chat with /clear, or lower it with /context.]"
                         )}
                         break
+                    # Each retry must cut deeper than the last: the old code re-trimmed to the same target
+                    # (the budget is recomputed from the saved window every time), so three retries sent
+                    # the same prompt three times. The provider's own counts say by how much it was over.
                     real_ctx = parse_context_limit(str(e))
+                    sent = parse_prompt_tokens(str(e))
                     from config import set_context_window
-                    if real_ctx:
-                        new_window = max(2048, int(real_ctx * 0.9))
-                    else:
-                        new_window = max(2048, int(self.max_context_tokens * 0.7))
-                    set_context_window(new_window)   # learn the real window for next turns
-                    self.max_context_tokens = new_window
-                    self._trim_history()
+                    if real_ctx and int(real_ctx * 0.9) < get_context_window():
+                        set_context_window(max(2048, int(real_ctx * 0.9)))   # learn the real window for next turns
+                    self.max_context_tokens = get_context_window()
+                    over = max(0, sent - real_ctx) if (sent and real_ctx) else 0
+                    extra = over + int(self.max_context_tokens * 0.1 * self._ctx_overflow_retries)
+                    self._trim_history(extra_reserve=extra)
                     yield {"type": "error", "content": (
                         f"\n[Argent: prompt exceeded the model's context window — trimmed history "
-                        f"and retrying (window now ~{new_window} tokens)...]"
+                        f"and retrying (window ~{self.max_context_tokens} tokens, "
+                        f"{extra} more held back)...]"
                     )}
                     continue
                 elif self._wait_plan(e) is not None and netstate.patience_seconds() > 0:
@@ -1958,9 +2065,13 @@ When solving non-trivial problems, formulating plans, or taking actions:
                         for m in cleaned_messages:
                             if isinstance(m, dict) and "images" in m:
                                 m.pop("images", None)
+                        how = (" Если модель мультимодальная (например Ornith-1.5, Qwen3.5), запустите KoboldCPP "
+                               "с её файлом проектора: --mmproj <файл mmproj .gguf из репозитория модели>."
+                               if self.provider == "koboldcpp" else "")
                         yield {"type": "error", "content": (
-                            f"\n[Argent: модель '{self.model_name}' ({self.provider}) не поддерживает чтение картинок "
-                            f"(отсутствует mmproj или модель чисто текстовая). Изображение откреплено, повтор запроса в текстовом режиме...]"
+                            f"\n[Argent: сервер {self.provider} не принял картинку для '{self.model_name}' "
+                            f"(не загружен mmproj или модель чисто текстовая).{how} "
+                            f"Изображение откреплено, повтор запроса в текстовом режиме...]"
                         )}
                         continue
 
@@ -1977,6 +2088,7 @@ When solving non-trivial problems, formulating plans, or taking actions:
             # full_content (it started from the prefix), so the stored message is one answer.
             net_streak.reset()
             resume_prefix = ""
+            self._preflight_trims = 0      # the limit is on trims in a row that did not let a request through
 
             # End of stream — parse tool call arguments from strings to dicts.
             if tool_calls_accumulator and not is_truncated:
@@ -2859,33 +2971,19 @@ When solving non-trivial problems, formulating plans, or taking actions:
         """Token breakdown of what the next request will carry: the system
         prompt (incl. AGENTS.md), the tool schemas actually sent for this tier,
         and the conversation history. Lets the user see where the budget goes."""
-        import json
-        from tool_profiles import slim_tools_for_category
-
         system_tokens = self._estimate_tokens(str(self.messages[0])) if self.messages else 0
         history_tokens = sum(self._estimate_message(m) for m in self.messages[1:])
 
-        tool_tokens = 0
-        tool_count = 0
-        if self.strategy.supports_native_tools():
-            schemas = get_tool_schemas(include_hidden=False)
-            category = get_model_size_category(self.model_name)
-            is_moe = category == "moe" or is_moe_model(self.model_name)
-            if is_moe:
-                category = "moe"
-            if not is_moe:
-                keep = set(slim_tools_for_category([t["function"]["name"] for t in schemas], category))
-                sent = [t for t in schemas if t["function"]["name"] in keep]
-            else:
-                sent = schemas
-
-            wants_minify = getattr(self.strategy, "wants_minified_schemas", lambda: False)()
-            if (category in ("tiny", "small") or wants_minify) and sent:
-                from tool_profiles import minify_tool_schemas
-                sent = minify_tool_schemas(sent)
-
+        # The same tools the request carries; without a native tool channel they ride as an in-prompt
+        # catalog, which costs context just the same (it used to be counted as zero).
+        sent, _ = self._request_tools()
+        tool_count = len(sent)
+        if not sent:
+            tool_tokens = 0
+        elif self.strategy.supports_native_tools() and not getattr(self, "_native_tools_unsupported", False):
             tool_tokens = self._estimate_tokens(json.dumps(sent))
-            tool_count = len(sent)
+        else:
+            tool_tokens = self._estimate_tokens(build_tool_catalog(sent))
 
         max_tokens = get_context_window()
         total = system_tokens + tool_tokens + history_tokens

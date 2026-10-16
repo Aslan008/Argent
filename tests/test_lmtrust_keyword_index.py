@@ -744,11 +744,11 @@ class TestBM25ExactScores:
             "apple",
         ]
         idx = BM25Index(["a", "b"], docs, [{}, {}], k1=1.5, b=0.75)
-        # N=2, dl=[14, 1], avgdl=7.5, df[apple]=2
+        # N=2, dl=[15, 1] (ten "apple" + five other words), avgdl=8, df[apple]=2
         idf = math.log(1.2)  # log(1 + 0.5/2.5)
-        avgdl = 7.5
-        # doc0: freq=10, dl=14
-        expected_0 = idf * 25 / (10 + 1.5 * (0.25 + 0.75 * 14 / avgdl))
+        avgdl = 8.0
+        # doc0: freq=10, dl=15
+        expected_0 = idf * 25 / (10 + 1.5 * (0.25 + 0.75 * 15 / avgdl))
         # doc1: freq=1, dl=1
         expected_1 = idf * 2.5 / (1 + 1.5 * (0.25 + 0.75 * 1 / avgdl))
         _, captured = self._search_and_capture(idx, "apple", top_k=10)
@@ -843,7 +843,7 @@ class TestBM25ExactScores:
         )
 # ─── Exact BM25 score assertions (kills operator mutations in BM25 formula) ──
 
-class TestBM25ExactScores:
+class TestBM25ExactScoresOperators:
     """Assert exact BM25 scores to kill operator mutations.
 
     Setup: 3 docs with known term frequencies.

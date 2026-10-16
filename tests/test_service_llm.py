@@ -524,3 +524,56 @@ def test_sync_chat_turns_an_error_body_into_a_retryable_provider_error():
         monkey.undo()
     assert ei.value.retryable
     assert classify(ei.value).kind is Kind.BUSY
+
+
+# ── an auxiliary model that is gone falls back to the main model ─────────────
+
+class _NamedProvider:
+    def __init__(self, name, answer=None, error=None, problem=None):
+        self.name, self._answer, self._error, self._problem = name, answer, error, problem
+        self.models = []
+
+    def validate_config(self):
+        return self._problem
+
+    def sync_chat(self, model, messages, timeout=None):
+        self.models.append(model)
+        if self._error:
+            raise self._error
+        return self._answer
+
+
+def test_a_missing_aux_model_falls_back_to_the_main_model(monkeypatch):
+    """Seen in the logs for days: /aux pointed at 'qwen2.5-3b-instruct' (removed from Ollama) and every
+    compaction ended in the model-free summary, while the main model answered every turn."""
+    import config
+    import providers
+    from providers import ProviderError
+    from src.agent import service_llm
+
+    aux = _NamedProvider("ollama", error=ProviderError(
+        "Ollama error: model 'qwen2.5-3b-instruct' not found (status code: 404)"))
+    main = _NamedProvider("zai", answer="## Intent\n" + "сводка основной моделью. " * 20)
+    monkeypatch.setattr(config, "get_auxiliary_model", lambda: "qwen2.5-3b-instruct")
+    monkeypatch.setattr(config, "get_current_model", lambda: "glm-5.2")
+    monkeypatch.setattr(config, "get_provider", lambda: "zai")
+    monkeypatch.setattr(providers, "create_service_provider", lambda: (aux, "qwen2.5-3b-instruct"))
+    monkeypatch.setattr(providers, "create_provider", lambda *a, **k: main)
+    said = []
+    result = service_llm.run("summarise", ui=service_llm.UI(notify=said.append), retries=1, policy="auto")
+    assert result.text and "основной моделью" in result.text
+    assert aux.models == ["qwen2.5-3b-instruct"] and main.models == ["glm-5.2"]
+    assert any("основной моделью glm-5.2" in s for s in said)
+
+
+def test_without_an_aux_model_there_is_nothing_to_fall_back_to(monkeypatch):
+    import config
+    import providers
+    from providers import ProviderError
+    from src.agent import service_llm
+
+    main = _NamedProvider("ollama", error=ProviderError("model 'x' not found (status code: 404)"))
+    monkeypatch.setattr(config, "get_auxiliary_model", lambda: None)
+    monkeypatch.setattr(providers, "create_service_provider", lambda: (main, "x"))
+    result = service_llm.run("summarise", ui=service_llm.UI(), retries=1, policy="auto")
+    assert result.text is None and main.models == ["x"]

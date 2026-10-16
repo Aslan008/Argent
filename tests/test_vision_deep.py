@@ -318,7 +318,7 @@ class TestAgentTurnAndTelegramBotReception:
 
         # Verify agent yielded notice and continued to get content
         error_notices = [c["content"] for c in chunks if c.get("type") == "error"]
-        assert any("не поддерживает чтение картинок" in n for n in error_notices)
+        assert any("не принял картинку" in n and "--mmproj" in n for n in error_notices)
 
         content_chunks = [c["content"] for c in chunks if c.get("type") == "content_stream"]
         assert "Text-only recovery response." in "".join(content_chunks)

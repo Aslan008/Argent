@@ -97,7 +97,7 @@ def calculate(expression: str) -> str:
         return f"{expression} = {result}"
     except ZeroDivisionError:
         return f"Error: division by zero in '{expression}'."
-    except (ValueError, SyntaxError, OverflowError, TypeError) as numeric_error:
+    except (ValueError, SyntaxError, OverflowError, TypeError):
         pass
 
     # --- Symbolic path: the expression mentions variables or calculus ---

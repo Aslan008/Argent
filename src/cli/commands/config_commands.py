@@ -13,11 +13,54 @@ from config import (
     get_openrouter_api_key, set_openrouter_api_key,
     get_xkiro_api_key, set_xkiro_api_key,
     get_wormsoft_api_key, set_wormsoft_api_key,
-    get_koboldcpp_url, set_koboldcpp_url,
+    get_koboldcpp_url, set_koboldcpp_url, normalize_koboldcpp_url,
 )
 from src.cli.commands.base import CommandContext, CommandResult
 from src.cli.commands.registry import registry
 from ui import console, print_system, print_error, select_model, print_context_usage, _select_from_list
+
+
+def _server_problem(base_url: str, timeout: float = 3.0):
+    """None when an OpenAI-compatible server answers at `base_url`, else a short reason."""
+    import requests
+    try:
+        response = requests.get(base_url.rstrip("/") + "/models", timeout=timeout)
+    except requests.RequestException as e:
+        return type(e).__name__
+    return None if response.status_code < 400 else f"HTTP {response.status_code}"
+
+
+def _set_koboldcpp_address(raw: str) -> bool:
+    """Save the KoboldCPP address a person typed. The server is only asked afterwards and never decides
+    whether the address is kept: it may well be started after Argent."""
+    from vision import forget_capabilities
+    try:
+        url = normalize_koboldcpp_url(raw)
+    except ValueError as e:
+        print_error(f"Адрес KoboldCPP не принят: {e}. Пример: /provider koboldcpp http://192.168.1.50:5001/v1")
+        return False
+    if url != get_koboldcpp_url():
+        set_koboldcpp_url(url)
+        forget_capabilities("koboldcpp")
+    problem = _server_problem(url)
+    if problem:
+        print_system(f"Адрес KoboldCPP: [bold cyan]{url}[/bold cyan]\n"
+                     f"[yellow]Сервер по нему сейчас не отвечает ({problem}). Адрес сохранён; "
+                     f"проверьте, что KoboldCPP запущен и порт доступен.[/yellow]")
+    else:
+        print_system(f"Адрес KoboldCPP: [bold cyan]{url}[/bold cyan] (сервер отвечает)")
+    return True
+
+
+def _ask_koboldcpp_address() -> None:
+    """Show the current address and let it be changed; an empty answer keeps it."""
+    try:
+        answer = questionary.text("Адрес KoboldCPP (Enter — оставить):", default=get_koboldcpp_url()).ask()
+    except Exception:
+        return
+    answer = (answer or "").strip()
+    if answer and answer != get_koboldcpp_url():
+        _set_koboldcpp_address(answer)
 
 
 @registry.register("/ui", help_text="Стиль интерфейса TUI: premium (оформленный) или classic (как в терминале)", category="config", is_prefix=True)
@@ -107,19 +150,25 @@ def _say_catalog_problem(provider) -> None:
                  f"Показан {'сохранённый' if catalog.source == 'cache' else 'встроенный'} список.[/yellow]")
 
 
-@registry.register("/provider", help_text="Выбор провайдера API (например: /provider zai)", category="config", is_prefix=True)
+@registry.register("/provider", help_text="Выбор провайдера API (например: /provider zai; адрес KoboldCPP: /provider koboldcpp http://host:5001/v1)", category="config", is_prefix=True)
 def handle_provider(ctx: CommandContext) -> CommandResult:
     from command_handler import switch_model
     current_prov = get_provider()
     choices = ["ollama", "zai", "openrouter", "claude", "deepseek", "xkiro", "wormsoft", "koboldcpp"]
-    parts = ctx.user_input.strip().split(maxsplit=1)
+    parts = ctx.user_input.strip().split(maxsplit=2)
+    address = parts[2].strip() if len(parts) > 2 else ""
     if len(parts) > 1:
         req_prov = parts[1].strip().lower()
-        if req_prov in choices:
-            new_prov = req_prov
-        else:
+        if req_prov not in choices:
             print_error(f"Неизвестный провайдер '{req_prov}'. Доступные: {', '.join(choices)}")
             return CommandResult.continue_loop()
+        if address and req_prov != "koboldcpp":
+            print_error(f"Адрес задаётся только для koboldcpp: /provider koboldcpp <адрес>. "
+                        f"Для {req_prov} он фиксирован или берётся из настроек.")
+            return CommandResult.continue_loop()
+        if address and not _set_koboldcpp_address(address):
+            return CommandResult.continue_loop()
+        new_prov = req_prov
     else:
         new_prov = _select_from_list("Выберите API провайдера:", choices, default=current_prov)
 
@@ -198,8 +247,9 @@ def handle_provider(ctx: CommandContext) -> CommandResult:
                 except Exception:
                     pass
         elif new_prov == "koboldcpp":
-            current_url = get_koboldcpp_url()
-            options_text = f" (URL: {current_url})"
+            if len(parts) == 1:                      # picked from the menu: the address is part of the choice
+                _ask_koboldcpp_address()
+            options_text = f" (URL: {get_koboldcpp_url()}; изменить: /provider koboldcpp <адрес>)"
 
         print_system(f"Провайдер изменён: {new_prov}{options_text}")
         if new_prov != current_prov:
@@ -229,18 +279,26 @@ def handle_compact(ctx: CommandContext) -> CommandResult:
     if len(agent.messages) <= 2:
         print_system("История диалога слишком коротка для сжатия.")
     else:
-        from src.agent.trimmer import soft_trim_with_summarization, age_tool_results
+        from src.agent.trimmer import soft_trim_with_summarization, age_tool_results, _history_tokens
+        before_len = len(agent.messages)
+        before_tokens = _history_tokens(agent.messages, agent.model_name)
         agent.messages = age_tool_results(agent.messages)
         target_msgs = max(4, int(agent.max_history_messages * 0.5))
         target_budget = max(1024, int(agent.max_context_tokens * 0.5))
-        before_len = len(agent.messages)
+        # force: compressing on request, not only past a limit - "82 → 82" meant the request was ignored
         agent.messages = soft_trim_with_summarization(
-            agent.messages, agent.model_name, target_msgs, target_budget
+            agent.messages, agent.model_name, target_msgs, target_budget, force=True
         )
         after_len = len(agent.messages)
+        after_tokens = _history_tokens(agent.messages, agent.model_name)
         if hasattr(agent, "reset_turn_records"):
             agent.reset_turn_records()
-        print_system(f"Контекст оптимизирован: {before_len} → {after_len} сообщений (Прогрессивная дистилляция).")
+        if after_tokens < before_tokens:
+            print_system(f"Контекст сжат: {before_len} → {after_len} сообщений, "
+                         f"~{before_tokens:,} → ~{after_tokens:,} токенов истории.".replace(",", " "))
+        else:
+            print_system("Сжимать нечего: в истории только текущий обмен, он остаётся дословно. "
+                         "Начать заново — /clear.")
     return CommandResult.continue_loop()
 
 
@@ -701,8 +759,15 @@ def handle_key(ctx: CommandContext) -> CommandResult:
     return CommandResult.continue_loop()
 
 
-@registry.register("/endpoint", help_text="Переключить эндпоинт Z.AI", category="config")
+@registry.register("/endpoint", help_text="Адрес сервера: KoboldCPP (/endpoint http://host:5001/v1) или эндпоинт Z.AI", category="config", is_prefix=True)
 def handle_endpoint(ctx: CommandContext) -> CommandResult:
+    if get_provider() == "koboldcpp":
+        parts = ctx.user_input.strip().split(maxsplit=1)
+        if len(parts) > 1:
+            _set_koboldcpp_address(parts[1])
+        else:
+            _ask_koboldcpp_address()
+        return CommandResult.continue_loop()
     endpoint_choice = questionary.select(
         "Select Z.AI Endpoint:",
         choices=[
@@ -717,6 +782,9 @@ def handle_endpoint(ctx: CommandContext) -> CommandResult:
     else:
         set_zai_endpoint(ZAI_ENDPOINT_GENERAL)
         print_system("Z.AI Endpoint set to General API.")
+    return CommandResult.continue_loop()
+
+
 @registry.register("/temperature", aliases=["/temp"], help_text="Настройка температуры генерации (0.0–2.0)", category="config", is_prefix=True)
 def handle_temperature(ctx: CommandContext) -> CommandResult:
     from config import get_temperature, set_temperature

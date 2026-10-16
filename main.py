@@ -52,7 +52,7 @@ from src.startup import (
 def chat_allowed_tools() -> list:
     """The toolset for a regular chat turn: all available tools."""
     from tools.schemas import get_available_tools
-    from config import get_disabled_tools
+    from config import get_disabled_tools      # looked up at call time (not the name bound at import)
     disabled = set(get_disabled_tools() or [])
     tools = get_available_tools()
     if isinstance(tools, dict):
