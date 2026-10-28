@@ -55,6 +55,24 @@ class TestExitCodeHonesty:
         assert co._runs_under_powershell("Get-ChildItem .") is True
 
 
+class TestConsoleEncoding:
+    """A command that prints a file must not mangle it.
+
+    PowerShell 5.1's `Get-Content` decodes a file as ANSI unless told otherwise, so
+    reading a UTF-8 file with Cyrillic through the shell returned `РїСЂРёРІРµС‚`. The
+    agent then cannot use its own console: it cannot diff what it wrote against what it
+    read. Fixed in the wrapper, and pinned here, because the wrapper is easy to lose.
+    """
+
+    @pytest.mark.skipif(not WINDOWS, reason="PowerShell encoding is a Windows matter")
+    def test_get_content_of_a_utf8_file_is_readable(self, tmp_path):
+        target = tmp_path / "ru.txt"
+        target.write_text("привет, мир\n", encoding="utf-8")
+
+        out = co.run_command(f'Get-Content "{target}"')
+        assert "привет, мир" in out, out
+
+
 class TestLocalPages:
     def test_a_project_html_page_may_be_opened(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)

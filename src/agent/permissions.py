@@ -45,7 +45,7 @@ from typing import List, Optional, Tuple
 
 from argent.logger import get_logger
 from src.agent.shell_hooks import (
-    command_parts, file_digest, glob_match, is_trusted, subject, trust_file,
+    command_parts, file_digest, glob_match, is_trusted, subject, subject_paths, trust_file,
 )
 
 log = get_logger("permissions")
@@ -107,13 +107,23 @@ def matches(rule: Rule, tool: str, args: dict, root: Path) -> bool:
     if rule.pattern is None or rule.pattern == "*":
         return True
     file, command = subject(args or {})
+    paths = subject_paths(args or {})
     if tool in COMMAND_TOOLS or command and not file:
         # An allow must cover the line exactly as it will run; deny/ask also look inside chains.
         return bool(command) and _command_matches(command, rule.pattern, whole_line_only=rule.kind == "allow")
-    if file:
-        rel = _relative(file, root)
-        return glob_match(rel, rule.pattern) or ("/" not in rule.pattern and glob_match(rel.rsplit("/", 1)[-1], rule.pattern))
+    if file or paths:
+        hits = [_path_matches(p, rule.pattern, root) for p in (paths or [file])]
+        # A deny/ask rule protects: if ANY file the call touches is covered, it applies.
+        # An allow rule permits: it must cover EVERY file, or one entry outside the
+        # allowed folder would ride along on a batch that is otherwise fine.
+        return any(hits) if rule.kind in ("deny", "ask") else all(hits)
     return False
+
+
+def _path_matches(path: str, pattern: str, root: Path) -> bool:
+    rel = _relative(path, root)
+    return (glob_match(rel, pattern)
+            or ("/" not in pattern and glob_match(rel.rsplit("/", 1)[-1], pattern)))
 
 
 def parse_file_data(data, source: str) -> Tuple[List[Rule], List[str]]:

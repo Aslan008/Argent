@@ -1214,6 +1214,59 @@ def request_approval_status(action: str, *, destructive: bool = False,
     return status, reason
 
 
+#: Commands that throw away work the person has not committed. The consent line has to
+#: say how MUCH, not just what: `git checkout -- .` against a clean tree is harmless,
+#: against forty changed files it is the whole afternoon.
+_DESTRUCTIVE_COMMANDS = (
+    "git checkout --", "git checkout .", "git checkout -f", "git restore",
+    "git reset --hard", "git clean", "git stash drop", "git stash clear",
+    "git branch -D",
+)
+
+
+def destructive_scope(command: str) -> str:
+    """How much uncommitted work a command would destroy, for the consent text.
+
+    Only for commands whose whole purpose is to discard local changes. Returns "" for
+    everything else, and for anything it cannot measure — a guess in a consent prompt is
+    worse than no number, because it gets trusted.
+    """
+    text = (command or "").strip().lower()
+    if not text:
+        return ""
+    hit = any(text.startswith(prefix) or f"; {prefix}" in text or f"&& {prefix}" in text
+              for prefix in _DESTRUCTIVE_COMMANDS)
+    if not hit:
+        return ""
+    try:
+        import subprocess
+        result = subprocess.run(["git", "status", "--porcelain"], capture_output=True,
+                                text=True, timeout=5)
+    except Exception:
+        return ""
+    if result.returncode != 0:
+        # Not a repository (or git is unavailable): no claim at all. "Nothing to lose"
+        # when we simply could not look is the kind of reassurance that gets trusted.
+        return ""
+    lines = [line for line in result.stdout.splitlines() if line.strip()]
+    if not lines:
+        return "рабочее дерево чисто — терять нечего"
+    modified = sum(1 for line in lines if not line.startswith("??"))
+    untracked = len(lines) - modified
+    return (f"уничтожит НЕЗАКОММИЧЕННОЕ: {modified} изменённых файлов, "
+            f"{untracked} неотслеживаемых")
+
+
+def current_scope_note() -> str:
+    """The scope note for the approval being answered right now ("" when none).
+
+    Kept beside the decision rather than inside `action`: the automation runner and the
+    subagent worker read the command back out of that string, so decorating it would
+    send "git checkout -- . [уничтожит 6 файлов]" to the shell.
+    """
+    return getattr(_local, "scope_note", "") or ""
+
+
 def _raw_terminal_prompt(action: str, destructive: bool, grant_key: str | None) -> str:
     """Interactive TTY prompt on console."""
     from argent.ui import console
@@ -1225,6 +1278,9 @@ def _raw_terminal_prompt(action: str, destructive: bool, grant_key: str | None) 
 
     from argent.ui import approval_header_markup
     console.print(approval_header_markup(action, destructive))
+    note = current_scope_note()
+    if note:
+        console.print(f"[yellow]→ {note}[/yellow]")
 
     try:
         from src.cli.input_queue import pause_active_input_listener, resume_active_input_listener
@@ -1317,6 +1373,9 @@ def _request_approval_impl(action: str, *, destructive: bool = False,
     # the one that takes power away: it switches off every shortcut below, auto mode included.
     rule_allow = rule_ask = None
     command = command_from_action(action)
+    # What a destructive command takes with it. Computed here, once, so every transport
+    # (terminal, TUI, phone) shows the same number instead of only the command text.
+    _local.scope_note = destructive_scope(command) if command else ""
     if command is not None and not _nobody_is_watching():
         try:
             from src.agent.permissions import PERMISSIONS

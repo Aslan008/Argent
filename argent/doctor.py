@@ -267,23 +267,48 @@ def _check_lsp():
         return (WARN, f"multilspy check failed: {e}")
 
 
-def _check_git():
+def worktree_summary() -> dict:
+    """What is uncommitted: counts plus the top-level dirs git does not track.
+
+    Does not measure sizes on purpose — walking a 180 MB data folder to print one
+    number costs more than the answer is worth, and naming the directory is enough
+    for a person to look. Both `doctor` and `/status` show this line, because it is
+    the first thing anyone needs to know about somebody else's tree.
+    """
     try:
-        res = run_text(
-            ["git", "rev-parse", "--is-inside-work-tree"],
-            capture_output=True, timeout=5,
-        )
-        if res.returncode != 0:
-            return (WARN, "not a git repository — /commit, checkpoints and rollback unavailable")
-        dirty = run_text(
-            ["git", "status", "--porcelain"],
-            capture_output=True, timeout=5,
-        ).stdout.strip()
-        return (OK, "repository detected" + (f", {len(dirty.splitlines())} uncommitted change(s)" if dirty else ", clean"))
+        inside = run_text(["git", "rev-parse", "--is-inside-work-tree"],
+                          capture_output=True, timeout=5)
+        if inside.returncode != 0:
+            return {"inside": False}
+        out = run_text(["git", "status", "--porcelain"], capture_output=True, timeout=5).stdout
     except FileNotFoundError:
-        return (FAIL, "git executable not found")
+        return {"inside": False, "error": "git executable not found"}
     except Exception as e:
-        return (WARN, f"git check failed: {e}")
+        return {"inside": False, "error": f"git check failed: {e}"}
+
+    lines = [line for line in out.splitlines() if line.strip()]
+    untracked = [line[3:].strip('"') for line in lines if line.startswith("??")]
+    dirs = sorted({path.split("/")[0].rstrip("/") for path in untracked
+                   if "/" in path or path.endswith("/")})
+    return {"inside": True, "tracked": len(lines) - len(untracked),
+            "untracked": len(untracked), "dirs": dirs}
+
+
+def _check_git():
+    summary = worktree_summary()
+    if not summary.get("inside"):
+        reason = summary.get("error")
+        if reason:
+            return (FAIL if "not found" in reason else WARN, reason)
+        return (WARN, "not a git repository — /commit, checkpoints and rollback unavailable")
+    tracked, untracked = summary["tracked"], summary["untracked"]
+    if not tracked and not untracked:
+        return (OK, "repository detected, clean")
+    text = f"repository detected, {tracked} tracked change(s), {untracked} untracked"
+    if summary["dirs"]:
+        names = ", ".join(summary["dirs"][:5])
+        text += f"; untracked dirs: {names} — check .gitignore if that is data"
+    return (OK, text)
 
 
 def _check_extensions():

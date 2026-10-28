@@ -701,6 +701,73 @@ def _infer_tool_context(messages: List[Dict], tool_msg_index: int) -> tuple:
     return "unknown", ""
 
 
+#: Where a result that is aged out of the history is kept, so it can still be read.
+#:
+#: The stub used to end with "вывод не сохранён — перезапусти команду", which is the
+#: worst of both worlds: the text was already in hand and then thrown away, and the
+#: only way back was to run the command again — a whole round trip for a quote, and a
+#: chance for the world to have changed in between. Now the full text goes to disk and
+#: the stub carries its path.
+AGED_OUTPUT_SUBDIR = ("tool-output",)
+AGED_OUTPUT_KEEP = 200                                    # files
+AGED_OUTPUT_MAX_BYTES = 50 * 1024 * 1024                  # 50 MB overall
+AGED_OUTPUT_MIN_CHARS = 500        # below this the stub itself says almost everything
+
+
+def _aged_output_dir():
+    from pathlib import Path
+    override = os.environ.get("ARGENT_TOOL_OUTPUT_DIR")
+    if override:
+        return Path(override)
+    from argent.project_paths import project_root_or_cwd
+    return project_root_or_cwd().joinpath(".argent", *AGED_OUTPUT_SUBDIR)
+
+
+def _prune_aged_output(directory) -> None:
+    """Keep the folder bounded: newest KEEP files, and at most MAX_BYTES in total."""
+    try:
+        files = sorted((p for p in directory.iterdir() if p.is_file()),
+                       key=lambda p: p.stat().st_mtime, reverse=True)
+        total, keep = 0, 0
+        for path in files:
+            size = path.stat().st_size
+            keep += 1
+            total += size
+            if keep > AGED_OUTPUT_KEEP or total > AGED_OUTPUT_MAX_BYTES:
+                path.unlink(missing_ok=True)
+    except Exception:
+        pass
+
+
+def _spool_aged_output(tool_name: str, content: str) -> Optional[str]:
+    """Write the full text where a later `read_file` can reach it.
+
+    Returns a path usable from the project root, or None. Never raises: failing to
+    keep a pointer costs one re-read, raising here would cost the whole turn.
+    """
+    if len(content) < AGED_OUTPUT_MIN_CHARS:
+        return None
+    try:
+        import uuid
+        directory = _aged_output_dir()
+        directory.mkdir(parents=True, exist_ok=True)
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+        safe_tool = re.sub(r"[^\w.-]", "_", tool_name or "tool")[:40]
+        path = directory / f"{stamp}-{uuid.uuid4().hex[:6]}-{safe_tool}.log"
+        path.write_text(content, encoding="utf-8")
+        _prune_aged_output(directory)
+        # A path the model can paste into read_file: relative to where it works, and
+        # absolute when the folder was pointed somewhere else (tests, another drive).
+        try:
+            from pathlib import Path
+            return path.resolve().relative_to(Path.cwd().resolve()).as_posix()
+        except ValueError:
+            return path.as_posix()
+    except Exception as e:
+        log.info("could not save an aged tool result: %s", e)
+        return None
+
+
 def _build_aged_stub(tool_name: str, key_arg: str, content: str) -> str:
     """Build a compact metadata replacement for an old tool result.
 
@@ -714,6 +781,15 @@ def _build_aged_stub(tool_name: str, key_arg: str, content: str) -> str:
     char_count = len(content)
     line_count = content.count("\n") + 1
     body = [l for l in content.strip().split("\n") if l.strip()]
+    saved = _spool_aged_output(tool_name, content)
+    if saved:
+        where = f"Целиком — в '{saved}' (read_file с диапазоном строк)."
+    elif tool_name == "read_file":
+        where = "Полный текст — перечитай файл."
+    elif tool_name == "grep_search":
+        where = "Перезапусти, если нужен весь список."
+    else:
+        where = "Вывод не сохранён — перезапусти команду, если нужна точная цитата."
 
     def head(count: int = 1) -> str:
         return " / ".join(l.strip()[:110] for l in body[:count])
@@ -724,11 +800,11 @@ def _build_aged_stub(tool_name: str, key_arg: str, content: str) -> str:
     if tool_name == "read_file":
         return (f"[aged: read_file({key_arg}) — {line_count} строк, "
                 f"{char_count} символов. Начало: {head()} … Хвост: {tail()}. "
-                f"Полный текст — перечитай файл.]")
+                f"{where}")
     elif tool_name == "grep_search":
         match_count = content.count("\n")
         return (f"[aged: grep_search({key_arg}) — {match_count} совпадений. "
-                f"Первое: {head()}. Перезапусти, если нужен весь список.]")
+                f"Первое: {head()}. {where}")
     elif tool_name == "run_command":
         exit_info = ""
         for line in body:
@@ -738,8 +814,7 @@ def _build_aged_stub(tool_name: str, key_arg: str, content: str) -> str:
         # The tail is what carries a verdict: "2 failed, 15 passed" lives in the last
         # lines, and that is exactly the thing a model has to be able to quote.
         return (f"[aged: run_command({key_arg}) — {line_count} строк{exit_info}. "
-                f"Начало: {head()}. Хвост: {tail(2)}. "
-                f"Вывод не сохранён — перезапусти команду, если нужна точная цитата.]")
+                f"Начало: {head()}. Хвост: {tail(2)}. {where}")
     elif tool_name in ("write_file", "replace_in_file"):
         first_line = body[0][:150] if body else ""
         return f"[aged: {tool_name}({key_arg}) — {first_line}]"

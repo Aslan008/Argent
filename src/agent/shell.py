@@ -423,7 +423,13 @@ def build_command_argv(command: str, shell_kind: str):
             stripped = cmd.lstrip()
             if stripped.startswith(('"', "'")):
                 cmd = "& " + cmd
-        wrapped = "[Console]::OutputEncoding=[Text.Encoding]::UTF8; " + cmd
+        # Two encodings are needed, not one. OutputEncoding fixes what we READ from the
+        # child. Get-Content is the other direction: on PowerShell 5.1 it decodes a file
+        # as ANSI unless told otherwise, so a UTF-8 file with Cyrillic came back as
+        # mojibake (`вЂ”`) and the agent could not trust its own console output.
+        # Defaults lose to an explicit -Encoding, so a command that wants ANSI can say so.
+        wrapped = ("[Console]::OutputEncoding=[Text.Encoding]::UTF8; "
+                   "$PSDefaultParameterValues['*:Encoding']='utf8'; " + cmd)
         return ["powershell", "-NoProfile", "-NonInteractive", "-Command", wrapped]
     return f'cmd /s /c "{command}"'
 

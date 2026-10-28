@@ -51,6 +51,8 @@ KEY_PATTERNS = [
 # Files whose job is to hold fake credentials, and this scanner.
 ALLOWED_FILES = {
     "tests/test_secret_redactor.py",
+    # A redaction fixture: the fake key here is the input that must NOT survive.
+    "tests/replay/test_schema.py",
     "src/agent/secret_redactor.py",
     "scripts/repo_hygiene.py",
     "tests/test_repo_hygiene.py",

@@ -18,7 +18,7 @@ _Пусто._
 
 ### 1. `cargo test` в `crates/argent-tui` падает на `test_bridge_e2e` вне PATH базового Python
 - **Дата:** 2026-10-26
-- **Симптом:** `process didn't exit successfully ... (exit code: 0xc0000135, STATUS_DLL_NOT_FOUND)`. С добавленным в PATH `C:\Users\mshat\AppData\Local\Programs\Python\Python311` тест проходит.
+- **Симптом:** `process didn't exit successfully ... (exit code: 0xc0000135, STATUS_DLL_NOT_FOUND)`. С добавленным в PATH `%LOCALAPPDATA%\Programs\Python\Python311` тест проходит.
 - **Причина:** тест-бинарь линкуется с libpython, а venv-путь `python3.dll` не содержит.
 - **Решение:** либо в `tests/test_bridge_e2e.rs` пропускать тест с внятным сообщением, если DLL не найдена, либо добавить в `crates/argent-tui/build.rs`/README строку про PATH. Пока записано как известное ограничение окружения.
 - **Разбор (2026-10-27):** пропуск внутри теста не поможет — падение происходит **при загрузке тест-бинаря**, до любого тест-кода: бинарь линкуется с `libpython`, а в venv нет `python3.dll`. `skip_or_fail` в тесте уже есть и работает для случая «мост не запускается»; это шаг раньше.

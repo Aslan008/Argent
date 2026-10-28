@@ -381,7 +381,7 @@ class AgentSession:
             play_sound("prompt")
         except Exception:
             pass
-        from argent.approval import approval_prompt_spec
+        from argent.approval import approval_prompt_spec, current_scope_note
         spec = approval_prompt_spec(grant_key, bool(destructive))
         self._emit({
             "type": "approval_request",
@@ -389,6 +389,10 @@ class AgentSession:
             "action": action,
             "destructive": bool(destructive),
             "grant_key": grant_key,
+            # How much a destructive command would destroy, when it can be measured
+            # ("уничтожит НЕЗАКОММИЧЕННОЕ: 6 изменённых файлов"). Kept out of `action`
+            # on purpose: the automation runner reads the command back out of it.
+            "detail": current_scope_note(),
             # The terminal's own wording, so a frontend draws the same question.
             "question": spec["question"],
             "choices": spec["choices"],

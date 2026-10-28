@@ -138,6 +138,31 @@ def _telegram() -> Row:
     return ("Telegram", OK, f"вкл · режим {config.get_telegram_mode()}")
 
 
+def _worktree() -> Row:
+    """Uncommitted work in the tree the agent is about to touch.
+
+    This session I spent a round of discovery finding out — by hand — that the tree
+    held hundreds of uncommitted changes, a package move among them. One line here
+    answers that before the first command.
+    """
+    from argent.doctor import worktree_summary
+    summary = worktree_summary()
+    if not summary.get("inside"):
+        return ("Рабочее дерево", OFF, summary.get("error") or "не git-репозиторий")
+    tracked, untracked = summary["tracked"], summary["untracked"]
+    if not tracked and not untracked:
+        return ("Рабочее дерево", OK, "чисто, всё закоммичено")
+    text = f"{tracked} изменено, {untracked} не отслеживается"
+    if summary["dirs"]:
+        names = ", ".join(summary["dirs"][:4])
+        text += f" · среди них каталоги: {names}"
+    # A few uncommitted files are normal while working. Hundreds mean somebody inherited
+    # a tree where a refactor — or a data folder — is sitting uncommitted, and that is
+    # worth knowing before the first command, not after a surprise commit.
+    level = WARN if (tracked + untracked) > 200 else OK
+    return ("Рабочее дерево", level, text)
+
+
 def _waiting() -> Row:
     """Background commands and waits that are still alive."""
     from src.agent import watches
@@ -175,8 +200,8 @@ def _browser() -> Row:
 
 
 SECTIONS: List[Callable[[], Row]] = [
-    _model, _local_queue, _ultracode, _rooms, _automations, _memory, _desktop, _telegram,
-    _waiting, _todos, _mcp, _browser,
+    _model, _worktree, _local_queue, _ultracode, _rooms, _automations, _memory, _desktop,
+    _telegram, _waiting, _todos, _mcp, _browser,
 ]
 
 
