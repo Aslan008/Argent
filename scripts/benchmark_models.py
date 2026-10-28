@@ -24,7 +24,7 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from providers import create_provider, ProviderError
+from argent.providers import create_provider, ProviderError
 
 
 READ_FILE_TOOL = {
@@ -166,7 +166,7 @@ def main():
         provider_name = args[i + 1]
         del args[i:i + 2]
 
-    import config
+    import argent.config as config
     models = args or [config.get_current_model()]
     provider = create_provider(provider_name)
 

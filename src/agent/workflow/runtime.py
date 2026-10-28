@@ -12,7 +12,7 @@ import threading
 from pathlib import Path
 from typing import List, Optional, Tuple
 
-from logger import get_logger
+from argent.logger import get_logger
 from src.agent.workflow import advisor, calibration, control, report, roles, store
 from src.agent.workflow.engine import Budgets, Engine, Job, Outcome, Ports
 from src.agent.workflow.plan import Plan, Step
@@ -22,6 +22,8 @@ log = get_logger("ultracode")
 _state_lock = threading.Lock()
 _enabled = False
 _active: Optional[store.RunState] = None
+# The engine of the run that is going on: the handle a step discovered mid-flight needs.
+_engine: Optional[object] = None
 
 
 # ── the session switch ──────────────────────────────────────────────────────────
@@ -114,6 +116,10 @@ class StepBoard:
             elif step.status == RUNNING:
                 status = IN_PROGRESS
                 text += f" — попытка {step.attempts}" if step.attempts > 1 else " — идёт"
+                # What the worker is doing right now, from its own log: a step that says
+                # only "running" is a black box for as long as it thinks.
+                if step.progress:
+                    text += f" · {step.progress}"
                 note = self._brief()
                 if note:
                     text += f" ({note})"
@@ -175,6 +181,10 @@ class SubagentJob(Job):
     def stop(self) -> None:
         self._manager.stop(self.run)
 
+    def progress(self) -> str:
+        """The worker's own newest log line: what it is doing right now."""
+        return (self.run.log_tail or "").strip().splitlines()[-1] if (self.run.log_tail or "").strip() else ""
+
 
 def _in_git_repo(cwd: str) -> bool:
     try:
@@ -192,12 +202,26 @@ _EXIT = re.compile(r"^Exit code:\s*(-?\d+)", re.M)
 
 def run_check(command: str, cwd: str) -> Tuple[bool, str]:
     """A step's check through the same gate as every command the model runs (risk-gate, approval, redaction)."""
-    from tools.command_ops import run_command
+    from argent.tools.command_ops import run_command
     output = run_command(command, cwd=cwd or None, timeout=240)
     if output.startswith("Execution aborted") or output.startswith("Command BLOCKED"):
         return False, output
     m = _EXIT.search(output)
     return (m is not None and int(m.group(1)) == 0), output
+
+
+def _targets_hint() -> str:
+    """What the planner may hand a step: models and thinking levels that exist now.
+
+    Without this the planner can only guess, and a guessed model is a step that
+    fails on a 404 in the middle of an unattended run.
+    """
+    try:
+        from src.agent.subagents import available_targets
+        return available_targets()
+    except Exception as e:                          # never block a run on a nice-to-have
+        log.debug("target list unavailable: %s", e)
+        return ""
 
 
 def _repo_hint(cwd: str) -> str:
@@ -225,9 +249,31 @@ def _repo_hint(cwd: str) -> str:
     return "\n".join(lines)
 
 
+def _stream_worker(run, line: str) -> None:
+    """A worker's own dialogue, line by line, on the supervisor's screen.
+
+    One line per thing it says: the step panel can only say "идёт", and a person watching
+    a run needs to see a worker that is stuck reading the wrong file, not discover it from
+    a report twenty minutes later.
+    """
+    from rich.markup import escape
+
+    text = " ".join((line or "").split())
+    if not text or text.startswith("ARGENT_SUBAGENT_RESULT"):
+        return
+    _say(f"[dim]{escape(run.role or 'worker')} #{run.id} › {escape(text[:300])}[/dim]")
+
+
+def _transcript(state: store.RunState, step: Step) -> Path:
+    """Where a step's worker keeps its conversation, so the next try can continue it."""
+    folder = Path(state.cwd) / ".argent" / "workflows"
+    folder.mkdir(parents=True, exist_ok=True)
+    return folder / f"{state.id}-{step.id}.json"
+
+
 def _say(text: str) -> None:
     try:
-        from ui import print_system
+        from argent.ui import print_system
         print_system(text)
     except Exception:
         log.info("%s", text)
@@ -237,8 +283,8 @@ say = _say
 
 
 def build_ports(state: store.RunState, board: Optional[StepBoard] = None) -> Ports:
-    import config
-    from providers import create_provider
+    import argent.config as config
+    from argent.providers import create_provider
 
     main_provider, main_model = config.get_provider(), config.get_current_model()
     target = advisor.resolve(main_provider, main_model)
@@ -246,7 +292,7 @@ def build_ports(state: store.RunState, board: Optional[StepBoard] = None) -> Por
                                  cloud=target.cloud if not target.configured else False, leaves_pc=False)
     note = ""
     if target.leaves_pc and not config.is_advisor_cloud_consented():
-        import approval
+        import argent.approval as approval
         asked = approval.request_approval(
             f"Ultracode: советник {target.label} — облачная модель. План и патчи проекта (без секретов) уйдут "
             f"в облако. Разрешить на этот запуск? (навсегда: /advisor consent on)",
@@ -268,11 +314,18 @@ def build_ports(state: store.RunState, board: Optional[StepBoard] = None) -> Por
     def start(step: Step, task: str) -> Job:
         from src.agent.subagents import MANAGER
         isolation = "worktree" if (step.writes and _in_git_repo(state.cwd)) else "none"
-        run = MANAGER.spawn(step.role, task, isolation=isolation, cwd=Path(state.cwd))
+        # A retry continues the worker that already worked on this step: its conversation
+        # is loaded back, so it does not re-read what it already read or redo what it
+        # already did. The brief still carries what failed, because a worker that only
+        # remembers is not told what went wrong.
+        resume = _transcript(state, step) if step.attempts > 1 else None
+        run = MANAGER.spawn(step.role, task, isolation=isolation, cwd=Path(state.cwd),
+                            resume_from=resume,
+                            model=step.model, provider=step.provider, thinking=step.thinking)
         return SubagentJob(run)
 
     def critic(step: Step, material: str) -> Tuple[str, str]:
-        from agent import run_plan_critique
+        from argent.agent import run_plan_critique
         from src.agent.critic import parse_critic_verdict, sanitize_and_truncate_diff
         review = run_plan_critique(sanitize_and_truncate_diff(material, 30000), goal=state.goal,
                                    what=f"patch for step {step.id} of a larger job")
@@ -281,17 +334,63 @@ def build_ports(state: store.RunState, board: Optional[StepBoard] = None) -> Por
     def advise(kind: str, goal: str, body: str):
         return advisor.consult(kind, goal, body, target, fallback=main_target if target.label != main_target.label else None)
 
+    def verify(task: str) -> Tuple[bool, str]:
+        """A second agent carries the instruction out and answers PASS or FAIL.
+
+        It runs in the real tree with read-and-run tools only: the point is to see the
+        result the way a person would, not to read the diff again. A verifier that
+        crashes or times out is treated as absent — a broken witness must not fail work
+        that its mechanical checks have already accepted.
+        """
+        from src.agent.subagents import MANAGER
+
+        run = MANAGER.spawn("reviewer", task, isolation="none", cwd=Path(state.cwd))
+        if not MANAGER.wait(run, timeout=900):
+            MANAGER.stop(run)
+            _say("[yellow]проверяющий не уложился в 15 минут — сужу по механическим проверкам"
+                 "[/yellow]")
+            MANAGER.discard(run)
+            return True, ""
+        report = run.report or ""
+        MANAGER.discard(run)
+        verdict = roles.parse_verifier_verdict(report)
+        if verdict == "FAIL":
+            return False, report
+        if verdict == "PASS":
+            return True, report
+        _say("[yellow]проверяющий не назвал вердикт — считаю, что проверка не удалась, но шаг не валю"
+             "[/yellow]")
+        return True, ""
+
     def confirm(plan_obj: Plan, level: int) -> bool:
-        import approval
+        import argent.approval as approval
         _say(f"[bold]План Ultracode[/bold] (уровень {level} — {calibration.LEVEL_NAMES.get(level, '?')}):\n"
              f"{plan_obj.outline()}")
         return approval.request_approval(
             f"Ultracode: выполнить этот план ({len(plan_obj.steps)} шаг., уровень {level})?",
             destructive=False, grant_key=None)
 
-    return Ports(plan=plan, start=start, check=run_check, critic=critic, advise=advise, confirm=confirm,
+    def watch_start(command: str) -> str:
+        from argent.tools import command_ops as ops
+        return str(ops.start_background_command(command, cwd=state.cwd) or "")
+
+    def watch_tail(pid: str) -> str:
+        from argent.tools import command_ops as ops
+        return ops.background_output(pid) or ""
+
+    def watch_stop(pid: str) -> None:
+        from argent.tools import command_ops as ops
+        try:
+            ops.stop_background_process(pid)
+        except Exception as e:                     # an already-finished watcher is not an error
+            log.debug("stopping watcher %s: %s", pid, e)
+
+    return Ports(plan=plan, start=start, check=run_check, critic=critic, verify=verify, advise=advise,
+                 confirm=confirm,
                  say=lambda t: _say(f"[dim]{t}[/dim]"), stop_requested=control.stop_requested,
                  repo_hint=lambda: _repo_hint(state.cwd),
+                 targets=_targets_hint,
+                 watch_start=watch_start, watch_tail=watch_tail, watch_stop=watch_stop,
                  progress=board.update if board is not None else (lambda plan: None))
 
 
@@ -301,14 +400,14 @@ _BUDGET_STEPS = {3: 12, 2: 8, 1: 6}
 
 
 def _budgets(level: int, profile: calibration.Profile) -> Budgets:
-    import config
+    import argent.config as config
     return Budgets(max_steps=_BUDGET_STEPS.get(level, 6), max_attempts=3,
                    max_minutes=float(config.get_ultracode_max_minutes()),
                    max_advisor_calls=6, parallelism=calibration.parallelism_for(level, profile))
 
 
 def _decide_level() -> Tuple[int, str, calibration.Profile]:
-    import config
+    import argent.config as config
     provider, model = config.get_provider(), config.get_current_model()
     profile = calibration.calibrate(provider, model)
     level, why = calibration.choose_level(profile, config.get_ultracode_level())
@@ -322,7 +421,7 @@ class _ServerPriority:
     def __enter__(self):
         self.lowered: List[int] = []
         try:
-            import config
+            import argent.config as config
             from src.agent.local_backend import TUNER, classify
             backend = classify(config.get_provider(), config.get_current_model())
             if backend.local and not config.is_lower_server_priority_enabled():
@@ -367,20 +466,30 @@ def _run(state: store.RunState, level: int, profile: calibration.Profile) -> str
     board = StepBoard()
     ports = build_ports(state, board)
     budgets = _budgets(level, profile)
-    global _active
+    global _active, _engine
     with _state_lock:
         _active = state
+    # While a workflow runs, its workers' dialogue is shown line by line: the hook is set
+    # here and put back afterwards, so an ordinary sub-agent started later is quiet again.
+    from src.agent.subagents import MANAGER
+    previous_hook = MANAGER.on_line
+    MANAGER.on_line = _stream_worker
     final = None
     try:
         with _ServerPriority():
             if level == 1:
                 return _plan_only(state, ports, budgets)
-            final = Engine(state, ports, budgets).run()
+            engine = Engine(state, ports, budgets)
+            with _state_lock:
+                _engine = engine
+            final = engine.run()
             text = report.render(final)
             return text if (not final.result or final.result in text) else final.result + "\n\n" + text
     finally:
+        MANAGER.on_line = previous_hook
         with _state_lock:
             _active = None
+            _engine = None
         board.close(done=final is not None and final.status == "done")
 
 
@@ -405,6 +514,34 @@ def start(goal: str) -> str:
     _say(f"[bold]Ultracode[/bold]: уровень {level} — {calibration.LEVEL_NAMES[level]} ({why})")
     store.save(state)
     return _run(state, level, profile)
+
+
+def add_step(goal: str, role: str = "coder", title: str = "", files: str = "",
+             checks: str = "", verify: str = "") -> str:
+    """A sub-task found while a workflow runs: it joins the plan and starts when it can.
+
+    This is the parallelism of the plan made usable mid-flight: a step added here does not
+    wait for the run to end and be re-planned, it is picked up by the loop on its next
+    round, next to whatever else is running.
+    """
+    with _state_lock:
+        engine = _engine
+    if engine is None:
+        return ("Ultracode сейчас не выполняется — добавлять шаг некуда. Начните его обычным способом: "
+                "ultracode(action=\"start\", goal=...)")
+    text = (goal or "").strip()
+    if not text:
+        return "Error: add_step needs `goal` — what the extra step must achieve."
+
+    def split(value: str) -> List[str]:
+        return [part.strip() for part in str(value or "").replace("\n", ";").split(";") if part.strip()]
+
+    new_id = engine.add_step(text, role=role, title=title,
+                             files=tuple(split(files)), checks=tuple(split(checks)),
+                             verify=tuple(split(verify)))
+    if not new_id:
+        return "Шаг не добавлен: прогон уже завершается."
+    return f"Шаг {new_id} добавлен в текущий прогон и начнётся, когда освободится место."
 
 
 def resume(run_id: str = "") -> str:

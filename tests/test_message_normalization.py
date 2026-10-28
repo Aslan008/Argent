@@ -1,6 +1,6 @@
 import json
 
-from providers import OpenAICompatibleProvider, ZAIProvider
+from argent.providers import OpenAICompatibleProvider, ZAIProvider
 
 
 norm = OpenAICompatibleProvider._normalize_outgoing_messages

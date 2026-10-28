@@ -29,7 +29,7 @@ import threading
 import time
 import urllib.parse
 
-from logger import get_logger
+from argent.logger import get_logger
 
 log = get_logger("research")
 
@@ -224,7 +224,7 @@ def _brave_search(query: str, limit: int = 5) -> list:
     Off unless an API key is configured, so the keyless zero-setup default is
     untouched; when the quota runs out the other engines simply carry the query.
     """
-    from config import get_brave_api_key
+    from argent.config import get_brave_api_key
     key = get_brave_api_key()
     if not key:
         return []
@@ -285,7 +285,7 @@ def _ollama_search(query: str, limit: int = 5) -> list:
     Note it is a CLOUD service even when the model is local: the query leaves
     the machine. Off unless a key is configured, so the keyless default stands.
     """
-    from config import get_ollama_api_key
+    from argent.config import get_ollama_api_key
     key = get_ollama_api_key()
     if not key:
         return []
@@ -351,7 +351,7 @@ def active_engines() -> list:
     """The engine set for this run: respect user-configured single engine if selected,
     otherwise return the keyless baseline plus any configured API-key engines (Brave, Ollama)."""
     try:
-        from config import get_search_engine
+        from argent.config import get_search_engine
         selected = (get_search_engine() or "all").lower().strip()
         if selected in ENGINE_MAP:
             return [ENGINE_MAP[selected]]
@@ -360,7 +360,7 @@ def active_engines() -> list:
 
     engines = list(DEFAULT_ENGINES)
     try:
-        from config import get_brave_api_key, get_ollama_api_key
+        from argent.config import get_brave_api_key, get_ollama_api_key
         # Independent indexes go first: they carry the most that the keyless
         # baseline cannot reach, and order decides who survives the result cap.
         if get_ollama_api_key():

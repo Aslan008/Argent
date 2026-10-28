@@ -7,7 +7,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-import config
+import argent.config as config
 from src.memory import dream, hub
 from src.memory.store import (INDEX_MAX_LINES, MAX_BODY_CHARS, MemoryRefused, NodeStore, normalize_name, parse)
 
@@ -186,7 +186,7 @@ class TestHub:
 
 class TestTool:
     def call(self, **kw):
-        from tools.memory_tools import memory
+        from argent.tools.memory_tools import memory
         return memory(**kw)
 
     def test_write_read_search_forget(self, mem):
@@ -218,10 +218,10 @@ class TestTool:
         assert "switched off" in self.call(action="list")
 
     def test_registered_everywhere(self):
-        from tools.lazy_registry import DEFAULT_TOOL_LOADERS
-        from tools.schemas import TOOL_SCHEMAS
+        from argent.tools.lazy_registry import DEFAULT_TOOL_LOADERS
+        from argent.tools.schemas import TOOL_SCHEMAS
         from src.agent.subagents import FORBIDDEN_TOOLS
-        assert DEFAULT_TOOL_LOADERS["memory"] == ("tools.memory_tools", "memory")
+        assert DEFAULT_TOOL_LOADERS["memory"] == ("argent.tools.memory_tools", "memory")
         names = [t["function"]["name"] for t in TOOL_SCHEMAS]
         assert names.count("memory") == 1
         assert "memory" in FORBIDDEN_TOOLS
@@ -244,7 +244,7 @@ class TestTool:
         assert plan_mode.hides("memory") is True
 
     def test_small_models_are_offered_it(self):
-        import tool_profiles
+        import argent.tool_profiles as tool_profiles
         assert "memory" in tool_profiles.core_tools_now()
 
 
@@ -252,7 +252,7 @@ class TestTool:
 
 class TestPrompt:
     def test_index_reaches_the_prompt(self, mem):
-        from agent import ArgentAgent
+        from argent.agent import ArgentAgent
         mem[0].put("deploy-steps", "how a release is made", "run make release", source="agent")
         agent = ArgentAgent.__new__(ArgentAgent)
         agent.model_name = "qwen3:8b"
@@ -343,7 +343,7 @@ class TestAnswer:
 
 def _sessions(monkeypatch, *items):
     """items: (id, saved_at, cwd, [messages])"""
-    import session
+    import argent.session as session
     metas = [{"id": i, "saved_at": s, "cwd": c} for i, s, c, _ in items]
     by_id = {i: {"messages": m} for i, _, _, m in items}
     monkeypatch.setattr(session, "list_sessions", lambda query=None: list(metas))
@@ -469,7 +469,7 @@ class TestRun:
                 seen["priority"] = governor.current_priority()
                 return "{}"
 
-        import providers
+        import argent.providers as providers
         monkeypatch.setattr(providers, "create_provider", lambda name: Provider())
         dream.default_ask("ollama", "m")([{"role": "user", "content": "x"}])
         assert seen["priority"] == governor.P_BACKGROUND

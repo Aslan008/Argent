@@ -8,7 +8,7 @@ encodability invariant.
 
 import pytest
 
-from text_safety import (
+from argent.text_safety import (
     _HIGH,
     _LOW,
     REPLACEMENT,

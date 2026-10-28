@@ -21,7 +21,7 @@ try:
 except Exception:
     pass
 
-from src.leeth.dispatcher import dispatcher  # noqa: E402
+from src.leeth.dispatcher import dispatcher  
 
 QUERIES = [
     # A. conversational (expect NO_TOOL / delegation)

@@ -9,7 +9,7 @@ set_policy, clear_session_grants) that the interactive flow depends on.
 
 import pytest
 
-import approval
+import argent.approval as approval
 
 
 # ---------------------------------------------------------------------------

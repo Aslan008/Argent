@@ -11,7 +11,7 @@ try:
 except Exception:
     pass
 
-from src.leeth.dispatcher import dispatcher  # noqa: E402
+from src.leeth.dispatcher import dispatcher  
 
 QUERIES = [
     "посчитай 128 * 64",                        # expect calculate proposal (low conf) -> partial

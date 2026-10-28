@@ -13,7 +13,7 @@ import random
 import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional
-from logger import get_logger
+from argent.logger import get_logger
 
 logger = get_logger("dataset_builder")
 
@@ -165,7 +165,7 @@ class DatasetBuilder:
             return "grep_search"
         if tool_name in ("search_files", "filter_new_items"):
             return "search_files"
-        if tool_name in ("run_command", "run_admin_command", "read_background_command"):
+        if tool_name in ("run_command", "read_background_command"):
             return "run_command"
         if tool_name in ("list_directory", "list_desktop_windows"):
             return "list_directory"

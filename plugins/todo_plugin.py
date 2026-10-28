@@ -1,6 +1,6 @@
 import os
 from rich.table import Table
-from ui import console
+from argent.ui import console
 
 def command_todo():
     # Получаем текущую директорию проекта

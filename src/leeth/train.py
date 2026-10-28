@@ -22,7 +22,7 @@ from torch.utils.data import DataLoader, Dataset
 from src.leeth.dataset_generator import LeethDatasetGenerator, LeethSample
 from src.leeth.model import LeethConfig, LeethModel
 from src.leeth.tokenizer import LeethTokenizer, SPACE_CHAR
-from logger import get_logger
+from argent.logger import get_logger
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = get_logger("leeth_train")

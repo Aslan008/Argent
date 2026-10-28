@@ -12,9 +12,9 @@ from unittest.mock import MagicMock
 
 import pytest
 
-import agent as agent_module
-import config
-from agent import ArgentAgent, MAX_TRUNCATE_CONTINUES
+import argent.agent as agent_module
+import argent.config as config
+from argent.agent import ArgentAgent, MAX_TRUNCATE_CONTINUES
 
 
 class FakeProvider:

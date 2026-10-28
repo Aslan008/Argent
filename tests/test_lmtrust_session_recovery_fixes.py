@@ -15,19 +15,19 @@ from pathlib import Path
 import pytest
 from unittest.mock import MagicMock, patch
 
-import agent as agent_mod
-from agent import ArgentAgent
-import main as main_mod
-from main import restore_session, offer_previous_context
-import session as session_mod
-from session import (
+import argent.agent as agent_mod
+from argent.agent import ArgentAgent
+import argent.main as main_mod
+from argent.main import restore_session, offer_previous_context
+import argent.session as session_mod
+from argent.session import (
     save_session,
     load_session,
     get_last_session,
     _make_serializable,
     _first_user_message,
 )
-from memory_manager import memory
+from argent.memory_manager import memory
 
 
 @pytest.fixture(autouse=True)
@@ -37,8 +37,8 @@ def _isolate_sessions_dir(tmp_path, monkeypatch):
     index_path = sess_dir / "index.json"
     monkeypatch.setattr(session_mod, "SESSIONS_DIR", sess_dir)
     monkeypatch.setattr(session_mod, "INDEX_PATH", index_path)
-    monkeypatch.setattr("ui.print_system", lambda *a, **k: None)
-    monkeypatch.setattr("ui.print_error", lambda *a, **k: None)
+    monkeypatch.setattr("argent.ui.print_system", lambda *a, **k: None)
+    monkeypatch.setattr("argent.ui.print_error", lambda *a, **k: None)
     yield
 
 

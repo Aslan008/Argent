@@ -10,8 +10,8 @@ import pytest
 from src.agent.mcp_prompt import (
     FULL_LIST_LIMIT, build_mcp_section, model_access_warning,
 )
-from tools import misc_tools
-from tools.misc_tools import list_mcp_tools
+from argent.tools import misc_tools
+from argent.tools.misc_tools import list_mcp_tools
 
 
 class _FakeClient:
@@ -51,21 +51,23 @@ class TestSection:
         out = build_mcp_section([{"name": "s"}], client=client)
         assert "list_mcp_tools" in out and "call_mcp_tool" in out
 
-    def test_an_unreachable_server_says_so(self):
-        """Otherwise the model blames itself for the failure and retries."""
+    def test_an_unreachable_server_is_dropped_from_the_prompt(self):
+        """A dead server cannot be called, so its line only cost every request.
+        It stays visible in `list_mcp_tools` and in `/mcp`, where a person looks."""
         client = _FakeClient({"dead": [{"error": "connection refused"}]})
         out = build_mcp_section([{"name": "dead"}], client=client)
-        assert "UNREACHABLE" in out and "connection refused" in out
-        assert "Do not call it" in out
+        assert out == ""
 
-    def test_a_raising_client_does_not_break_the_prompt(self):
+    def test_a_raising_client_drops_the_server_instead_of_breaking_the_prompt(self):
         client = _FakeClient({"boom": RuntimeError("pipe closed")})
-        out = build_mcp_section([{"name": "boom"}], client=client)
-        assert "UNREACHABLE" in out and "pipe closed" in out
+        assert build_mcp_section([{"name": "boom"}], client=client) == ""
 
-    def test_a_connected_but_empty_server(self):
+    def test_a_connected_but_empty_server_is_named_as_such(self):
+        """«Up, offers nothing» is not the same problem as «down», and calling it
+        will not fix it — the server itself has to be looked at."""
         out = build_mcp_section([{"name": "s"}], client=_FakeClient({"s": []}))
-        assert "no tools" in out
+        assert "NO TOOLS" in out
+        assert "Check the server" in out
 
     def test_names_are_sorted_so_the_prefix_cache_survives(self):
         """The section is the prefix of every request; reordering it between
@@ -83,19 +85,19 @@ class TestSection:
 
 class TestAccessWarning:
     def test_silence_when_nothing_is_configured(self, monkeypatch):
-        monkeypatch.setattr("config.get_mcp_servers", lambda: [])
+        monkeypatch.setattr("argent.config.get_mcp_servers", lambda: [])
         assert model_access_warning() is None
 
     def test_configured_and_reachable_is_silent(self, monkeypatch):
-        monkeypatch.setattr("config.get_mcp_servers", lambda: [{"name": "unity"}])
-        monkeypatch.setattr("config.get_disabled_tools", lambda: [])
+        monkeypatch.setattr("argent.config.get_mcp_servers", lambda: [{"name": "unity"}])
+        monkeypatch.setattr("argent.config.get_disabled_tools", lambda: [])
         assert model_access_warning() is None
 
     def test_a_disabled_call_mcp_tool_is_named_out_loud(self, monkeypatch):
         """'Server RUNNING, 140 tools' and 'the model can use it' are separate
         switches that both read as ON. This cost a real debugging session."""
-        monkeypatch.setattr("config.get_mcp_servers", lambda: [{"name": "unity"}])
-        monkeypatch.setattr("config.get_disabled_tools", lambda: ["call_mcp_tool"])
+        monkeypatch.setattr("argent.config.get_mcp_servers", lambda: [{"name": "unity"}])
+        monkeypatch.setattr("argent.config.get_disabled_tools", lambda: ["call_mcp_tool"])
         warning = model_access_warning()
         assert warning and "call_mcp_tool" in warning and "/tools" in warning
 
@@ -103,7 +105,7 @@ class TestAccessWarning:
 class TestListTool:
     @pytest.fixture(autouse=True)
     def servers(self, monkeypatch):
-        monkeypatch.setattr("config.get_mcp_servers",
+        monkeypatch.setattr("argent.config.get_mcp_servers",
                             lambda: [{"name": "unity", "type": "stdio"}])
         names = [f"tool_{i:03d}" for i in range(140)] + ["bake_navmesh"]
         monkeypatch.setattr(misc_tools, "mcp_client",
@@ -133,7 +135,7 @@ class TestListTool:
         assert out.startswith("Error:") and "unity" in out
 
     def test_no_servers_configured(self, monkeypatch):
-        monkeypatch.setattr("config.get_mcp_servers", lambda: [])
+        monkeypatch.setattr("argent.config.get_mcp_servers", lambda: [])
         assert "No MCP servers are configured" in list_mcp_tools()
 
     def test_an_unreachable_server_reports_the_reason(self, monkeypatch):
@@ -147,13 +149,13 @@ class TestWeakModelProfile:
         """A fixed core set cannot say 'useful here, dead weight there'. Without
         this, a weak model silently loses its only door to a configured Unity
         editor — the exact failure this change was chasing."""
-        from tool_profiles import core_tools_now, slim_tools_for_category
+        from argent.tool_profiles import core_tools_now, slim_tools_for_category
 
-        monkeypatch.setattr("config.get_mcp_servers", lambda: [])
+        monkeypatch.setattr("argent.config.get_mcp_servers", lambda: [])
         assert "call_mcp_tool" not in core_tools_now()
         assert slim_tools_for_category(["call_mcp_tool", "read_file"], "tiny") == ["read_file"]
 
-        monkeypatch.setattr("config.get_mcp_servers", lambda: [{"name": "unity"}])
+        monkeypatch.setattr("argent.config.get_mcp_servers", lambda: [{"name": "unity"}])
         assert {"call_mcp_tool", "list_mcp_tools"} <= core_tools_now()
         assert "call_mcp_tool" in slim_tools_for_category(["call_mcp_tool"], "tiny")
 
@@ -163,11 +165,13 @@ class TestWeakModelProfile:
         def boom():
             raise RuntimeError("config unreadable")
 
-        monkeypatch.setattr("config.get_mcp_servers", boom)
-        from tool_profiles import CORE_CHAT_TOOLS, core_tools_now
-        assert core_tools_now() == set(CORE_CHAT_TOOLS)
+        monkeypatch.setattr("argent.config.get_mcp_servers", boom)
+        from argent.tool_profiles import CORE_CHAT_TOOLS, core_tools_now
+        # "Does not shrink" is a subset claim: conditionally enabled tools (desktop
+        # control, RAG) may be present and say nothing about a broken config.
+        assert set(CORE_CHAT_TOOLS) <= core_tools_now()
 
     def test_capable_models_are_untouched(self, monkeypatch):
-        from tool_profiles import slim_tools_for_category
-        monkeypatch.setattr("config.get_mcp_servers", lambda: [])
+        from argent.tool_profiles import slim_tools_for_category
+        monkeypatch.setattr("argent.config.get_mcp_servers", lambda: [])
         assert slim_tools_for_category(["call_mcp_tool"], "cloud") == ["call_mcp_tool"]

@@ -6,12 +6,12 @@ from pathlib import Path
 import questionary
 from rich.syntax import Syntax
 
-from file_tracker import undo, get_diff, get_pending_changes
+from argent.file_tracker import undo, get_diff, get_pending_changes
 from src.agent.shell import run_text
 from src.cli.cd_path import clean_cd_path
 from src.cli.commands.base import CommandContext, CommandResult
 from src.cli.commands.registry import registry
-from ui import console, print_system, print_error
+from argent.ui import console, print_system, print_error
 
 
 @registry.register("/init", help_text="Изучить проект и создать .argent/AGENTS.md", category="project", is_prefix=True)
@@ -83,7 +83,7 @@ def handle_cd(ctx: CommandContext) -> CommandResult:
             return CommandResult.continue_loop()
         os.chdir(resolved)
         try:
-            from memory_manager import memory
+            from argent.memory_manager import memory
             memory._mgr = None
         except Exception:
             pass
@@ -146,11 +146,11 @@ def handle_commit(ctx: CommandContext) -> CommandResult:
             print_error("No staged changes found. Use 'git add' first.")
             return CommandResult.continue_loop()
 
-        from config import get_critic_auto
+        from argent.config import get_critic_auto
         if get_critic_auto():
-            from agent import run_plan_critique
+            from argent.agent import run_plan_critique
             from src.agent.critic import parse_critic_verdict, CriticVerdict, sanitize_and_truncate_diff
-            from memory_manager import memory
+            from argent.memory_manager import memory
             print_system("[dim]Критик смотрит подготовленный дифф перед коммитом…[/dim]")
             clean_diff = sanitize_and_truncate_diff(staged_diff)
             try:
@@ -189,7 +189,7 @@ def handle_commit(ctx: CommandContext) -> CommandResult:
         )
         gen_message = ""
         try:
-            from providers import create_service_provider
+            from argent.providers import create_service_provider
             provider, svc_model = create_service_provider()
             res = provider.sync_chat(
                 model=svc_model,

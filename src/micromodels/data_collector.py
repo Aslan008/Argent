@@ -13,7 +13,7 @@ import threading
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
-from logger import get_logger
+from argent.logger import get_logger
 
 logger = get_logger("active_learning_collector")
 

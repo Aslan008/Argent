@@ -23,7 +23,7 @@ _BY_NAME = {
     "files": {"read_file", "write_file", "replace_in_file", "delete_file", "create_directory", "move_file",
               "copy_file", "list_directory", "search_files", "grep_search", "get_file_outline", "read_git_diff",
               "analyze_project", "git_checkpoint", "git_rollback", "view_image", "run_deep_linter"},
-    "shell": {"run_command", "run_admin_command", "start_background_command", "list_background_commands",
+    "shell": {"run_command", "start_background_command", "list_background_commands",
               "read_background_command", "send_background_command", "stop_background_command", "wait_heartbeat",
               "calculate"},
     "web": {"search_web", "read_webpage", "browser_open", "browser_action", "browser_inspect", "browser_close",
@@ -48,7 +48,7 @@ def group_of(tool: str) -> str:
 def tool_catalog(mutating=None) -> list:
     """[{name, description, group, params:[...], mutating, not_in_rooms}] for every registered tool,
     sorted by group then name."""
-    from tools.schemas import AVAILABLE_TOOLS, TOOL_SCHEMAS
+    from argent.tools.schemas import AVAILABLE_TOOLS, TOOL_SCHEMAS
     from src.rooms.validator import NOT_IN_ROOMS
     if mutating is None:
         from src.agent.plan_mode import _mutates as mutating

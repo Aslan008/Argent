@@ -5,7 +5,7 @@ import time
 
 import pytest
 
-import run_scope
+import argent.run_scope as run_scope
 from src.rooms import parallel as par
 from src.rooms.engine import Engine, MergeConflict, plan_resume
 from src.rooms.journal import Journal
@@ -201,7 +201,7 @@ class TestConcurrency:
         assert peak[0] == 1
 
     def test_sampling_of_one_branch_is_not_read_by_the_other(self):
-        from config import _get, generation_overrides
+        from argent.config import _get, generation_overrides
         seen = {}
         both_in = threading.Barrier(2, timeout=5)
 
@@ -219,7 +219,7 @@ class TestConcurrency:
         assert seen == {"a": 0.1, "b": 0.9}                 # each branch read its own value
 
     def test_a_nested_scope_sees_the_layer_of_its_parent(self):
-        from config import _get, generation_overrides
+        from argent.config import _get, generation_overrides
         with run_scope.branch():
             with generation_overrides({"temperature": 0.3}):
                 with run_scope.branch():

@@ -9,7 +9,7 @@ import stat
 from pathlib import Path
 import pytest
 
-from tools.file_ops import (
+from argent.tools.file_ops import (
     read_file,
     write_file,
     replace_in_file,
@@ -19,13 +19,13 @@ from tools.file_ops import (
     delete_file,
     list_directory,
 )
-from tools._helpers import (
+from argent.tools._helpers import (
     _validate_code_syntax,
     _maybe_unescape_content,
     _strip_read_line_numbers,
 )
-import file_tracker
-from tools.schemas import AVAILABLE_TOOLS
+import argent.file_tracker as file_tracker
+from argent.tools.schemas import AVAILABLE_TOOLS
 
 
 class TestFuzzyFallbackNoDuplicates:
@@ -180,7 +180,7 @@ class TestMultiReplacePolymorphism:
         monkeypatch.chdir(tmp_path)
         (tmp_path / "a.txt").write_text("aaa\n", encoding="utf-8")
         changes = [
-            {"file_path": "a.txt", "target_text": "aaa", "replacement_text": "AAA"}
+            {"path": "a.txt", "target_text": "aaa", "replacement_text": "AAA"}
         ]
         out = multi_replace_in_file(changes)
         assert out.startswith("Successfully")
@@ -193,7 +193,7 @@ class TestMultiReplacePolymorphism:
         (tmp_path / "b.txt").write_text("bbb\n", encoding="utf-8")
         payload = {
             "changes": [
-                {"file_path": "b.txt", "target_text": "bbb", "replacement_text": "BBB"}
+                {"path": "b.txt", "target_text": "bbb", "replacement_text": "BBB"}
             ]
         }
         out = multi_replace_in_file(payload)
@@ -232,7 +232,7 @@ class TestDeleteReadOnlyFile:
         p.write_text("readonly content", encoding="utf-8")
         os.chmod(p, stat.S_IREAD)  # Make read-only
 
-        monkeypatch.setattr("approval.request_approval", lambda *args, **kwargs: True)
+        monkeypatch.setattr("argent.approval.request_approval", lambda *args, **kwargs: True)
         res = delete_file("readonly.txt")
         assert "Successfully deleted" in res
         assert not p.exists()
@@ -255,8 +255,8 @@ class TestListDirectoryBounded:
 class TestAgentDropReadCacheForMultiReplace:
     def test_agent_drops_cache_for_multi_replace(self):
         """DEFECT-FILE-13: agent._drop_read_cache handles polymorphic changes_json."""
-        from agent import ArgentAgent
-        from tools._helpers import _resolve_path
+        from argent.agent import ArgentAgent
+        from argent.tools._helpers import _resolve_path
 
         p1 = str(_resolve_path("some/path/file1.py"))
         p2 = str(_resolve_path("some/path/file2.py"))
@@ -267,7 +267,7 @@ class TestAgentDropReadCacheForMultiReplace:
 
         dummy = DummyAgent()
         changes = [
-            {"file_path": "some/path/file1.py", "target_text": "a", "replacement_text": "b"}
+            {"path": "some/path/file1.py", "target_text": "a", "replacement_text": "b"}
         ]
         dummy._drop_read_cache({"changes_json": changes})
         assert p1 not in dummy._read_cache

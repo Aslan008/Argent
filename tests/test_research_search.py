@@ -95,7 +95,7 @@ class TestEngineParsers:
 
 class TestSearchWebIntegration:
     def test_formats_merged_results(self, monkeypatch):
-        import tools.web_tools as wt
+        import argent.tools.web_tools as wt
         monkeypatch.setattr("src.research.search.meta_search",
                             lambda query, max_results=5: [
                                 {"title": "A", "url": "http://a", "snippet": "sa", "source": "wikipedia"},
@@ -107,12 +107,12 @@ class TestSearchWebIntegration:
         assert "SYSTEM REMINDER" in out
 
     def test_no_results(self, monkeypatch):
-        import tools.web_tools as wt
+        import argent.tools.web_tools as wt
         monkeypatch.setattr("src.research.search.meta_search", lambda query, max_results=5: [])
         assert "No results found" in wt.search_web("q")
 
     def test_explicit_engine_duckduckgo(self, monkeypatch):
-        import tools.web_tools as wt
+        import argent.tools.web_tools as wt
         from src.research.search import _ddg_search
         passed_engines = []
 
@@ -127,15 +127,15 @@ class TestSearchWebIntegration:
         assert passed_engines[0] == [_ddg_search]
 
     def test_explicit_engine_brave_missing_key(self, monkeypatch):
-        import tools.web_tools as wt
-        monkeypatch.setattr("config.get_brave_api_key", lambda: "")
+        import argent.tools.web_tools as wt
+        monkeypatch.setattr("argent.config.get_brave_api_key", lambda: "")
         out = wt.search_web("q", engine="brave")
         assert "Brave search is not configured" in out
 
     def test_explicit_engine_brave_configured(self, monkeypatch):
-        import tools.web_tools as wt
+        import argent.tools.web_tools as wt
         from src.research.search import _brave_search
-        monkeypatch.setattr("config.get_brave_api_key", lambda: "key-123")
+        monkeypatch.setattr("argent.config.get_brave_api_key", lambda: "key-123")
         passed = []
         monkeypatch.setattr("src.research.search.meta_search",
                             lambda query, max_results=5, engines=None: (passed.append(engines) or []))
@@ -143,13 +143,13 @@ class TestSearchWebIntegration:
         assert passed == [[_brave_search]]
 
     def test_explicit_engine_ollama_missing_key(self, monkeypatch):
-        import tools.web_tools as wt
-        monkeypatch.setattr("config.get_ollama_api_key", lambda: "")
+        import argent.tools.web_tools as wt
+        monkeypatch.setattr("argent.config.get_ollama_api_key", lambda: "")
         out = wt.search_web("q", engine="ollama")
         assert "Ollama web search is not configured" in out
 
     def test_explicit_engine_unknown(self):
-        import tools.web_tools as wt
+        import argent.tools.web_tools as wt
         out = wt.search_web("q", engine="google")
         assert "Unknown search engine 'google'" in out
 

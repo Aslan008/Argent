@@ -263,7 +263,7 @@ def test_a_worker_process_is_run_below_normal_priority():
 
 
 def test_server_options_are_off_unless_asked(monkeypatch):
-    import config
+    import argent.config as config
     monkeypatch.setattr(governor, "classify", lambda provider, model="": LOCAL)
     assert governor.server_options("ollama", "m") == {}
     monkeypatch.setattr(config, "is_limit_server_threads_enabled", lambda: True)

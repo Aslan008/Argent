@@ -4,7 +4,7 @@ import logging
 
 import pytest
 
-import tools.command_ops as command_ops
+import argent.tools.command_ops as command_ops
 from src.agent import secret_redactor as sr
 from src.agent.secret_redactor import StreamRedactor, redact
 from tests.test_command_ops_streaming import _MockProc, _mock_approve
@@ -183,7 +183,7 @@ def test_a_prompt_the_filter_held_back_still_reaches_the_model(monkeypatch):
 
 
 def test_the_log_filter_hides_secrets(tmp_path):
-    from logger import _SecretFilter
+    from argent.logger import _SecretFilter
 
     record = logging.LogRecord("t", logging.INFO, __file__, 1, "header was %s", (f"Bearer-less {OPENAI}",), None)
     assert _SecretFilter().filter(record) is True

@@ -4,23 +4,24 @@ Includes /vibe, /tasks, /sound, /critic, /guard, /hooks, /tools, /logs, /stats,
 """
 
 import os
+import time
 from pathlib import Path
 import questionary
 from rich.markup import escape
 
-import approval
-from config import (
+import argent.approval as approval
+from argent.config import (
     get_hooks_dir, set_hooks_dir, get_autonomous_plugins_enabled, set_autonomous_plugins_enabled,
     get_disabled_tools, set_disabled_tools,
     get_current_model, get_provider,
 )
-from hook_manager import hook_manager
-from mcp_client import mcp_client
-from memory_manager import memory
+from argent.hook_manager import hook_manager
+from argent.mcp_client import mcp_client
+from argent.memory_manager import memory
 from src.agent.shell import run_text
 from src.cli.commands.base import CommandContext, CommandResult
 from src.cli.commands.registry import registry
-from ui import console, print_system, print_error
+from argent.ui import console, print_system, print_error
 
 
 # --- Vibe Mode Helpers ---
@@ -40,9 +41,12 @@ def set_vibe_mode(enabled: bool, notify: bool = True) -> bool:
         approval.set_policy(approval.POLICY_AUTO)
         if notify:
             print_system(
-                "Vibe-режим ВКЛ: безопасные действия одобряются автоматически, "
-                "деструктивные — отклоняются во избежание потери данных, "
-                "перед первой правкой каждого хода создаётся чекпоинт. Откат: /rewind."
+                "Vibe-режим ВКЛ: безопасные и непроверяемые команды выполняются сами "
+                "(в транскрипте видно, что именно проверить нельзя). Удаление внутри проекта "
+                "разрешено, но сначала копируется в корзину — вернуть можно командой /trash. "
+                "Отклоняются только: удаление вне проекта, состояние самого Argent (.argent), "
+                "команды, собранные в рантайме, и выключение машины. "
+                "Перед первой правкой каждого хода создаётся чекпоинт. Откат: /rewind."
             )
     else:
         approval.set_policy(approval.POLICY_ASK)
@@ -98,7 +102,7 @@ def offer_safety_checkpoint(task: str) -> None:
             default=True
         ).ask()
         if approved:
-            from tools.misc_tools import git_checkpoint
+            from argent.tools.misc_tools import git_checkpoint
             print_system(git_checkpoint(f"перед задачей: {task[:60]}"))
     except Exception:
         pass
@@ -135,10 +139,94 @@ def handle_vibe(ctx: CommandContext) -> CommandResult:
     return CommandResult.continue_loop()
 
 
+# --- Trash Command ---
+
+def _human_size(num: int) -> str:
+    size = float(num)
+    for unit in ("Б", "КБ", "МБ", "ГБ"):
+        if size < 1024 or unit == "ГБ":
+            return f"{size:.0f} {unit}" if unit == "Б" else f"{size:.1f} {unit}"
+        size /= 1024
+    return f"{size:.1f} ГБ"
+
+
+@registry.register("/trash", help_text="Корзина: что можно вернуть после удаления в /vibe",
+                   category="agent", is_prefix=True)
+def handle_trash(ctx: CommandContext) -> CommandResult:
+    """List, restore and drop the snapshots an autonomous delete left behind."""
+    try:
+        from argent import trash
+    except Exception as e:                        # pragma: no cover - import guard
+        print_error(f"Корзина недоступна: {e}")
+        return CommandResult.continue_loop()
+
+    parts = ctx.user_input.strip().split()
+    action = parts[1].lower() if len(parts) > 1 else "list"
+    target = parts[2] if len(parts) > 2 else (parts[1] if action not in ("list", "purge") else "")
+
+    if action in ("help", "?"):
+        print_system("Корзина автономного режима.\n"
+                     "  /trash                     — что лежит\n"
+                     "  /trash restore <id>        — вернуть на место\n"
+                     "  /trash drop <id>           — убрать снимок\n"
+                     "  /trash purge               — очистить корзину")
+        return CommandResult.continue_loop()
+
+    if action == "restore":
+        if not target:
+            print_error("Укажите снимок: /trash restore <id>")
+            return CommandResult.continue_loop()
+        try:
+            restored = trash.restore(target)
+        except KeyError as e:
+            print_error(str(e).strip("'"))
+            return CommandResult.continue_loop()
+        except Exception as e:
+            print_error(f"Восстановить не удалось: {e}")
+            return CommandResult.continue_loop()
+        if not restored:
+            print_system("Восстанавливать нечего: файлы снимка не найдены.")
+            return CommandResult.continue_loop()
+        for path in restored:
+            print_system(f"возвращено: {path}")
+        return CommandResult.continue_loop()
+
+    if action == "drop":
+        if not target:
+            print_error("Укажите снимок: /trash drop <id>")
+            return CommandResult.continue_loop()
+        print_system("Снимок убран." if trash.remove(target) else f"Снимка {target} нет.")
+        return CommandResult.continue_loop()
+
+    if action == "purge":
+        snapshots = trash.list_snapshots()
+        for snap in snapshots:
+            trash.remove(snap.id)
+        print_system(f"Корзина очищена: {len(snapshots)} снимков.")
+        return CommandResult.continue_loop()
+
+    snapshots = trash.list_snapshots()
+    if not snapshots:
+        print_system("Корзина пуста: автономных удалений ещё не было.")
+        return CommandResult.continue_loop()
+
+    print_system(f"В корзине {len(snapshots)} снимков (новые сверху):")
+    for snap in snapshots[:10]:
+        names = ", ".join(Path(e.original).name for e in snap.entries[:3])
+        more = f" и ещё {len(snap.entries) - 3}" if len(snap.entries) > 3 else ""
+        when = time.strftime("%d.%m %H:%M", time.localtime(snap.created))
+        print_system(f"  {snap.id}  {when}  {snap.files} файлов, {_human_size(snap.bytes)}"
+                     f"  — {escape(names)}{more}")
+    if len(snapshots) > 10:
+        print_system(f"  … и ещё {len(snapshots) - 10}")
+    print_system("Вернуть: /trash restore <id>")
+    return CommandResult.continue_loop()
+
+
 # --- Tasks Command ---
 
 def _parse_task_tools(spec: str):
-    from tools.schemas import AVAILABLE_TOOLS
+    from argent.tools.schemas import AVAILABLE_TOOLS
     spec = (spec or "").strip()
     if not spec:
         return [], []
@@ -186,7 +274,7 @@ def handle_sound(ctx: CommandContext) -> CommandResult:
 @registry.register("/critic", help_text="Независимый критик планов и кода", category="agent", is_prefix=True)
 def handle_critic(ctx: CommandContext) -> CommandResult:
     from src.agent.critic import parse_critic_model
-    from config import (
+    from argent.config import (
         get_critic_auto, set_critic_auto, get_critic_model,
         set_critic_model, get_critic_provider, set_critic_provider,
     )
@@ -247,7 +335,7 @@ def handle_critic(ctx: CommandContext) -> CommandResult:
         if not target:
             print_error("В истории нет сообщений ассистента и артефактов для критики. Укажите план явно: /critic <текст>")
         else:
-            from agent import run_plan_critique
+            from argent.agent import run_plan_critique
             from src.agent.critic import parse_critic_verdict, CriticVerdict
             goal = memory.data.get("objective") or ""
             print_system("[dim]Запускаю независимого критика (чистый контекст, только чтение)…[/dim]")
@@ -273,7 +361,7 @@ def handle_critic(ctx: CommandContext) -> CommandResult:
 @registry.register("/ultracode", help_text="Ultracode: большая задача планом, с проверками и критиком",
                    category="agent", is_prefix=True)
 def handle_ultracode(ctx: CommandContext) -> CommandResult:
-    import config
+    import argent.config as config
     from src.agent.workflow import calibration, runtime, store
     arg = ctx.user_input.strip()[len("/ultracode"):].strip()
     low = arg.lower()
@@ -362,7 +450,7 @@ def handle_ultracode(ctx: CommandContext) -> CommandResult:
 @registry.register("/advisor", help_text="Советник Ultracode: более сильная модель для решающих моментов",
                    category="agent", is_prefix=True)
 def handle_advisor(ctx: CommandContext) -> CommandResult:
-    import config
+    import argent.config as config
     from src.agent.critic import parse_critic_model
     from src.agent.workflow import advisor as adv
     arg = ctx.user_input.strip()[len("/advisor"):].strip()
@@ -417,7 +505,7 @@ def handle_status(ctx: CommandContext) -> CommandResult:
 @registry.register("/lanes", help_text="Очередь запросов к локальным моделям и нагрузка на ПК", category="agent",
                    is_prefix=True)
 def handle_lanes(ctx: CommandContext) -> CommandResult:
-    import config
+    import argent.config as config
     from src.agent import governor
     arg = ctx.user_input.strip()[len("/lanes"):].strip().lower()
     words = arg.split()
@@ -455,7 +543,7 @@ def handle_lanes(ctx: CommandContext) -> CommandResult:
 
 @registry.register("/guard", help_text="Управление защитой от опасных шелл-команд", category="agent", is_prefix=True)
 def handle_guard(ctx: CommandContext) -> CommandResult:
-    from config import get_command_guard, set_command_guard
+    from argent.config import get_command_guard, set_command_guard
     arg = ctx.user_input[len("/guard"):].strip().lower()
     if arg in ("off", "warn", "block"):
         set_command_guard(arg)
@@ -471,7 +559,7 @@ def handle_guard(ctx: CommandContext) -> CommandResult:
 
 @registry.register("/loopguard", aliases=["/loop_guard", "/antiloop"], help_text="Управление защитой от зацикливания инструментов LoopGuard (on | off | auto)", category="agent", is_prefix=True)
 def handle_loopguard(ctx: CommandContext) -> CommandResult:
-    from config import get_loop_guard_mode, set_loop_guard_mode
+    from argent.config import get_loop_guard_mode, set_loop_guard_mode
     parts = ctx.user_input.strip().split(maxsplit=1)
     arg = parts[1].strip().lower() if len(parts) > 1 else ""
 
@@ -501,7 +589,7 @@ def handle_hooks(ctx: CommandContext) -> CommandResult:
         print_system(f"Каталог плагинов: [bold cyan]{get_hooks_dir()}[/bold cyan]")
         print_system(f"Autonomous Plugin Creation: [bold yellow]{status}[/bold yellow]")
         
-        from config import get_disabled_plugins, set_disabled_plugins
+        from argent.config import get_disabled_plugins, set_disabled_plugins
         hooks_dir = Path(get_hooks_dir()).expanduser().resolve()
         if hooks_dir.exists():
             all_plugins = [item.stem for item in hooks_dir.iterdir() 
@@ -583,7 +671,7 @@ def _shell_hooks_command(sub: str, flags: list) -> None:
         return
 
     if sub == "untrust":
-        import config
+        import argent.config as config
         trusted = dict(config.get_trusted_files() or {})
         if trusted.pop(str(project_file.resolve()), None) is None:
             print_system("Файл и так не был доверенным.")
@@ -612,20 +700,35 @@ def _shell_hooks_command(sub: str, flags: list) -> None:
 
 @registry.register("/tools", help_text="Включение/отключение инструментов", category="agent")
 def handle_tools(ctx: CommandContext) -> CommandResult:
-    from tools import AVAILABLE_TOOLS
-    all_tools = list(AVAILABLE_TOOLS.keys())
+    from argent.tools import TOOL_GROUPS, AVAILABLE_TOOLS
+    all_tools = list(AVAILABLE_TOOLS)
     try:
-        from rag_engine import is_rag_enabled
+        from argent.rag_engine import is_rag_enabled
         if is_rag_enabled() and "semantic_search" not in all_tools:
             all_tools.append("semantic_search")
     except ImportError:
         pass
 
     disabled = set(get_disabled_tools())
-    choices = [
-        questionary.Choice(t, checked=(t not in disabled))
-        for t in all_tools
-    ]
+
+    # Grouped by the same taxonomy as the docs (`TOOL_GROUPS`): 59 tools in one flat
+    # list is a wall, and a person looking for the browser tools should not have to
+    # scan every file tool to find them.
+    grouped = []
+    for group, members in TOOL_GROUPS.items():
+        present = [t for t in all_tools if t in members]
+        if present:
+            grouped.append((group, present))
+    seen = {t for _, items in grouped for t in items}
+    rest = [t for t in all_tools if t not in seen]
+    if rest:
+        grouped.append(("other", rest))
+
+    choices = []
+    for group, items in grouped:
+        choices.append(questionary.Separator(f"── {group} ({len(items)}) ──"))
+        choices.extend(questionary.Choice(t, checked=(t not in disabled)) for t in items)
+
     selected_tools = questionary.checkbox(
         "Select the tools you want Argent to have access to:",
         choices=choices
@@ -707,7 +810,7 @@ def handle_logs(ctx: CommandContext) -> CommandResult:
 
 @registry.register("/stats", help_text="Диагностика и статистика контекста", category="agent")
 def handle_stats(ctx: CommandContext) -> CommandResult:
-    from config import (
+    from argent.config import (
         get_context_window, get_model_size_category,
         get_model_category_override, get_moe_specs
     )
@@ -768,7 +871,7 @@ def handle_stats(ctx: CommandContext) -> CommandResult:
 
 @registry.register("/rag_toggle", help_text="Переключить авто-RAG индексацию", category="agent")
 def handle_rag_toggle(ctx: CommandContext) -> CommandResult:
-    from config import get_auto_rag, set_auto_rag
+    from argent.config import get_auto_rag, set_auto_rag
     current = get_auto_rag()
     new_state = not current
     set_auto_rag(new_state)
@@ -778,7 +881,7 @@ def handle_rag_toggle(ctx: CommandContext) -> CommandResult:
         print_system("RAG включится при следующем запуске Argent.")
     else:
         try:
-            from rag_engine import disable_rag
+            from argent.rag_engine import disable_rag
             disable_rag()
             print_system("Семантический поиск (RAG) отключён для текущей сессии.")
         except ImportError:
@@ -788,7 +891,7 @@ def handle_rag_toggle(ctx: CommandContext) -> CommandResult:
 
 @registry.register("/kb_toggle", help_text="Переключить авто-загрузку внешних KB", category="agent")
 def handle_kb_toggle(ctx: CommandContext) -> CommandResult:
-    from config import get_auto_kb, set_auto_kb
+    from argent.config import get_auto_kb, set_auto_kb
     current = get_auto_kb()
     new_state = not current
     set_auto_kb(new_state)
@@ -801,7 +904,7 @@ def handle_kb_toggle(ctx: CommandContext) -> CommandResult:
 
 @registry.register("/auto_retrieve", help_text="Переключить авто-подстановку семантического поиска", category="agent")
 def handle_auto_retrieve(ctx: CommandContext) -> CommandResult:
-    from config import get_auto_retrieve, set_auto_retrieve
+    from argent.config import get_auto_retrieve, set_auto_retrieve
     new_state = not get_auto_retrieve()
     set_auto_retrieve(new_state)
     status = "[bold green]ENABLED[/bold green]" if new_state else "[bold red]DISABLED[/bold red]"
@@ -813,7 +916,7 @@ def handle_auto_retrieve(ctx: CommandContext) -> CommandResult:
 
 @registry.register("/skill import", aliases=["/skills import"], help_text="Импортировать навык из git или папки", category="agent", is_prefix=True)
 def handle_skill_import(ctx: CommandContext) -> CommandResult:
-    from skill_manager import skill_manager
+    from argent.skill_manager import skill_manager
     arg = ctx.user_input.split("import", 1)[1].strip().strip('"')
     if not arg:
         print_error(
@@ -833,7 +936,7 @@ def handle_skill_import(ctx: CommandContext) -> CommandResult:
 def handle_skills(ctx: CommandContext) -> CommandResult:
     if "import" in ctx.user_input:
         return handle_skill_import(ctx)
-    from skill_manager import skill_manager
+    from argent.skill_manager import skill_manager
     skills = skill_manager.list_skills()
     if not skills:
         print_system("Навыков нет. Создайте инструментом `create_skill` или импортируйте: /skill import.")
@@ -911,8 +1014,8 @@ def handle_rooms(ctx: CommandContext) -> CommandResult:
 def handle_browser(ctx: CommandContext) -> CommandResult:
     parts = ctx.user_input.strip().split()
     if len(parts) == 1:
-        from config import get_browser_mode, get_browser_name, get_browser_state_mode, get_effective_browser_state_mode
-        from browser_detect import detect_browsers
+        from argent.config import get_browser_mode, get_browser_name, get_browser_state_mode, get_effective_browser_state_mode
+        from argent.browser_detect import detect_browsers
         mode = get_browser_mode()
         name = get_browser_name()
         state_mode = get_browser_state_mode()
@@ -930,24 +1033,24 @@ def handle_browser(ctx: CommandContext) -> CommandResult:
             print_system("[dim]Браузеров на основе Chromium не найдено.[/dim]")
         print_system("\nUsage: /browser user | isolated | chrome | yandex | edge | brave | auto | a11y | dom")
     elif parts[1] in ("user", "isolated"):
-        from config import set_browser_mode
+        from argent.config import set_browser_mode
         set_browser_mode(parts[1])
         if parts[1] == "user":
             print_system("Режим браузера: [bold green]ВАШ[/bold green] — модель работает в вашем браузере через CDP.")
         else:
             print_system("Режим браузера: [bold yellow]ИЗОЛИРОВАННЫЙ[/bold yellow] — модель работает в Playwright Chromium.")
     elif parts[1] in ("chrome", "yandex", "edge", "brave"):
-        from config import set_browser_name, set_browser_mode
+        from argent.config import set_browser_name, set_browser_mode
         set_browser_name(parts[1])
         set_browser_mode("user")
         print_system(f"Браузер: [bold green]{parts[1]}[/bold green] (режим «ваш браузер» включён).")
     elif parts[1] in ("a11y", "dom"):
-        from config import set_browser_state_mode
+        from argent.config import set_browser_state_mode
         set_browser_state_mode(parts[1])
         label = "Accessibility Tree (семантическое дерево)" if parts[1] == "a11y" else "DOM (плоский список элементов)"
         print_system(f"State extraction: [bold green]{parts[1]}[/bold green] — {label}")
     elif parts[1] == "auto":
-        from config import set_browser_state_mode
+        from argent.config import set_browser_state_mode
         set_browser_state_mode("auto")
         print_system("State extraction: [bold green]auto[/bold green] — выбирается по tier модели (a11y для крупных, dom для мелких).")
     else:

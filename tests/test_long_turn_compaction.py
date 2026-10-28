@@ -16,7 +16,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-import config
+import argent.config as config
 from src.agent import trimmer
 
 
@@ -156,8 +156,8 @@ class _ReadingProvider:
 
 
 def test_a_long_turn_never_sends_a_request_over_the_window(monkeypatch, tmp_path):
-    import agent as agent_module
-    from agent import ArgentAgent
+    import argent.agent as agent_module
+    from argent.agent import ArgentAgent
 
     files = []
     for i in range(14):

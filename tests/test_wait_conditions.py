@@ -11,7 +11,7 @@ import pytest
 from src.agent.wait_conditions import (
     ConditionError, MAX_TIMEOUT_SECONDS, evaluate, wait_for,
 )
-from tools.misc_tools import wait_heartbeat
+from argent.tools.misc_tools import wait_heartbeat
 
 
 @pytest.fixture
@@ -46,7 +46,7 @@ class TestFilePredicates:
 
 class TestProcessPredicates:
     def _register(self, monkeypatch, poll_value):
-        import tools
+        import argent.tools as tools
 
         class _Proc:
             def poll(self):

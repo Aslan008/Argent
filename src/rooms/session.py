@@ -42,7 +42,7 @@ def default_routes() -> dict:
 
 
 def available_tool_names() -> set:
-    from tools.schemas import AVAILABLE_TOOLS
+    from argent.tools.schemas import AVAILABLE_TOOLS
     return set(AVAILABLE_TOOLS)
 
 
@@ -124,7 +124,7 @@ def questionary_confirm(node, state) -> bool:
 
 def build_runner(human_prompt=None, library=None, confirm=None, allow_spawn: bool = True) -> NodeRunner:
     spawn_handler = None
-    from config import get_rooms_spawn
+    from argent.config import get_rooms_spawn
     # `allow_spawn` is False for a run with nobody at the keyboard: proposing a room needs an approval
     if allow_spawn and library is not None and get_rooms_spawn():
         from src.rooms.spawn import RoomProposer, SpawnHandler, questionary_approve

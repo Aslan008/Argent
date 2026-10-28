@@ -20,7 +20,7 @@ from src.micromodels.speculative_cache import (
     SAFE_READONLY_TOOLS,
     speculative_cache,
 )
-from logger import get_logger
+from argent.logger import get_logger
 
 logger = get_logger("lookahead_observer")
 
@@ -132,8 +132,8 @@ class SpeculativeLookaheadObserver:
     def _handle_refutation(self, sentence: str) -> None:
         """Handles retraction: extracts mentioned file and removes from cache if present."""
         args = extract_specialist_args("read_file", sentence)
-        if args and "file_path" in args:
-            target = args["file_path"]
+        if args and "path" in args:
+            target = args["path"]
             speculative_cache.invalidate(target)
 
     def _evaluate_sentence_intent(self, sentence: str) -> None:
@@ -175,8 +175,8 @@ class SpeculativeLookaheadObserver:
         try:
             target_path = None
             if intent == "read_file":
-                from tools.file_ops import read_file
-                fpath = args.get("file_path", "")
+                from argent.tools.file_ops import read_file
+                fpath = args.get("path", "")
                 target_path = fpath
 
                 # File size check to prevent memory spikes on huge files
@@ -197,7 +197,7 @@ class SpeculativeLookaheadObserver:
                 )
 
             elif intent == "list_directory":
-                from tools.file_ops import list_directory
+                from argent.tools.file_ops import list_directory
                 dpath = args.get("path", ".")
                 target_path = dpath
                 result = list_directory(**args)
@@ -209,7 +209,7 @@ class SpeculativeLookaheadObserver:
                 )
 
             elif intent == "search_files":
-                from tools.search_ops import search_files
+                from argent.tools.search_ops import search_files
                 result = search_files(**args)
                 speculative_cache.put(
                     tool_name=intent,
@@ -218,7 +218,7 @@ class SpeculativeLookaheadObserver:
                 )
 
             elif intent == "grep_search":
-                from tools.search_ops import grep_search
+                from argent.tools.search_ops import grep_search
                 result = grep_search(**args)
                 speculative_cache.put(
                     tool_name=intent,

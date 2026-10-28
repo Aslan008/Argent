@@ -23,9 +23,11 @@ import pytest
 _ROOT = Path(__file__).resolve().parents[1]
 # Third-party code (the project's own virtualenv sits in the repo) is not ours to
 # police: scanning .venv reported aiohttp's loggers and took tens of seconds.
+# `scratch` holds unpacked dependency caches (uvcache311) and `.argent/laya` a
+# vendored tool, so both reported other people's `logging.getLogger` calls.
 _SKIP = {".git", ".venv", "venv", "venv_pyqt6", "site-packages", "node_modules",
          "__pycache__", ".pytest_cache", ".claude", "tests", "scripts", "desktop",
-         "visuals"}
+         "visuals", "scratch", ".argent"}
 
 
 def _sources():
@@ -61,7 +63,7 @@ class TestNoHandlerlessLoggers:
             f"обработчика, записи никуда не попадут: {offenders}")
 
     def test_get_logger_actually_writes(self, tmp_path, monkeypatch):
-        import logger as logger_mod
+        import argent.logger as logger_mod
 
         monkeypatch.setattr(logger_mod, "LOG_DIR", tmp_path)
         name = "probe_writes"

@@ -55,6 +55,7 @@ def test_dopt_result_fields():
 # ---------------------------------------------------------------------------
 
 def test_solver_missing_assets_raises(tmp_path):
+    pytest.importorskip("transformers", reason="optional stack — pip install transformers")
     """Ни ONNX, ни чекпоинт → FileNotFoundError (не тихая деградация)."""
     with pytest.raises(FileNotFoundError):
         DoptSolver(onnx_path=tmp_path / "no.onnx", ckpt_path=tmp_path / "no.pt")
@@ -144,6 +145,7 @@ def _artifacts_present() -> bool:
 
 @pytest.mark.skipif(not _artifacts_present(), reason="DoPT ONNX/base not present")
 def test_solver_optimal_on_real_domains():
+    pytest.importorskip("transformers", reason="optional stack — pip install transformers")
     import random
     import sys
 

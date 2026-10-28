@@ -9,10 +9,10 @@ import io
 import pytest
 from rich.console import Console
 
-import ui
+import argent.ui as ui
 from src.bridge.session import AgentSession
 from src.cli import cli_ui
-from usage_tracker import usage as session_usage
+from argent.usage_tracker import usage as session_usage
 
 
 class FakeAgent:
@@ -32,7 +32,7 @@ class FakeAgent:
 @pytest.fixture(autouse=True)
 def _fresh_totals(monkeypatch):
     # The user's real config may select 'verbose'; the tests state their mode.
-    import config
+    import argent.config as config
     monkeypatch.setattr(config, "get_turn_snapshot_mode", lambda: "compact")
     session_usage.reset()
     yield

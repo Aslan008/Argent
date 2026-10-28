@@ -152,7 +152,6 @@ _TOOLS: Dict[str, Tuple[str, str, Any]] = {
     "analyze_project": ("🗺", "Анализ проекта", lambda a: short_path(_a(a, "path"))),
     "run_deep_linter": ("🧹", "Линтер", lambda a: short_path(_a(a, "path"))),
     "run_command": ("⚡", "Команда", lambda a: one_line(_a(a, "command"), 56)),
-    "run_admin_command": ("🛡", "Команда (админ)", lambda a: one_line(_a(a, "command"), 56)),
     "start_background_command": ("🚀", "Фоновая команда", lambda a: one_line(_a(a, "command"), 52)),
     "read_background_command": ("📜", "Вывод фоновой команды", lambda a: _a(a, "pid")),
     "send_background_command": ("⌨️", "Ввод в фоновую команду", lambda a: _a(a, "pid")),

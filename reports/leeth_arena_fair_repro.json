@@ -1,0 +1,143 @@
+{
+ "date": "2026-10-20",
+ "seed": 20261020,
+ "repro": {
+  "repro_massive20_en en": {
+   "measured": 0.74,
+   "published": 0.783,
+   "n": 300,
+   "errors": 0,
+   "ok": true
+  },
+  "repro_massive20_en multilingual": {
+   "measured": 0.637,
+   "published": 0.657,
+   "n": 300,
+   "errors": 0,
+   "ok": true
+  },
+  "repro_xnli_en en": {
+   "measured": 0.873,
+   "published": 0.86,
+   "n": 300,
+   "errors": 0,
+   "ok": true
+  },
+  "repro_xnli_en multilingual": {
+   "measured": 0.86,
+   "published": 0.843,
+   "n": 300,
+   "errors": 0,
+   "ok": true
+  },
+  "repro_banking77 multilingual": {
+   "measured": 0.448,
+   "published": 0.425,
+   "n": 500,
+   "errors": 0,
+   "ok": true
+  },
+  "repro_emotion en": {
+   "measured": 0.572,
+   "published": 0.573,
+   "n": 600,
+   "errors": 0,
+   "ok": true
+  },
+  "repro_emotion multilingual": {
+   "measured": 0.522,
+   "published": 0.513,
+   "n": 600,
+   "errors": 0,
+   "ok": true
+  },
+  "repro_sst5 en": {
+   "measured": 0.357,
+   "published": 0.372,
+   "n": 600,
+   "errors": 0,
+   "ok": true
+  },
+  "repro_sst5 multilingual": {
+   "measured": 0.285,
+   "published": 0.282,
+   "n": 600,
+   "errors": 0,
+   "ok": true
+  },
+  "repro_clinc150 en": {
+   "measured": 0.606,
+   "published": 0.604,
+   "n": 500,
+   "errors": 0,
+   "ok": true
+  },
+  "repro_clinc150 en/tournament": {
+   "measured": 0.876,
+   "published": 0.894,
+   "n": 500,
+   "errors": 0,
+   "ok": true
+  }
+ },
+ "tasks": {
+  "clinc150": {},
+  "banking77": {},
+  "dbpedia14": {},
+  "emotion": {},
+  "sst5": {},
+  "massive_en": {},
+  "massive_ru": {},
+  "xnli_en": {},
+  "xnli_ru": {}
+ },
+ "verdicts": {},
+ "latency": {
+  "laya-en": [
+   {
+    "model": "laya-en",
+    "config": "single",
+    "ms_p50": 349.2341500004841,
+    "n": 2766,
+    "threads": 8
+   },
+   {
+    "model": "laya-en",
+    "config": "tournament",
+    "ms_p50": 1700.3273499994975,
+    "n": 1300,
+    "threads": 8
+   },
+   {
+    "model": "laya-en",
+    "config": "score",
+    "ms_p50": 232.457850001083,
+    "n": 600,
+    "threads": 8
+   }
+  ],
+  "laya-multilingual": [
+   {
+    "model": "laya-multilingual",
+    "config": "single",
+    "ms_p50": 116.74910000147065,
+    "n": 2800,
+    "threads": 8
+   },
+   {
+    "model": "laya-multilingual",
+    "config": "tournament",
+    "ms_p50": 608.8733500000671,
+    "n": 1300,
+    "threads": 8
+   },
+   {
+    "model": "laya-multilingual",
+    "config": "score",
+    "ms_p50": 95.63134999916656,
+    "n": 600,
+    "threads": 8
+   }
+  ]
+ }
+}

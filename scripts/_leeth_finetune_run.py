@@ -13,7 +13,7 @@ try:
 except Exception:
     pass
 
-from src.leeth.finetune import finetune_from_feedback  # noqa: E402
+from src.leeth.finetune import finetune_from_feedback  
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 

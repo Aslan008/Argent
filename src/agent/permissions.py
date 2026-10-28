@@ -43,7 +43,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional, Tuple
 
-from logger import get_logger
+from argent.logger import get_logger
 from src.agent.shell_hooks import (
     command_parts, file_digest, glob_match, is_trusted, subject, trust_file,
 )
@@ -51,7 +51,7 @@ from src.agent.shell_hooks import (
 log = get_logger("permissions")
 
 KINDS = ("deny", "ask", "allow")
-COMMAND_TOOLS = frozenset({"run_command", "start_background_command", "run_admin_command"})
+COMMAND_TOOLS = frozenset({"run_command", "start_background_command"})
 
 _RULE_RE = re.compile(r"^\s*([A-Za-z_*][\w*|]*)\s*(?:\((.*)\))?\s*$", re.DOTALL)
 
@@ -156,7 +156,7 @@ class Permissions:
     def project_root(self) -> Path:
         if self._project_dir:
             return self._project_dir
-        from project_paths import project_root_or_cwd
+        from argent.project_paths import project_root_or_cwd
         return project_root_or_cwd()
 
     def files(self) -> List[Tuple[str, Path]]:

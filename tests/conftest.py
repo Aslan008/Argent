@@ -2,6 +2,19 @@ import pytest
 
 
 @pytest.fixture(autouse=True)
+def _no_tui_from_the_host(monkeypatch):
+    """Tests run without a TUI window, even when started from inside Argent.
+
+    The host process exports ARGENT_TUI=1, and a tool that asks a question then
+    routes it through the TUI bridge instead of the terminal. A test has no bridge
+    window, so every answer came back "No answer" — seven tests read as broken
+    payload parsing when nothing was broken but the environment. A test that means
+    to exercise the bridge path sets the variable itself.
+    """
+    monkeypatch.delenv("ARGENT_TUI", raising=False)
+
+
+@pytest.fixture(autouse=True)
 def _offline_token_estimation(monkeypatch):
     """Keep the test suite offline and fast.
 
@@ -79,7 +92,7 @@ def _fresh_user_settings():
     import os
     from pathlib import Path
 
-    import config
+    import argent.config as config
 
     scratch = os.environ.get("USERPROFILE", "")
     isolated = bool(os.environ.get("ARGENT_TEST_REAL_HOME")) and bool(scratch)
@@ -155,7 +168,7 @@ def _own_model_cache(tmp_path, monkeypatch):
     """The Claude model list is cached on disk and in memory. One test's catalogue must not be
     the next one's, and no test may read or write the developer's real cache."""
     monkeypatch.setenv("ARGENT_CACHE_DIR", str(tmp_path / "argent-cache"))
-    import claude_catalog
+    import argent.claude_catalog as claude_catalog
     claude_catalog.forget()
     yield
     claude_catalog.forget()
@@ -185,7 +198,7 @@ def _no_fast_path_unless_asked(monkeypatch, request):
     itself patch get_fast_dispatch_backend (or call the dispatcher directly) as they need."""
     if request.node.get_closest_marker("real_fast_dispatch"):
         return
-    import config
+    import argent.config as config
     monkeypatch.setattr(config, "get_fast_dispatch_backend", lambda: "off")
 
 

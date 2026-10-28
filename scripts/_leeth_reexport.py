@@ -13,7 +13,7 @@ try:
 except Exception:
     pass
 
-from src.leeth.export import export_to_onnx, quantize_onnx_model  # noqa: E402
+from src.leeth.export import export_to_onnx, quantize_onnx_model  
 
 DATA_DIR = Path("src/leeth/data")
 

@@ -19,7 +19,7 @@ import torch
 
 from src.leeth.ranking import LeethRankingModel, RankResult, load_ranking_head
 from src.leeth.tokenizer import LeethTokenizer
-from logger import get_logger
+from argent.logger import get_logger
 
 logger = get_logger("leeth_skill_router")
 

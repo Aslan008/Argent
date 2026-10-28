@@ -23,7 +23,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Callable, Optional, Tuple
 
-from logger import get_logger
+from argent.logger import get_logger
 
 log = get_logger("calibration")
 
@@ -84,7 +84,7 @@ Probe = Callable[[str, str], Tuple[Optional[float], Optional[float]]]
 def probe_model(provider: str, model: str) -> Tuple[Optional[float], Optional[float]]:
     """(seconds to the first token, tokens per second) of one short request, or (None, None)."""
     try:
-        from providers import create_provider
+        from argent.providers import create_provider
         from src.agent import governor
         prompt = [{"role": "user", "content": "Count from 1 to 30, separated by commas. Output only the numbers."}]
         started = time.monotonic()
@@ -140,7 +140,7 @@ def calibrate(provider: str, model: str, force: bool = False, probe: Optional[Pr
               now: Callable[[], float] = time.time) -> Profile:
     """The profile of (provider, model) on this machine; measured once and cached."""
     from src.agent.local_backend import classify
-    import config
+    import argent.config as config
 
     backend = classify(provider, model)
     hw = read_hardware()

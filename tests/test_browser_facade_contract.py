@@ -18,8 +18,8 @@ from unittest.mock import create_autospec
 
 import pytest
 
-import tools.browser_tools as bt
-from tools.schemas import TOOL_SCHEMAS
+import argent.tools.browser_tools as bt
+from argent.tools.schemas import TOOL_SCHEMAS
 
 ACTIONS = [
     ("click", {"index": 3}, "browser_click"),

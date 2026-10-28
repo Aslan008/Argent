@@ -14,6 +14,7 @@ INT8 после миграции, (3) static MinMax после миграции.
 """
 
 import json
+import random
 import sys
 import time
 from pathlib import Path

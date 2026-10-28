@@ -23,7 +23,7 @@ _NOT_RECOGNIZED = (
     "не является внутренней либо внешней",
     "the term",  # PowerShell: "The term 'x' is not recognized..."
 )
-_ACCESS_DENIED = ("access is denied", "отказано в доступе", "permission denied")
+_ACCESS_DENIED = ("access is denied", "is denied", "отказано в доступе", "permission denied")
 _PATH_NOT_FOUND = (
     "no such file or directory", "cannot find path", "could not find",
     "не удается найти", "не удалось найти", "не найден путь", "system cannot find",
@@ -138,11 +138,64 @@ def diagnose_command_error(command: str, output: str, exit_code: int) -> str | N
             "This is a COMMAND problem, not a code problem."
         )
 
-    # Needs elevation.
-    if _contains(low, _ACCESS_DENIED):
+    # A taskkill that found nothing is the answer to "is a process holding the
+    # lock?": no. Re-running the build or killing again cannot help.
+    if command.strip().lower().startswith("taskkill") and ("not found" in low or "не найден" in low):
         return (
-            "Access was denied — this action needs elevated privileges. Use "
-            "`run_admin_command` for it, or choose a path/operation that doesn't require admin."
+            "No cargo/rustc process was found, so a live build is not holding the lock. "
+            "The `.cargo-lock`/target entry is most likely high-integrity or ACL-owned by an "
+            "earlier elevated build (a normal process can have FullControl and still be denied), "
+            "or held by another tool. Do not retry the build and do not launch another elevated "
+            "delete blindly: inspect ownership/ACL, or remove `target` once from an elevated "
+            "shell, then build normally."
+        )
+
+    # Needs elevation — but only say so when the operation itself is an admin one.
+    # A project file locked by an elevated build, or Argent's own .argent folder
+    # owned by another account, is NOT a reason to elevate: that creates
+    # Administrator-owned artifacts and makes the next normal command fail too.
+    if _contains(low, _ACCESS_DENIED):
+        if re.search(r"(?i)\b(remove-item|rmdir|\brd\b|\bdel\b)", command):
+            return (
+                "The path cannot be removed: it is locked by another process, or it was created "
+                "by an elevated process and has a high integrity level/ACL that a normal process "
+                "cannot override even with FullControl. Do not retry this delete. Check the owner "
+                "and `icacls`; remove this directory once from an elevated shell, waiting for it "
+                "to finish, then continue without elevation."
+            )
+        if "cargo-lock" in low or ".cargo-lock" in low:
+            return (
+                "Cargo could not take its build lock. If Task Manager shows no cargo/rustc, the "
+                "lock is not a live build: `target` was probably created by an elevated build and "
+                "its files are high-integrity/Administrator-owned, so the normal user cannot modify "
+                "them. Do not run cargo as administrator and do not keep retrying the build; check "
+                "ownership/`icacls`, or remove `target` once from an elevated shell, then build "
+                "normally."
+            )
+        if ".argent" in low or "memory.json" in low:
+            return (
+                "Argent could not write its own state in the project's .argent folder "
+                "(permission denied). This is NOT the command's failure — its output is still "
+                "valid. Check who owns that folder (icacls) and give your account write access; "
+                "do not elevate the build for this. Memory will fall back to ~/.argent until fixed."
+            )
+        adminish = re.search(
+            r"(?i)\b(net\s+(stop|start|pause|continue)|sc\s+(stop|start|config|delete)|"
+            r"reg\s+(add|delete|import)|bcdedit|schtasks|services\.msc|"
+            r"program files|system32|hklm|hkey_local_machine|winsxs)\b",
+            command,
+        )
+        if adminish:
+            return (
+                "Access was denied for an operation that normally requires administrator "
+                "rights. Re-run this one as `run_command(command=..., admin=true)`, and "
+                "expect the files it creates to be owned by Administrator."
+            )
+        return (
+            "Permission was denied for a file or folder. Close the program that holds it "
+            "(an editor, a build daemon, a stale elevated process) and check ownership/ACL "
+            "with `icacls <path>`; only use elevation if the location itself is protected "
+            "(Program Files, services, registry). Do not elevate ordinary project builds."
         )
 
     # Path/file not found.

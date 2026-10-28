@@ -13,13 +13,13 @@ import sys
 from pathlib import Path
 from unittest.mock import MagicMock
 
-from tools.file_ops import write_file, append_to_file, delete_file
+from argent.tools.file_ops import write_file, append_to_file, delete_file
 
 
 @pytest.fixture(autouse=True)
 def _stub_deps(monkeypatch):
     """Neutralise external dependencies so tests run in isolation."""
-    import memory_manager
+    import argent.memory_manager as memory_manager
 
     class FakeMemory:
         def __init__(self):
@@ -38,24 +38,24 @@ def _stub_deps(monkeypatch):
 
     fake_mem = FakeMemory()
     monkeypatch.setattr(memory_manager, "memory", fake_mem)
-    monkeypatch.setattr("tools.file_ops.memory", fake_mem)
+    monkeypatch.setattr("argent.tools.file_ops.memory", fake_mem)
 
     # No-op snapshot (file_tracker)
-    monkeypatch.setattr("tools.file_ops.snapshot", lambda fp: None)
+    monkeypatch.setattr("argent.tools.file_ops.snapshot", lambda fp: None)
 
     # No syntax validation errors
-    monkeypatch.setattr("tools.file_ops._validate_code_syntax", lambda fp: None)
+    monkeypatch.setattr("argent.tools.file_ops._validate_code_syntax", lambda fp: None)
 
     # No path restrictions
-    monkeypatch.setattr("tools.file_ops._is_plugin_path_restricted", lambda fp: None)
-    monkeypatch.setattr("tools.file_ops._is_unity_meta_restricted", lambda fp: None)
-    monkeypatch.setattr("tools.file_ops._unity_script_placement_error", lambda fp: None)
+    monkeypatch.setattr("argent.tools.file_ops._is_plugin_path_restricted", lambda fp: None)
+    monkeypatch.setattr("argent.tools.file_ops._is_unity_meta_restricted", lambda fp: None)
+    monkeypatch.setattr("argent.tools.file_ops._unity_script_placement_error", lambda fp: None)
 
     # Mock rag_engine to avoid indexing side-effects
     mock_rag = MagicMock()
     mock_rag.update_file_index = lambda fp: None
     mock_rag.remove_file_index = lambda fp: None
-    monkeypatch.setitem(sys.modules, "rag_engine", mock_rag)
+    monkeypatch.setitem(sys.modules, "argent.rag_engine", mock_rag)
 
     yield
 
@@ -235,7 +235,7 @@ class TestDeleteFileBlindSpots:
 
     def test_delete_with_approval_succeeds(self, tmp_path, monkeypatch):
         """delete_file should succeed when approval is granted."""
-        monkeypatch.setattr("approval.request_approval", lambda *a, **kw: True)
+        monkeypatch.setattr("argent.approval.request_approval", lambda *a, **kw: True)
 
         target = tmp_path / "deleteme.txt"
         target.write_text("bye", encoding="utf-8")
@@ -245,7 +245,7 @@ class TestDeleteFileBlindSpots:
 
     def test_delete_without_approval_aborts(self, tmp_path, monkeypatch):
         """delete_file should abort when approval is denied, leaving the file intact."""
-        monkeypatch.setattr("approval.request_approval", lambda *a, **kw: False)
+        monkeypatch.setattr("argent.approval.request_approval", lambda *a, **kw: False)
 
         target = tmp_path / "keepme.txt"
         target.write_text("stay", encoding="utf-8")
@@ -255,7 +255,7 @@ class TestDeleteFileBlindSpots:
 
     def test_delete_calls_memory_on_success(self, tmp_path, monkeypatch):
         """On successful deletion, memory.add_completed should be called."""
-        monkeypatch.setattr("approval.request_approval", lambda *a, **kw: True)
+        monkeypatch.setattr("argent.approval.request_approval", lambda *a, **kw: True)
 
         calls = []
 
@@ -269,7 +269,7 @@ class TestDeleteFileBlindSpots:
             def add_error(self, s):
                 pass
 
-        monkeypatch.setattr("tools.file_ops.memory", TrackMemory())
+        monkeypatch.setattr("argent.tools.file_ops.memory", TrackMemory())
 
         target = tmp_path / "track.txt"
         target.write_text("x", encoding="utf-8")

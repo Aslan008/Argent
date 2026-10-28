@@ -2,7 +2,7 @@
 
 import base64
 
-from tools.command_ops import _encode_powershell_command
+from argent.tools.command_ops import _encode_powershell_command
 
 
 def _decode(encoded: str) -> str:

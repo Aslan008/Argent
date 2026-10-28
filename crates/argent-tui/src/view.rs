@@ -23,7 +23,7 @@ use ratatui::text::{Line, Span};
 use serde_json::{json, Value};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-use crate::ansi::{clip_line, line_width, parse_ansi, strip_ansi, style_from_rich};
+use crate::ansi::{clip_line, glue_style, line_width, parse_ansi, strip_ansi, style_from_rich};
 use crate::app::{App, ClickAction, MessageItem};
 use crate::renderer::{BlockRenderer, FallbackRenderer};
 use crate::theme::UiStyle;
@@ -289,38 +289,6 @@ pub fn full_panel(
     out
 }
 
-/// The REPL's `Очередь сообщений` box (cli_ui `_render_queue_input_display`).
-pub(crate) fn queue_rows(app: &App, width: usize) -> Vec<Line<'static>> {
-    if app.message_queue.is_empty() {
-        return Vec::new();
-    }
-    let border = Style::default().fg(Color::Indexed(6)).add_modifier(Modifier::DIM);
-    // Rich lays the title's `bold cyan` over the panel's `cyan dim`, so the title
-    // is dim as well — the REPL's box shows exactly that.
-    let title = vec![Span::styled(
-        format!("Очередь сообщений ({})", app.message_queue.len()),
-        Style::default().fg(Color::Indexed(6)).add_modifier(Modifier::BOLD | Modifier::DIM),
-    )];
-    let body: Vec<Line<'static>> = app
-        .message_queue
-        .iter()
-        .enumerate()
-        .map(|(i, item)| {
-            let mut short: String = item.replace('\n', " ");
-            if short.chars().count() > 65 {
-                short = format!("{}…", short.chars().take(62).collect::<String>());
-            }
-            Line::from(vec![
-                Span::raw(" "),
-                Span::styled(format!("{}.", i + 1), Style::default().add_modifier(Modifier::DIM)),
-                Span::raw(" "),
-                Span::styled(strip_ansi(&short), Style::default().fg(Color::Indexed(7))),
-            ])
-        })
-        .collect();
-    full_panel(title, body, border, width)
-}
-
 /// What the user typed, as the REPL echoes it: `❯ ` then the text, continuation
 /// rows indented to line up under it. (The premium look draws it in `cards.rs`.)
 fn user_rows(app: &App, text: &str, width: u16) -> Vec<Line<'static>> {
@@ -523,8 +491,27 @@ pub(crate) fn mark_focus(rows: &mut [Line<'static>]) {
 
 /// The rows of message `idx` at `width`.
 pub fn item_view(app: &App, idx: usize, width: u16) -> ItemView {
+    // A folded turn-process: its rows are not built at all, and the first of them becomes
+    // the one line that opens it. Nothing else has to know — the scroll maths already
+    // works from whatever a view reports its length to be.
+    if app.fold_hides(idx) {
+        return ItemView { blocks: Vec::new(), focused: false, len: 0, chrome_tail: 0, lead: 0 };
+    }
+    if let Some(group) = app.fold_at(idx) {
+        let mut blocks = Blocks::default();
+        blocks.add(Arc::new(vec![fold_header(app, idx, group.end, width, false)]));
+        blocks.click_last(ClickAction::ToggleFold(idx));
+        return ItemView { blocks: blocks.0, focused: false, len: 1, chrome_tail: 0, lead: 0 };
+    }
     if app.ui.is_premium() {
-        return crate::cards::item_view(app, idx, width);
+        let mut view = crate::cards::item_view(app, idx, width);
+        // An opened group keeps its line above the steps, so a second click closes it.
+        if let Some(end) = app.fold_groups.get(&idx).map(|g| g.end) {
+            view.blocks.insert(0, (Arc::new(vec![fold_header(app, idx, end, width, true)]),
+                                   Some(ClickAction::ToggleFold(idx)), Cols::ALL));
+            view.len += 1;
+        }
+        return view;
     }
     let mut blocks = Blocks::default();
     let mut chrome_tail = 0usize;
@@ -629,6 +616,15 @@ pub fn item_view(app: &App, idx: usize, width: u16) -> ItemView {
             }
         }
 
+        // Live console output, already joined into rows upstream (`push_output`).
+        MessageItem::Output(text) => {
+            let rows: Vec<Line<'static>> = parse_ansi(&glue_style(text))
+                .into_iter()
+                .map(|l| clip_line(l, width as usize))
+                .collect();
+            blocks.add(Arc::new(rows));
+        }
+
         MessageItem::System(text) => {
             let fp = text_fp(text);
             blocks.add(app.cached_block(idx, 0, fp, width, || ("system", json!({"text": text}))));
@@ -668,8 +664,111 @@ pub fn item_view(app: &App, idx: usize, width: u16) -> ItemView {
         }
     }
 
+    // An opened group keeps its line above the steps, so a second click closes it.
+    if let Some(end) = app.fold_groups.get(&idx).map(|g| g.end) {
+        blocks.0.insert(0, (Arc::new(vec![fold_header(app, idx, end, width, true)]),
+                            Some(ClickAction::ToggleFold(idx)), Cols::ALL));
+    }
+
     let len = blocks.0.iter().map(|(b, _, _)| b.len()).sum();
     ItemView { blocks: blocks.0, focused: app.is_focused_block(idx), len, chrome_tail, lead: 0 }
+}
+
+/// `▸ Ходы агента · 7 шагов · 4 инструмента · 2 файла · 1 ошибка · 0:12` — the one line a
+/// finished turn's work folds into, and the button that brings it back.
+fn fold_header(app: &App, start: usize, end: usize, width: u16, open: bool) -> Line<'static> {
+    let (steps, tools, files, errors, secs) = fold_stats(app, start, end);
+    let mut parts: Vec<String> = Vec::new();
+    if steps > 0 {
+        parts.push(format!("{steps} {}", plural(steps, "шаг", "шага", "шагов")));
+    }
+    if tools > 0 {
+        parts.push(format!("{tools} {}", plural(tools, "инструмент", "инструмента", "инструментов")));
+    }
+    if files > 0 {
+        parts.push(format!("{files} {}", plural(files, "файл", "файла", "файлов")));
+    }
+    if errors > 0 {
+        parts.push(format!("{errors} {}", plural(errors, "ошибка", "ошибки", "ошибок")));
+    }
+    if secs >= 1.0 {
+        parts.push(fmt_compact(secs));
+    }
+    // The line is the turn's own name, not a counters dump: «Ходы агента · 14 шагов…».
+    let marker = if open { "▾" } else { "▸" };
+    let text = if parts.is_empty() {
+        format!(" {marker} Ходы агента")
+    } else {
+        format!(" {marker} Ходы агента · {}", parts.join(" · "))
+    };
+    // A failure inside the run is named on the line itself: the folded rows are gone, and
+    // silence about a red step would be the fold lying.
+    let style = if errors > 0 {
+        Style::default().fg(Color::Indexed(3)).add_modifier(Modifier::DIM)
+    } else {
+        Style::default().add_modifier(Modifier::DIM)
+    };
+    clip_line(Line::from(Span::styled(text, style)), width as usize)
+}
+
+/// What the folded rows amount to: steps, tool calls, distinct files, failures, seconds.
+fn fold_stats(app: &App, start: usize, end: usize) -> (usize, usize, usize, usize, f64) {
+    let end = end.min(app.messages.len());
+    let start = start.min(end);
+    let mut steps = 0usize;
+    let mut tools = 0usize;
+    let mut errors = 0usize;
+    let mut secs = 0.0f64;
+    let mut files: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for item in &app.messages[start..end] {
+        // Every hidden item is a step — a call, a reasoning block, a progress note
+        // between batches. Counting only tool calls made the line understate the work.
+        steps += 1;
+        match item {
+            MessageItem::Tool { args, result, duration_secs, .. } => {
+                tools += 1;
+                if let Some(d) = duration_secs {
+                    secs += *d;
+                }
+                if crate::app::tool_failed(result.as_deref()) {
+                    errors += 1;
+                }
+                for key in ["path", "file_path", "file", "files"] {
+                    match args.get(key) {
+                        Some(Value::String(p)) => {
+                            files.insert(p.clone());
+                        }
+                        Some(Value::Array(list)) => {
+                            for value in list {
+                                if let Value::String(p) = value {
+                                    files.insert(p.clone());
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            MessageItem::Diff { file, .. } => {
+                files.insert(file.clone());
+            }
+            _ => {}
+        }
+    }
+    (steps, tools, files.len(), errors, secs)
+}
+
+/// Russian agrees with the number, so the line has to as well.
+fn plural(n: usize, one: &'static str, few: &'static str, many: &'static str) -> &'static str {
+    let tail = n % 100;
+    if (11..=14).contains(&tail) {
+        return many;
+    }
+    match n % 10 {
+        1 => one,
+        2..=4 => few,
+        _ => many,
+    }
 }
 
 /// `⠋   ⠋ name: target (0:03)` — the REPL's `_ToolWaitDisplay`, including its
@@ -808,7 +907,6 @@ pub fn live_rows(app: &App, width: u16, height: usize) -> Vec<Line<'static>> {
             ));
         }
     }
-    rows.extend(queue_rows(app, w));
     rows
 }
 

@@ -14,7 +14,7 @@ import time
 
 import pytest
 
-import tools.command_ops as command_ops
+import argent.tools.command_ops as command_ops
 
 
 # ---------------------------------------------------------------------------
@@ -79,7 +79,11 @@ class TestStartBackgroundCommand:
         r2 = command_ops.start_background_command('echo two')
         pid1 = int(r1.split("PID:")[-1].strip())
         pid2 = int(r2.split("PID:")[-1].strip())
-        assert pid2 > pid1
+        # The number is the process's own OS pid, not a counter of ours, so it is
+        # not handed out in order: the promise is "two jobs, two different numbers",
+        # and each of them names a real process (see tests/test_background_pid.py).
+        assert pid1 != pid2
+        assert pid1 > 0 and pid2 > 0
 
     def test_process_registered_in_active_processes(self):
         result = command_ops.start_background_command('echo registered')

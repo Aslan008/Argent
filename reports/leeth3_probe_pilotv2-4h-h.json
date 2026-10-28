@@ -1,0 +1,391 @@
+{
+ "model": ".argent/kaggle/leeth3/out_v2-4h/run/final",
+ "batches": [
+  215,
+  374
+ ],
+ "orders": 4,
+ "holdout_only": true,
+ "safety": {
+  "base": {
+   "n": 699,
+   "auc": 0.821,
+   "acc": 0.741,
+   "ece": 0.041
+  },
+  "all_phrasings_mean": {
+   "n": 699,
+   "auc": 0.829,
+   "acc": 0.74,
+   "ece": 0.05
+  },
+  "phrasing_spread_mean": 0.122,
+  "phrasing_spread_over_0.2": 0.152,
+  "gate_0.8": {
+   "base": {
+    "danger_caught": 0.974,
+    "benign_pass": 0.224
+   },
+   "all_phrasings_mean": {
+    "danger_caught": 0.983,
+    "benign_pass": 0.215
+   }
+  },
+  "without_user_words": {
+   "n": 617,
+   "mean_abs_shift": 0.177,
+   "shift_over_0.1": 0.616,
+   "mean_abs_shift_words_twins": 0.279,
+   "with_words": {
+    "n": 566,
+    "auc": 0.818,
+    "acc": 0.733,
+    "ece": 0.035
+   },
+   "without_words": {
+    "n": 566,
+    "auc": 0.673,
+    "acc": 0.64,
+    "ece": 0.05
+   }
+  },
+  "twins": {
+   "в команде": {
+    "base": {
+     "ordering": 0.92,
+     "n_pairs": 88,
+     "ci90": [
+      0.86,
+      0.956
+     ]
+    },
+    "all_phrasings_mean": {
+     "ordering": 0.932,
+     "n_pairs": 88,
+     "ci90": [
+      0.874,
+      0.964
+     ]
+    }
+   },
+   "в масштабе": {
+    "base": {
+     "ordering": 0.851,
+     "n_pairs": 47,
+     "ci90": [
+      0.747,
+      0.917
+     ]
+    },
+    "all_phrasings_mean": {
+     "ordering": 0.809,
+     "n_pairs": 47,
+     "ci90": [
+      0.698,
+      0.885
+     ]
+    }
+   },
+   "в режиме": {
+    "base": {
+     "ordering": 0.732,
+     "n_pairs": 56,
+     "ci90": [
+      0.626,
+      0.817
+     ]
+    },
+    "all_phrasings_mean": {
+     "ordering": 0.661,
+     "n_pairs": 56,
+     "ci90": [
+      0.551,
+      0.755
+     ]
+    }
+   },
+   "в словах пользователя": {
+    "base": {
+     "ordering": 0.951,
+     "n_pairs": 81,
+     "ci90": [
+      0.894,
+      0.978
+     ]
+    },
+    "all_phrasings_mean": {
+     "ordering": 0.963,
+     "n_pairs": 81,
+     "ci90": [
+      0.911,
+      0.985
+     ]
+    }
+   },
+   "факт в середине контекста": {
+    "base": {
+     "ordering": 0.486,
+     "n_pairs": 37,
+     "ci90": [
+      0.357,
+      0.618
+     ]
+    },
+    "all_phrasings_mean": {
+     "ordering": 0.405,
+     "n_pairs": 37,
+     "ci90": [
+      0.284,
+      0.54
+     ]
+    }
+   }
+  }
+ },
+ "content": {
+  "with_text": {
+   "n": 326,
+   "auc": 0.968,
+   "acc": 0.92,
+   "ece": 0.045
+  },
+  "question_only": {
+   "n": 326,
+   "auc": 0.528,
+   "acc": 0.521,
+   "ece": 0.286
+  },
+  "pairs_with_text": {
+   "ordering": 0.975,
+   "n_pairs": 163,
+   "ci90": [
+    0.946,
+    0.989
+   ]
+  },
+  "pairs_question_only": {
+   "ordering": 0.564,
+   "n_pairs": 163,
+   "ci90": [
+    0.5,
+    0.627
+   ]
+  },
+  "by_pair_method": {
+   "без слов текста": {
+    "with_text": {
+     "ordering": 0.988,
+     "n_pairs": 81,
+     "ci90": [
+      0.947,
+      0.997
+     ]
+    },
+    "question_only": {
+     "ordering": 0.506,
+     "n_pairs": 81,
+     "ci90": [
+      0.416,
+      0.596
+     ]
+    }
+   },
+   "два события": {
+    "with_text": {
+     "ordering": 0.963,
+     "n_pairs": 82,
+     "ci90": [
+      0.912,
+      0.985
+     ]
+    },
+    "question_only": {
+     "ordering": 0.622,
+     "n_pairs": 82,
+     "ci90": [
+      0.531,
+      0.705
+     ]
+    }
+   }
+  }
+ },
+ "tools": {
+  "native": {
+   "n": 494,
+   "options_mean": 19.427,
+   "acc_first_order": 0.862,
+   "acc_mean_of_orders": 0.858,
+   "same_answer_every_order": 0.917,
+   "gated": {
+    "0.5": {
+     "half0": {
+      "acc": 0.85,
+      "re_asked": 0.073
+     },
+     "half1": {
+      "acc": 0.879,
+      "re_asked": 0.032
+     }
+    },
+    "0.6": {
+     "half0": {
+      "acc": 0.846,
+      "re_asked": 0.121
+     },
+     "half1": {
+      "acc": 0.87,
+      "re_asked": 0.085
+     }
+    },
+    "0.7": {
+     "half0": {
+      "acc": 0.846,
+      "re_asked": 0.154
+     },
+     "half1": {
+      "acc": 0.87,
+      "re_asked": 0.109
+     }
+    },
+    "0.8": {
+     "half0": {
+      "acc": 0.846,
+      "re_asked": 0.211
+     },
+     "half1": {
+      "acc": 0.87,
+      "re_asked": 0.146
+     }
+    },
+    "0.9": {
+     "half0": {
+      "acc": 0.846,
+      "re_asked": 0.259
+     },
+     "half1": {
+      "acc": 0.87,
+      "re_asked": 0.219
+     }
+    },
+    "0.95": {
+     "half0": {
+      "acc": 0.846,
+      "re_asked": 0.336
+     },
+     "half1": {
+      "acc": 0.87,
+      "re_asked": 0.275
+     }
+    },
+    "1.01": {
+     "half0": {
+      "acc": 0.846,
+      "re_asked": 1.0
+     },
+     "half1": {
+      "acc": 0.87,
+      "re_asked": 1.0
+     }
+    }
+   },
+   "gated_chosen_on_half0": {
+    "tau": 0.5,
+    "half1": {
+     "acc": 0.879,
+     "re_asked": 0.032
+    },
+    "half1_first_order_acc": 0.883
+   }
+  },
+  "wide32": {
+   "n": 494,
+   "options_mean": 33.49,
+   "acc_first_order": 0.846,
+   "acc_mean_of_orders": 0.86,
+   "same_answer_every_order": 0.909,
+   "gated": {
+    "0.5": {
+     "half0": {
+      "acc": 0.826,
+      "re_asked": 0.061
+     },
+     "half1": {
+      "acc": 0.879,
+      "re_asked": 0.032
+     }
+    },
+    "0.6": {
+     "half0": {
+      "acc": 0.83,
+      "re_asked": 0.101
+     },
+     "half1": {
+      "acc": 0.883,
+      "re_asked": 0.073
+     }
+    },
+    "0.7": {
+     "half0": {
+      "acc": 0.834,
+      "re_asked": 0.142
+     },
+     "half1": {
+      "acc": 0.887,
+      "re_asked": 0.109
+     }
+    },
+    "0.8": {
+     "half0": {
+      "acc": 0.834,
+      "re_asked": 0.194
+     },
+     "half1": {
+      "acc": 0.887,
+      "re_asked": 0.17
+     }
+    },
+    "0.9": {
+     "half0": {
+      "acc": 0.834,
+      "re_asked": 0.267
+     },
+     "half1": {
+      "acc": 0.887,
+      "re_asked": 0.251
+     }
+    },
+    "0.95": {
+     "half0": {
+      "acc": 0.834,
+      "re_asked": 0.34
+     },
+     "half1": {
+      "acc": 0.887,
+      "re_asked": 0.34
+     }
+    },
+    "1.01": {
+     "half0": {
+      "acc": 0.834,
+      "re_asked": 1.0
+     },
+     "half1": {
+      "acc": 0.887,
+      "re_asked": 1.0
+     }
+    }
+   },
+   "gated_chosen_on_half0": {
+    "tau": 0.7,
+    "half1": {
+     "acc": 0.887,
+     "re_asked": 0.109
+    },
+    "half1_first_order_acc": 0.879
+   }
+  }
+ },
+ "model_calls": 9825,
+ "seconds": 2554.2
+}

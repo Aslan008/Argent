@@ -35,7 +35,7 @@ try:
 except Exception:
     pass
 
-from src.leeth import feedback  # noqa: E402
+from src.leeth import feedback  
 
 
 def _brief(rec: Dict[str, Any], idx: int) -> str:

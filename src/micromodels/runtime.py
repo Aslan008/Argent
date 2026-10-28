@@ -24,7 +24,7 @@ from src.micromodels.schema_dataset_generator import (
 from src.micromodels.semantic_registry import SemanticToolRegistry
 from src.micromodels.specialists import extract_specialist_args
 from src.micromodels.tokenizer import BPETokenizer
-from logger import get_logger
+from argent.logger import get_logger
 
 logger = get_logger("micromodel_runtime")
 

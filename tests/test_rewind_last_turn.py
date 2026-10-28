@@ -5,9 +5,9 @@ from unittest.mock import MagicMock
 
 import pytest
 
-import agent as agent_module
-import config
-from agent import ArgentAgent
+import argent.agent as agent_module
+import argent.config as config
+from argent.agent import ArgentAgent
 from src.agent.checkpoints import set_auto_checkpoint
 
 

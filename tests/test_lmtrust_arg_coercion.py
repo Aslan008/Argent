@@ -497,7 +497,7 @@ class TestCoerceAndLogDeep:
     def test_logging_when_changes_occur(self, caplog):
         with caplog.at_level(logging.INFO, logger=arg_coercion.log.name):
             result = coerce_and_log("write_file", {
-                "file_path": "x", "content": "y", "overwrite": "false",
+                "path": "x", "content": "y", "overwrite": "false",
             })
         assert result["overwrite"] is False
         assert "coerced 1 argument(s) for write_file" in caplog.text
@@ -506,9 +506,9 @@ class TestCoerceAndLogDeep:
     def test_no_logging_when_no_changes(self, caplog):
         with caplog.at_level(logging.INFO, logger=arg_coercion.log.name):
             result = coerce_and_log("write_file", {
-                "file_path": "x", "content": "y", "overwrite": False,
+                "path": "x", "content": "y", "overwrite": False,
             })
-        assert result == {"file_path": "x", "content": "y", "overwrite": False}
+        assert result == {"path": "x", "content": "y", "overwrite": False}
         assert "coerced" not in caplog.text
 
     def test_multiple_changes_logged_with_count(self, caplog, monkeypatch):

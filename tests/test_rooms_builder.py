@@ -8,7 +8,7 @@ import pytest
 from src.rooms import builder as B
 from src.rooms.diagram import diff_rooms, render_flow, render_mermaid
 from src.rooms.models import Room
-from tests.test_rooms_cli_tool import Term, lib, starter_lib  # noqa: F401  (fixtures and helpers)
+from tests.test_rooms_cli_tool import Term, lib, starter_lib  
 from tests.test_rooms_library import STARTER_TOOLS
 from src.rooms import cli
 from src.rooms.tool import rooms_action

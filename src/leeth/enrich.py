@@ -23,7 +23,7 @@ entirely — they are maintenance noise, not user intent.
 from typing import Any, Dict
 
 from src.leeth import feedback, trajectory
-from logger import get_logger
+from argent.logger import get_logger
 
 logger = get_logger("leeth_enrich")
 

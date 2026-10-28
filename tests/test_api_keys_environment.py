@@ -7,7 +7,7 @@ key was to write it into a plain-text config file.
 
 import pytest
 
-import config
+import argent.config as config
 
 # (getter, saved-key name in the config file, environment variables it honours)
 KEYS = [

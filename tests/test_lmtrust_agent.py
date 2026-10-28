@@ -10,9 +10,9 @@ from unittest.mock import MagicMock
 
 import pytest
 
-import agent as agent_module
-import config
-from agent import ArgentAgent
+import argent.agent as agent_module
+import argent.config as config
+from argent.agent import ArgentAgent
 
 
 # --------------------------------------------------------------------------- #
@@ -190,7 +190,7 @@ class TestEphemeralContext:
 
     def test_ephemeral_reports_background_processes(self, cloud_agent, monkeypatch):
         """Background processes are reported in ephemeral context."""
-        import tools
+        import argent.tools as tools
         monkeypatch.setitem(tools.ACTIVE_PROCESSES, "99", {"command": "x"})
         try:
             eph = cloud_agent._build_ephemeral_context()
@@ -274,9 +274,9 @@ class TestEphemeralContext:
             iter([step2_chunk]),
         ]
 
-        with patch("agent.create_provider", return_value=mock_provider), \
-             patch("agent.get_available_tools", return_value={"dummy_tool": lambda: "Sunny 25C"}), \
-             patch("agent.get_tool_schemas", return_value=[{"type": "function", "function": {"name": "dummy_tool", "parameters": {}}}]):
+        with patch("argent.agent.create_provider", return_value=mock_provider), \
+             patch("argent.agent.get_available_tools", return_value={"dummy_tool": lambda: "Sunny 25C"}), \
+             patch("argent.agent.get_tool_schemas", return_value=[{"type": "function", "function": {"name": "dummy_tool", "parameters": {}}}]):
 
             events = list(agent.process_user_input("What is the weather?"))
 
@@ -320,7 +320,7 @@ class TestReadDedup:
         f = tmp_path / "test.py"
         f.write_text("x = 1\n" * 100)
         result = cloud_agent._read_dedup_note({
-            "file_path": str(f),
+            "path": str(f),
             "start_line": 1,
             "end_line": 10,
         })
@@ -331,7 +331,7 @@ class TestReadDedup:
         f = tmp_path / "test.py"
         f.write_text("x = 1\n" * 100)
         result = cloud_agent._read_dedup_note({
-            "file_path": str(f),
+            "path": str(f),
             "start_line": 5,
         })
         assert result is None
@@ -339,7 +339,7 @@ class TestReadDedup:
     def test_returns_none_for_nonexistent_file(self, cloud_agent, tmp_path):
         """Non-existent file should return None (no dedup)."""
         result = cloud_agent._read_dedup_note({
-            "file_path": str(tmp_path / "nonexistent.py"),
+            "path": str(tmp_path / "nonexistent.py"),
         })
         assert result is None
 
@@ -352,7 +352,7 @@ class TestReadDedup:
         """A file that was never read before should return None."""
         f = tmp_path / "test.py"
         f.write_text("x = 1\n")
-        result = cloud_agent._read_dedup_note({"file_path": str(f)})
+        result = cloud_agent._read_dedup_note({"path": str(f)})
         assert result is None
 
     def test_returns_note_for_cached_unchanged_file(self, cloud_agent, tmp_path):
@@ -360,13 +360,13 @@ class TestReadDedup:
         f = tmp_path / "test.py"
         f.write_text("x = 1\n")
         # Record the read
-        cloud_agent._record_read({"file_path": str(f)}, "x = 1\n")
+        cloud_agent._record_read({"path": str(f)}, "x = 1\n")
         # Add the stored content to messages so it's "in history"
         cloud_agent.messages.append({
             "role": "user",
             "content": "x = 1\n",
         })
-        result = cloud_agent._read_dedup_note({"file_path": str(f)})
+        result = cloud_agent._read_dedup_note({"path": str(f)})
         assert result is not None
         assert "UNCHANGED" in result
 
@@ -374,19 +374,19 @@ class TestReadDedup:
         """A file that was read but then modified should return None."""
         f = tmp_path / "test.py"
         f.write_text("x = 1\n")
-        cloud_agent._record_read({"file_path": str(f)}, "x = 1\n")
+        cloud_agent._record_read({"path": str(f)}, "x = 1\n")
         # Modify the file
         f.write_text("x = 2\n")
-        result = cloud_agent._read_dedup_note({"file_path": str(f)})
+        result = cloud_agent._read_dedup_note({"path": str(f)})
         assert result is None
 
     def test_returns_none_when_content_not_in_history(self, cloud_agent, tmp_path):
         """Even if cached, if the content was trimmed from history, no dedup."""
         f = tmp_path / "test.py"
         f.write_text("x = 1\n")
-        cloud_agent._record_read({"file_path": str(f)}, "x = 1\n")
+        cloud_agent._record_read({"path": str(f)}, "x = 1\n")
         # Don't add the content to messages — it's been trimmed
-        result = cloud_agent._read_dedup_note({"file_path": str(f)})
+        result = cloud_agent._read_dedup_note({"path": str(f)})
         assert result is None
 
 
@@ -397,7 +397,7 @@ class TestReadDedup:
 class TestExternalChangeDetection:
     def test_returns_none_for_non_edit_tool(self, cloud_agent, tmp_path):
         """Non-edit tools should not trigger external change detection."""
-        result = cloud_agent._external_change_note("read_file", {"file_path": str(tmp_path / "x.py")})
+        result = cloud_agent._external_change_note("read_file", {"path": str(tmp_path / "x.py")})
         assert result is None
 
     def test_returns_none_for_no_file_path(self, cloud_agent):
@@ -409,15 +409,15 @@ class TestExternalChangeDetection:
         """A file that was never read should not trigger external change warning."""
         f = tmp_path / "test.py"
         f.write_text("x = 1\n")
-        result = cloud_agent._external_change_note("replace_in_file", {"file_path": str(f)})
+        result = cloud_agent._external_change_note("replace_in_file", {"path": str(f)})
         assert result is None
 
     def test_returns_none_for_unchanged_file(self, cloud_agent, tmp_path):
         """A file that was read and hasn't changed should not warn."""
         f = tmp_path / "test.py"
         f.write_text("x = 1\n")
-        cloud_agent._record_read({"file_path": str(f)}, "x = 1\n")
-        result = cloud_agent._external_change_note("replace_in_file", {"file_path": str(f)})
+        cloud_agent._record_read({"path": str(f)}, "x = 1\n")
+        result = cloud_agent._external_change_note("replace_in_file", {"path": str(f)})
         assert result is None
 
     def test_warns_for_externally_modified_file(self, cloud_agent, tmp_path):
@@ -425,11 +425,11 @@ class TestExternalChangeDetection:
         import time
         f = tmp_path / "test.py"
         f.write_text("x = 1\n")
-        cloud_agent._record_read({"file_path": str(f)}, "x = 1\n")
+        cloud_agent._record_read({"path": str(f)}, "x = 1\n")
         time.sleep(0.01)
         # Modify the file externally — different size to ensure detection
         f.write_text("x = 222\n")
-        result = cloud_agent._external_change_note("replace_in_file", {"file_path": str(f)})
+        result = cloud_agent._external_change_note("replace_in_file", {"path": str(f)})
         assert result is not None
         assert "changed on disk" in result.lower()
 
@@ -438,12 +438,12 @@ class TestExternalChangeDetection:
         import time
         f = tmp_path / "test.py"
         f.write_text("x = 1\n")
-        cloud_agent._record_read({"file_path": str(f)}, "x = 1\n")
+        cloud_agent._record_read({"path": str(f)}, "x = 1\n")
         time.sleep(0.01)
         # Modify the file externally — different size to ensure detection
         f.write_text("x = 222\n")
         for tool_name in ["replace_in_file", "write_file"]:
-            result = cloud_agent._external_change_note(tool_name, {"file_path": str(f)})
+            result = cloud_agent._external_change_note(tool_name, {"path": str(f)})
             assert result is not None, f"{tool_name} should detect external changes"
 
 
@@ -456,10 +456,10 @@ class TestDropReadCache:
         """After dropping, the cache entry is gone."""
         f = tmp_path / "test.py"
         f.write_text("x = 1\n")
-        cloud_agent._record_read({"file_path": str(f)}, "x = 1\n")
+        cloud_agent._record_read({"path": str(f)}, "x = 1\n")
         assert str(f.resolve()) in cloud_agent._read_cache or \
                str(f) in cloud_agent._read_cache
-        cloud_agent._drop_read_cache({"file_path": str(f)})
+        cloud_agent._drop_read_cache({"path": str(f)})
         assert str(f.resolve()) not in cloud_agent._read_cache
         assert str(f) not in cloud_agent._read_cache
 
@@ -470,7 +470,7 @@ class TestDropReadCache:
 
     def test_noop_for_nonexistent_file(self, cloud_agent, tmp_path):
         """Dropping a non-existent file should be a no-op."""
-        cloud_agent._drop_read_cache({"file_path": str(tmp_path / "nonexistent.py")})
+        cloud_agent._drop_read_cache({"path": str(tmp_path / "nonexistent.py")})
         # Should not crash
 
 

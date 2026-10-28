@@ -129,7 +129,7 @@ class TestReadWebpageIntegration:
     def no_real_browser(self, monkeypatch):
         """read_webpage falls back to a headless browser for thin pages; a unit test must not start one
         (these tests used to launch Chromium and read its error page for http://x)."""
-        import browser_engine
+        import argent.browser_engine as browser_engine
 
         def refuse(coro):
             coro.close()
@@ -137,7 +137,7 @@ class TestReadWebpageIntegration:
         monkeypatch.setattr(browser_engine.browser_engine, "run", refuse)
 
     def test_success_format(self, monkeypatch):
-        import tools.web_tools as wt
+        import argent.tools.web_tools as wt
         monkeypatch.setattr("src.research.fetch.fetch_page",
                             lambda url, timeout=15, raw=False:
                             {"ok": True, "url": url, "text": "hello world", "source": "trafilatura", "error": ""})
@@ -145,7 +145,7 @@ class TestReadWebpageIntegration:
         assert out.startswith("Content of http://x:") and "hello world" in out
 
     def test_error_format(self, monkeypatch):
-        import tools.web_tools as wt
+        import argent.tools.web_tools as wt
         monkeypatch.setattr("src.research.fetch.fetch_page",
                             lambda url, timeout=15, raw=False:
                             {"ok": False, "url": url, "text": "", "source": "error", "error": "HTTP 500"})
@@ -153,7 +153,7 @@ class TestReadWebpageIntegration:
         assert out.startswith("Error reading webpage") and "HTTP 500" in out
 
     def test_truncation(self, monkeypatch):
-        import tools.web_tools as wt
+        import argent.tools.web_tools as wt
         big = "a" * 20000
         monkeypatch.setattr("src.research.fetch.fetch_page",
                             lambda url, timeout=15, raw=False:
@@ -166,8 +166,8 @@ class TestBrowserFallbackDoesNotReturnErrorPages:
     """The browser fallback read Chrome's own "This site can't be reached" page as the site's content."""
 
     def test_a_failed_navigation_is_not_content(self, monkeypatch):
-        import browser_engine
-        import tools.web_tools as wt
+        import argent.browser_engine as browser_engine
+        import argent.tools.web_tools as wt
         monkeypatch.setattr("src.research.fetch.fetch_page",
                             lambda url, timeout=15, raw=False:
                             {"ok": False, "url": url, "text": "", "source": "error", "error": "DNS failure"})
@@ -195,5 +195,5 @@ class TestBrowserFallbackDoesNotReturnErrorPages:
         ("Opened: https://example.com/\nTitle: Example", False),
     ])
     def test_what_counts_as_not_loaded(self, opened, failed):
-        import tools.web_tools as wt
+        import argent.tools.web_tools as wt
         assert wt._browser_did_not_load(opened) is failed

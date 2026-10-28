@@ -11,7 +11,7 @@ class TestThemeLookup:
         theme = tmp_path / "custom.yaml"
         theme.write_text("colors: {}\n", encoding="utf-8")
         monkeypatch.setenv("ARGENT_THEME", str(theme))
-        import ui
+        import argent.ui as ui
         importlib.reload(ui)
         assert ui.THEME_FILE == theme
 
@@ -22,7 +22,7 @@ class TestThemeLookup:
         elsewhere.mkdir(parents=True)
         monkeypatch.delenv("ARGENT_THEME", raising=False)
         monkeypatch.chdir(elsewhere)
-        import ui
+        import argent.ui as ui
         importlib.reload(ui)
         # The repo ships theme.yaml next to ui.py, so it resolves regardless of CWD.
         assert ui.THEME_FILE is not None
@@ -30,7 +30,7 @@ class TestThemeLookup:
 
     def test_home_dir_is_a_candidate(self, tmp_path, monkeypatch):
         """_find_theme_file falls through to ~/.argent/theme.yaml."""
-        import ui
+        import argent.ui as ui
         home = tmp_path / "home"
         (home / ".argent").mkdir(parents=True)
         expected = home / ".argent" / "theme.yaml"
@@ -50,7 +50,7 @@ class TestThemeLookup:
 
 class TestMarkdownOffLoop:
     def test_get_markdown_uses_to_thread(self, monkeypatch):
-        import browser_engine
+        import argent.browser_engine as browser_engine
 
         calls = {"threaded": False}
         real_to_thread = asyncio.to_thread

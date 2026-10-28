@@ -28,7 +28,7 @@ def _c(tool, **args):
 class TestTheDangerousOne:
     def test_a_string_false_disarms_a_guard(self):
         """The whole reason this module exists."""
-        assert _c("write_file", file_path="x", content="y",
+        assert _c("write_file", path="x", content="y",
                   overwrite="false")["overwrite"] is False
 
     @pytest.mark.parametrize("text,expected", [
@@ -37,16 +37,16 @@ class TestTheDangerousOne:
         ("null", False), ("none", False),
     ])
     def test_the_spellings_that_show_up(self, text, expected):
-        assert _c("write_file", file_path="x", content="y",
+        assert _c("write_file", path="x", content="y",
                   overwrite=text)["overwrite"] is expected
 
     def test_an_ambiguous_string_is_left_for_the_tool_to_reject(self):
         """Guessing here would be worse than the tool's own error message."""
-        assert _c("write_file", file_path="x", content="y",
+        assert _c("write_file", path="x", content="y",
                   overwrite="maybe")["overwrite"] == "maybe"
 
     def test_a_real_boolean_is_untouched(self):
-        assert _c("write_file", file_path="x", content="y",
+        assert _c("write_file", path="x", content="y",
                   overwrite=True)["overwrite"] is True
 
 
@@ -56,11 +56,11 @@ class TestNumbers:
                   max_results="3")["max_results"] == 3
 
     def test_a_whole_float_is_an_integer(self):
-        assert _c("read_file", file_path="x", start_line="10.0")["start_line"] == 10
+        assert _c("read_file", path="x", start_line="10.0")["start_line"] == 10
 
     def test_a_fractional_value_is_not_silently_truncated(self):
         """Rounding somebody's 2.5 to 2 invents an intention they did not have."""
-        assert _c("read_file", file_path="x", start_line="2.5")["start_line"] == "2.5"
+        assert _c("read_file", path="x", start_line="2.5")["start_line"] == "2.5"
 
     def test_nonsense_is_passed_through(self):
         assert _c("grep_search", directory=".", pattern="p",
@@ -96,30 +96,27 @@ class TestJsonInAString:
     invites the model to send the object itself."""
 
     def test_a_list_is_serialised_back(self):
-        """Originally pinned with multi_replace_in_file(changes_json=[...]); that
-        tool was folded into replace_in_file, and call_mcp_tool is the remaining
-        `*_json` parameter."""
-        batch = [{"file_path": "a.py", "changes": []}]
-        assert _c("call_mcp_tool", server_name="unity", tool_name="t",
-                  arguments_json=batch)["arguments_json"] == '[{"file_path": "a.py", "changes": []}]'
+        """`tools_json` is the remaining parameter that declares a string holding
+        JSON, which invites the model to send the list itself."""
+        batch = ["read_file", "grep_search"]
+        assert _c("run_subagent", role="Coder", task="t", tools_json=batch)["tools_json"] == '["read_file", "grep_search"]'
 
     def test_a_dict_is_serialised_back(self):
-        assert _c("call_mcp_tool", server_name="unity", tool_name="t",
-                  arguments_json={"type": "Scene"})["arguments_json"] == '{"type": "Scene"}'
+        assert _c("run_subagent", role="Coder", task="t", tools_json={"read_file": True})["tools_json"] == '{"read_file": true}'
 
     def test_an_ordinary_string_parameter_does_not_swallow_objects(self):
         """Only *_json invites this; turning any list into text elsewhere would
         invent an intention the model did not have."""
         value = ["line one", "line two"]
-        assert _c("write_file", file_path="x", content=value)["content"] is value
+        assert _c("write_file", path="x", content=value)["content"] is value
 
     def test_a_correct_json_string_is_untouched(self):
-        text = '[{"file_path": "a.py"}]'
-        assert _c("multi_replace_in_file", changes_json=text)["changes_json"] is text
+        text = '[{"path": "a.py"}]'
+        assert _c("replace_in_file", changes_json=text)["changes_json"] is text
 
     def test_the_tool_then_works(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
-        from tools.file_ops import multi_replace_in_file
+        from argent.tools.file_ops import multi_replace_in_file
 
         (tmp_path / "t.txt").write_text("привет мир", encoding="utf-8")
         payload = [{"file_path": "t.txt", "target_text": "мир",
@@ -133,7 +130,7 @@ class TestJsonInAString:
         to be reported as "the target appears 11 times", with advice to make the
         target MORE distinctive — the opposite of the real problem."""
         monkeypatch.chdir(tmp_path)
-        from tools.file_ops import multi_replace_in_file
+        from argent.tools.file_ops import multi_replace_in_file
 
         (tmp_path / "t.txt").write_text("привет мир", encoding="utf-8")
         payload = [{"file_path": "t.txt",
@@ -151,14 +148,14 @@ class TestUntouched:
         assert coerce_arguments("not_a_tool", args) == (args, [])
 
     def test_a_parameter_the_schema_does_not_declare(self):
-        assert _c("write_file", file_path="x", content="y",
+        assert _c("write_file", path="x", content="y",
                   mystery="7")["mystery"] == "7"
 
     def test_strings_stay_strings(self):
-        assert _c("write_file", file_path="x", content="y")["content"] == "y"
+        assert _c("write_file", path="x", content="y")["content"] == "y"
 
     def test_a_number_in_a_string_field_becomes_text(self):
-        assert _c("write_file", file_path=5, content="y")["file_path"] == "5"
+        assert _c("write_file", path=5, content="y")["path"] == "5"
 
     def test_empty_and_non_dict_input(self):
         assert coerce_arguments("write_file", {}) == ({}, [])
@@ -170,14 +167,14 @@ class TestRecord:
         """A tool whose arguments are always repaired is a tool whose
         description needs rewriting — invisible without the record."""
         with caplog.at_level(logging.INFO, logger=arg_coercion.log.name):
-            coerce_and_log("write_file", {"file_path": "x", "content": "y",
+            coerce_and_log("write_file", {"path": "x", "content": "y",
                                           "overwrite": "false"})
         assert "coerced 1 argument(s) for write_file" in caplog.text
         assert "overwrite='false'->False" in caplog.text
 
     def test_a_clean_call_is_silent(self, caplog):
         with caplog.at_level(logging.INFO, logger=arg_coercion.log.name):
-            coerce_and_log("write_file", {"file_path": "x", "content": "y",
+            coerce_and_log("write_file", {"path": "x", "content": "y",
                                           "overwrite": False})
         assert "coerced" not in caplog.text
 
@@ -187,12 +184,12 @@ class TestAgainstTheRealTools:
 
     def test_the_overwrite_guard_holds_again(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
-        from tools.file_ops import write_file
+        from argent.tools.file_ops import write_file
 
         target = tmp_path / "notes.md"
         target.write_text("\n".join(f"line {i}" for i in range(400)), encoding="utf-8")
 
-        args = coerce_and_log("write_file", {"file_path": "notes.md",
+        args = coerce_and_log("write_file", {"path": "notes.md",
                                              "content": "WIPED",
                                              "overwrite": "false"})
         result = write_file(**args)
@@ -201,36 +198,37 @@ class TestAgainstTheRealTools:
 
     def test_grep_finds_what_is_there(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
-        from tools.search_ops import grep_search
+        from argent.tools.search_ops import grep_search
 
         (tmp_path / "a.txt").write_text("needle\nneedle\nneedle\n", encoding="utf-8")
-        args = coerce_and_log("grep_search", {"directory": str(tmp_path),
+        args = coerce_and_log("grep_search", {"path": str(tmp_path),
                                               "pattern": "needle",
                                               "max_results": "3"})
         assert "No matches found" not in grep_search(**args)
 
     def test_read_file_does_not_leak_a_typeerror(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
-        from tools.file_ops import read_file
+        from argent.tools.file_ops import read_file
 
         (tmp_path / "a.txt").write_text("\n".join(str(i) for i in range(20)),
                                         encoding="utf-8")
-        args = coerce_and_log("read_file", {"file_path": "a.txt",
+        args = coerce_and_log("read_file", {"path": "a.txt",
                                             "start_line": "5", "end_line": "8"})
         out = read_file(**args)
         assert "not supported between instances" not in out
 
     def test_replace_in_file_aliases_remap_to_target_and_replacement(self):
-        args = {"file_path": "test.py", "old_string": "foo", "new_string": "bar"}
+        args = {"path": "test.py", "old_string": "foo", "new_string": "bar"}
         coerced = coerce_and_log("replace_in_file", args)
         assert coerced["target_text"] == "foo"
         assert coerced["replacement_text"] == "bar"
         assert "old_string" not in coerced
         assert "new_string" not in coerced
 
-    def test_read_file_path_alias_remaps_to_file_path(self):
-        args = {"path": "main.py"}
-        coerced = coerce_and_log("read_file", args)
-        assert coerced["file_path"] == "main.py"
-        assert "path" not in coerced
+    def test_the_old_path_name_is_repaired_to_the_canonical_one(self):
+        """`file_path` was the tool's parameter until the cleanup. A model (or a saved
+        trace) that still says it must be understood, not refused."""
+        coerced = coerce_and_log("read_file", {"file_path": "main.py"})
+        assert coerced["path"] == "main.py"
+        assert "file_path" not in coerced
 

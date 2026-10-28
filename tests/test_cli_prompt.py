@@ -197,7 +197,7 @@ class TestMainScope:
         import ast
         from pathlib import Path
 
-        main_path = Path(__file__).resolve().parent.parent / "main.py"
+        main_path = Path(__file__).resolve().parent.parent / "argent" / "main.py"
         tree = ast.parse(main_path.read_text(encoding="utf-8"))
         main_func = [n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "main"][0]
 

@@ -81,8 +81,8 @@ class TestEverythingElseIsUnchanged:
 class TestTheCallersUseIt:
     def test_the_context_meter_does_not_explode(self, monkeypatch):
         """The reported symptom: one request and the meter passed 300k."""
-        import agent as agent_module
-        from agent import ArgentAgent
+        import argent.agent as agent_module
+        from argent.agent import ArgentAgent
 
         a = ArgentAgent.__new__(ArgentAgent)
         a.model_name, a.provider = "m", "ollama"

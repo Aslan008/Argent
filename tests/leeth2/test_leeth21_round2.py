@@ -93,6 +93,7 @@ def test_build_output_cleanups_are_not_called_dangerous():
 
 # ------------------------------------------------------------------------------------------------ bigtools
 def test_the_tool_library_is_large_and_disjoint_from_the_exams_vocabulary():
+    pytest.importorskip("scipy", reason="temperature fitting uses scipy.optimize — pip install scipy")
     exam = _load("leeth21_exam")
     assert len(BT._LIB) >= 600 and len({n for n, _ in BT._LIB}) == len(BT._LIB)
     assert not set(BT.VERBS) & set(exam.VERBS)
@@ -188,6 +189,7 @@ def test_heavy_bigtools_rows_have_100_to_255_options_and_the_window_policy_appli
 
 
 def test_the_trainer_can_fit_temperatures_with_the_run_time_window():
+    pytest.importorskip("scipy", reason="temperature fitting uses scipy.optimize — pip install scipy")
     from src.leeth2.train import TrainConfig
 
     cfg = TrainConfig()

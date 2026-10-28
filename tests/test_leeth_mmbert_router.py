@@ -22,13 +22,13 @@ import os
 from pathlib import Path
 
 import pytest
-import config
+import argent.config as config
 
 os.environ["LEETH_ROUTER"] = "mmbert"
 
-from src.leeth.dispatcher import dispatcher  # noqa: E402
-from src.leeth.primitives import ChoiceQuestion, ExtractQuestion, NoulQuestion  # noqa: E402
-from src.leeth.runtime import leeth  # noqa: E402
+from src.leeth.dispatcher import dispatcher  
+from src.leeth.primitives import ChoiceQuestion, ExtractQuestion, NoulQuestion  
+from src.leeth.runtime import leeth  
 
 BATTERY_PATH = Path(__file__).resolve().parents[1] / "scripts" / "prod_battery.json"
 TEMPLATE_Q = "Какой инструмент Argent должен быть вызван в первую очередь?"
@@ -49,6 +49,7 @@ def _mmbert_onnx():
         return
     leeth.reload(force_device="onnx")
     assert leeth.device == "onnx-cpu" and leeth.ort_session is not None
+    pytest.importorskip("transformers", reason="Leeth tests build a real ModernBERT backbone — pip install transformers")
     assert leeth.mmbert_active, "mmBERT router must be active for this module"
     yield
 

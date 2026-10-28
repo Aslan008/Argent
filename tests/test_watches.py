@@ -72,7 +72,7 @@ def test_timer_is_clamped_so_it_cannot_be_polling(reg):
 
 
 def test_timer_wakes_early_when_a_background_command_finishes(reg):
-    from tools import ACTIVE_PROCESSES, ACTIVE_PROCESSES_LOCK
+    from argent.tools import ACTIVE_PROCESSES, ACTIVE_PROCESSES_LOCK
     proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
     try:
         with ACTIVE_PROCESSES_LOCK:
@@ -156,14 +156,14 @@ def test_the_real_thread_wakes_the_handler(tmp_path, monkeypatch):
 # -- the tool -------------------------------------------------------------------
 
 def test_tool_keeps_the_blocking_protocol_without_a_frontend():
-    from tools.misc_tools import wait_heartbeat
+    from argent.tools.misc_tools import wait_heartbeat
     assert "[HEARTBEAT_REQUEST:" in wait_heartbeat(until='file_exists("a")')
     assert "[HEARTBEAT_REQUEST: 30|" in wait_heartbeat(delay_seconds=30, condition_to_check="x")
 
 
 def test_tool_registers_a_watch_when_a_frontend_can_wake_the_agent(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    from tools.misc_tools import wait_heartbeat
+    from argent.tools.misc_tools import wait_heartbeat
     W.WATCHES.set_handler(lambda m, w: None)
     try:
         out = wait_heartbeat(until='file_exists("a")', condition_to_check="build", timeout_seconds=90)

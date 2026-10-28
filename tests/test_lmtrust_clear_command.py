@@ -12,10 +12,10 @@ Covers:
 import pytest
 from unittest.mock import MagicMock, patch
 
-from agent import ArgentAgent
-from command_handler import handle_slash_command
-from memory_manager import memory
-import vision
+from argent.agent import ArgentAgent
+from argent.command_handler import handle_slash_command
+from argent.memory_manager import memory
+import argent.vision as vision
 
 
 class TestClearCommandRobustness:
@@ -90,7 +90,7 @@ class TestClearCommandRobustness:
 
     def test_command_handler_aliases_clear_reset_new(self, monkeypatch):
         said = []
-        monkeypatch.setattr("command_handler.print_system", lambda text: said.append(str(text)))
+        monkeypatch.setattr("argent.command_handler.print_system", lambda text: said.append(str(text)))
 
         agent = ArgentAgent()
 

@@ -3,9 +3,9 @@
 import pytest
 from unittest.mock import MagicMock
 
-import config
-import memory_manager
-from memory_manager import MemoryManager
+import argent.config as config
+import argent.memory_manager as memory_manager
+from argent.memory_manager import MemoryManager
 from src.agent.strategy import (
     get_model_strategy, MoELocalStrategy, StandardLocalStrategy,
     CloudStrategy, TinyLocalStrategy
@@ -117,7 +117,7 @@ class TestMemoryErrorResolution:
 
 class TestObjectiveAnchorCleanliness:
     def _agent(self, monkeypatch, strategy=None):
-        import agent as agent_module
+        import argent.agent as agent_module
         monkeypatch.setattr(agent_module, "get_mcp_servers", lambda: [])
         monkeypatch.setattr(agent_module, "create_provider", lambda *a, **k: MagicMock())
         monkeypatch.setattr(agent_module, "estimate_tokens", lambda t, m, p: len(t) // 4)
@@ -127,7 +127,7 @@ class TestObjectiveAnchorCleanliness:
         return ag
 
     def test_standard_anchor_omits_current_task_and_no_retry_phrase(self, monkeypatch):
-        from memory_manager import memory
+        from argent.memory_manager import memory
         memory.clear()
         memory.add_completed("Created renderer")
         memory.add_error("syntax error in math.py")
@@ -141,7 +141,7 @@ class TestObjectiveAnchorCleanliness:
         assert "FILES ALREADY EDITED" in anchor
 
     def test_moe_factual_only_anchor_omits_errors_and_completed(self, monkeypatch):
-        from memory_manager import memory
+        from argent.memory_manager import memory
         memory.clear()
         memory.add_completed("Created renderer")
         memory.add_error("some test failure")

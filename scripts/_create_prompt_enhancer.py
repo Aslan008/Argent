@@ -1,6 +1,6 @@
 import sys
 sys.path.insert(0, str(sys.argv[1]) if len(sys.argv) > 1 else ".")
-from tools.plugin_tools import create_plugin
+from argent.tools.plugin_tools import create_plugin
 
 code = '''"""
 Prompt Enhancer Plugin
@@ -17,7 +17,7 @@ This dramatically improves AI understanding of the codebase without
 manual context injection.
 """
 
-from ui import console, print_system
+from argent.ui import console, print_system
 import os
 import re
 from pathlib import Path

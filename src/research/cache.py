@@ -13,7 +13,7 @@ import threading
 import time
 from pathlib import Path
 
-from logger import get_logger
+from argent.logger import get_logger
 
 log = get_logger("research")
 

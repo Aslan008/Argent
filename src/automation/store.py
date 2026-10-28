@@ -23,7 +23,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
 
-from logger import get_logger
+from argent.logger import get_logger
 
 log = get_logger("automation")
 
@@ -98,7 +98,7 @@ class Automation:
 
 
 def _argent_dir() -> Path:
-    from project_paths import project_root_or_cwd
+    from argent.project_paths import project_root_or_cwd
     return project_root_or_cwd() / ".argent"
 
 
@@ -115,7 +115,7 @@ def state_path() -> Path:
 
 
 def project_root() -> Path:
-    from project_paths import project_root_or_cwd
+    from argent.project_paths import project_root_or_cwd
     return Path(project_root_or_cwd())
 
 
@@ -255,7 +255,7 @@ def load_automations() -> list:
 
 
 def save_automations(automations: list) -> None:
-    from atomic_io import atomic_write_text
+    from argent.atomic_io import atomic_write_text
     payload = json.dumps([asdict(a) for a in automations], indent=2, ensure_ascii=False)
     atomic_write_text(defs_path(), payload)
 
@@ -327,7 +327,7 @@ def _trim_history(path: Path) -> None:
     try:
         if path.stat().st_size < _TRIM_AT_BYTES:
             return
-        from atomic_io import atomic_write_text
+        from argent.atomic_io import atomic_write_text
         lines = [ln for ln in path.read_text(encoding="utf-8").splitlines() if ln.strip()]
         atomic_write_text(path, "\n".join(lines[-MAX_RUN_HISTORY:]) + "\n")
     except Exception as e:
@@ -555,7 +555,7 @@ def load_state() -> dict:
 
 def save_state(**changes) -> dict:
     """Merge ``changes`` into the state file (None removes a key)."""
-    from atomic_io import atomic_write_text
+    from argent.atomic_io import atomic_write_text
     with _defs_lock():
         state = load_state()
         for key, value in changes.items():

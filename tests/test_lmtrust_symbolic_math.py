@@ -12,7 +12,7 @@ import ast
 import pytest
 import sympy
 
-from tools.symbolic_math import (
+from argent.tools.symbolic_math import (
     SymbolicError,
     _binop,
     _guard_power,

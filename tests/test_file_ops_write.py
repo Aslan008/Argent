@@ -18,7 +18,7 @@ import sys
 import pytest
 from pathlib import Path
 
-from tools.file_ops import write_file, append_to_file, delete_file
+from argent.tools.file_ops import write_file, append_to_file, delete_file
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -27,7 +27,7 @@ from tools.file_ops import write_file, append_to_file, delete_file
 
 @pytest.fixture(autouse=True)
 def _stub_deps(monkeypatch):
-    import memory_manager
+    import argent.memory_manager as memory_manager
 
     class FakeMemory:
         def __init__(self):
@@ -43,15 +43,15 @@ def _stub_deps(monkeypatch):
     fake_mem = FakeMemory()
     monkeypatch.setattr(memory_manager, "memory", fake_mem)
 
-    import file_tracker
+    import argent.file_tracker as file_tracker
     monkeypatch.setattr(file_tracker, "snapshot", lambda *a, **k: None)
 
     # Stub approval to auto-approve
-    import approval
+    import argent.approval as approval
     monkeypatch.setattr(approval, "request_approval", lambda *a, **k: True)
 
     # Stub _validate_code_syntax to always pass (no syntax errors)
-    import tools._helpers as helpers
+    import argent.tools._helpers as helpers
     monkeypatch.setattr(helpers, "_validate_code_syntax", lambda fp: None)
 
     # Stub _unity_script_placement_error to always pass
@@ -196,7 +196,7 @@ class TestWriteFileOverwrite:
 class TestWriteFileRestrictions:
     def test_plugin_restricted_py_path(self, tmp_path, monkeypatch):
         """A .py file inside the plugins/ directory is restricted for small models."""
-        import config
+        import argent.config as config
         plugins_dir = tmp_path / "plugins"
         plugins_dir.mkdir(exist_ok=True)
         monkeypatch.setattr(config, "get_hooks_dir", lambda: str(plugins_dir))
@@ -220,7 +220,7 @@ class TestWriteFileSyntaxValidation:
     def test_new_file_syntax_error_not_created(self, tmp_path, monkeypatch):
         """When syntax validation fails on a NEW file, the file is NOT created
         and the message says 'The new file was not created.'"""
-        import tools._helpers as helpers
+        import argent.tools._helpers as helpers
         monkeypatch.setattr(
             helpers, "_validate_code_syntax", lambda fp: "SyntaxError: invalid syntax"
         )
@@ -232,7 +232,7 @@ class TestWriteFileSyntaxValidation:
     def test_existing_file_syntax_error_restored(self, tmp_path, monkeypatch):
         """When syntax validation fails on an EXISTING file, the file is
         restored to its previous version."""
-        import tools._helpers as helpers
+        import argent.tools._helpers as helpers
         original = "x = 1\n"
         (tmp_path / "existing.py").write_text(original, encoding="utf-8")
         monkeypatch.setattr(
@@ -243,6 +243,21 @@ class TestWriteFileSyntaxValidation:
         assert "restored" in out.lower()
         # File restored to original
         assert (tmp_path / "existing.py").read_text(encoding="utf-8") == original
+
+    def test_rejected_new_file_is_not_sent_to_replace_in_file(self, tmp_path):
+        """Real validator: the reply once said 'the new file was not created' and then 'fix it with replace_in_file' -
+        the model tried to patch a file that did not exist. The next step must be another write_file."""
+        out = write_file("broken.py", "PLAN_META = {\n    'a': 1,\n")
+        assert "not created" in out.lower()
+        assert not (tmp_path / "broken.py").exists()
+        assert "call write_file again" in out
+        assert "using the `replace_in_file` tool" not in out
+
+    def test_rejected_overwrite_asks_for_full_content_again(self, tmp_path):
+        (tmp_path / "existing.py").write_text("x = 1\n", encoding="utf-8")
+        out = write_file("existing.py", "def (\n", overwrite=True)
+        assert "call write_file" in out and "overwrite=true" in out
+        assert "using the `replace_in_file` tool" not in out
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -355,7 +370,7 @@ class TestDeleteFile:
 
     def test_delete_approval_denied(self, tmp_path, monkeypatch):
         """When approval is denied, the file is NOT deleted."""
-        import approval
+        import argent.approval as approval
         monkeypatch.setattr(approval, "request_approval", lambda *a, **k: False)
         (tmp_path / "denied.txt").write_text("keep me\n", encoding="utf-8")
         out = delete_file("denied.txt")
@@ -365,7 +380,7 @@ class TestDeleteFile:
 
     def test_delete_approval_granted(self, tmp_path, monkeypatch):
         """When approval is granted, the file is deleted."""
-        import approval
+        import argent.approval as approval
         monkeypatch.setattr(approval, "request_approval", lambda *a, **k: True)
         (tmp_path / "granted.txt").write_text("delete me\n", encoding="utf-8")
         out = delete_file("granted.txt")
@@ -375,8 +390,8 @@ class TestDeleteFile:
     def test_delete_plugin_restricted_before_approval(self, tmp_path, monkeypatch):
         """A plugin-restricted path returns the restriction error BEFORE the
         approval check is even reached."""
-        import approval
-        import config
+        import argent.approval as approval
+        import argent.config as config
         called = {"approval": False}
         monkeypatch.setattr(
             approval, "request_approval", lambda *a, **k: called.__setitem__("approval", True) or False

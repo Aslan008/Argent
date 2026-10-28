@@ -24,7 +24,7 @@ from typing import Any
 import psutil
 import pytest
 
-import tools.command_ops as command_ops
+import argent.tools.command_ops as command_ops
 from src.agent.events import EVENT_QUEUE
 
 
@@ -320,7 +320,7 @@ class TestL7EventQueueAndSleeperIntegration:
     def test_stopped_process_does_not_abort_sleeper(self):
         """Stopping a process produces bg_done event with non-zero exit code.
         The sleeper in main.py MUST ignore it because it was an intentional stop."""
-        from main import ArgentAgent
+        from argent.main import ArgentAgent
 
         res = command_ops.start_background_command(
             'powershell -NoProfile -Command "Start-Sleep -Seconds 60"'

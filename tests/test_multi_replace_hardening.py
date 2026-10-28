@@ -8,7 +8,7 @@
 """
 import json
 import pytest
-from tools.file_ops import multi_replace_in_file
+from argent.tools.file_ops import multi_replace_in_file
 
 class TestMultiReplaceHardening:
     def test_duplicate_key_preserves_non_empty_replacement(self, tmp_path):

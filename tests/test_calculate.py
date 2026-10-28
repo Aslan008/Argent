@@ -1,4 +1,4 @@
-from tools.misc_tools import calculate
+from argent.tools.misc_tools import calculate
 
 
 class TestCalculateBasics:

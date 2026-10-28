@@ -98,8 +98,8 @@ class TestToolCatalog:
             "description": "Read a file. Second sentence dropped.",
             "parameters": {
                 "type": "object",
-                "properties": {"file_path": {"type": "string"}, "limit": {"type": "integer"}},
-                "required": ["file_path"],
+                "properties": {"path": {"type": "string"}, "limit": {"type": "integer"}},
+                "required": ["path"],
             },
         }},
         {"function": {"name": "noop", "description": "", "parameters": {}}},
@@ -107,7 +107,7 @@ class TestToolCatalog:
 
     def test_catalog_lines(self):
         catalog = build_tool_catalog(self.SCHEMAS)
-        assert "- read_file(file_path, limit?) — Read a file" in catalog
+        assert "- read_file(path, limit?) — Read a file" in catalog
         assert "Second sentence" not in catalog
         assert "- noop()" in catalog
 

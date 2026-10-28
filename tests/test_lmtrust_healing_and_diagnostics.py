@@ -108,12 +108,20 @@ class TestL3L4L5CommandDiagnostics:
         diag_alt = diagnose_command_error(cmd, output_alt, exit_code=1)
         assert "Check it is installed and on PATH" in diag_alt
 
-    def test_access_denied_suggests_run_admin_command(self):
+    def test_access_denied_suggests_elevating_the_same_command(self):
         diag = diagnose_command_error("net stop wuauserv", "Access is denied.", exit_code=5)
-        assert "run_admin_command" in diag
+        assert "admin=true" in diag
 
-        diag_ru = diagnose_command_error("cmd", "отказано в доступе", exit_code=5)
-        assert "run_admin_command" in diag_ru
+    def test_a_generic_denial_names_the_cause_instead_of_inviting_elevation(self):
+        # A service or registry operation is where elevation IS the answer, and the
+        # hint above says so. A plain file denial is not: naming elevation here made
+        # the agent escalate ordinary project builds, which the hint now warns
+        # against. Both spellings must take the same branch.
+        for output in ("Access is denied.", "отказано в доступе"):
+            diag = diagnose_command_error("cmd", output, exit_code=5)
+            assert "admin=true" not in diag
+            assert "icacls" in diag
+            assert "Do not elevate" in diag
 
     def test_csharp_compiler_error_codes_extracted(self):
         output = "Program.cs(12,5): error CS0103: The name 'foo' does not exist in the current context"

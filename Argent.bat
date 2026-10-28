@@ -18,7 +18,7 @@ rem way (a plain console host), and finally stays open with the reason instead o
 set "PY=%CD%\.venv\Scripts\python.exe"
 set "MARK=%CD%\.argent\launch.ok"
 set "LOG=%CD%\.argent\launch.log"
-set "ENTRY=run_tui.py"
+set "ENTRY=-m argent.run_tui"
 if defined ARGENT_ENTRY set "ENTRY=%ARGENT_ENTRY%"
 
 if not exist "%PY%" (
@@ -29,6 +29,8 @@ if not exist "%PY%" (
 if not exist ".argent" mkdir ".argent" >nul 2>nul
 if exist "%MARK%" del /q "%MARK%" >nul 2>nul
 
+if defined ARGENT_NO_WT goto skip_wt
+
 where wt.exe >nul 2>nul
 if %ERRORLEVEL% equ 0 (
     echo %DATE% %TIME% wt.exe>> "%LOG%"
@@ -38,6 +40,7 @@ if %ERRORLEVEL% equ 0 (
     echo %DATE% %TIME% wt.exe did not start Argent within 15 s>> "%LOG%"
 )
 
+:skip_wt
 echo %DATE% %TIME% conhost.exe>> "%LOG%"
 start "Argent Coder" conhost.exe "%PY%" %ENTRY%
 call :wait_started 15

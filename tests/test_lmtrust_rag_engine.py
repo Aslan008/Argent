@@ -21,8 +21,8 @@ _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
-import rag_engine
-from rag_engine import (
+import argent.rag_engine as rag_engine
+from argent.rag_engine import (
     _is_ignored,
     _load_argentignore,
     _chunk_python_ast,
@@ -443,6 +443,7 @@ class TestRagEnabledState:
         assert is_rag_enabled() is True
 
     def test_enable_rag_for_project_missing_dir(self, monkeypatch):
+        pytest.importorskip("chromadb", reason="RAG needs chromadb — pip install chromadb")
         monkeypatch.setattr(rag_engine, "_RAG_ENABLED", False)
         result = rag_engine.enable_rag_for_project("/nonexistent/path/that/does/not/exist")
         assert "does not exist" in result or "Error" in result
@@ -474,7 +475,7 @@ class TestOllamaEmbeddingFunction:
         mock_response.json.return_value = {"embeddings": [[0.1, 0.2, 0.3]]}
         monkeypatch.setattr("requests.post", MagicMock(return_value=mock_response))
         # Patch config to avoid import issues
-        monkeypatch.setattr("config.get_embedding_batch_size", lambda: 50)
+        monkeypatch.setattr("argent.config.get_embedding_batch_size", lambda: 50)
         result = ef.embed_query("hello")
         assert isinstance(result, list)
         assert result == [0.1, 0.2, 0.3]
@@ -487,7 +488,7 @@ class TestOllamaEmbeddingFunction:
             "embeddings": [[0.1, 0.2], [0.3, 0.4]]
         }
         monkeypatch.setattr("requests.post", MagicMock(return_value=mock_response))
-        monkeypatch.setattr("config.get_embedding_batch_size", lambda: 50)
+        monkeypatch.setattr("argent.config.get_embedding_batch_size", lambda: 50)
         result = ef.embed_documents(["hello", "world"])
         assert isinstance(result, list)
         assert len(result) == 2
@@ -500,7 +501,7 @@ class TestOllamaEmbeddingFunction:
         mock_response.raise_for_status = MagicMock()
         mock_response.json.return_value = {"embeddings": []}
         monkeypatch.setattr("requests.post", MagicMock(return_value=mock_response))
-        monkeypatch.setattr("config.get_embedding_batch_size", lambda: 50)
+        monkeypatch.setattr("argent.config.get_embedding_batch_size", lambda: 50)
         # __call__ with one item but embeddings empty → mismatch → fallback
         # The fallback also uses requests.post, so keep the same mock
         result = ef.embed_query("hello")
@@ -513,8 +514,8 @@ class TestOllamaEmbeddingFunction:
         # Return fewer embeddings than input texts → triggers ValueError → fallback
         mock_response.json.return_value = {"embeddings": [[0.1]]}
         monkeypatch.setattr("requests.post", MagicMock(return_value=mock_response))
-        monkeypatch.setattr("config.get_embedding_batch_size", lambda: 50)
-        monkeypatch.setattr("config.get_embedding_concurrency", lambda: 1)
+        monkeypatch.setattr("argent.config.get_embedding_batch_size", lambda: 50)
+        monkeypatch.setattr("argent.config.get_embedding_concurrency", lambda: 1)
         result = ef(["text1", "text2"])
         assert isinstance(result, list)
         assert len(result) == 2
@@ -525,7 +526,7 @@ class TestOllamaEmbeddingFunction:
         mock_response.raise_for_status = MagicMock()
         mock_response.json.return_value = {"embeddings": [[0.5, 0.6]]}
         monkeypatch.setattr("requests.post", MagicMock(return_value=mock_response))
-        monkeypatch.setattr("config.get_embedding_concurrency", lambda: 1)
+        monkeypatch.setattr("argent.config.get_embedding_concurrency", lambda: 1)
         result = ef._embed_individually(["single text"], "http://localhost:11434")
         assert isinstance(result, list)
         assert len(result) == 1
@@ -536,7 +537,7 @@ class TestOllamaEmbeddingFunction:
         mock_response = MagicMock()
         mock_response.raise_for_status = MagicMock(side_effect=Exception("API down"))
         monkeypatch.setattr("requests.post", MagicMock(return_value=mock_response))
-        monkeypatch.setattr("config.get_embedding_concurrency", lambda: 1)
+        monkeypatch.setattr("argent.config.get_embedding_concurrency", lambda: 1)
         result = ef._embed_individually(["text"], "http://localhost:11434")
         assert isinstance(result, list)
         assert len(result) == 1
@@ -552,7 +553,7 @@ class TestOllamaEmbeddingFunction:
         mock_response.json.return_value = {"embeddings": [[0.1]]}
         mock_post = MagicMock(return_value=mock_response)
         monkeypatch.setattr("requests.post", mock_post)
-        monkeypatch.setattr("config.get_embedding_batch_size", lambda: 50)
+        monkeypatch.setattr("argent.config.get_embedding_batch_size", lambda: 50)
         ef(["text"])
         # Verify the URL used includes the env host
         call_args = mock_post.call_args
@@ -570,7 +571,7 @@ class TestOllamaEmbeddingFunction:
             return resp
         mock_post = MagicMock(side_effect=make_response)
         monkeypatch.setattr("requests.post", mock_post)
-        monkeypatch.setattr("config.get_embedding_batch_size", lambda: 1)
+        monkeypatch.setattr("argent.config.get_embedding_batch_size", lambda: 1)
         # batch_size=1 → two texts → two separate batch calls (no fallback)
         ef(["text1", "text2"])
         assert mock_post.call_count == 2
@@ -629,7 +630,7 @@ class TestPruneDeletedFiles:
         # Patch project_root_or_cwd to return tmp_path (where files don't exist)
         mock_pp = MagicMock()
         mock_pp.project_root_or_cwd = MagicMock(return_value=tmp_path)
-        monkeypatch.setitem(sys.modules, "project_paths", mock_pp)
+        monkeypatch.setitem(sys.modules, "argent.project_paths", mock_pp)
 
         result = rag_engine.prune_deleted_files()
         assert result == 2
@@ -648,7 +649,7 @@ class TestPruneDeletedFiles:
 
         mock_pp = MagicMock()
         mock_pp.project_root_or_cwd = MagicMock(return_value=tmp_path)
-        monkeypatch.setitem(sys.modules, "project_paths", mock_pp)
+        monkeypatch.setitem(sys.modules, "argent.project_paths", mock_pp)
 
         result = rag_engine.prune_deleted_files()
         assert result == 0
@@ -662,7 +663,7 @@ class TestPruneDeletedFiles:
 
         mock_pp = MagicMock()
         mock_pp.project_root_or_cwd = MagicMock(return_value=tmp_path)
-        monkeypatch.setitem(sys.modules, "project_paths", mock_pp)
+        monkeypatch.setitem(sys.modules, "argent.project_paths", mock_pp)
 
         assert rag_engine.prune_deleted_files() == 0
 

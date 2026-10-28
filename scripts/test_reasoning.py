@@ -32,10 +32,10 @@ sys.modules["ollama"] = m
 
 # Force provider to ollama for testing
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-import config
+import argent.config as config
 config.get_provider = lambda: "ollama"
 
-from agent import ArgentAgent
+from argent.agent import ArgentAgent
 
 def test_reasoning_capture():
     agent = ArgentAgent()

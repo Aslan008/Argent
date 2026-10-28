@@ -15,7 +15,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from providers import (
+from argent.providers import (
     ProviderError,
     with_retry,
     _parse_openai_usage,
@@ -34,7 +34,7 @@ class TestWithRetry:
         """(1) A fn that returns immediately must not sleep or retry."""
         calls = []
         sleep_calls = []
-        monkeypatch.setattr("providers.time.sleep", lambda d: sleep_calls.append(d))
+        monkeypatch.setattr("argent.providers.time.sleep", lambda d: sleep_calls.append(d))
 
         def fn():
             calls.append(1)
@@ -50,7 +50,7 @@ class TestWithRetry:
         succeeds — sleep must be invoked exactly once."""
         calls = []
         sleep_calls = []
-        monkeypatch.setattr("providers.time.sleep", lambda d: sleep_calls.append(d))
+        monkeypatch.setattr("argent.providers.time.sleep", lambda d: sleep_calls.append(d))
 
         def fn():
             calls.append(1)
@@ -68,7 +68,7 @@ class TestWithRetry:
         with no sleep."""
         calls = []
         sleep_calls = []
-        monkeypatch.setattr("providers.time.sleep", lambda d: sleep_calls.append(d))
+        monkeypatch.setattr("argent.providers.time.sleep", lambda d: sleep_calls.append(d))
 
         def fn():
             calls.append(1)
@@ -85,7 +85,7 @@ class TestWithRetry:
         and then re-raise."""
         calls = []
         sleep_calls = []
-        monkeypatch.setattr("providers.time.sleep", lambda d: sleep_calls.append(d))
+        monkeypatch.setattr("argent.providers.time.sleep", lambda d: sleep_calls.append(d))
 
         def fn():
             calls.append(1)
@@ -103,7 +103,7 @@ class TestWithRetry:
         because there is no second attempt."""
         calls = []
         sleep_calls = []
-        monkeypatch.setattr("providers.time.sleep", lambda d: sleep_calls.append(d))
+        monkeypatch.setattr("argent.providers.time.sleep", lambda d: sleep_calls.append(d))
 
         def fn():
             calls.append(1)
@@ -118,7 +118,7 @@ class TestWithRetry:
         """Bonus: a plain Exception whose message contains a retryable code (429)
         is wrapped in a retryable ProviderError and retried."""
         calls = []
-        monkeypatch.setattr("providers.time.sleep", lambda d: None)
+        monkeypatch.setattr("argent.providers.time.sleep", lambda d: None)
 
         def fn():
             calls.append(1)
@@ -133,7 +133,7 @@ class TestWithRetry:
     def test_generic_exception_non_retryable_raises_wrapped(self, monkeypatch):
         """Bonus: a plain Exception without a retryable code is wrapped in a
         non-retryable ProviderError and raised immediately."""
-        monkeypatch.setattr("providers.time.sleep", lambda d: None)
+        monkeypatch.setattr("argent.providers.time.sleep", lambda d: None)
 
         def fn():
             raise ValueError("totally bogus")
@@ -331,9 +331,9 @@ class TestCreateProvider:
 
         import httpx as _real_httpx
         monkeypatch.setattr("httpx.Timeout", _real_httpx.Timeout)
-        monkeypatch.setattr("config.get_stream_read_timeout", lambda: 120.0)
+        monkeypatch.setattr("argent.config.get_stream_read_timeout", lambda: 120.0)
 
-        from providers import create_provider, OllamaProvider
+        from argent.providers import create_provider, OllamaProvider
         p = create_provider("ollama")
         assert isinstance(p, OllamaProvider)
         assert p.name == "ollama"
@@ -344,17 +344,17 @@ class TestCreateProvider:
         fake_openai.OpenAI = MagicMock()
         monkeypatch.setitem(sys.modules, "openai", fake_openai)
 
-        monkeypatch.setattr("config.get_zai_api_key", lambda: "test-key")
-        monkeypatch.setattr("config.get_zai_endpoint", lambda: "https://api.test.example/v1")
+        monkeypatch.setattr("argent.config.get_zai_api_key", lambda: "test-key")
+        monkeypatch.setattr("argent.config.get_zai_endpoint", lambda: "https://api.test.example/v1")
 
-        from providers import create_provider, ZAIProvider
+        from argent.providers import create_provider, ZAIProvider
         p = create_provider("zai")
         assert isinstance(p, ZAIProvider)
         assert p.name == "zai"
 
     def test_unknown_provider_raises_value_error(self, monkeypatch):
         """(18) An unknown provider name raises ValueError."""
-        from providers import create_provider
+        from argent.providers import create_provider
         with pytest.raises(ValueError) as exc:
             create_provider("does-not-exist")
         assert "Unknown provider" in str(exc.value)

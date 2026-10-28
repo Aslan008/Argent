@@ -3,9 +3,9 @@ from unittest.mock import patch, MagicMock
 
 import pytest
 
-import config
-import doctor
-from command_handler import _mcp_add
+import argent.config as config
+import argent.doctor as doctor
+from argent.command_handler import _mcp_add
 from src.agent.mcp_prompt import build_mcp_section
 
 
@@ -20,8 +20,8 @@ class TestBlenderMCPPreset:
         fake_mcp_client = MagicMock()
         fake_mcp_client.register_and_start.side_effect = lambda name, cfg: registered.update({name: cfg}) or "OK"
 
-        monkeypatch.setattr("command_handler.add_mcp_server", fake_add_mcp_server)
-        monkeypatch.setattr("mcp_client.mcp_client", fake_mcp_client)
+        monkeypatch.setattr("argent.command_handler.add_mcp_server", fake_add_mcp_server)
+        monkeypatch.setattr("argent.mcp_client.mcp_client", fake_mcp_client)
 
         _mcp_add(["/mcp", "add", "blender"])
 
@@ -44,8 +44,8 @@ class TestBlenderMCPPreset:
         fake_mcp_client = MagicMock()
         fake_mcp_client.register_and_start.return_value = "OK"
 
-        monkeypatch.setattr("command_handler.add_mcp_server", fake_add_mcp_server)
-        monkeypatch.setattr("mcp_client.mcp_client", fake_mcp_client)
+        monkeypatch.setattr("argent.command_handler.add_mcp_server", fake_add_mcp_server)
+        monkeypatch.setattr("argent.mcp_client.mcp_client", fake_mcp_client)
 
         _mcp_add(["/mcp", "add", "unity"])
 

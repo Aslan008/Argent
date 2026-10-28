@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from project_paths import find_project_root, project_root_or_cwd
+from argent.project_paths import find_project_root, project_root_or_cwd
 
 
 @pytest.fixture
@@ -64,7 +64,7 @@ class TestFindProjectRoot:
 
 class TestAgentsMemoryAnchoring:
     def test_project_agents_md_found_from_subfolder(self, home, monkeypatch):
-        from agent import build_agents_memory
+        from argent.agent import build_agents_memory
         root = home / "proj"
         (root / ".argent").mkdir(parents=True)
         (root / ".argent" / "AGENTS.md").write_text("PROJECT RULES", encoding="utf-8")

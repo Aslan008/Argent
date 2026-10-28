@@ -8,9 +8,9 @@ The command therefore reports the mismatch rather than letting you set half.
 
 import pytest
 
-import command_handler
-import config
-from command_handler import (
+import argent.command_handler as command_handler
+import argent.config as config
+from argent.command_handler import (
     SEARCH_MENU_BRAVE, SEARCH_MENU_LANGS, SEARCH_MENU_MODEL, SEARCH_MENU_OLLAMA,
 )
 from src.research.rerank import MULTILINGUAL_MODEL, _DEFAULT_MODEL
@@ -251,7 +251,7 @@ class TestSearchEngineSwitch:
         assert any("Неизвестный поисковый движок" in line for line in ui)
 
     def test_menu_switch_engine(self, cfg, ui, monkeypatch):
-        from command_handler import SEARCH_MENU_ENGINE
+        from argent.command_handler import SEARCH_MENU_ENGINE
         answers = iter([SEARCH_MENU_ENGINE, "duckduckgo"])
 
         class _Seq:

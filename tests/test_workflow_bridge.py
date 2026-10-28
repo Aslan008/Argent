@@ -7,9 +7,9 @@ from unittest.mock import MagicMock
 
 import pytest
 
-import agent as agent_module
-import config
-from agent import ArgentAgent
+import argent.agent as agent_module
+import argent.config as config
+from argent.agent import ArgentAgent
 from src.agent import shell_hooks, todos
 from src.agent.plan_mode import PLAN
 from src.bridge.repl_bridge import ReplBridge
@@ -74,8 +74,12 @@ def test_the_state_carries_the_checklist_and_plan_mode(bridge_env):
     PLAN.enter()
     state = bridge.get_state()
     assert state["mode"] == "PLAN"
-    assert json.loads(state["todos"]) == [{"content": "read", "status": "completed"},
-                                          {"content": "edit", "status": "in_progress"}]
+    loaded = json.loads(state["todos"])
+    assert [{k: t[k] for k in ("content", "status")} for t in loaded] == [
+        {"content": "read", "status": "completed"},
+        {"content": "edit", "status": "in_progress"}]
+    # A step that is running carries its own clock, so the panel can say "4 мин".
+    assert isinstance(loaded[1].get("since"), (int, float))
 
 
 def test_a_prompt_hook_adds_its_context_to_what_the_agent_receives(bridge_env):

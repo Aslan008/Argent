@@ -154,7 +154,15 @@ pub fn tool_result_summary(name: &str, result: &str) -> String {
     if trimmed.is_empty() {
         return "пусто".to_string();
     }
-    let lines: Vec<&str> = trimmed.lines().collect();
+    // `Exit code: 1` / `OUTPUT:` is the envelope `run_command` wraps the result in:
+    // it says nothing about what happened, so it is never the line the summary quotes.
+    let lines: Vec<&str> = trimmed.lines().filter(|l| !is_meta_line(l)).collect();
+    if lines.is_empty() {
+        return match exit_code_of(trimmed) {
+            Some(code) if code != 0 => format!("exit {code}"),
+            _ => "пусто".to_string(),
+        };
+    }
 
     // Commands: prefer a test summary line, then a change-counter line.
     if name == "run_command" || name == "start_background_command" {
@@ -204,6 +212,19 @@ pub fn tool_result_summary(name: &str, result: &str) -> String {
         }
     }
 
+    // A command that failed says so with its exit code, and that is what the
+    // compact row should report — the first line of output is often just noise.
+    if let Some(code) = exit_code_of(trimmed) {
+        if code != 0 {
+            let first = lines.first().map(|l| l.trim()).unwrap_or("");
+            return if first.is_empty() {
+                format!("exit {code}")
+            } else {
+                format!("exit {code} · {}", truncate_chars(first, 40))
+            };
+        }
+    }
+
     if lines.len() == 1 {
         return truncate_chars(lines[0].trim(), 60);
     }
@@ -225,7 +246,25 @@ pub fn format_duration(secs: f64) -> String {
     }
 }
 
-/// True when a tool result signals failure (the CLI's prefix check).
+/// The `Exit code: N` line `run_command` reports first in a result, when present.
+pub fn exit_code_of(text: &str) -> Option<i32> {
+    text.lines().take(3).find_map(|line| {
+        let line = line.trim();
+        let rest = line
+            .strip_prefix("Exit code:")
+            .or_else(|| line.strip_prefix("exit code:"))?;
+        rest.trim().parse::<i32>().ok()
+    })
+}
+
+/// `Exit code: 1` / `OUTPUT:` — the envelope `run_command` adds, not content.
+fn is_meta_line(line: &str) -> bool {
+    let t = line.trim();
+    t == "OUTPUT:" || exit_code_of(t).is_some()
+}
+
+/// True when a tool result signals failure (the CLI's prefix check, plus the exit
+/// code a failed shell command reports).
 pub fn result_is_error(result: &str) -> bool {
     let cleaned;
     let text = if result.contains('\u{1b}') || result.contains('\r') {
@@ -234,7 +273,12 @@ pub fn result_is_error(result: &str) -> bool {
     } else {
         result
     };
-    text.trim_start().to_lowercase().starts_with("error")
+    if text.trim_start().to_lowercase().starts_with("error") {
+        return true;
+    }
+    // The prefix alone missed every failed shell command: `run_command` opens the
+    // result with `Exit code: 1`, so a broken build was drawn as finished.
+    matches!(exit_code_of(text), Some(code) if code != 0)
 }
 
 /// `12 строк` / `3 файла` for the compact result gutter.
@@ -365,5 +409,30 @@ mod tests {
     fn error_detection_is_prefix_based() {
         assert!(result_is_error("  ERROR: boom"));
         assert!(!result_is_error("no error here"));
+    }
+
+    #[test]
+    fn a_non_zero_exit_code_means_failure() {
+        // `run_command` opens a failed result with the code; the prefix check alone
+        // drew a green tick over every broken build.
+        let failed = "Exit code: 1\nOUTPUT:\nbox/mod.rs:3: error: boom\n";
+        assert!(result_is_error(failed));
+        assert!(!result_is_error("Exit code: 0\nOUTPUT:\nall good\n"));
+        assert_eq!(exit_code_of(failed), Some(1));
+        assert_eq!(exit_code_of("no code here"), None);
+    }
+
+    #[test]
+    fn the_exit_code_line_is_never_the_summary() {
+        let failed = "Exit code: 1\nOUTPUT:\nbox/mod.rs:3: error: boom\nsecond\n";
+        let s = tool_result_summary("run_command", failed);
+        assert!(s.starts_with("exit 1 · "), "{s}");
+        assert!(!s.contains("Exit code"), "{s}");
+    }
+
+    #[test]
+    fn a_result_of_nothing_but_an_exit_code_still_summarises() {
+        assert_eq!(tool_result_summary("run_command", "Exit code: 2"), "exit 2");
+        assert_eq!(tool_result_summary("run_command", "Exit code: 0\nOUTPUT:\n"), "пусто");
     }
 }

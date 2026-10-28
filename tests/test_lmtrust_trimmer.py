@@ -168,7 +168,7 @@ class TestL2ErrorPathsAndCircuitBreaker:
             {"role": "system", "content": "sys"},
             {"role": "user", "content": "Сделай оптимизацию контекста"},
             {"role": "assistant", "tool_calls": [
-                {"function": {"name": "write_file", "arguments": json.dumps({"file_path": "src/agent/trimmer.py"})}}
+                {"function": {"name": "write_file", "arguments": json.dumps({"path": "src/agent/trimmer.py"})}}
             ]},
             {"role": "tool", "content": "File written successfully"}
         ]
@@ -195,7 +195,7 @@ class TestL4FileRehydrationAndBoundaries:
 
         messages = [
             {"role": "assistant", "tool_calls": [
-                {"function": {"name": "write_file", "arguments": json.dumps({"file_path": str(big_file)})}}
+                {"function": {"name": "write_file", "arguments": json.dumps({"path": str(big_file)})}}
             ]}
         ]
         rehydrated = _rehydrate_files(messages, max_files=1, max_chars_per_file=500)
@@ -207,14 +207,14 @@ class TestL4FileRehydrationAndBoundaries:
     def test_rehydrate_files_ignores_missing_files(self):
         messages = [
             {"role": "assistant", "tool_calls": [
-                {"function": {"name": "write_file", "arguments": json.dumps({"file_path": "non_existent_file_12345.py"})}}
+                {"function": {"name": "write_file", "arguments": json.dumps({"path": "non_existent_file_12345.py"})}}
             ]}
         ]
         res = _rehydrate_files(messages)
         assert res == ""
 
     def test_write_compact_boundary_appends_jsonl(self, tmp_path, monkeypatch):
-        import project_paths
+        import argent.project_paths as project_paths
         monkeypatch.setattr(project_paths, "project_root_or_cwd", lambda: tmp_path)
 
         before = [{"role": "user"}, {"role": "assistant"}, {"role": "user"}]
@@ -264,7 +264,7 @@ class TestL9AgingAndCompaction:
         # 8 turns ago tool call
         messages = [
             {"role": "system", "content": "System"},
-            {"role": "assistant", "tool_calls": [{"id": "call_1", "function": {"name": "read_file", "arguments": json.dumps({"file_path": "main.py"})}}]},
+            {"role": "assistant", "tool_calls": [{"id": "call_1", "function": {"name": "read_file", "arguments": json.dumps({"path": "main.py"})}}]},
             {"role": "tool", "tool_call_id": "call_1", "content": "print('hello')\n" * 30},
         ]
         # Add 7 user turns
@@ -277,6 +277,25 @@ class TestL9AgingAndCompaction:
         aged = age_tool_results(messages, age_threshold=6)
         tool_msg = aged[2]
         assert tool_msg["content"].startswith("[aged: read_file(main.py)")
+
+    def test_an_aged_stub_keeps_real_lines(self):
+        # A header that only counts lines cannot be quoted: the model has to re-read
+        # the file just to say what was in it, and pays a round trip for every mention.
+        content = "def main():\n" + "    filler()\n" * 40 + "    return 0\n"
+        stub = _build_aged_stub("read_file", "a.py", content)
+
+        assert "def main():" in stub, "начало файла остаётся"
+        assert "return 0" in stub, "хвост файла остаётся"
+        assert len(stub) < 400, "заглушка остаётся заглушкой"
+
+    def test_an_aged_command_keeps_the_verdict(self):
+        # The last lines are where "2 failed, 15 passed" lives — the one thing a
+        # report has to quote.
+        content = "collected 17 items\n" + "test_a ... ok\n" * 30 + "2 failed, 15 passed in 3.10s\n"
+        stub = _build_aged_stub("run_command", "pytest -q", content)
+
+        assert "2 failed, 15 passed" in stub
+        assert "17 строк" not in stub or "строк" in stub
 
     def test_compact_tool_history_preserves_recent(self):
         messages = [

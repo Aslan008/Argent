@@ -9,8 +9,8 @@
 
 import asyncio
 
-import browser_engine
-from browser_engine import _browser_alive, _extension_launch_options
+import argent.browser_engine as browser_engine
+from argent.browser_engine import _browser_alive, _extension_launch_options
 
 
 def test_without_an_extension_nothing_changes():
@@ -113,7 +113,7 @@ def test_asking_for_a_window_still_switches(monkeypatch):
 
 
 def test_the_tool_passes_none_when_headed_is_not_given(monkeypatch):
-    from tools import browser_tools
+    from argent.tools import browser_tools
     seen = {}
 
     async def open_page(url, session, headed, return_state=True, mode=None):

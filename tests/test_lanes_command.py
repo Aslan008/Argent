@@ -4,7 +4,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-import config
+import argent.config as config
 from src.agent import governor, lanes, pressure
 from src.agent.lanes import P_WORKER
 from src.agent.local_backend import Backend
@@ -94,7 +94,7 @@ def test_a_bad_argument_does_not_change_anything(stored):
 
 
 def test_doctor_reports_a_cloud_model_as_no_load(monkeypatch):
-    import doctor
+    import argent.doctor as doctor
     monkeypatch.setattr(doctor, "get_provider", lambda: "deepseek")
     monkeypatch.setattr(doctor, "get_current_model", lambda: "deepseek-chat")
     status, detail = doctor._check_local_server()
@@ -102,7 +102,7 @@ def test_doctor_reports_a_cloud_model_as_no_load(monkeypatch):
 
 
 def test_doctor_warns_when_the_pc_is_busy(monkeypatch):
-    import doctor
+    import argent.doctor as doctor
     monkeypatch.setattr(doctor, "get_provider", lambda: "ollama")
     monkeypatch.setattr(doctor, "get_current_model", lambda: "qwen3:8b")
     monkeypatch.delenv("OLLAMA_HOST", raising=False)
@@ -116,7 +116,7 @@ def test_doctor_warns_when_the_pc_is_busy(monkeypatch):
 
 class TestEmbeddingsQueue:
     def _run(self, monkeypatch, texts):
-        import rag_engine
+        import argent.rag_engine as rag_engine
         import requests
         from contextlib import contextmanager
         seen = []
@@ -157,7 +157,7 @@ class TestDelegateLocalQueue:
     def test_the_gguf_is_loaded_once_and_used_through_the_lane(self, monkeypatch, tmp_path):
         import sys
         import types
-        import local_inference
+        import argent.local_inference as local_inference
         from contextlib import contextmanager
 
         loads = []

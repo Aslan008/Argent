@@ -1,6 +1,6 @@
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
-from browser_engine import browser_engine, _SessionContext
+from argent.browser_engine import browser_engine, _SessionContext
 from src.agent.arg_coercion import coerce_and_log
 
 

@@ -491,7 +491,7 @@ add(id="mind2web", repo="osunlp/Multimodal-Mind2Web", kind="mind2web", family="b
     opts=dict(drop_cols=["screenshot", "raw_html"]), note="element ranking over cleaned-HTML candidates; test_website = unseen websites")
 add(id="glaive_fc", repo="glaiveai/glaive-function-calling-v2", kind="glaive", family="tools", lang="en", dev=None, caps=(60000, 0, 0, 0), lic="permissive", note="carved by hash")
 
-from .kinds import register_extra  # noqa: E402
+from .kinds import register_extra  
 
 register_extra()
 

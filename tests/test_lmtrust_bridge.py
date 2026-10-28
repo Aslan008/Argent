@@ -11,7 +11,7 @@ from src.bridge.lmtrust_bridge import (
     get_test_response,
     apply_test_response,
 )
-from tools.misc_tools import request_blind_spot_tests
+from argent.tools.misc_tools import request_blind_spot_tests
 
 
 @pytest.mark.lmtrust(layer="L1", direction="D7")

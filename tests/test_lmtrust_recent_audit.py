@@ -69,7 +69,7 @@ class TestWebToolsResourceCleanup:
     """read_webpage headless fallback must ensure browser session is closed on errors."""
 
     def test_close_session_called_even_if_get_markdown_raises(self):
-        from tools.web_tools import read_webpage
+        from argent.tools.web_tools import read_webpage
 
         mock_engine = MagicMock()
         mock_engine.run.side_effect = [
@@ -80,7 +80,7 @@ class TestWebToolsResourceCleanup:
         ]
 
         with patch("src.research.fetch.fetch_page", return_value={"ok": False, "text": "", "error": "timeout"}):
-            with patch("browser_engine.browser_engine", mock_engine):
+            with patch("argent.browser_engine.browser_engine", mock_engine):
                 res = read_webpage("https://spa-example.com")
                 # close_session MUST have been invoked
                 assert mock_engine.close_session.called, "browser_engine.close_session was NOT called!"
@@ -95,7 +95,7 @@ class TestUploadFileAdversarial:
 
     @pytest.mark.asyncio
     async def test_upload_file_handles_json_encoded_list_string(self, tmp_path):
-        from browser_engine import browser_engine
+        from argent.browser_engine import browser_engine
 
         f1 = tmp_path / "a.txt"
         f2 = tmp_path / "b.txt"

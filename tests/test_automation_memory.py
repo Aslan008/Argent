@@ -9,12 +9,12 @@ from datetime import datetime, timedelta
 import pytest
 
 from src.automation import memory
-from tools.misc_tools import filter_new_items
+from argent.tools.misc_tools import filter_new_items
 
 
 @pytest.fixture(autouse=True)
 def project(tmp_path, monkeypatch):
-    monkeypatch.setattr("project_paths.project_root_or_cwd", lambda: tmp_path)
+    monkeypatch.setattr("argent.project_paths.project_root_or_cwd", lambda: tmp_path)
     (tmp_path / ".argent").mkdir()
     memory.reset_scope()
     yield tmp_path

@@ -161,7 +161,7 @@ def patience_seconds() -> float:
     raw = os.environ.get("ARGENT_NETWORK_PATIENCE")
     if raw is None:
         try:
-            from config import get_network_patience
+            from argent.config import get_network_patience
             return get_network_patience()
         except Exception:
             return DEFAULT_PATIENCE_S

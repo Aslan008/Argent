@@ -8,9 +8,9 @@ into cloud sessions and vice versa.
 
 import pytest
 
-import config
-import agent as agent_module
-from agent import ArgentAgent
+import argent.config as config
+import argent.agent as agent_module
+from argent.agent import ArgentAgent
 from src.agent.strategy import TinyLocalStrategy, StandardLocalStrategy, CloudStrategy
 
 

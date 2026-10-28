@@ -13,8 +13,8 @@ These tests drive whole turns through the agent with a scripted provider.
 
 import pytest
 
-import agent as agent_module
-from agent import ArgentAgent
+import argent.agent as agent_module
+from argent.agent import ArgentAgent
 from src.agent.semantic_loop_guard import (
     browser_eval_expression,
     is_browser_eval_call,

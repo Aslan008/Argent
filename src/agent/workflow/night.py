@@ -19,7 +19,7 @@ from __future__ import annotations
 import sys
 from typing import List, Optional, Tuple
 
-from logger import get_logger
+from argent.logger import get_logger
 from src.agent.workflow import calibration, runtime, store
 from src.agent.workflow.engine import Engine
 from src.agent.workflow.plan import Plan
@@ -92,7 +92,7 @@ def prepare(goal: str, when: str) -> str:
                 f"{plan.outline()}")
     listed = "\n".join(f"  {c}" for c in commands) if commands else "  (никаких: шаги без проверок)"
     runtime.say("[bold]Без вас будут выполнены только эти команды-проверки[/bold] (каждая, как написана):\n" + listed)
-    import approval
+    import argent.approval as approval
     if not approval.request_approval(
             f"Ultracode: выполнить этот план ночью ({schedule}, {len(plan.steps)} шаг.)? Все остальные действия, "
             f"которым нужно ваше разрешение, будут отклонены и попадут в отчёт.",
@@ -145,7 +145,7 @@ def _cwd() -> str:
 
 def run(run_id: str) -> int:
     """The unattended half. Exit code: 0 done, 1 not done (report printed), 2 nothing to run."""
-    import approval
+    import argent.approval as approval
     from src.automation import store as astore
     from src.automation.runner import UnattendedGate, command_allowed
 

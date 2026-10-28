@@ -2,9 +2,9 @@ import json
 import pytest
 from unittest.mock import patch, MagicMock
 
-import config
-import providers
-from providers import ClaudeProvider
+import argent.config as config
+import argent.providers as providers
+from argent.providers import ClaudeProvider
 from src.agent.strategy import get_model_strategy, CloudStrategy
 from src.agent.critic import parse_critic_model
 
@@ -355,7 +355,7 @@ class TestClaudeStreaming:
  
     def test_stream_chat_claude_5_5_thinking(self):
         p = ClaudeProvider(api_key="sk-test")
-        import config
+        import argent.config as config
         config.set_thinking_mode("auto")
         config.set_thinking_budget(4096)
 

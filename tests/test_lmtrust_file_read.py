@@ -12,9 +12,9 @@ FakeMemory so no real I/O side-effects leak into the test session.
 
 import pytest
 
-import tools.file_ops
-import memory_manager
-from tools.file_ops import (
+import argent.tools as tools
+import argent.memory_manager as memory_manager
+from argent.tools.file_ops import (
     read_file,
     list_directory,
     get_file_outline,

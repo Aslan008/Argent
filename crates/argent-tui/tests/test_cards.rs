@@ -1,11 +1,11 @@
 //! The premium transcript: every kind of message has its own shape — your message a
 //! bubble at the right edge, a thought quiet and dotted, a tool call a card with a
-//! rail and a fill, an answer on the way marked as such — and copying and selecting
-//! take only the text, never the dressing.
+//! rail and a fill, one answer header per run — and copying and selecting take only
+//! the text, never the dressing.
 
 use std::collections::HashMap;
 
-use argent_tui::app::{App, MessageItem};
+use argent_tui::app::{App, ApprovalData, MessageItem};
 use argent_tui::theme::{Palette, UiStyle};
 use argent_tui::ui::draw_ui;
 use ratatui::backend::TestBackend;
@@ -133,10 +133,10 @@ fn a_finished_tool_is_a_two_row_card_with_a_rail_and_a_fill() {
     let buf = draw(&app, 80, 20);
     let y = find(&buf, "read_file");
     let head = row(&buf, y);
-    assert!(head.starts_with(" ▍ ✓ read_file"), "{head:?}");
+    assert!(head.starts_with("   ▍ ✓ ▸ read_file"), "{head:?}");
     assert!(head.contains("28ms"), "the duration is on the right: {head:?}");
-    assert_eq!(buf[(1, y)].symbol(), "▍");
-    assert_eq!(buf[(1, y)].fg, p().tool);
+    assert_eq!(buf[(3, y)].symbol(), "▍");
+    assert_eq!(buf[(3, y)].fg, p().tool);
     assert_eq!(buf[(40, y)].bg, p().surface, "the card is filled to the edge");
     assert_eq!(buf[(79, y)].bg, p().surface);
     let next = row(&buf, y + 1);
@@ -145,22 +145,47 @@ fn a_finished_tool_is_a_two_row_card_with_a_rail_and_a_fill() {
 }
 
 #[test]
-fn a_failed_tool_is_red_and_shows_its_output() {
+fn a_failed_tool_is_red_and_stays_collapsed_until_opened() {
     let mut app = premium_app();
     app.messages.push(tool("run_command", &[("command", "make")], "Error: exit 2\nboom on line 3"));
     let buf = draw(&app, 80, 20);
     let y = find(&buf, "run_command");
     assert!(row(&buf, y).contains("✗"), "{:?}", row(&buf, y));
     assert!(row(&buf, y).contains("failed"));
-    assert_eq!(buf[(1, y)].fg, p().danger, "the rail is red");
+    assert!(row(&buf, y).contains("▸"), "a failure starts folded");
+    assert_eq!(buf[(3, y)].fg, p().danger, "the rail is red");
     assert_eq!(buf[(40, y)].bg, p().danger_soft, "the header is tinted red");
+    assert!(!rows(&buf).iter().any(|r| r.contains("boom on line 3")), "output is hidden");
+
+    let mut opened = premium_app();
+    let mut t = tool("run_command", &[("command", "make")], "Error: exit 2\nboom on line 3");
+    if let MessageItem::Tool { expanded, .. } = &mut t {
+        *expanded = true;
+    }
+    opened.messages.push(t);
+    let buf = draw(&opened, 80, 20);
     let out = find(&buf, "boom on line 3");
-    assert_eq!(buf[(1, out)].fg, p().danger);
+    assert_eq!(buf[(3, out)].fg, p().danger);
     assert_eq!(buf[(60, out)].bg, p().code, "the output is on the darker body");
 }
 
 #[test]
-fn an_opened_tool_shows_its_output_and_says_how_much_was_left_out() {
+fn an_opened_command_shows_the_whole_command_not_only_the_clipped_header() {
+    let mut app = premium_app();
+    let tail = "FULL_COMMAND_TAIL";
+    let command = format!("echo {} {tail}", "x".repeat(180));
+    let mut t = tool("run_command", &[("command", &command)], "ok");
+    if let MessageItem::Tool { expanded, .. } = &mut t {
+        *expanded = true;
+    }
+    app.messages.push(t);
+    let buf = draw(&app, 80, 30);
+    let all = rows(&buf).join("\n");
+    assert!(all.contains(tail), "the full command must be visible when open:\n{all}");
+}
+
+#[test]
+fn an_opened_tool_shows_its_output_and_says_where_the_window_is() {
     let mut app = premium_app();
     let long: String = (0..40).map(|i| format!("line {i}\n")).collect();
     let mut t = tool("read_file", &[("file_path", "big.txt")], &long);
@@ -172,7 +197,12 @@ fn an_opened_tool_shows_its_output_and_says_how_much_was_left_out() {
     assert!(rows(&buf).iter().any(|r| r.contains("line 0")));
     assert!(rows(&buf).iter().any(|r| r.contains("line 14")));
     assert!(!rows(&buf).iter().any(|r| r.contains("line 15")), "the REPL's own cap of fifteen rows");
-    assert!(rows(&buf).iter().any(|r| r.contains("ещё 25 строк")));
+    // The rest is not thrown away any more: the card is a window on the whole result,
+    // and the line says where in it the person is.
+    assert!(
+        rows(&buf).iter().any(|r| r.contains("из 40")),
+        "the window says how big the whole is"
+    );
 }
 
 #[test]
@@ -189,8 +219,8 @@ fn a_running_tool_is_the_first_row_of_its_card() {
     app.is_busy = true;
     let buf = draw(&app, 80, 20);
     let y = find(&buf, "grep_search");
-    assert!(row(&buf, y).starts_with(" ▍ "), "{:?}", row(&buf, y));
-    assert_eq!(buf[(1, y)].fg, p().tool);
+    assert!(row(&buf, y).starts_with("   ▍ "), "{:?}", row(&buf, y));
+    assert_eq!(buf[(3, y)].fg, p().tool);
     assert_eq!(buf[(60, y)].bg, p().surface);
 }
 
@@ -226,7 +256,7 @@ fn a_thought_is_quiet_dotted_and_unfilled() {
     let buf = draw(&app, 80, 20);
     let y = find(&buf, "Анализ");
     let r = row(&buf, y);
-    assert!(r.starts_with(" ┊ ◇ Анализ"), "{r:?}");
+    assert!(r.starts_with(" ┊ ▸ ◇ Анализ"), "{r:?}");
     assert!(r.contains("The list is built too early."), "a preview of the conclusion: {r:?}");
     assert_eq!(buf[(40, y)].bg, ratatui::style::Color::Reset, "no fill: a thought is not a card");
     assert_eq!(buf[(1, y)].fg, p().think);
@@ -254,7 +284,7 @@ fn an_opened_thought_is_the_text_behind_the_dotted_rail() {
 // ── answers ──────────────────────────────────────────────────────────────────
 
 #[test]
-fn an_answer_with_a_tool_call_after_it_is_marked_as_on_the_way() {
+fn an_answer_before_a_tool_call_is_not_labelled_as_incomplete() {
     let mut app = premium_app();
     app.messages.push(MessageItem::assistant("Сначала посмотрю файл.", ""));
     app.messages.push(tool("read_file", &[("file_path", "a.py")], "x"));
@@ -263,8 +293,130 @@ fn an_answer_with_a_tool_call_after_it_is_marked_as_on_the_way() {
     let all = rows(&buf);
     let headers: Vec<&String> = all.iter().filter(|r| r.contains("✦ Argent")).collect();
     assert_eq!(headers.len(), 2, "{all:#?}");
-    assert!(headers[0].contains("промежуточный ответ"), "the first is not the answer yet: {:?}", headers[0]);
-    assert!(!headers[1].contains("промежуточный"), "the last one is the answer: {:?}", headers[1]);
+    assert!(
+        headers.iter().all(|r| !r.contains("промежуточный")),
+        "the old chip is gone: {headers:?}"
+    );
+}
+
+#[test]
+fn two_adjacent_assistant_items_share_one_header() {
+    let mut app = premium_app();
+    app.messages.push(MessageItem::assistant("Первая часть.", ""));
+    app.messages.push(MessageItem::assistant("Продолжение.", ""));
+    let buf = draw(&app, 80, 30);
+    let all = rows(&buf);
+    let headers = all.iter().filter(|r| r.contains("✦ Argent")).count();
+    assert_eq!(headers, 1, "a re-sent segment is not a second speaker: {all:#?}");
+    assert!(all.iter().any(|r| r.contains("Продолжение.")));
+}
+
+#[test]
+fn the_spend_and_the_ignored_settings_sit_in_the_right_corner() {
+    let mut app = premium_app();
+    app.status.session_summary = "sum 12.3k tok · $0.0123".into();
+    app.status.inert_label = "n/a: thinking, depth".into();
+    let buf = draw(&app, 120, 12);
+    let bar = rows(&buf).last().cloned().unwrap();
+    let spend_at = bar.find("sum 12.3k tok").unwrap_or_else(|| panic!("no spend: {bar:?}"));
+    let inert_at = bar.find("n/a: thinking").unwrap_or_else(|| panic!("no n/a note: {bar:?}"));
+    assert!(spend_at < inert_at, "{bar:?}");
+    assert!(inert_at > bar.len() / 2, "the note belongs in the right corner: {bar:?}");
+    assert!(bar.trim_end().ends_with("/help"), "{bar:?}");
+}
+
+#[test]
+fn the_spend_falls_back_to_the_raw_totals() {
+    let mut app = premium_app();
+    app.status.session_prompt = 800.0;
+    app.status.session_completion = 200.0;
+    app.status.session_cost = 0.0123;
+    assert_eq!(argent_tui::ui::session_spend(&app.status), "sum 1.0k tok · $0.0123");
+}
+
+#[test]
+fn nothing_is_invented_before_anything_was_spent() {
+    let app = premium_app();
+    assert_eq!(argent_tui::ui::session_spend(&app.status), "");
+    let bar = rows(&draw(&app, 120, 12)).last().cloned().unwrap();
+    assert!(!bar.contains("n/a:"), "no capability claim was made: {bar:?}");
+}
+
+#[test]
+fn hovering_the_context_gauge_explains_the_budget() {
+    let mut app = premium_app();
+    app.status.ctx_tokens = 12_300;
+    app.status.ctx_max = 32_768;
+    app.status.ctx_percent = 37.5;
+    app.status.ctx_breakdown =
+        "Системный промпт   3.1k tok\nИнструменты (52)   2.4k tok\nИстория разговора   6.8k tok\n\nВсего   12.3k / 32.8k tok  ·  38%"
+            .to_string();
+    let first = draw(&app, 120, 20);
+    let bar = rows(&first).last().cloned().unwrap();
+    let col = bar.find("ctx ").expect("the ctx chip") as u16;
+    app.mouse_pos = Some((col + 1, 19));
+
+    let buf = draw(&app, 120, 20);
+    let all = rows(&buf).join("\n");
+    assert!(all.contains("Системный промпт"), "the breakdown is shown on hover:\n{all}");
+    assert!(all.contains("Инструменты (52)"));
+    assert!(all.contains("Всего"), "{all}");
+}
+
+#[test]
+fn a_tool_card_offers_only_the_chevron_not_a_tooltip() {
+    let mut app = premium_app();
+    app.messages.push(tool("read_file", &[("file_path", "a.py")], "x"));
+    let first = draw(&app, 100, 20);
+    let y = find(&first, "read_file");
+    app.mouse_pos = Some((20, y));
+    let buf = draw(&app, 100, 20);
+    let all = rows(&buf).join("\n");
+    assert!(!all.contains("раскрыть/свернуть результат инструмента"), "no card tooltip:\n{all}");
+    assert!(row(&buf, y).contains('▸'), "the chevron is the affordance: {all}");
+}
+
+#[test]
+fn an_approval_is_a_framed_banner_that_cannot_be_missed() {
+    let mut app = premium_app();
+    app.active_approval = Some(ApprovalData {
+        id: 1,
+        action: "rm -rf build".into(),
+        destructive: true,
+        grant_key: None,
+        prompt: None,
+        selected: 0,
+    });
+    let buf = draw(&app, 100, 24);
+    let all = rows(&buf).join("\n");
+    assert!(all.contains("ТРЕБУЕТСЯ ПОДТВЕРЖДЕНИЕ"), "{all}");
+    assert!(all.contains("ОПАСНОЕ ДЕЙСТВИЕ"), "a destructive call says so: {all}");
+    assert!(all.contains('╭') && all.contains('╯'), "framed: {all}");
+    assert!(all.contains("Esc — отклонить"), "{all}");
+}
+
+#[test]
+fn a_stopped_turn_says_so_at_once() {
+    let mut app = premium_app();
+    app.messages.push(MessageItem::assistant("partial", ""));
+    app.is_busy = true;
+    app.is_cancelling = true;
+    let buf = draw(&app, 80, 20);
+    let all = rows(&buf).join("\n");
+    assert!(all.contains("Останавливаю"), "the old spinner must not keep claiming generation:\n{all}");
+}
+
+#[test]
+fn a_shorter_second_frame_does_not_leave_ghost_text() {
+    let mut app = premium_app();
+    app.messages.push(MessageItem::System("a long line that will disappear".into()));
+    let mut term = Terminal::new(TestBackend::new(80, 20)).unwrap();
+    term.draw(|f| draw_ui(f, &app)).unwrap();
+    app.messages.clear();
+    app.messages.push(MessageItem::System("x".into()));
+    term.draw(|f| draw_ui(f, &app)).unwrap();
+    let all = rows(term.backend().buffer()).join("\n");
+    assert!(!all.contains("will disappear"), "stale characters survived:\n{all}");
 }
 
 #[test]
@@ -293,8 +445,8 @@ fn a_diff_tints_added_and_removed_lines() {
     let removed = find(&buf, "-old");
     assert_eq!(buf[(40, added)].bg, p().ok_soft);
     assert_eq!(buf[(40, removed)].bg, p().danger_soft);
-    assert_eq!(buf[(1, added)].fg, p().ok);
-    assert_eq!(buf[(1, removed)].fg, p().danger);
+    assert_eq!(buf[(3, added)].fg, p().ok);
+    assert_eq!(buf[(3, removed)].fg, p().danger);
 }
 
 #[test]
@@ -303,7 +455,7 @@ fn an_error_is_a_red_card_with_one_prefix_and_the_hint_under_it() {
     app.messages.push(MessageItem::Error { text: "boom".into(), hint: Some("Try again later".into()) });
     let buf = draw(&app, 80, 20);
     let y = find(&buf, "Ошибка: boom");
-    assert!(row(&buf, y).starts_with(" ▍ ✗ "), "{:?}", row(&buf, y));
+    assert!(row(&buf, y).starts_with("   ▍ ✗ "), "{:?}", row(&buf, y));
     assert_eq!(buf[(40, y)].bg, p().danger_soft);
     assert!(row(&buf, y + 1).contains("Try again later"));
     assert!(!rows(&buf).join("\n").contains("Ошибка: Ошибка"));

@@ -1,6 +1,6 @@
 import builtins
 
-import rag_engine
+import argent.rag_engine as rag_engine
 
 
 class TestReadPdf:

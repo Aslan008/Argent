@@ -7,8 +7,8 @@ kill common mutations (off-by-one, wrong operator, missing branch, etc.).
 
 import pytest
 
-import prompt_compressor
-from prompt_compressor import (
+import argent.prompt_compressor as prompt_compressor
+from argent.prompt_compressor import (
     drop_unavailable_tool_lines,
     _strip_section,
     compress_system_prompt,

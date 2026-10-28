@@ -3,7 +3,7 @@
 #![allow(clippy::useless_conversion)]
 
 use pyo3::prelude::*;
-use pyo3::types::{PyAnyMethods, PyDict, PyDictMethods};
+use pyo3::types::{PyAnyMethods, PyBytes, PyDict, PyDictMethods};
 use std::collections::HashMap;
 use std::io::stdout;
 use std::sync::mpsc::channel;
@@ -39,7 +39,7 @@ pub mod toolrender;
 pub mod ui;
 pub mod view;
 
-use app::{App, ClickAction, CompletionItem, MessageItem, Submit};
+use app::{App, ClickAction, CompletionItem, MessageItem, QueueTrigger, Submit};
 use events::ArgentEvent;
 
 /// How long a burst of keys may pause, in ms, and still be one paste (a long paste reaches the
@@ -99,12 +99,124 @@ mod paste_tests {
 }
 use sink::RustEventSink;
 
+/// Put the clipboard into the prompt.
+///
+/// A picture on the clipboard becomes an attachment: the pixels go to Python,
+/// which encodes them the way `view_image` does and queues them for the next turn
+/// (`vision.queue_image`). Anything else is pasted as text, exactly as Ctrl+V
+/// behaved before images were supported.
+fn paste_clipboard(app: &mut App, clipboard: &mut Option<arboard::Clipboard>, bridge: &PyObject) {
+    let Some(clip) = clipboard.as_mut() else {
+        return;
+    };
+
+    if let Ok(img) = clip.get_image() {
+        if img.width > 0 && img.height > 0 {
+            let (w, h) = (img.width, img.height);
+            let rgba = img.bytes.to_vec();
+            let reply = Python::with_gil(|py| -> Option<String> {
+                let bytes = PyBytes::new_bound(py, &rgba);
+                match bridge.call_method1(py, "queue_clipboard_image", (w, h, bytes)) {
+                    Ok(value) => value.extract::<String>(py).ok(),
+                    Err(err) => {
+                        err.print(py);
+                        None
+                    }
+                }
+            });
+            // The bridge answers with the size on success, with the reason on
+            // failure; either way the user must see it, or a paste looks ignored.
+            if let Some(reply) = reply {
+                let note = if reply.contains('×') {
+                    format!("Скриншот прикреплён к следующему сообщению: {reply}")
+                } else {
+                    format!("Не удалось вставить изображение: {reply}")
+                };
+                app.messages.push(MessageItem::Notice(note));
+                // The strip above the prompt draws what the bridge holds, so the
+                // list is read now instead of at the next 2-second poll.
+                pull_state(app, bridge);
+                return;
+            }
+        }
+    }
+
+    if let Ok(text) = clip.get_text() {
+        if !text.is_empty() {
+            app.insert_str(&text.replace("\r\n", "\n"));
+        }
+    }
+}
+
+/// Read the bridge's state once: the toolbar's numbers, the attachments and the
+/// queue all come from it, and a click must show its result at once rather than
+/// at the next two-second poll.
+fn pull_state(app: &mut App, bridge: &PyObject) {
+    Python::with_gil(|py| {
+        let Ok(state_obj) = bridge.call_method0(py, "get_state") else {
+            return;
+        };
+        let Ok(dict) = state_obj.extract::<Bound<'_, PyDict>>(py) else {
+            return;
+        };
+        let mut state_map = HashMap::new();
+        for (k, v) in dict.iter() {
+            let k_str: String = k.extract().unwrap_or_default();
+            let v_str = v.extract::<String>().unwrap_or_else(|_| v.to_string());
+            state_map.insert(k_str, v_str);
+        }
+        app.update_status(state_map);
+    });
+}
+
 #[pyfunction]
 fn run_tui(py: Python, bridge: PyObject) -> PyResult<()> {
     // 1. Setup in-memory event channel and sink
     let (tx, rx) = channel();
-    let sink = Py::new(py, RustEventSink { tx })?;
+    let sink = Py::new(py, RustEventSink { tx: tx.clone() })?;
     bridge.call_method1(py, "set_event_sink", (sink,))?;
+
+    // Toolbar state is pulled on its own thread. Doing it here, on the drawing
+    // thread, meant taking the GIL — and the GIL belongs to the agent's worker
+    // while it thinks, streams and parses. The interface therefore froze solid
+    // during long turns: no keys, no wheel, nothing, until the worker let go.
+    // Now the worker's Python work can take as long as it likes; this thread only
+    // reads whatever the poller last managed to fetch.
+    let poll_stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let poll_stop_thread = poll_stop.clone();
+    let poll_tx = tx.clone();
+    let poll_bridge = bridge.clone_ref(py);
+    let poller = std::thread::spawn(move || {
+        use std::sync::atomic::Ordering::Relaxed;
+        while !poll_stop_thread.load(Relaxed) {
+            std::thread::sleep(Duration::from_millis(1000));
+            if poll_stop_thread.load(Relaxed) {
+                break;
+            }
+            let map = Python::with_gil(|py| -> Option<HashMap<String, String>> {
+                let state_obj = poll_bridge.call_method0(py, "get_state").ok()?;
+                let dict = state_obj.extract::<Bound<'_, PyDict>>(py).ok()?;
+                let mut state_map = HashMap::new();
+                for (k, v) in dict.iter() {
+                    let k_str: String = k.extract().unwrap_or_default();
+                    let v_str = v.extract::<String>().unwrap_or_else(|_| v.to_string());
+                    state_map.insert(k_str, v_str);
+                }
+                Some(state_map)
+            });
+            match map {
+                Some(state_map) => {
+                    if poll_tx
+                        .send((std::time::Instant::now(), ArgentEvent::State(state_map)))
+                        .is_err()
+                    {
+                        break;      // the UI is gone
+                    }
+                }
+                None => break,      // the bridge is gone
+            }
+        }
+    });
 
     // 2. Load initial state, completions, and persistent history
     let mut app = App::new();
@@ -141,6 +253,16 @@ fn run_tui(py: Python, bridge: PyObject) -> PyResult<()> {
                 }
             }
         }
+    }
+
+    // `/queue` is answered by this frontend (the queue is Rust state), so the
+    // bridge's registry cannot list it — and a command nobody can find is not a
+    // command. It rides in the completion list with the rest.
+    if !app.completions.iter().any(|c| c.name == "/queue") {
+        app.completions.push(CompletionItem {
+            name: "/queue".to_string(),
+            help: "Очередь: list | rm <№> | edit <№> <текст> | add <текст> | in 10m <текст> | on error[:текст] <текст> | on success <текст> | on stuck <текст> | clear".to_string(),
+        });
     }
 
     if let Ok(hist_obj) = bridge.call_method0(py, "get_history") {
@@ -233,13 +355,21 @@ fn run_tui(py: Python, bridge: PyObject) -> PyResult<()> {
         let mut clipboard = arboard::Clipboard::new().ok();
         let mut last_ctrl_c: Option<std::time::Instant> = None;
         let mut last_draw = std::time::Instant::now() - Duration::from_secs(1);
-        let mut last_state = std::time::Instant::now();
 
         // The mouse wheel scrolls the transcript and a click can open a block, so
         // capture is on from the start; Shift+drag still selects with the
         // terminal's own selection, and Alt+M / F2 hands the mouse back.
-        if guard.toggle_mouse_capture().is_ok() {
-            app.mouse_capture_enabled = true;
+        match guard.toggle_mouse_capture() {
+            Ok(_) => app.mouse_capture_enabled = true,
+            Err(e) => {
+                // Without capture the console turns a wheel notch into Up/Down, and
+                // those walk the input history: the transcript then sits still while
+                // the prompt fills with old messages. Say so instead of letting it
+                // look as if the wheel were bound to the prompt.
+                app.messages.push(MessageItem::Notice(format!(
+                    "Захват мыши не включился ({e}): колесо будет листать историю ввода, а не чат. Alt+M — попробовать снова."
+                )));
+            }
         }
 
         // Events read ahead while looking for a pasted burst and not consumed yet.
@@ -248,44 +378,42 @@ fn run_tui(py: Python, bridge: PyObject) -> PyResult<()> {
         loop {
             app.tick = app.tick.wrapping_add(1);
 
-            // Refresh the toolbar's numbers from the bridge now and then.
-            if last_state.elapsed() >= Duration::from_millis(2000) {
-                last_state = std::time::Instant::now();
-                app.dirty.set(true);
-                Python::with_gil(|py| {
-                    if let Ok(state_obj) = bridge.call_method0(py, "get_state") {
-                        if let Ok(dict) = state_obj.extract::<Bound<'_, PyDict>>(py) {
-                            let mut state_map = HashMap::new();
-                            for (k, v) in dict.iter() {
-                                let k_str: String = k.extract().unwrap_or_default();
-                                let v_str = v.to_string();
-                                state_map.insert(k_str, v_str);
-                            }
-                            app.update_status(state_map);
-                        }
-                    }
-                });
-            }
+            // The toolbar's numbers arrive from the poller thread as State events; this
+            // loop no longer calls Python for them, so it cannot be blocked by the worker.
 
             // Drain all pending events from Python
             while let Ok((at, event)) = rx.try_recv() {
                 let is_done = matches!(event, ArgentEvent::Done);
+                // A queued message can be waiting for exactly this: a failure to
+                // recover from, or a successful end to report on. Both are read
+                // before the event is consumed, because the text is the trigger.
+                let mut queue_moved = false;
+                if let ArgentEvent::Error { text, .. } = &event {
+                    app.turn_had_error = true;
+                    queue_moved = app.fire_error_conditions(text) > 0;
+                }
                 app.handle_event_at(event, at);
                 if is_done {
-                    Python::with_gil(|py| {
-                        if let Ok(state_obj) = bridge.call_method0(py, "get_state") {
-                            if let Ok(dict) = state_obj.extract::<Bound<'_, PyDict>>(py) {
-                                let mut state_map = HashMap::new();
-                                for (k, v) in dict.iter() {
-                                    let k_str: String = k.extract().unwrap_or_default();
-                                    let v_str = v.extract::<String>().unwrap_or_else(|_| v.to_string());
-                                    state_map.insert(k_str, v_str);
-                                }
-                                app.update_status(state_map);
-                            }
-                        }
-                    });
+                    // "On success" means the turn really succeeded: a turn that
+                    // reported an error on its way out is not one.
+                    if !app.turn_had_error && app.release_queued(QueueTrigger::Success, "") > 0 {
+                        queue_moved = true;
+                    }
+                    app.turn_had_error = false;
+                    app.dirty.set(true);
+                    // The toolbar catches up on the next State event (≤ 1 s); fetching it
+                    // here meant a GIL wait of up to hundreds of milliseconds on the very
+                    // thread that reads the keyboard.
                 }
+                if queue_moved {
+                    app.dirty.set(true);
+                }
+            }
+
+            // Time-based queue conditions, and the stuck check: a message queued
+            // "in 10m" or "when this step hangs" has nothing else to wake it.
+            if app.tick_queue() > 0 {
+                app.dirty.set(true);
             }
 
             app.drop_stale_selection();
@@ -299,7 +427,6 @@ fn run_tui(py: Python, bridge: PyObject) -> PyResult<()> {
                 });
                 break;
             }
-
             // Check if agent finished and there are queued messages to run
             if !app.is_busy {
                 if let Some(next_prompt) = app.pop_next_queued_message() {
@@ -315,6 +442,32 @@ fn run_tui(py: Python, bridge: PyObject) -> PyResult<()> {
                     if rejected {
                         app.requeue_rejected_message(next_prompt);
                     }
+                }
+            }
+
+            // The background window follows its process: a copy of the output tail
+            // every 600 ms while it is open. A copy — `read_background_command`
+            // drains the queue, and draining it here would take the output away from
+            // the agent that may be waiting for it.
+            if app.bg_view.is_some() {
+                let now = std::time::Instant::now();
+                let due = match app.bg_view_refresh.get() {
+                    None => true,
+                    Some(at) => now.duration_since(at) >= Duration::from_millis(600),
+                };
+                if due {
+                    let pid = app.bg_view.as_ref().map(|v| v.pid.clone()).unwrap_or_default();
+                    let fresh = Python::with_gil(|py| {
+                        bridge
+                            .call_method1(py, "background_view", (pid,))
+                            .ok()
+                            .and_then(|r| r.extract::<String>(py).ok())
+                    });
+                    if let Some(raw) = fresh {
+                        app.apply_bg_view(&raw);
+                    }
+                    app.bg_view_refresh.set(Some(now));
+                    app.dirty.set(true);
                 }
             }
 
@@ -355,10 +508,23 @@ fn run_tui(py: Python, bridge: PyObject) -> PyResult<()> {
                 match next_event {
                     // Mouse Wheel Scroll support & interactive button clicks
                     Event::Mouse(mouse) => match mouse.kind {
+                        // A pointer that moves is how hover hints and the
+                        // context breakdown appear: the TUI behaves like a
+                        // desktop window, not like a terminal that ignores it.
+                        MouseEventKind::Moved => {
+                            app.set_mouse_pos(mouse.column, mouse.row);
+                        }
                         MouseEventKind::ScrollUp => {
+                            // The wheel event carries the position it happened at, and
+                            // that is the only honest answer to "what is under the
+                            // pointer": the last `Moved` can be minutes old, so a wheel
+                            // over the chat scrolled the prompt (or the checklist) that
+                            // the pointer had once rested on.
+                            app.set_mouse_pos(mouse.column, mouse.row);
                             app.wheel(true, std::time::Instant::now());
                         }
                         MouseEventKind::ScrollDown => {
+                            app.set_mouse_pos(mouse.column, mouse.row);
                             app.wheel(false, std::time::Instant::now());
                         }
                         // As in Windows terminals: a right click copies what is selected,
@@ -377,11 +543,7 @@ fn run_tui(py: Python, bridge: PyObject) -> PyResult<()> {
                                 app.selecting = false;
                                 app.clear_selection();
                             } else if app.active_select.is_none() && app.active_approval.is_none() {
-                                if let Some(ref mut clip) = clipboard {
-                                    if let Ok(text) = clip.get_text() {
-                                        app.insert_str(&text.replace("\r\n", "\n"));
-                                    }
-                                }
+                                paste_clipboard(&mut app, &mut clipboard, &bridge);
                             }
                         }
                         MouseEventKind::Down(MouseButton::Left) => {
@@ -517,6 +679,130 @@ fn run_tui(py: Python, bridge: PyObject) -> PyResult<()> {
                                     ClickAction::ToggleTodos => {
                                         app.todos_folded = !app.todos_folded;
                                     }
+                                    ClickAction::ToggleTodosDone => {
+                                        app.todos_done_expanded = !app.todos_done_expanded;
+                                    }
+                                    ClickAction::ToggleSubTodos(idx) => {
+                                        if let Some(open) = app.todos_sub_open.get_mut(idx) {
+                                            *open = !*open;
+                                        }
+                                    }
+                                    ClickAction::ToggleBackground => {
+                                        app.bg_folded = !app.bg_folded;
+                                    }
+                                    ClickAction::ToggleBackgroundDone => {
+                                        app.bg_done_folded = !app.bg_done_folded;
+                                    }
+                                    ClickAction::ToggleFold(idx) => {
+                            app.toggle_fold(idx);
+                        }
+                        ClickAction::OpenBackground(pid) => {
+                            app.open_bg_view(&pid);
+                        }
+                        // Stopping a process takes two clicks on the same row:
+                        // the first arms it and says so, the second sends
+                        // `/stop <pid>` — the same command the prompt takes, so
+                        // it goes through whatever approval the session has.
+                        ClickAction::StopBackground(pid) => {
+                            if app.pending_stop.as_deref() != Some(pid.as_str()) {
+                                app.pending_stop = Some(pid.clone());
+                                app.messages.push(MessageItem::Notice(format!(
+                                    "Ещё раз на ⏹ у pid {pid} — процесс будет остановлен"
+                                )));
+                            } else {
+                                app.pending_stop = None;
+                                if app.is_busy {
+                                    app.messages.push(MessageItem::Notice(
+                                        "Ход ещё идёт — остановите процесс после него".to_string(),
+                                    ));
+                                } else {
+                                    app.is_command_in_flight = true;
+                                    app.is_busy = true;
+                                    Python::with_gil(|py| {
+                                        let _ = bridge.call_method1(
+                                            py, "start_turn", (format!("/stop {pid}"),));
+                                    });
+                                }
+                            }
+                        }
+                        ClickAction::ShowBackgroundOutput(pid) => {
+                                        // The output of a process runs to hundreds of lines and
+                                        // would bury the chat if drawn here: the command prints it
+                                        // in the transcript, where it can be scrolled and copied.
+                                        if app.is_busy {
+                                            app.messages.push(MessageItem::Notice(
+                                                "Дождитесь завершения хода — вывод откроется в чате".to_string(),
+                                            ));
+                                        } else {
+                                            app.is_command_in_flight = true;
+                                            app.is_busy = true;
+                                            Python::with_gil(|py| {
+                                                let _ = bridge.call_method1(
+                                                    py, "start_turn", (format!("/jobs {pid}"),));
+                                            });
+                                        }
+                                    }
+                                    ClickAction::ShowImage(idx) => {
+                                        // Ask the bridge for a screen-sized grid: the one in
+                                        // the poll is 96 columns wide, and a picture blown up
+                                        // from it is exactly the blur people complain about.
+                                        // Falls back to the cached frame if the file is gone.
+                                        let raw = Python::with_gil(|py| {
+                                            bridge
+                                                .call_method0(py, "preview_full")
+                                                .ok()
+                                                .and_then(|v| v.extract::<String>(py).ok())
+                                        });
+                                        let big = raw
+                                            .as_deref()
+                                            .and_then(crate::app::parse_image_preview);
+                                        if let Some(prev) = big {
+                                            app.image_view = Some(prev);
+                                        } else if let Some(prev) = app.previews.get(&idx).cloned() {
+                                            app.image_view = Some(prev);
+                                        }
+                                    }
+                                    // A queued message: take it into the draft. The slot
+                                    // stays put, so pressing Enter replaces it in place
+                                    // instead of moving it to the end of the queue.
+                                    ClickAction::EditQueue(idx) => {
+                                        if app.edit_queued(idx) {
+                                            app.messages.push(MessageItem::Notice(format!(
+                                                "Правка сообщения {} в очереди: Enter заменит его, Esc отменит",
+                                                idx + 1
+                                            )));
+                                        }
+                                    }
+                                    ClickAction::DropQueue(idx) => {
+                                        if let Some(removed) = app.drop_queued(idx) {
+                                            let short: String = removed.chars().take(60).collect();
+                                            app.messages.push(MessageItem::Notice(format!(
+                                                "Убрано из очереди: {short}"
+                                            )));
+                                        }
+                                    }
+                                    // A picture attached to the next message.
+                                    ClickAction::ShowAttachment(idx) => {
+                                        let raw = Python::with_gil(|py| {
+                                            bridge
+                                                .call_method1(py, "pending_image_full", (idx,))
+                                                .ok()
+                                                .and_then(|v| v.extract::<String>(py).ok())
+                                        });
+                                        if let Some(p) = raw.as_deref().and_then(crate::app::parse_image_preview) {
+                                            app.image_view = Some(p);
+                                        }
+                                    }
+                                    ClickAction::DropAttachment(idx) => {
+                                        Python::with_gil(|py| {
+                                            let _ = bridge.call_method1(py, "drop_pending_image", (idx,));
+                                        });
+                                        app.attachments.clear();
+                                        app.messages.push(MessageItem::Notice(
+                                            "Вложение убрано из сообщения".to_string(),
+                                        ));
+                                        pull_state(&mut app, &bridge);
+                                    }
                                     ClickAction::ToggleMouseCapture => {
                                         match guard.toggle_mouse_capture() {
                                             Ok(enabled) => {
@@ -534,22 +820,34 @@ fn run_tui(py: Python, bridge: PyObject) -> PyResult<()> {
                                         }
                                     }
                                 }
-                            } else if app.in_transcript(mouse.row) {
-                                // Not a click target: select transcript text. A second
-                                // press selects the word, a third the row.
-                                let clicks = app.click_count(mouse.column, mouse.row, std::time::Instant::now());
-                                app.begin_selection(mouse.column, mouse.row, clicks);
                             } else {
-                                app.mouse_sel = None;
+                                let clicks = app.click_count(mouse.column, mouse.row, std::time::Instant::now());
+                                // The prompt is an editor, not a chat area: a press in
+                                // it puts the caret under the pointer.
+                                if app.begin_input_selection(mouse.column, mouse.row, clicks) {
+                                    // handled by the draft
+                                } else if app.in_transcript(mouse.row) {
+                                    // Not a click target: select transcript text. A second
+                                    // press selects the word, a third the row.
+                                    app.begin_selection(mouse.column, mouse.row, clicks);
+                                } else {
+                                    app.mouse_sel = None;
+                                }
                             }
                         }
                         MouseEventKind::Drag(MouseButton::Left) => {
-                            app.drag_selection(mouse.column, mouse.row);
+                            if app.input_selecting {
+                                app.drag_input_selection(mouse.column, mouse.row);
+                            } else {
+                                app.drag_selection(mouse.column, mouse.row);
+                            }
                         }
                         MouseEventKind::Up(MouseButton::Left) => {
-                            // A drag copies what it covered, like selecting in a
-                            // terminal; a plain click leaves nothing selected.
-                            if let Some(text) = app.finish_selection() {
+                            if app.input_selecting {
+                                // A selection in the draft is not copied on release:
+                                // it is there to be cut, replaced or copied by hand.
+                                app.finish_input_selection();
+                            } else if let Some(text) = app.finish_selection() {
                                 if let Some(ref mut clip) = clipboard {
                                     let _ = clip.set_text(text);
                                 }
@@ -561,6 +859,11 @@ fn run_tui(py: Python, bridge: PyObject) -> PyResult<()> {
                     Event::Resize(..) => {
                         app.mouse_sel = None;
                         app.selecting = false;
+                        // A terminal resize is also the recovery path from a
+                        // stale/corrupted alternate-screen frame: repaint the
+                        // whole surface, exactly like the fullscreen toggle
+                        // users already use to clear the glitch.
+                        let _ = guard.terminal.clear();
                     }
 
                     // Bracketed paste: arrives as one event instead of a keystroke storm, which is
@@ -590,6 +893,50 @@ Event::FocusGained => {
                     Event::Key(key) => {
                         // CRITICAL: Filter out Release events to prevent duplicate characters on Windows!
                         if key.kind == KeyEventKind::Release {
+                            continue;
+                        }
+                        // Any key returns the prompt to the caret: a peek back at
+                        // earlier lines is a look, and typing ends it.
+                        app.input_scroll = 0;
+                        // The window on a background task is a window: Esc closes it
+                        // and the scroll keys move its own text, not the chat behind.
+                        if app.bg_view.is_some() {
+                            match key.code {
+                                KeyCode::Esc | KeyCode::Char('q') => {
+                                    app.close_bg_view();
+                                    continue;
+                                }
+                                KeyCode::PageUp => {
+                                    app.bg_view_page(true);
+                                    continue;
+                                }
+                                KeyCode::PageDown => {
+                                    app.bg_view_page(false);
+                                    continue;
+                                }
+                                KeyCode::Home => {
+                                    app.bg_view_scroll(-1000);
+                                    continue;
+                                }
+                                KeyCode::End => {
+                                    app.bg_view_scroll(1000);
+                                    continue;
+                                }
+                                KeyCode::Up => {
+                                    app.bg_view_scroll(-1);
+                                    continue;
+                                }
+                                KeyCode::Down => {
+                                    app.bg_view_scroll(1);
+                                    continue;
+                                }
+                                _ => {}
+                            }
+                        }
+                        // The full-screen picture is a look, not a mode: any key
+                        // closes it and nothing of it reaches the prompt.
+                        if app.image_view.is_some() {
+                            app.image_view = None;
                             continue;
                         }
                         // A Windows console does not deliver a paste as Event::Paste: the text
@@ -698,13 +1045,25 @@ Event::FocusGained => {
                                         });
                                     }
                                 }
-                                KeyCode::Backspace => {
-                                    select.filter.pop();
-                                    select.on_filter_changed();
+                                // The typed answer is editable: the caret walks with
+                                // the arrows, Home/End, and deletes on either side.
+                                KeyCode::Backspace => select.filter_backspace(),
+                                KeyCode::Delete => select.filter_delete(),
+                                KeyCode::Left => select.filter_left(),
+                                KeyCode::Right => select.filter_right(),
+                                KeyCode::Home => select.filter_home(),
+                                KeyCode::End => select.filter_end(),
+                                KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                                    select.filter_home();
+                                }
+                                KeyCode::Char('e') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                                    select.filter_end();
+                                }
+                                KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                                    select.filter_clear();
                                 }
                                 KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
-                                    select.filter.push(c);
-                                    select.on_filter_changed();
+                                    select.filter_insert(c);
                                 }
                                 _ => {}
                             }
@@ -756,6 +1115,11 @@ Event::FocusGained => {
                             if let Some(d) = decision {
                                 let chosen = if d == "pick" { picked } else { d.to_string() };
                                 app.active_approval = None;
+                                // The modal is taller than the normal prompt.
+                                // Repaint the whole screen when it leaves so a
+                                // stale terminal row cannot survive under the
+                                // toolbar (the "toolbar disappears" glitch).
+                                let _ = guard.terminal.clear();
                                 Python::with_gil(|py| {
                                     let _ = bridge.call_method1(py, "reply_approval", (aid, chosen));
                                 });
@@ -816,14 +1180,6 @@ Event::FocusGained => {
                         }
 
                         match (key.modifiers, key.code) {
-                            (KeyModifiers::CONTROL, KeyCode::Char('c')) if app.has_selection() => {
-                                if let Some(text) = app.selected_text() {
-                                    if let Some(ref mut clip) = clipboard {
-                                        let _ = clip.set_text(text);
-                                    }
-                                }
-                                app.clear_selection();
-                            }
                             (KeyModifiers::CONTROL, KeyCode::Char('x')) if app.has_selection() => {
                                 if let Some(text) = app.selected_text() {
                                     if let Some(ref mut clip) = clipboard {
@@ -836,16 +1192,16 @@ Event::FocusGained => {
                                 app.delete_selection();
                             }
                             (KeyModifiers::CONTROL, KeyCode::Char('c')) => {
-                                if app.has_selection() {
-                                    app.clear_selection();
-                                } else if !app.input.is_empty() {
-                                    app.input.clear();
-                                    app.cursor_pos = 0;
-                                    last_ctrl_c = None;
-                                } else if app.is_busy {
+                                // A turn in flight is the priority: Ctrl+C must
+                                // stop the work, even when a draft is sitting in
+                                // the prompt or a selection exists. Clearing the
+                                // input first was why a busy agent looked like it
+                                // ignored Ctrl+C.
+                                if app.is_busy {
                                     // First press stops the turn; a second press
                                     // within the window exits, so a busy agent can
                                     // never trap the user in the TUI.
+                                    app.is_cancelling = true;
                                     Python::with_gil(|py| {
                                         let _ = bridge.call_method0(py, "cancel_turn");
                                     });
@@ -860,6 +1216,17 @@ Event::FocusGained => {
                                         break;
                                     }
                                     last_ctrl_c = Some(now);
+                                } else if app.has_selection() {
+                                    if let Some(text) = app.selected_text() {
+                                        if let Some(ref mut clip) = clipboard {
+                                            let _ = clip.set_text(text);
+                                        }
+                                    }
+                                    app.clear_selection();
+                                } else if !app.input.is_empty() {
+                                    app.input.clear();
+                                    app.cursor_pos = 0;
+                                    last_ctrl_c = None;
                                 } else {
                                     // Idle: like the REPL, ask for a second Ctrl+C
                                     // within the window before leaving, so a stray
@@ -891,11 +1258,18 @@ Event::FocusGained => {
                                 app.delete_char();
                             }
                             (KeyModifiers::CONTROL, KeyCode::Char('v')) => {
-                                if let Some(ref mut clip) = clipboard {
-                                    if let Ok(text) = clip.get_text() {
-                                        app.insert_str(&text.replace("\r\n", "\n"));
-                                    }
-                                }
+                                paste_clipboard(&mut app, &mut clipboard, &bridge);
+                            }
+                            // Same paste on keys the terminal does not swallow: some
+                            // hosts turn Ctrl+V into a text-only paste, which silently
+                            // drops a picture on the clipboard.
+                            (KeyModifiers::ALT, KeyCode::Char('v')) => {
+                                paste_clipboard(&mut app, &mut clipboard, &bridge);
+                            }
+                            (m, KeyCode::Char('v'))
+                                if m.contains(KeyModifiers::CONTROL) && m.contains(KeyModifiers::SHIFT) =>
+                            {
+                                paste_clipboard(&mut app, &mut clipboard, &bridge);
                             }
                             // Collapsible-block navigation. Space used to double as the reasoning
                             // toggle, which made it impossible to tell an indent
@@ -1139,12 +1513,18 @@ Event::FocusGained => {
                             {
                                 app.lower(3);
                             }
-                            // PageUp / PageDown with any modifier
+                            // PageUp / PageDown with any modifier. A tool card with the
+                            // focus pages its own output first: the card is a window, and
+                            // the keys should move what the person is looking at.
                             (_, KeyCode::PageUp) => {
-                                app.scroll_up(10);
+                                if !app.page_focused_card(true) {
+                                    app.scroll_up(10);
+                                }
                             }
                             (_, KeyCode::PageDown) => {
-                                app.lower(10);
+                                if !app.page_focused_card(false) {
+                                    app.lower(10);
+                                }
                             }
                             // Ctrl+Home: scroll to very top of chat history
                             (m, KeyCode::Home) if m.contains(KeyModifiers::CONTROL) => {
@@ -1157,6 +1537,10 @@ Event::FocusGained => {
                             (KeyModifiers::NONE, KeyCode::Esc) => {
                                 if app.cancel_completion() {
                                     // Closed the suggestions (and undid a Tab preview).
+                                } else if app.queue_edit.is_some() {
+                                    // Leave the edit: the message stays in the queue as
+                                    // it was, and the draft that was put aside returns.
+                                    app.cancel_queue_edit();
                                 } else if !app.input.is_empty() {
                                     app.input.clear();
                                     app.cursor_pos = 0;
@@ -1278,6 +1662,11 @@ Event::FocusGained => {
                 app.dirty.set(true);
             }
         }
+
+        // The loop is over: stop the poller before the terminal is handed back, or it
+        // would keep calling into Python while the interpreter shuts down.
+        poll_stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        let _ = poller.join();
 
         Ok(())
     });

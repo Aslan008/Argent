@@ -2,7 +2,7 @@
 
 import pytest
 
-import config
+import argent.config as config
 from src.leeth.primitives import ChoiceQuestion, ChoiceResult, LeethDecisionBatch, NoulQuestion, NoulResult
 from src.leeth.runtime import LeethRuntime
 

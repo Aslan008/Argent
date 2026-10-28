@@ -20,7 +20,7 @@ from pathlib import Path
 
 import pytest
 
-from tools.schemas import AVAILABLE_TOOLS
+from argent.tools.schemas import AVAILABLE_TOOLS
 
 _ROOT = Path(__file__).resolve().parents[1]
 # semantic_search is registered only when RAG is on; call_mcp_tool proxies MCP.
@@ -75,6 +75,12 @@ def _drifted():
             names = _string_elements(node)
             if not names or len(names) < 2:
                 continue
+            # A loader entry is ("module.path", "function"). The module is not a tool
+            # name: counting it made every DEFAULT_TOOL_LOADERS tuple look drifted,
+            # and the guard cried "phantom tool" about argent.tools.file_ops.
+            names = [n for n in names if "." not in n]
+            if len(names) < 2:
+                continue
             known = [n for n in names if n in _REAL]
             if len(known) * 2 < len(names):      # not a tool list
                 continue
@@ -123,6 +129,6 @@ class TestTranslationTables:
         """`MultiEdit -> multi_replace_in_file` and `TodoWrite -> add_work_task`
         sat here after both targets were gone: a skill written for Claude Code
         was told to call something that does not exist."""
-        from skill_manager import _TOOL_NAME_MAP
+        from argent.skill_manager import _TOOL_NAME_MAP
         ghosts = {k: v for k, v in _TOOL_NAME_MAP.items() if v not in _REAL}
         assert not ghosts, ghosts

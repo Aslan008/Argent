@@ -51,6 +51,34 @@ pub fn strip_ansi(s: &str) -> String {
     out
 }
 
+/// Drop a full reset that a producer wrote *inside* one line.
+///
+/// Rich wraps every `console.print` in `\x1b[2m … \x1b[0m`, and the REPL streams a
+/// command's output write by write. Joined into one item (see `App::push_output`)
+/// the reset sits mid-line and would drop the style for the rest of it — " M" dim,
+/// the path after it bright. A reset followed immediately by another SGR open is
+/// redundant, so removing it leaves the visible result unchanged.
+pub fn glue_style(text: &str) -> String {
+    const RESET: &str = "\u{1b}[0m";
+    if !text.contains(RESET) {
+        return text.to_string();
+    }
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(pos) = rest.find(RESET) {
+        let after = &rest[pos + RESET.len()..];
+        // Keep the reset when it ends a line or a run of resets.
+        let redundant = after.starts_with("\u{1b}[") && !after.starts_with(RESET);
+        out.push_str(&rest[..pos]);
+        if !redundant {
+            out.push_str(RESET);
+        }
+        rest = after;
+    }
+    out.push_str(rest);
+    out
+}
+
 /// Consume one escape sequence starting after the ESC, appending its
 /// non-escape payload (there is none) to `out`.
 fn strip_one_sequence(chars: &mut std::iter::Peekable<std::str::Chars<'_>>, _out: &mut String) {
@@ -409,6 +437,29 @@ mod parse_tests {
             .iter()
             .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect::<String>())
             .collect()
+    }
+
+    #[test]
+    fn leading_spaces_survive_parsing() {
+        // `git status --short` writes its status letter in column one; a trimmed
+        // line loses the column and the path reads like a separate entry.
+        assert_eq!(text(&parse_ansi(" M path.py\n")), vec![" M path.py"]);
+    }
+
+    #[test]
+    fn a_reset_between_two_pieces_of_a_line_keeps_the_style() {
+        // Two REPL writes joined into one row: the reset the producer put between
+        // them must not brighten the second half.
+        let glued = glue_style("\u{1b}[2m M\u{1b}[0m\u{1b}[2m path\u{1b}[0m\n");
+        let l = parse_ansi(&glued);
+        assert_eq!(text(&l), vec![" M path"]);
+        assert!(
+            l[0].spans.iter().all(|s| s.style.add_modifier.contains(Modifier::DIM)),
+            "style lost after the join: {:?}",
+            l[0].spans
+        );
+        // A reset that ends the line is kept.
+        assert_eq!(glue_style("a\u{1b}[0m\n"), "a\u{1b}[0m\n");
     }
 
     #[test]

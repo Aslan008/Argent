@@ -5,9 +5,9 @@ from unittest.mock import MagicMock
 
 import pytest
 
-import agent as agent_module
-import config
-from agent import ArgentAgent
+import argent.agent as agent_module
+import argent.config as config
+from argent.agent import ArgentAgent
 from src.agent import checkpoints
 from src.agent.checkpoints import (
     CheckpointError, auto_checkpoint, blocking_commits, create_checkpoint,
@@ -46,8 +46,47 @@ class TestCreateAndList:
         (repo / "app.py").write_text("v2\n", encoding="utf-8")
         sha = create_checkpoint("before: fix menu")
         assert sha
-        assert _git("log", "-1", "--pretty=%s").stdout.strip() == \
+        assert _git("log", "-1", "--pretty=%s", sha).stdout.strip() == \
             "Argent Checkpoint: before: fix menu"
+
+    def test_snapshot_stays_off_the_branch(self, repo):
+        """The 2026-10-20 incident: a checkpoint was a real commit on master that swept
+        untracked datasets and the user's uncommitted work into history. Now the branch,
+        HEAD, the index and `git status` are exactly as before."""
+        (repo / "app.py").write_text("v2\n", encoding="utf-8")
+        (repo / "data.jsonl").write_text("big\n", encoding="utf-8")
+        head, status = _git("rev-parse", "HEAD").stdout, _git("status", "--porcelain").stdout
+        sha = create_checkpoint("before: x")
+        assert sha
+        assert _git("rev-parse", "HEAD").stdout == head
+        assert _git("status", "--porcelain").stdout == status            # data.jsonl is still untracked
+        assert _git("log", "--pretty=%s").stdout.strip().splitlines() == ["initial"]
+        assert _git("for-each-ref", "--format=%(refname)", "refs/argent/checkpoints").stdout.strip()
+        assert "data.jsonl" in _git("ls-tree", "--name-only", sha).stdout  # ...but it is in the snapshot
+
+    def test_staged_changes_are_untouched_and_covered(self, repo):
+        (repo / "staged.py").write_text("mine\n", encoding="utf-8")
+        _git("add", "staged.py")
+        (repo / "app.py").write_text("v2\n", encoding="utf-8")
+        assert create_checkpoint("x")
+        assert _git("diff", "--cached", "--name-only").stdout.strip() == "staged.py"
+        assert _git("diff", "--name-only").stdout.strip() == "app.py"
+
+    def test_push_does_not_send_checkpoints(self, repo, tmp_path):
+        remote = tmp_path.parent / (tmp_path.name + "_remote.git")
+        _git("init", "-q", "--bare", str(remote))
+        (repo / "app.py").write_text("v2\n", encoding="utf-8")
+        create_checkpoint("x")
+        branch = _git("rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
+        assert _git("push", "-q", str(remote), branch).returncode == 0
+        assert not _git("for-each-ref", "refs/argent", cwd=str(remote)).stdout.strip()
+
+    def test_only_the_newest_are_kept(self, repo, monkeypatch):
+        monkeypatch.setattr(checkpoints, "KEEP_CHECKPOINTS", 3)
+        for i in range(5):
+            (repo / "app.py").write_text(f"v{i}\n", encoding="utf-8")
+            create_checkpoint(f"cp{i}")
+        assert [c["label"] for c in list_checkpoints()] == ["cp4", "cp3", "cp2"]
 
     def test_clean_tree_returns_none(self, repo):
         assert create_checkpoint("nothing") is None
@@ -85,16 +124,41 @@ class TestRewind:
         assert "stashed" in msg
         assert "Argent Auto-Save before Rewind" in _git("stash", "list").stdout
 
-    def test_discards_newer_checkpoints_and_reports_them(self, repo):
+    def test_newer_checkpoints_stay_available(self, repo):
         (repo / "app.py").write_text("v2\n", encoding="utf-8")
         create_checkpoint("older")
         target = list_checkpoints()[0]["sha"]
         (repo / "app.py").write_text("v3\n", encoding="utf-8")
         create_checkpoint("newer")
 
-        msg = rewind_to(target)
-        assert "Discarded 1 newer checkpoint" in msg
-        assert [c["label"] for c in list_checkpoints()] == ["older"]
+        rewind_to(target)
+        assert (repo / "app.py").read_text(encoding="utf-8") == "v2\n"
+        assert [c["label"] for c in list_checkpoints()] == ["newer", "older"]
+        rewind_to(list_checkpoints()[0]["sha"])                              # and forward again
+        assert (repo / "app.py").read_text(encoding="utf-8") == "v3\n"
+
+    def test_restores_files_added_and_deleted_and_keeps_them_uncommitted(self, repo):
+        (repo / "notes.txt").write_text("draft\n", encoding="utf-8")        # untracked at snapshot time
+        (repo / "app.py").write_text("v2\n", encoding="utf-8")
+        create_checkpoint("cp")
+        (repo / "notes.txt").unlink()
+        (repo / "junk.tmp").write_text("x\n", encoding="utf-8")            # appeared after the snapshot
+
+        rewind_to(list_checkpoints()[0]["sha"])
+        assert (repo / "notes.txt").read_text(encoding="utf-8") == "draft\n"
+        assert not (repo / "junk.tmp").exists()                             # it is in the stash, not lost
+        assert set(_git("status", "--porcelain").stdout.splitlines()) == {" M app.py", "?? notes.txt"}
+        assert _git("log", "--pretty=%s").stdout.strip().splitlines() == ["initial"]
+
+    def test_old_style_checkpoint_commits_still_rewind(self, repo):
+        """Checkpoints made before 2026-10-20 are commits on the branch."""
+        (repo / "app.py").write_text("v2\n", encoding="utf-8")
+        _git("add", "-A")
+        _git("commit", "-q", "-m", "Argent Checkpoint: before: legacy")
+        (repo / "app.py").write_text("broken\n", encoding="utf-8")
+        assert [c["label"] for c in list_checkpoints()] == ["before: legacy"]
+        assert "Rewound to checkpoint" in rewind_to(list_checkpoints()[0]["sha"])
+        assert (repo / "app.py").read_text(encoding="utf-8") == "v2\n"
 
     def test_real_commit_in_between_blocks_rewind(self, repo):
         (repo / "app.py").write_text("v2\n", encoding="utf-8")
@@ -128,26 +192,15 @@ class TestAutoCheckpoint:
         finally:
             set_auto_checkpoint(True)
 
-    def test_staged_changes_are_left_alone(self, repo):
-        # A hand-crafted index means the user is mid-commit; auto add -A
-        # would destroy it. The skip must also leave the index untouched.
+    def test_staged_changes_are_left_alone_and_covered(self, repo):
+        # A hand-crafted index means the user is mid-commit. The snapshot is built
+        # in a temporary index, so it neither skips this turn nor touches theirs.
         (repo / "staged.py").write_text("mine\n", encoding="utf-8")
         _git("add", "staged.py")
-        assert auto_checkpoint("x") is None
+        assert auto_checkpoint("x")
         staged = _git("diff", "--cached", "--name-only").stdout.strip()
         assert staged == "staged.py"
-
-    def test_staged_skip_warns_the_user(self, repo):
-        """Skipping is right; skipping SILENTLY is the trap — the user would
-        believe /rewind covers them while the agent edits unprotected."""
-        from src.agent.checkpoints import auto_checkpoint_detailed
-        (repo / "staged.py").write_text("mine\n", encoding="utf-8")
-        _git("add", "staged.py")
-
-        result = auto_checkpoint_detailed("почини меню")
-        assert result.sha is None
-        assert result.warn is True
-        assert "staged" in result.reason and "/rewind" in result.reason
+        assert _git("log", "--pretty=%s").stdout.strip().splitlines() == ["initial"]
 
     def test_clean_tree_skip_is_not_a_warning(self, repo):
         from src.agent.checkpoints import auto_checkpoint_detailed
@@ -176,12 +229,12 @@ class TestAutoCheckpoint:
 
 class TestGitRollbackTool:
     def _approve(self, monkeypatch):
-        import approval
+        import argent.approval as approval
         monkeypatch.setattr(approval, "request_approval", lambda *a, **k: True)
 
     def test_no_arg_rolls_back_to_latest(self, repo, monkeypatch):
         self._approve(monkeypatch)
-        from tools.misc_tools import git_rollback
+        from argent.tools.misc_tools import git_rollback
         (repo / "app.py").write_text("v2\n", encoding="utf-8")
         create_checkpoint("latest state")
         (repo / "app.py").write_text("broken\n", encoding="utf-8")
@@ -191,7 +244,7 @@ class TestGitRollbackTool:
 
     def test_substring_picks_older_checkpoint(self, repo, monkeypatch):
         self._approve(monkeypatch)
-        from tools.misc_tools import git_rollback
+        from argent.tools.misc_tools import git_rollback
         (repo / "app.py").write_text("v2\n", encoding="utf-8")
         create_checkpoint("before: сломал меню")
         (repo / "app.py").write_text("v3\n", encoding="utf-8")
@@ -202,7 +255,7 @@ class TestGitRollbackTool:
 
     def test_no_match_lists_available(self, repo, monkeypatch):
         self._approve(monkeypatch)
-        from tools.misc_tools import git_rollback
+        from argent.tools.misc_tools import git_rollback
         (repo / "app.py").write_text("v2\n", encoding="utf-8")
         create_checkpoint("before: правка")
 
@@ -211,16 +264,16 @@ class TestGitRollbackTool:
         assert "before: правка" in out
 
     def test_denied_approval_aborts(self, repo, monkeypatch):
-        import approval
+        import argent.approval as approval
         monkeypatch.setattr(approval, "request_approval", lambda *a, **k: False)
-        from tools.misc_tools import git_rollback
+        from argent.tools.misc_tools import git_rollback
         (repo / "app.py").write_text("v2\n", encoding="utf-8")
         create_checkpoint("cp")
         assert git_rollback() == "Rollback aborted by user."
 
     def test_no_checkpoints_is_explicit(self, repo, monkeypatch):
         self._approve(monkeypatch)
-        from tools.misc_tools import git_rollback
+        from argent.tools.misc_tools import git_rollback
         assert "no Argent Checkpoints found" in git_rollback()
 
 

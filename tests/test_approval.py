@@ -1,6 +1,6 @@
 import pytest
 
-import approval
+import argent.approval as approval
 
 
 @pytest.fixture(autouse=True)
@@ -26,13 +26,27 @@ class TestDestructiveDetection:
         "git clean -fdx",
         "git push origin master --force",
         "reg delete HKCU\\Software\\Foo /f",
-        "taskkill /IM python.exe /F",
-        "Stop-Process -Name notepad",
         "shutdown /s /t 0",
         "Clear-Content log.txt",
     ])
     def test_destructive_commands_detected(self, command):
         assert approval.is_destructive_command(command)
+
+    @pytest.mark.parametrize("command", [
+        "taskkill /IM python.exe /F",
+        "Stop-Process -Name notepad",
+    ])
+    def test_stopping_a_process_is_its_own_kind(self, command):
+        """/vibe lets these through; the ordinary mode still asks.
+
+        Killing a process is not destroying data — it starts again — and an
+        autonomous run has to be able to kill its own stuck interpreter, or it
+        hangs until a human answers a prompt it was not supposed to need.
+        """
+        level, _ = approval.assess_command_risk(command)
+        assert level == "warn"                     # still a question in ASK mode
+        assert approval.classify_command_risk(command).kind == approval.KILLS
+        assert not approval.is_destructive_command(command)
 
     @pytest.mark.parametrize("command", [
         "python -m pytest -q",

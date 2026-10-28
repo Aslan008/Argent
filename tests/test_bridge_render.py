@@ -9,7 +9,7 @@ import re
 import pytest
 from rich.console import Console
 
-import ui
+import argent.ui as ui
 from src.bridge import render
 from src.bridge.render import make_console, render_block
 

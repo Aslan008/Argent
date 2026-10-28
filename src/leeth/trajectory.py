@@ -24,7 +24,7 @@ import time
 import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional
-from logger import get_logger
+from argent.logger import get_logger
 
 logger = get_logger("leeth_trajectory")
 
@@ -46,7 +46,7 @@ def _is_enabled() -> bool:
     if "pytest" in sys.modules:
         return False
     try:
-        import config
+        import argent.config as config
         return config.get_leeth_feedback_enabled()
     except Exception:
         return True

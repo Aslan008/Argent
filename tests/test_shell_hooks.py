@@ -7,8 +7,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
-import agent as agent_module
-from agent import ArgentAgent
+import argent.agent as agent_module
+from argent.agent import ArgentAgent
 from src.agent import shell_hooks
 from src.agent.shell_hooks import HookSpec, ShellHooks, _matches, parse_specs
 from src.agent.strategy import CloudStrategy
@@ -225,7 +225,7 @@ class ScriptedProvider:
 
     def stream_chat(self, **kwargs):
         if kwargs.get("tools"):
-            from providers import ProviderError
+            from argent.providers import ProviderError
             raise ProviderError("HTTP 404: No endpoints found that support tool use.")
         script_ = self.scripts[min(self.calls, len(self.scripts) - 1)]
         self.calls += 1

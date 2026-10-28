@@ -15,9 +15,9 @@ import json
 
 import pytest
 
-import vision
-from providers import _images_for_ollama, _images_for_openai
-from vision import MAX_EDGE_PIXELS, build_image_message, encode_image, model_supports_vision
+import argent.vision as vision
+from argent.providers import _images_for_ollama, _images_for_openai
+from argent.vision import MAX_EDGE_PIXELS, build_image_message, encode_image, model_supports_vision
 
 
 @pytest.fixture(autouse=True)
@@ -154,10 +154,10 @@ class TestProviderDialects:
 
 class TestTheTool:
     def test_a_queued_image_is_handed_over_once(self, tmp_path, monkeypatch):
-        from tools.misc_tools import view_image
+        from argent.tools.misc_tools import view_image
 
-        monkeypatch.setattr("config.get_current_model", lambda: "seer")
-        monkeypatch.setattr("config.get_provider", lambda: "ollama")
+        monkeypatch.setattr("argent.config.get_current_model", lambda: "seer")
+        monkeypatch.setattr("argent.config.get_provider", lambda: "ollama")
         monkeypatch.setattr(vision, "model_supports_vision", lambda m, p: True)
 
         out = view_image(str(_png(tmp_path)))
@@ -166,10 +166,10 @@ class TestTheTool:
         assert vision.drain_images() == []    # drained, not duplicated into the next turn
 
     def test_a_blind_model_is_refused_before_encoding(self, tmp_path, monkeypatch):
-        from tools.misc_tools import view_image
+        from argent.tools.misc_tools import view_image
 
-        monkeypatch.setattr("config.get_current_model", lambda: "glm-5.2:cloud")
-        monkeypatch.setattr("config.get_provider", lambda: "ollama")
+        monkeypatch.setattr("argent.config.get_current_model", lambda: "glm-5.2:cloud")
+        monkeypatch.setattr("argent.config.get_provider", lambda: "ollama")
         monkeypatch.setattr(vision, "model_supports_vision", lambda m, p: False)
         monkeypatch.setattr(vision, "encode_image",
                             lambda p: pytest.fail("не нужно кодировать для слепой модели"))
@@ -178,10 +178,10 @@ class TestTheTool:
         assert out.startswith("Error:") and "/model" in out
 
     def test_unverified_support_is_tried_but_flagged(self, tmp_path, monkeypatch):
-        from tools.misc_tools import view_image
+        from argent.tools.misc_tools import view_image
 
-        monkeypatch.setattr("config.get_current_model", lambda: "m")
-        monkeypatch.setattr("config.get_provider", lambda: "openrouter")
+        monkeypatch.setattr("argent.config.get_current_model", lambda: "m")
+        monkeypatch.setattr("argent.config.get_provider", lambda: "openrouter")
         monkeypatch.setattr(vision, "model_supports_vision", lambda m, p: None)
 
         out = view_image(str(_png(tmp_path)))
@@ -189,10 +189,10 @@ class TestTheTool:
         assert len(vision.drain_images()) == 1
 
     def test_nothing_is_queued_when_the_file_is_bad(self, tmp_path, monkeypatch):
-        from tools.misc_tools import view_image
+        from argent.tools.misc_tools import view_image
 
-        monkeypatch.setattr("config.get_current_model", lambda: "seer")
-        monkeypatch.setattr("config.get_provider", lambda: "ollama")
+        monkeypatch.setattr("argent.config.get_current_model", lambda: "seer")
+        monkeypatch.setattr("argent.config.get_provider", lambda: "ollama")
         monkeypatch.setattr(vision, "model_supports_vision", lambda m, p: True)
 
         assert view_image(str(tmp_path / "nope.png")).startswith("Error:")
@@ -201,11 +201,11 @@ class TestTheTool:
     def test_view_image_signature_resolves_all_annotations(self):
         """Regression test: verify inspect.signature(view_image) does not raise NameError for missing types like Any."""
         import inspect
-        from tools.misc_tools import view_image
+        from argent.tools.misc_tools import view_image
 
         sig = inspect.signature(view_image)
         assert "crop" in sig.parameters
-        assert "file_path" in sig.parameters
+        assert "path" in sig.parameters
 
     def test_koboldcpp_vision_probe_and_ornith_heuristic(self, monkeypatch):
         # 1. Name heuristics (without an mmproj probe). Ornith-1.5 is multimodal (Qwen3.5 based,
@@ -231,9 +231,9 @@ class TestTheTool:
         assert vision.model_supports_vision("any-model", "koboldcpp") is False
 
     def test_desktop_tools_notice_when_model_does_not_support_vision(self, monkeypatch):
-        from tools.desktop_tools import _maybe_auto_attach
-        monkeypatch.setattr("config.get_current_model", lambda: "ORNITH1.5:35BA3B")
-        monkeypatch.setattr("config.get_provider", lambda: "koboldcpp")
+        from argent.tools.desktop_tools import _maybe_auto_attach
+        monkeypatch.setattr("argent.config.get_current_model", lambda: "ORNITH1.5:35BA3B")
+        monkeypatch.setattr("argent.config.get_provider", lambda: "koboldcpp")
         vision.mark_vision_unsupported("koboldcpp", "ORNITH1.5:35BA3B")
 
         res = {"base64": "fake_b64", "media_type": "image/png", "path": "screen.png"}

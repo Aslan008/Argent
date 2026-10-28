@@ -271,7 +271,7 @@ class RoomBuilder:
         return raw, room, problems
 
     def _run(self, first_prompt: str, name: Optional[str], old: Optional[Room]) -> BuildResult:
-        from src.rooms.library import RoomLibrary  # noqa: F401  (type only)
+        from src.rooms.library import RoomLibrary  
         taken = {n for n, src in self.library.sources.items() if src == "starter"}
         if old is not None and name == old.room:
             taken.discard(name)

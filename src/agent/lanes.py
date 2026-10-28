@@ -33,7 +33,7 @@ import time
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
-from logger import get_logger
+from argent.logger import get_logger
 
 log = get_logger("lanes")
 

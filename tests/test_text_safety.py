@@ -11,7 +11,7 @@ import json
 
 import pytest
 
-from text_safety import REPLACEMENT, has_lone_surrogates, repair_structure, repair_surrogates
+from argent.text_safety import REPLACEMENT, has_lone_surrogates, repair_structure, repair_surrogates
 
 HIGH = chr(0xD83D)
 LOW = chr(0xDE00)
@@ -130,7 +130,7 @@ class TestTheStoragePath:
     def test_a_session_with_a_surrogate_still_saves(self, tmp_path, monkeypatch):
         """The one moment the history most needs to be written is the moment it
         would have been lost."""
-        import session as session_module
+        import argent.session as session_module
 
         d = tmp_path / "sessions"
         d.mkdir()

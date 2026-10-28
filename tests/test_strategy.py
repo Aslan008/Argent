@@ -19,7 +19,7 @@ class TestAgentStrategy(unittest.TestCase):
         # Strategy selection reads the model category, which honours a manual
         # override stored in the user's real config. Neutralize it so these
         # tests verify name-based classification regardless of the machine.
-        patcher = patch("config.get_model_category_override", return_value=None)
+        patcher = patch("argent.config.get_model_category_override", return_value=None)
         patcher.start()
         self.addCleanup(patcher.stop)
 

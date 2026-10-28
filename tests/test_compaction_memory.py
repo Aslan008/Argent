@@ -108,8 +108,8 @@ class TestRules:
 class TestFacts:
     def test_facts_merge_across_compactions_and_survive_a_render_parse_roundtrip(self):
         first = C.collect_facts([_msg("assistant", "Правлю модуль конфигурации проекта", tool_calls=[
-            _call("write_file", file_path="src/a.py"), _call("run_command", command="pytest tests/a")])])
-        second = C.collect_facts([_msg("assistant", "x", tool_calls=[_call("replace_in_file", file_path="src/b.py")]),
+            _call("write_file", path="src/a.py"), _call("run_command", command="pytest tests/a")])])
+        second = C.collect_facts([_msg("assistant", "x", tool_calls=[_call("replace_in_file", path="src/b.py")]),
                                   _msg("tool", "Traceback (most recent call last):\nValueError: boom")])
         rendered = C.render_facts(C.merge_facts(first, second), include_requests=False)
         again = C.parse_facts(rendered)
@@ -175,7 +175,7 @@ class TestTwoCompactionsInARow:
         edited.write_text("BODY_OF_CORE = 1\n", encoding="utf-8")
         first = [_msg("system", "sys"),
                  _msg("user", "Всё запускай исключительно на Kaggle, а не локально. Начнём с модуля core."),
-                 _msg("assistant", "Правлю core", tool_calls=[_call("write_file", file_path=str(edited)),
+                 _msg("assistant", "Правлю core", tool_calls=[_call("write_file", path=str(edited)),
                                                               _call("run_command", command="pytest tests/core")]),
                  _msg("tool", "Traceback (most recent call last):\nKeyError: 'depth'", tool_call_id="x")]
         first += _turns(0, 24)
@@ -200,7 +200,7 @@ class TestTwoCompactionsInARow:
         core = self.project / "core.py"
         core.write_text("SECRET_FILE_BODY_MARKER = 42\n", encoding="utf-8")
         msgs = [_msg("system", "sys"), _msg("user", "Начни работу над модулем"),
-                _msg("assistant", "пишу", tool_calls=[_call("write_file", file_path=str(core))])] + _turns(0, 24)
+                _msg("assistant", "пишу", tool_calls=[_call("write_file", path=str(core))])] + _turns(0, 24)
         once = run(msgs)
         assert "SECRET_FILE_BODY_MARKER" in self._distillate(once)
         run(once + _turns(50, 24))
@@ -267,9 +267,9 @@ class TestRehydration:
         edited, a, b, c = (tmp_path / n for n in ("edited.py", "a.py", "b.py", "c.py"))
         for p in (edited, a, b, c):
             p.write_text(f"# {p.name}\n", encoding="utf-8")
-        msgs = [_msg("assistant", "", tool_calls=[_call("read_file", file_path=str(a))]),
-                _msg("assistant", "", tool_calls=[_call("read_file", file_path=str(b))]),
-                _msg("assistant", "", tool_calls=[_call("read_file", file_path=str(c))]),
-                _msg("assistant", "", tool_calls=[_call("write_file", file_path=str(edited))])]
+        msgs = [_msg("assistant", "", tool_calls=[_call("read_file", path=str(a))]),
+                _msg("assistant", "", tool_calls=[_call("read_file", path=str(b))]),
+                _msg("assistant", "", tool_calls=[_call("read_file", path=str(c))]),
+                _msg("assistant", "", tool_calls=[_call("write_file", path=str(edited))])]
         out = trimmer._rehydrate_files(msgs, max_files=3)
         assert "edited.py" in out and "c.py" in out and "b.py" in out and "a.py" not in out.replace("edited.py", "")

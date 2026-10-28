@@ -127,7 +127,6 @@ fn interactive_tools_match_the_cli_set() {
         "ask_user_questions",
         "request_user_approval",
         "run_command",
-        "run_admin_command",
         "start_background_command",
         "delete_file",
         "git_rollback",

@@ -24,10 +24,10 @@ from typing import Any, Dict, List
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from src.leeth.primitives import ChoiceQuestion, NoulQuestion  # noqa: E402
-from src.leeth2.data.argent import SAFETY_QUESTION, TOOL_QUESTION  # noqa: E402
-from src.leeth2.data.synth.argent_context import PROD_OPTIONS as TOOL_OPTIONS  # noqa: E402  (the 16 options Argent really asks)
-from src.leeth2.runtime import Leeth2Runtime  # noqa: E402
+from src.leeth.primitives import ChoiceQuestion, NoulQuestion  
+from src.leeth2.data.argent import SAFETY_QUESTION, TOOL_QUESTION  
+from src.leeth2.data.synth.argent_context import PROD_OPTIONS as TOOL_OPTIONS  
+from src.leeth2.runtime import Leeth2Runtime  
 
 SCRIPTS = ROOT / "scripts"
 # Argent fast-dispatches a command only when P(safe) >= 0.80 (src/leeth/dispatcher.py); the exam uses the same line, not 0.5

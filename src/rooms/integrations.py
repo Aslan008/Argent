@@ -132,7 +132,7 @@ class Integrations:
     @staticmethod
     def _configured_servers() -> dict:
         try:
-            from config import get_mcp_servers
+            from argent.config import get_mcp_servers
             return {s.get("name"): s for s in get_mcp_servers() if s.get("name")}
         except Exception:
             return {}
@@ -140,7 +140,7 @@ class Integrations:
     def ensure_server(self, name: str) -> str:
         """Make sure the server is connected, starting it from the configuration when it is not.
         Returns "" when it is ready, else the reason it is not."""
-        from mcp_client import mcp_client
+        from argent.mcp_client import mcp_client
         srv = mcp_client.servers.get(name)
         if srv is not None and srv.is_running:
             return ""
@@ -162,7 +162,7 @@ class Integrations:
         problem = self.ensure_server(node.server)
         if problem:
             return problem
-        from tools.schemas import AVAILABLE_TOOLS
+        from argent.tools.schemas import AVAILABLE_TOOLS
         with policy.use(rules):
             if (node.mode or "call") == "list":
                 return str(AVAILABLE_TOOLS["list_mcp_tools"](node.server, str((node.args or {}).get("filter", ""))))
@@ -179,7 +179,7 @@ class Integrations:
     @staticmethod
     def _required_params(server: str, tool: str) -> list:
         try:
-            from mcp_client import mcp_client
+            from argent.mcp_client import mcp_client
             for t in mcp_client.list_tools(server):
                 if t.get("name") == tool:
                     schema = t.get("inputSchema") or t.get("parameters") or {}
@@ -195,7 +195,7 @@ class Integrations:
             blocked = policy.skill_blocked(node.skill)
             if blocked:
                 return f"Error: {blocked}"
-            from skill_manager import skill_manager
+            from argent.skill_manager import skill_manager
             text = skill_manager.read_skill(node.skill)
             if not text:
                 return f"Error: skill '{node.skill}' not found."
@@ -205,13 +205,13 @@ class Integrations:
     @staticmethod
     def _plugin_modules() -> list:
         try:
-            from hook_manager import hook_manager
+            from argent.hook_manager import hook_manager
             return list(getattr(hook_manager, "_plugins", []) or [])
         except Exception:
             return []
 
     def plugin(self, node, state) -> str:
-        from hook_manager import hook_manager
+        from argent.hook_manager import hook_manager
         mode = node.mode or "command"
         args = dict(node.args or {})
         if mode == "hook":
@@ -227,7 +227,7 @@ class Integrations:
         buf = io.StringIO()
         result = None
         try:
-            from ui import console
+            from argent.ui import console
             capture = console.capture()
         except Exception:
             capture = contextlib.nullcontext()
@@ -264,7 +264,7 @@ class Integrations:
             return False
 
     def leeth(self, node, state) -> str:
-        from tools.schemas import AVAILABLE_TOOLS
+        from argent.tools.schemas import AVAILABLE_TOOLS
         mode = node.mode or "delegate"
         a = node.args or {}
         task = (node.instruction or "").strip()
@@ -399,7 +399,7 @@ class Integrations:
         """{name: {"type": ..., "running": bool}} for every configured server."""
         out = {}
         try:
-            from mcp_client import mcp_client
+            from argent.mcp_client import mcp_client
             running = {n: s.is_running for n, s in mcp_client.servers.items()}
         except Exception:
             running = {}
@@ -416,7 +416,7 @@ class Integrations:
         problem = self.ensure_server(server)
         if problem:
             raise RuntimeError(problem)
-        from mcp_client import mcp_client
+        from argent.mcp_client import mcp_client
         out = []
         for t in mcp_client.list_tools(server):
             if "name" not in t or "error" in t:
@@ -428,14 +428,14 @@ class Integrations:
 
     def skills(self) -> dict:
         try:
-            from skill_manager import skill_manager
+            from argent.skill_manager import skill_manager
             return {s["name"]: s.get("description", "") for s in skill_manager.list_skills()}
         except Exception:
             return {}
 
     def skill_headings(self, name: str) -> list:
         try:
-            from skill_manager import skill_manager
+            from argent.skill_manager import skill_manager
             text = skill_manager.read_skill(name) or ""
         except Exception:
             return []
@@ -452,7 +452,7 @@ class Integrations:
         """{plugin: {"commands": [...], "hooks": [...]}} for the loaded plugins."""
         out = {}
         try:                                  # a plugin added or removed since the last look shows up
-            from hook_manager import hook_manager
+            from argent.hook_manager import hook_manager
             hook_manager.reload_if_changed(quiet=True)
         except Exception:
             pass

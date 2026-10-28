@@ -12,7 +12,7 @@ import os
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
-from tools.file_ops import (
+from argent.tools.file_ops import (
     move_file,
     copy_file,
     replace_python_function,
@@ -21,7 +21,7 @@ from tools.file_ops import (
 
 @pytest.fixture(autouse=True)
 def _stub_deps(monkeypatch):
-    import memory_manager
+    import argent.memory_manager as memory_manager
 
     class FakeMemory:
         def __init__(self):
@@ -55,13 +55,13 @@ class TestMoveFileFixes:
         def fake_update(fp):
             rag_calls.append(("update", fp))
 
-        monkeypatch.setattr("tools.file_ops.snapshot", lambda fp: None)
+        monkeypatch.setattr("argent.tools.file_ops.snapshot", lambda fp: None)
         # Patch the import inside the function
         import sys
         mock_rag = MagicMock()
         mock_rag.remove_file_index = fake_remove
         mock_rag.update_file_index = fake_update
-        monkeypatch.setitem(sys.modules, "rag_engine", mock_rag)
+        monkeypatch.setitem(sys.modules, "argent.rag_engine", mock_rag)
 
         out = move_file(str(src), str(dst))
         assert "Successfully moved" in out
@@ -75,7 +75,7 @@ class TestMoveFileFixes:
         dst = tmp_path / "new.txt"
 
         snap_calls = []
-        monkeypatch.setattr("tools.file_ops.snapshot", lambda fp: snap_calls.append(fp))
+        monkeypatch.setattr("argent.tools.file_ops.snapshot", lambda fp: snap_calls.append(fp))
 
         out = move_file(str(src), str(dst))
         assert "Successfully moved" in out
@@ -90,7 +90,7 @@ class TestMoveFileFixes:
         dst = plugins_dir / "malicious.py"
 
         monkeypatch.setattr(
-            "tools.file_ops._is_plugin_path_restricted",
+            "argent.tools.file_ops._is_plugin_path_restricted",
             lambda fp: "Error: Plugin paths are restricted." if "plugins" in str(fp) else None
         )
 
@@ -118,7 +118,7 @@ class TestCopyFileFixes:
         import sys
         mock_rag = MagicMock()
         mock_rag.update_file_index = fake_update
-        monkeypatch.setitem(sys.modules, "rag_engine", mock_rag)
+        monkeypatch.setitem(sys.modules, "argent.rag_engine", mock_rag)
 
         out = copy_file(str(src), str(dst))
         assert "Successfully copied" in out
@@ -133,7 +133,7 @@ class TestCopyFileFixes:
         dst = tmp_path / "copy.py"
 
         monkeypatch.setattr(
-            "tools.file_ops._is_plugin_path_restricted",
+            "argent.tools.file_ops._is_plugin_path_restricted",
             lambda fp: "Error: Plugin paths are restricted." if "plugins" in str(fp) else None
         )
 
@@ -150,7 +150,7 @@ class TestCopyFileFixes:
         dst = plugins_dir / "malicious.py"
 
         monkeypatch.setattr(
-            "tools.file_ops._is_plugin_path_restricted",
+            "argent.tools.file_ops._is_plugin_path_restricted",
             lambda fp: "Error: Plugin paths are restricted." if "plugins" in str(fp) else None
         )
 
@@ -167,8 +167,8 @@ class TestReplacePythonFunctionUnescape:
     def test_literal_backslash_n_in_new_code_is_unescaped(self, tmp_path, monkeypatch):
         """When model sends \\n (literal backslash+n) in new_code, it should be
         converted to a real newline — same as write_file and replace_in_file do."""
-        monkeypatch.setattr("tools.file_ops.snapshot", lambda fp: None)
-        monkeypatch.setattr("tools.file_ops.memory", MagicMock())
+        monkeypatch.setattr("argent.tools.file_ops.snapshot", lambda fp: None)
+        monkeypatch.setattr("argent.tools.file_ops.memory", MagicMock())
 
         # File with a simple function
         (tmp_path / "f.py").write_text(
@@ -190,8 +190,8 @@ class TestReplacePythonFunctionUnescape:
         """When new_code contains a string literal with \\n (e.g. print('a\\nb')),
         the auto-detect should preserve it as literal backslash+n, not convert
         to a real newline that breaks the string."""
-        monkeypatch.setattr("tools.file_ops.snapshot", lambda fp: None)
-        monkeypatch.setattr("tools.file_ops.memory", MagicMock())
+        monkeypatch.setattr("argent.tools.file_ops.snapshot", lambda fp: None)
+        monkeypatch.setattr("argent.tools.file_ops.memory", MagicMock())
 
         (tmp_path / "f.py").write_text(
             "def greet():\n    return 'hello'\n", encoding="utf-8")

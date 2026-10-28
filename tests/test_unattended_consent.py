@@ -20,7 +20,7 @@ under every policy and so never exercised the hole.
 
 import pytest
 
-import approval
+import argent.approval as approval
 from src.automation.runner import UnattendedGate
 
 

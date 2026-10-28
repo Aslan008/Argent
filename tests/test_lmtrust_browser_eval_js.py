@@ -19,14 +19,14 @@ import pytest
 from unittest.mock import MagicMock, AsyncMock, patch
 from concurrent.futures import ThreadPoolExecutor
 
-from browser_engine import BrowserEngine, _SessionContext
-from tools.browser_tools import (
+from argent.browser_engine import BrowserEngine, _SessionContext
+from argent.tools.browser_tools import (
     browser_eval_js,
     _reset_poll_tracker,
     _SESSION_EVAL_TRACKER,
     _MUTATIVE_JS_PATTERN,
 )
-from tools.schemas import TOOL_SCHEMAS
+from argent.tools.schemas import TOOL_SCHEMAS
 
 
 class TestBrowserEvalJsEngine:
@@ -216,7 +216,7 @@ class TestBrowserEvalJsToolsWrapper:
     def test_mutative_actions_bypass_polling_halt(self, monkeypatch):
         mock_engine = MagicMock()
         mock_engine.run.return_value = "JS result: null"
-        monkeypatch.setattr("tools.browser_tools.browser_engine", mock_engine)
+        monkeypatch.setattr("argent.tools.browser_tools.browser_engine", mock_engine)
 
         # Scrolling 10 times in a row should NOT trigger [POLLING HALTED]
         for _ in range(10):
@@ -234,7 +234,7 @@ class TestBrowserEvalJsToolsWrapper:
     def test_non_mutative_void_still_triggers_polling_halt(self, monkeypatch):
         mock_engine = MagicMock()
         mock_engine.run.return_value = "JS result: null"
-        monkeypatch.setattr("tools.browser_tools.browser_engine", mock_engine)
+        monkeypatch.setattr("argent.tools.browser_tools.browser_engine", mock_engine)
 
         # Checking non-existent element 5 times with null result SHOULD trigger circuit breaker
         for _ in range(4):
@@ -246,7 +246,7 @@ class TestBrowserEvalJsToolsWrapper:
     def test_repeated_js_syntax_or_runtime_errors(self, monkeypatch):
         mock_engine = MagicMock()
         mock_engine.run.return_value = "Error evaluating JS: ReferenceError: myUnknownVar is not defined"
-        monkeypatch.setattr("tools.browser_tools.browser_engine", mock_engine)
+        monkeypatch.setattr("argent.tools.browser_tools.browser_engine", mock_engine)
 
         # Run 1 and 2: returns raw error
         res1 = browser_eval_js("myUnknownVar.test()")
@@ -267,7 +267,7 @@ class TestBrowserEvalJsToolsWrapper:
     def test_concurrent_sessions_thread_safety(self, monkeypatch):
         mock_engine = MagicMock()
         mock_engine.run.side_effect = lambda coro: "JS result: 123"
-        monkeypatch.setattr("tools.browser_tools.browser_engine", mock_engine)
+        monkeypatch.setattr("argent.tools.browser_tools.browser_engine", mock_engine)
 
         sessions = [f"session_{i}" for i in range(10)]
 

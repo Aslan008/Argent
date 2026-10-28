@@ -10,7 +10,7 @@ import pytest
 from unittest.mock import patch
 import src.agent.trimmer as trimmer
 from src.agent.context_limit import effective_history_budget, is_context_overflow, parse_context_limit
-from prompt_compressor import compress_tool_result, _strip_section
+from argent.prompt_compressor import compress_tool_result, _strip_section
 
 
 class TestTrimmerBlindSpots:
@@ -80,10 +80,10 @@ class TestTrimmerBlindSpots:
 
         import json
         messages = [
-            {"role": "assistant", "tool_calls": [{"function": {"name": "write_file", "arguments": json.dumps({"file_path": str(f_a)})}}]},
-            {"role": "assistant", "tool_calls": [{"function": {"name": "write_file", "arguments": json.dumps({"file_path": str(f_b)})}}]},
-            {"role": "assistant", "tool_calls": [{"function": {"name": "write_file", "arguments": json.dumps({"file_path": str(f_c)})}}]},
-            {"role": "assistant", "tool_calls": [{"function": {"name": "write_file", "arguments": json.dumps({"file_path": str(f_a)})}}]}, # edited again!
+            {"role": "assistant", "tool_calls": [{"function": {"name": "write_file", "arguments": json.dumps({"path": str(f_a)})}}]},
+            {"role": "assistant", "tool_calls": [{"function": {"name": "write_file", "arguments": json.dumps({"path": str(f_b)})}}]},
+            {"role": "assistant", "tool_calls": [{"function": {"name": "write_file", "arguments": json.dumps({"path": str(f_c)})}}]},
+            {"role": "assistant", "tool_calls": [{"function": {"name": "write_file", "arguments": json.dumps({"path": str(f_a)})}}]}, # edited again!
         ]
 
         # Max 2 files: should keep f_c and f_a (the last two modified)

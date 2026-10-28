@@ -27,7 +27,7 @@ from dataclasses import dataclass
 from typing import Dict, List, Optional
 from urllib.parse import urlparse
 
-from logger import get_logger
+from argent.logger import get_logger
 
 log = get_logger("local_backend")
 
@@ -77,7 +77,7 @@ def url_for(provider: str) -> str:
     if name == "ollama":
         return _ollama_host()
     try:
-        import config
+        import argent.config as config
         getter = getattr(config, f"get_{name}_url", None)
         if name == "zai":
             getter = getattr(config, "get_zai_endpoint", None)

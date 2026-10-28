@@ -12,8 +12,8 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-from src.leeth import trajectory as T  # noqa: E402
-from src.leeth import feedback as F  # noqa: E402
+from src.leeth import trajectory as T  
+from src.leeth import feedback as F  
 
 
 def main() -> None:

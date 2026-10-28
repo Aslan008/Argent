@@ -204,7 +204,7 @@ def verify_dopt_onnx(
     import onnxruntime as ort
 
     sys.path.insert(0, str(Path(__file__).parent))
-    from task_domains import GENERATORS  # src/leeth/task_domains.py
+    from task_domains import GENERATORS  
 
     import random
 

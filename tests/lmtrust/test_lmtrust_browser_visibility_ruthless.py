@@ -15,8 +15,8 @@ Covers:
 import pytest
 import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
-from browser_engine import browser_engine, _SessionContext
-from browser_detect import BrowserInfo
+from argent.browser_engine import browser_engine, _SessionContext
+from argent.browser_detect import BrowserInfo
 from src.agent.arg_coercion import coerce_and_log, remap_tool_aliases
 
 
@@ -187,7 +187,7 @@ class TestFallbackDemotionPaths:
     @pytest.mark.asyncio
     async def test_l4b_path1_headless_in_user_mode(self):
         """user mode + headed=False -> fallback to isolated headless with notice."""
-        with patch("config.get_browser_mode", return_value="user"):
+        with patch("argent.config.get_browser_mode", return_value="user"):
             with patch.object(browser_engine, "_launch_isolated", new=AsyncMock()) as mock_isolated:
                 await browser_engine._connect_user_browser(headed=False)
                 mock_isolated.assert_awaited_once_with(False)
@@ -203,9 +203,9 @@ class TestFallbackDemotionPaths:
         personal browser is no obstacle and that fallback is gone; an executable
         that is missing or blocked is the failure that remains.)"""
         fake_info = BrowserInfo(name="Google Chrome", key="chrome", exe_path="C:/Chrome/chrome.exe", user_data_dir="C:/Chrome/User Data")
-        with patch("config.get_browser_mode", return_value="user"):
-            with patch("config.get_browser_name", return_value="chrome"):
-                with patch("browser_detect.find_browser", return_value=fake_info):
+        with patch("argent.config.get_browser_mode", return_value="user"):
+            with patch("argent.config.get_browser_name", return_value="chrome"):
+                with patch("argent.browser_detect.find_browser", return_value=fake_info):
                     with patch("subprocess.Popen", side_effect=FileNotFoundError("chrome.exe is gone")):
                         with patch.object(browser_engine, "_launch_isolated", new=AsyncMock()) as mock_isolated:
                             await browser_engine._connect_user_browser(headed=True)
@@ -216,9 +216,9 @@ class TestFallbackDemotionPaths:
     @pytest.mark.asyncio
     async def test_l4b_path3_no_browser_installed(self):
         """user mode + no browser found -> missing browser notice."""
-        with patch("config.get_browser_mode", return_value="user"):
-            with patch("config.get_browser_name", return_value="chrome"):
-                with patch("browser_detect.find_browser", return_value=None):
+        with patch("argent.config.get_browser_mode", return_value="user"):
+            with patch("argent.config.get_browser_name", return_value="chrome"):
+                with patch("argent.browser_detect.find_browser", return_value=None):
                     with patch.object(browser_engine, "_launch_isolated", new=AsyncMock()) as mock_isolated:
                         await browser_engine._connect_user_browser(headed=True)
                         mock_isolated.assert_awaited_once_with(True)

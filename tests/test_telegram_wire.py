@@ -449,7 +449,7 @@ def api(monkeypatch, tmp_path):
 
 @pytest.fixture(autouse=True)
 def isolated_config(tmp_path, monkeypatch):
-    import config
+    import argent.config as config
     monkeypatch.setattr(config, "CONFIG_FILE", tmp_path / "cfg.json")
     monkeypatch.setattr(config, "_CONFIG_CACHE", None)
     config.set_telegram_chat_id(str(CHAT))

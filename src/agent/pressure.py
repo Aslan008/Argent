@@ -24,7 +24,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Callable, List, Optional
 
-from logger import get_logger
+from argent.logger import get_logger
 
 log = get_logger("pressure")
 

@@ -1,6 +1,6 @@
 """Anthropic prompt caching: the stable system prefix is marked cacheable."""
 
-from providers import OpenAICompatibleProvider
+from argent.providers import OpenAICompatibleProvider
 
 apply = OpenAICompatibleProvider._apply_prompt_cache
 

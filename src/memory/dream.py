@@ -28,7 +28,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable, List, Optional
 
-from logger import get_logger
+from argent.logger import get_logger
 from src.memory.store import MemoryRefused, Node, NodeStore, TYPES, normalize_name
 
 log = get_logger("memory")
@@ -127,7 +127,7 @@ def release_lock(root: Path) -> None:
 def check_gate(target_cloud: bool = False, force: bool = False, idle_minutes: float = IDLE_MINUTES,
                idle: Callable[[], Optional[float]] = idle_seconds,
                battery: Callable[[], bool] = on_battery) -> Gate:
-    import config
+    import argent.config as config
     if not config.is_memory_enabled():
         return Gate(False, "память выключена (/memory on)")
     if target_cloud and not config.is_memory_cloud_consented():
@@ -157,7 +157,7 @@ def load_state(store: NodeStore) -> dict:
 
 
 def save_state(store: NodeStore, state: dict) -> None:
-    from atomic_io import atomic_write_text
+    from argent.atomic_io import atomic_write_text
     store.root.mkdir(parents=True, exist_ok=True)
     atomic_write_text(state_path(store), json.dumps(state, ensure_ascii=False, indent=2))
 
@@ -216,7 +216,7 @@ class Gathered:
 
 
 def gather(project_root: Path, since: str = "", limit: int = EXCERPT_CHARS) -> Gathered:
-    import session as sessions_mod
+    import argent.session as sessions_mod
     from src.agent.secret_redactor import redact
 
     root = os.path.normcase(os.path.abspath(str(project_root)))
@@ -471,7 +471,7 @@ def apply_ops(store: NodeStore, ops: List[Op], report: Report, now: Optional[dat
 
 
 def _write_report(store: NodeStore, report: Report, now: datetime) -> Optional[Path]:
-    from atomic_io import atomic_write_text
+    from argent.atomic_io import atomic_write_text
     folder = store.root / REPORTS_DIR
     try:
         folder.mkdir(parents=True, exist_ok=True)
@@ -533,7 +533,7 @@ def run(store: NodeStore, ask: Callable[[list], str], project_root: Path, force:
 
 def resolve_target() -> tuple:
     """(provider, model, is_cloud) for the consolidation."""
-    import config
+    import argent.config as config
     from src.agent.local_backend import classify
     provider = (config.get_dream_provider() or config.get_provider() or "").strip()
     model = (config.get_dream_model() or config.get_current_model(provider) or "").strip()
@@ -542,7 +542,7 @@ def resolve_target() -> tuple:
 
 def default_ask(provider: str, model: str, timeout: float = 600.0) -> Callable[[list], str]:
     def ask(messages: list) -> str:
-        from providers import create_provider
+        from argent.providers import create_provider
         from src.agent import governor
         with governor.priority(governor.P_BACKGROUND):
             return create_provider(provider).sync_chat(model, messages, temperature=0.2, timeout=timeout) or ""
@@ -565,8 +565,8 @@ def main(argv: Optional[list] = None) -> int:
         pass
     from src.memory import hub
     store = hub.store_for("project")
-    from project_paths import project_root_or_cwd
-    import config
+    from argent.project_paths import project_root_or_cwd
+    import argent.config as config
     provider, model, cloud = resolve_target()
     report = run(store, default_ask(provider, model), Path(project_root_or_cwd()), force=args.force,
                  dry_run=args.dry_run, target_cloud=cloud, idle_minutes=args.idle_minutes,

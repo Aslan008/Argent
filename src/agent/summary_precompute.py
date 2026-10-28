@@ -26,7 +26,7 @@ import time
 from dataclasses import dataclass
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
-from logger import get_logger
+from argent.logger import get_logger
 
 log = get_logger("summary_precompute")
 
@@ -59,7 +59,7 @@ def enabled() -> bool:
     if os.environ.get("ARGENT_PRECOMPUTE") == "0":
         return False
     try:
-        import config
+        import argent.config as config
         return bool(config.is_summary_precompute_enabled())
     except Exception:
         return True

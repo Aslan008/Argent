@@ -6,7 +6,7 @@ and recover_tool_call that are easy to break during refactoring.
 
 import pytest
 
-from tool_recovery import (
+from argent.tool_recovery import (
     _accepts_args,
     fuzzy_match_tool,
     recover_json_arguments,

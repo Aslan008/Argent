@@ -8,10 +8,10 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-import claude_catalog
-import providers
-from claude_catalog import Catalog, ModelEntry, entry_from_api, load, thinking_style
-from providers import ClaudeProvider, ProviderError
+import argent.claude_catalog as claude_catalog
+import argent.providers as providers
+from argent.claude_catalog import Catalog, ModelEntry, entry_from_api, load, thinking_style
+from argent.providers import ClaudeProvider, ProviderError
 
 
 def info(mid, year=2025, month=1, thinking=None, effort=None, max_in=200000, max_out=64000):
@@ -57,18 +57,27 @@ class TestEntries:
 
     def test_the_real_sdk_objects_are_understood(self):
         from anthropic.types import ModelInfo
+        # The SDK grew required fields after this fixture was written: `lifecycle`
+        # (enum active/deprecated/retired) and the `server_tools` capability with
+        # its two leaves. This guard did its job — it failed and named exactly what
+        # had changed. Keep the payload in step with `ModelInfo.model_json_schema()`.
         raw = {"id": "claude-sonnet-5-5", "type": "model", "display_name": "Claude Sonnet 5.5",
                "created_at": "2026-02-15T00:00:00Z", "max_input_tokens": 1000000, "max_tokens": 128000,
+               "lifecycle": "active",
                "capabilities": {
                    "batch": {"supported": True}, "citations": {"supported": True}, "code_execution": {"supported": True},
                    "context_management": {"supported": True},
+                   "server_tools": {"supported": False, "code_execution": {"supported": False},
+                                    "web_search": {"supported": False}},
                    "effort": {"supported": True, "low": {"supported": True}, "medium": {"supported": True},
                               "high": {"supported": True}, "max": {"supported": False},
                               "xhigh": {"supported": True}},
                    "image_input": {"supported": True}, "pdf_input": {"supported": True},
                    "structured_outputs": {"supported": True},
                    "thinking": {"supported": True, "types": {"adaptive": {"supported": True},
-                                                             "enabled": {"supported": False}}}}}
+                                                             "enabled": {"supported": False},
+                                                             "between_tools": {"supported": False},
+                                                             "disabled": {"supported": False}}}}}
         e = entry_from_api(ModelInfo.model_validate(raw))
         assert (e.max_input, e.max_output) == (1000000, 128000)
         assert e.thinking_adaptive is True and e.thinking_enabled is False
@@ -152,7 +161,7 @@ class TestCapabilities:
 
 @pytest.fixture
 def provider(monkeypatch):
-    import config
+    import argent.config as config
     store = {}
     monkeypatch.setattr(config, "load_config", lambda: store)
     monkeypatch.setattr(config, "save_config", lambda c: store.update(c))
@@ -171,7 +180,7 @@ def provider(monkeypatch):
 
 def sent(provider, model, **config_values):
     """The keyword arguments stream_chat puts on messages.create."""
-    import config
+    import argent.config as config
     for name, value in config_values.items():
         getattr(config, f"set_{name}")(value)
     client = MagicMock()
@@ -185,7 +194,7 @@ class TestRequests:
     def test_the_sampling_parameters_the_installed_sdk_cannot_take_are_not_sent(self, provider):
         """anthropic >= 1.x dropped temperature/top_p/top_k from messages.create: sending one failed every
         request with 'unexpected keyword argument' before anything left the machine."""
-        import config
+        import argent.config as config
         config.set_top_p(0.9)
         config.set_top_k(40)
         kwargs = sent(provider, "claude-sonnet-4-5-20250929")
@@ -223,7 +232,7 @@ class TestRequests:
         assert "output_config" not in sent(provider, "claude-sonnet-4-5-20250929", reasoning_effort="high")
 
     def test_the_output_ceiling_of_the_model_is_respected(self, provider):
-        import config
+        import argent.config as config
         config.set_max_generation_tokens(100000)
         assert sent(provider, "claude-opus-5-5")["max_tokens"] == 32000
         assert sent(provider, "claude-3-5-sonnet-20241022")["max_tokens"] == 8192
@@ -307,8 +316,8 @@ class TestSwitchModel:
             self.model_name = name
 
     def test_the_name_is_corrected_and_saved_corrected(self, provider, monkeypatch):
-        import command_handler
-        import config
+        import argent.command_handler as command_handler
+        import argent.config as config
         said = []
         monkeypatch.setattr(command_handler, "print_system", lambda m, *a, **k: said.append(str(m)))
         monkeypatch.setattr(providers, "create_provider", lambda name=None: provider)
@@ -319,7 +328,7 @@ class TestSwitchModel:
         assert any("исправлено" in line for line in said)
 
     def test_an_unknown_name_changes_nothing_and_offers_alternatives(self, provider, monkeypatch):
-        import command_handler
+        import argent.command_handler as command_handler
         said = []
         monkeypatch.setattr(command_handler, "print_system", lambda m, *a, **k: said.append(str(m)))
         monkeypatch.setattr(providers, "create_provider", lambda name=None: provider)
@@ -329,7 +338,7 @@ class TestSwitchModel:
         assert any("не найдена" in line and "claude-opus-5-5" in line for line in said)
 
     def test_context_window_of_a_claude_model_comes_from_the_catalogue(self, provider, monkeypatch):
-        import model_limits
+        import argent.model_limits as model_limits
         entry = ModelEntry("claude-opus-5-5", max_input=1000000)
         monkeypatch.setattr(provider, "catalog", lambda refresh=False: Catalog([entry], "live"))
         monkeypatch.setattr(providers, "create_provider", lambda name=None: provider)
@@ -357,7 +366,7 @@ class TestWorkspace:
         assert "default_headers" not in seen
 
     def test_config_and_environment(self, monkeypatch):
-        import config
+        import argent.config as config
         store = {}
         monkeypatch.setattr(config, "load_config", lambda: store)
         monkeypatch.setattr(config, "save_config", lambda c: store.update(c))
@@ -385,7 +394,7 @@ class TestWorkspace:
         assert cat.source == "seed" and "workspace" in cat.problem
 
     def test_the_menu_tells_the_person_which_list_they_are_looking_at(self, monkeypatch):
-        import ui
+        import argent.ui as ui
         said = []
         monkeypatch.setattr(ui, "print_system", lambda m, *a, **k: said.append(str(m)))
         p = ClaudeProvider(api_key="sk")
@@ -440,7 +449,7 @@ class TestDisplayNames:
         assert claude_catalog.display_name("claude-opus-5-5") == "Claude Opus Five Point Five"
 
     def test_the_menu_shows_names_and_saves_ids(self, provider, monkeypatch):
-        import ui
+        import argent.ui as ui
         entries = [ModelEntry("claude-opus-5-5", display_name="Claude Opus 5.5"),
                    ModelEntry("claude-sonnet-4-5-20250929", display_name="Claude Sonnet 4.5")]
         monkeypatch.setattr(provider, "catalog", lambda refresh=False: Catalog(entries, "live"))
@@ -461,7 +470,7 @@ class TestDisplayNames:
         assert result == "claude-sonnet-4-5-20250929"
 
     def test_the_switch_message_uses_the_name(self, provider, monkeypatch):
-        import command_handler
+        import argent.command_handler as command_handler
         said = []
         monkeypatch.setattr(command_handler, "print_system", lambda m, *a, **k: said.append(str(m)))
         monkeypatch.setattr(providers, "create_provider", lambda name=None: provider)

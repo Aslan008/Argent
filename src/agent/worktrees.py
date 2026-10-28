@@ -22,7 +22,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional
 
-from logger import get_logger
+from argent.logger import get_logger
 
 log = get_logger("worktrees")
 

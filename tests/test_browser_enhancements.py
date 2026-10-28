@@ -2,8 +2,8 @@ import unittest
 import os
 import asyncio
 import pytest
-from browser_engine import browser_engine, _SessionContext
-import config
+from argent.browser_engine import browser_engine, _SessionContext
+import argent.config as config
 
 # These tests launch a real browser via CDP: slow, environment-dependent
 # and occasionally flaky when run in the same process as the unit suite.
@@ -297,7 +297,7 @@ class TestBrowserEnhancements(unittest.TestCase):
         self.assertIn("ollama", val)
 
     def test_select_option_method(self):
-        from tools.browser_tools import browser_select
+        from argent.tools.browser_tools import browser_select
 
         html = """<html><body>
             <select id='cf-prov'>

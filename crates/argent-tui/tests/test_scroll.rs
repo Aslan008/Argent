@@ -47,6 +47,24 @@ fn one_notch_is_three_rows() {
     assert_eq!(app.scroll_offset, 0);
 }
 
+/// The wheel belongs to the transcript and to nothing else. When the terminal
+/// reports it as arrow keys instead — mouse capture off, so Up/Down arrive —
+/// `history_prev` runs and the text being typed is swapped for an old message.
+/// That is the complaint this pins down: the chat must move, the prompt must not.
+#[test]
+fn the_wheel_never_walks_through_the_input_history() {
+    let mut app = long_chat();
+    app.input_history = vec!["git status".to_string(), "cargo test".to_string()];
+    app.input = "черновик ответа".to_string();
+
+    for _ in 0..4 {
+        turn(&mut app, true, Instant::now());
+    }
+
+    assert!(app.scroll_offset > 0, "the transcript is what a wheel notch moves");
+    assert_eq!(app.input, "черновик ответа", "the prompt keeps what was typed");
+}
+
 #[test]
 fn a_wheel_that_keeps_turning_speeds_up() {
     let mut app = long_chat();

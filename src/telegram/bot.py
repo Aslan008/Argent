@@ -32,7 +32,7 @@ import time
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from config import (  # noqa: F401  (set_* / get_telegram_enabled are re-exported: older code and tests import them from here)
+from argent.config import (  
     get_telegram_chat_id,
     get_telegram_enabled,
     get_telegram_mode,
@@ -42,12 +42,12 @@ from config import (  # noqa: F401  (set_* / get_telegram_enabled are re-exporte
     set_telegram_mode,
     set_telegram_token,
 )
-from logger import get_logger
+from argent.logger import get_logger
 from src.bridge.events import to_event
 from src.bridge.session import AgentSession
-from src.telegram.client import MAX_MSG_LEN, TELEGRAM_API_BASE, TelegramClient  # noqa: F401  (re-exported)
-from src.telegram.live import STOP_CALLBACK, LiveStatus, stop_keyboard  # noqa: F401  (re-exported)
-from src.telegram.render import (  # noqa: F401  (format_markdown_for_telegram, split_html: re-exported)
+from src.telegram.client import MAX_MSG_LEN, TELEGRAM_API_BASE, TelegramClient  
+from src.telegram.live import STOP_CALLBACK, LiveStatus, stop_keyboard  
+from src.telegram.render import (  
     MAX_HTML,
     bar,
     esc,
@@ -111,7 +111,7 @@ _CAPTURE_TOOLS = {"capture_desktop_screen", "capture_desktop_window", "get_clipb
 def _console_print(markup: str) -> None:
     """Echo to the PC terminal when the bridge runs beside it; never an error."""
     try:
-        from ui import console
+        from argent.ui import console
         console.print(markup)
     except Exception:
         pass
@@ -1139,7 +1139,7 @@ class TelegramBridge:
 
     @staticmethod
     def _queue_image(local_file: str, label: str) -> None:
-        from vision import encode_image, queue_image
+        from argent.vision import encode_image, queue_image
         payload, media_type, _ = encode_image(local_file)
         if payload and media_type:
             queue_image(payload, media_type, f"{label} ({local_file})")
@@ -1576,7 +1576,7 @@ class TelegramBridge:
             try:
                 from rich.markdown import Markdown
                 from rich.panel import Panel
-                from ui import console
+                from argent.ui import console
                 console.print()
                 console.print(Panel(Markdown(final_text), title="[bold #58a6ff]🤖 Argent → Telegram[/bold #58a6ff]", border_style="#58a6ff"))
             except Exception:

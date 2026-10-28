@@ -143,7 +143,7 @@ def use(policy: Optional["Policy"]):
     if not policy:
         yield
         return
-    import run_scope
+    import argent.run_scope as run_scope
     entry = (run_scope.current(), policy)
     with _lock:
         _stack.append(entry)
@@ -158,7 +158,7 @@ def use(policy: Optional["Policy"]):
 
 
 def _active() -> list:
-    import run_scope
+    import argent.run_scope as run_scope
     with _lock:
         return [p for owner, p in _stack if run_scope.visible(owner)]
 

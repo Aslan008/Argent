@@ -192,6 +192,7 @@ def test_emb16_compression_changes_no_output_bit(tiny_cfg):
     from src.leeth2.model import Leeth2Config, Leeth2Model, compress_for_inference
 
     torch.manual_seed(0)
+    pytest.importorskip("transformers", reason="Leeth tests build a real ModernBERT backbone — pip install transformers")
     cfg = Leeth2Config(base_model="tiny", backbone={}, vocab_size=tiny_cfg["vocab_size"], hidden_size=tiny_cfg["hidden_size"])
     from transformers import ModernBertConfig, ModernBertModel
 

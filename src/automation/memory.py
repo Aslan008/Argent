@@ -25,7 +25,7 @@ import json
 import threading
 from datetime import datetime, timedelta
 
-from logger import get_logger
+from argent.logger import get_logger
 
 log = get_logger("automation")
 
@@ -47,7 +47,7 @@ _file_lock = threading.Lock()
 
 
 def store_path():
-    from project_paths import project_root_or_cwd
+    from argent.project_paths import project_root_or_cwd
     return project_root_or_cwd() / ".argent" / _STORE_NAME
 
 
@@ -103,7 +103,7 @@ def _load() -> dict:
 
 
 def _save(data: dict) -> None:
-    from atomic_io import atomic_write_text
+    from argent.atomic_io import atomic_write_text
     atomic_write_text(store_path(),
                       json.dumps(data, indent=2, ensure_ascii=False, sort_keys=True))
 

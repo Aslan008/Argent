@@ -4,7 +4,7 @@ from rich.markdown import Markdown
 
 from src.cli.commands.base import CommandContext, CommandResult
 from src.cli.commands.registry import registry
-from ui import console, print_error, print_system
+from argent.ui import console, print_error, print_system
 
 
 @registry.register("/review", help_text="Независимое ревью изменений: /review [staged|коммит|A..B|путь] [на что "

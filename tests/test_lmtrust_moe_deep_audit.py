@@ -13,9 +13,9 @@ Covers verified edge cases and fixes:
 import pytest
 from unittest.mock import MagicMock
 
-import config
-import prompt_compressor
-from tools._helpers import _is_plugin_path_restricted
+import argent.config as config
+import argent.prompt_compressor as prompt_compressor
+from argent.tools._helpers import _is_plugin_path_restricted
 from src.agent.strategy import (
     get_model_strategy, MoELocalStrategy, StandardLocalStrategy,
     TinyLocalStrategy
@@ -133,7 +133,7 @@ class TestL6CrossSystemPromptAndToolIntegrity:
         assert "restricted for small models" in err
 
     def test_agent_elevates_moe_category_and_preserves_protocol(self, monkeypatch):
-        import agent as agent_module
+        import argent.agent as agent_module
 
         monkeypatch.setattr(agent_module, "get_mcp_servers", lambda: [])
         monkeypatch.setattr(agent_module, "create_provider", lambda *a, **k: MagicMock())
@@ -147,7 +147,7 @@ class TestL6CrossSystemPromptAndToolIntegrity:
         assert "Batch Reads" in sys_prompt
 
     def test_moe_ephemeral_context_has_persistence_directive(self, monkeypatch):
-        import agent as agent_module
+        import argent.agent as agent_module
         monkeypatch.setattr(agent_module, "get_mcp_servers", lambda: [])
         monkeypatch.setattr(agent_module, "create_provider", lambda *a, **k: MagicMock())
         monkeypatch.setattr(agent_module, "estimate_tokens", lambda t, m, p: len(t) // 4)
@@ -161,7 +161,7 @@ class TestL6CrossSystemPromptAndToolIntegrity:
         assert "No response requested" in ephemeral
 
     def test_command_ops_collapses_carriage_returns(self, monkeypatch):
-        import tools.command_ops as command_ops
+        import argent.tools.command_ops as command_ops
 
         # Simulate raw chunks with carriage returns (like pip or uv progress bar)
         raw = "Downloading pydantic (10%)\rDownloading pydantic (50%)\rDownloading pydantic (100%)\nInstalled"

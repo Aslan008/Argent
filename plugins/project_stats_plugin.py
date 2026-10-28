@@ -1,5 +1,5 @@
 import os
-from ui import console
+from argent.ui import console
 
 def on_startup():
     """Triggered every time Argent starts. Counts files in the current project root."""

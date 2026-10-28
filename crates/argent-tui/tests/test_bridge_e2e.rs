@@ -35,11 +35,11 @@ def setup(root):
 def make_bridge():
     # Nothing here may touch the user's real setup: no MCP servers, no Telegram,
     # no startup hooks, no knowledge-base indexing.
-    import config
+    import argent.config as config
     config.get_mcp_servers = lambda: []
     config.get_telegram_enabled = lambda: False
     config.get_auto_kb = lambda: False
-    from hook_manager import hook_manager
+    from argent.hook_manager import hook_manager
     hook_manager.call_hook = lambda *a, **k: None
 
     class Agent:
@@ -114,6 +114,9 @@ fn a_scripted_turn_reaches_the_screen_through_the_real_bridge() {
         app.renderer = Box::new(PyRenderer::new(bridge.clone_ref(py)));
         let raw: String = bridge.call_method0(py, "get_ui_config").ok()?.extract(py).ok()?;
         app.ui = UiConfig::from_json(&raw);
+        // This test is about the pipeline, not the compact look: once the turn folds on
+        // `Done`, the steps it asserts on are deliberately out of sight.
+        app.compact_view = false;
 
         bridge.call_method1(py, "start_turn", ("hello",)).ok()?;
         app.insert_str("hello");

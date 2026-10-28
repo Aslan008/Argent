@@ -26,7 +26,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from src.leeth import bulk  # noqa: E402
+from src.leeth import bulk  
 
 BUILTIN_QUESTIONS = {
     "delivery_complaint": "Это жалоба на доставку?",

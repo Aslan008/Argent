@@ -14,6 +14,7 @@ VOCAB = 600
 
 
 def tiny_backbone(layers: int = 9, hidden: int = 32, inter: int = 48) -> dict:
+    pytest.importorskip("transformers", reason="Leeth tests build a real ModernBERT backbone — pip install transformers")
     from transformers import ModernBertConfig
 
     cfg = ModernBertConfig(

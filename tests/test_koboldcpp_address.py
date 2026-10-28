@@ -8,9 +8,9 @@ saved.
 
 import pytest
 
-import config
-import vision
-from config import normalize_koboldcpp_url
+import argent.config as config
+import argent.vision as vision
+from argent.config import normalize_koboldcpp_url
 from src.cli.commands import config_commands as cc
 from src.cli.commands.base import CommandContext
 
@@ -50,7 +50,7 @@ def offline(monkeypatch):
     """No network and no model menus: the commands are exercised on the config alone."""
     monkeypatch.setattr(cc, "_server_problem", lambda url, timeout=3.0: None)
     monkeypatch.setattr(cc, "select_model", lambda current=None: current)
-    monkeypatch.setattr("command_handler.switch_model", lambda agent, model: None)
+    monkeypatch.setattr("argent.command_handler.switch_model", lambda agent, model: None)
     said, errors = [], []
     monkeypatch.setattr(cc, "print_system", said.append)
     monkeypatch.setattr(cc, "print_error", errors.append)
@@ -126,7 +126,7 @@ def test_a_changed_address_forgets_what_was_learned_about_the_old_server(offline
 
 
 def test_the_provider_is_built_on_the_new_address(offline):
-    import providers
+    import argent.providers as providers
     _run(cc.handle_provider, "/provider koboldcpp http://lan-box:5001")
     provider = providers._build_provider("koboldcpp")
     assert provider._base_url == "http://lan-box:5001/v1"

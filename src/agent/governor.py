@@ -27,9 +27,9 @@ import threading
 import time
 from typing import Callable, Iterator, Optional
 
-from logger import get_logger
+from argent.logger import get_logger
 from src.agent import lanes
-from src.agent.lanes import P_ADVISOR, P_BACKGROUND, P_INTERACTIVE, P_WORKER  # noqa: F401 (re-exported)
+from src.agent.lanes import P_ADVISOR, P_BACKGROUND, P_INTERACTIVE, P_WORKER  
 from src.agent.local_backend import Backend, TUNER, classify, thread_budget
 
 log = get_logger("governor")
@@ -109,7 +109,7 @@ def enabled() -> bool:
     if os.environ.get("ARGENT_GOVERNOR") == "0":
         return False
     try:
-        import config
+        import argent.config as config
         return bool(config.is_local_governor_enabled())
     except Exception:
         return True
@@ -117,7 +117,7 @@ def enabled() -> bool:
 
 def _capacity() -> int:
     try:
-        import config
+        import argent.config as config
         return max(1, int(config.get_local_parallelism()))
     except Exception:
         return 1
@@ -152,7 +152,7 @@ def _acquire(lane: lanes.Lane, prio: int, label: str):
 def server_options(provider_name: str, model: str = "") -> dict:
     """Extra request options that keep a local server from taking every core (Ollama: num_thread)."""
     try:
-        import config
+        import argent.config as config
         if not config.is_limit_server_threads_enabled():
             return {}
     except Exception:
@@ -166,7 +166,7 @@ def server_options(provider_name: str, model: str = "") -> dict:
 def _after_acquire(backend: Backend) -> None:
     """Once in a while, while we use the server: make sure it runs below the person's own programs."""
     try:
-        import config
+        import argent.config as config
         if not config.is_lower_server_priority_enabled():
             return
     except Exception:
@@ -207,7 +207,7 @@ def _on_wait_note(label: str) -> Callable[[int], None]:
 
 
 def settings() -> dict:
-    import config
+    import argent.config as config
     return {
         "enabled": enabled(),
         "parallelism": _capacity(),
@@ -354,7 +354,7 @@ def govern(provider):
             temperature = kwargs.get("temperature", args[0] if args else 0.3)
             # the context the person's own turns use: a server that gets another one reloads the model
             try:
-                import config
+                import argent.config as config
                 window = int(config.get_context_window()) or None
             except Exception:
                 window = None

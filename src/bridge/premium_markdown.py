@@ -35,7 +35,7 @@ from rich.table import Table
 from rich.text import Text
 from rich.theme import Theme
 
-import ui
+import argent.ui as ui
 
 TEXT = "#e6edf3"
 MUTED = "#8b949e"

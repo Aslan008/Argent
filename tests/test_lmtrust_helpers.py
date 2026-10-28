@@ -11,9 +11,9 @@ from unittest.mock import MagicMock
 
 import pytest
 
-import config
-import tools._helpers as helpers
-from tools._helpers import (
+import argent.config as config
+import argent.tools._helpers as helpers
+from argent.tools._helpers import (
     _resolve_path,
     _is_plugin_path_restricted,
     _is_unity_meta_restricted,

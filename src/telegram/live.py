@@ -15,7 +15,7 @@ import threading
 import time
 from typing import Any, Callable, Dict, List, Optional
 
-from logger import get_logger
+from argent.logger import get_logger
 from src.telegram.render import (
     diff_counts,
     esc,

@@ -135,7 +135,9 @@ class TestBridgeAdversarial:
         assert any("\x1b[1;34mBold Blue\x1b[0m" in c for c in captured)
         assert any("Error text" in c for c in captured)
         control = [c for c in captured if "spinner" in c]
-        assert control and control[0] == "spinner"
+        # The fragment keeps its newline (it tells the frontend the line ended);
+        # what matters here is that the cursor/mode codes are gone.
+        assert control and control[0].strip() == "spinner"
 
     def test_stdout_trap_restoration_on_exception(self):
         orig_stdout = sys.stdout
@@ -188,7 +190,9 @@ class TestBridgeCrossSystem:
             time.sleep(0.02)
 
         # /help emits table via stdout, which StdoutTrap captures and forwards as notices
-        notices = [e.get("text", "") for e in events if e.get("type") == "notice"]
+        # Console text reaches the frontend as `output` (a stream of fragments that
+        # belong to one line); `notice` is a message of its own.
+        notices = [e.get("text", "") for e in events if e.get("type") in ("notice", "output")]
         assert any("Argent" in n or "Команды" in n or "help" in n for n in notices)
 
         # Must conclude with a done event
@@ -218,6 +222,16 @@ class TestBridgeCrossSystem:
         while time.time() - start_wait < 2.0 and not any(e.get("type") == "done" for e in events):
             time.sleep(0.02)
 
+        # /vibe enables the autonomous run, and that run starts its own turn — the
+        # lock is legitimately busy again, sometimes before this line and sometimes
+        # after it. That is why this check used to pass or fail depending on timing.
+        # What the test is about is the slash command being accepted and its own turn
+        # finishing, so the auto-run is switched off first.
+        bridge.set_vibe(False)
+        bridge._cancel_auto()
+        deadline = time.time() + 2.0
+        while time.time() < deadline and bridge.session._turn_running:
+            time.sleep(0.02)
         assert not bridge.session._turn_running
 
     def test_ask_select_and_reply_flow(self):
@@ -260,7 +274,7 @@ class TestBridgeCrossSystem:
         events = []
         bridge.set_event_sink(lambda e: events.append(e))
 
-        from ui import _select_from_list
+        from argent.ui import _select_from_list
 
         result = [None]
         def _call_select():

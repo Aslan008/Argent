@@ -16,14 +16,14 @@ SCOPES = ("project", "global")
 
 def enabled() -> bool:
     try:
-        import config
+        import argent.config as config
         return bool(config.is_memory_enabled())
     except Exception:
         return True
 
 
 def project_dir() -> Path:
-    from project_paths import project_root_or_cwd
+    from argent.project_paths import project_root_or_cwd
     return Path(project_root_or_cwd()) / ".argent" / "memory"
 
 

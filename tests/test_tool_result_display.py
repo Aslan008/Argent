@@ -12,13 +12,13 @@ turns later from the model's behaviour.
 
 import pytest
 
-import ui
+import argent.ui as ui
 
 
 @pytest.fixture(autouse=True)
 def compact_by_default(monkeypatch):
-    monkeypatch.setattr("config.get_debug_mode", lambda: False)
-    monkeypatch.setattr("config.get_show_tool_results", lambda: False)
+    monkeypatch.setattr("argent.config.get_debug_mode", lambda: False)
+    monkeypatch.setattr("argent.config.get_show_tool_results", lambda: False)
 
 
 @pytest.fixture
@@ -59,12 +59,12 @@ class TestWhatIsNeverCollapsed:
         assert not str(printed[0]).startswith("  [dim]✓")     # a Panel, not a line
 
     def test_debug_mode_keeps_the_panel(self, printed, monkeypatch):
-        monkeypatch.setattr("config.get_debug_mode", lambda: True)
+        monkeypatch.setattr("argent.config.get_debug_mode", lambda: True)
         ui.print_tool_end("read_file", "\n".join(str(i) for i in range(50)))
         assert not str(printed[0]).startswith("  [dim]✓")
 
     def test_the_setting_brings_the_panel_back(self, printed, monkeypatch):
-        monkeypatch.setattr("config.get_show_tool_results", lambda: True)
+        monkeypatch.setattr("argent.config.get_show_tool_results", lambda: True)
         ui.print_tool_end("read_file", "a\nb\nc")
         assert not str(printed[0]).startswith("  [dim]✓")
 

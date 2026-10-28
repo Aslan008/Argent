@@ -11,7 +11,7 @@ from typing import Any, Dict, Optional
 
 from src.micromodels.data_collector import collector
 from src.micromodels.runtime import runtime
-from logger import get_logger
+from argent.logger import get_logger
 
 logger = get_logger("micromodel_dispatcher")
 

@@ -11,7 +11,7 @@ not exist.
 import pytest
 
 from src.agent import needle_coprocessor as nc
-from tools.schemas import AVAILABLE_TOOLS
+from argent.tools.schemas import AVAILABLE_TOOLS
 
 
 class _FakeNeedle:

@@ -2,7 +2,7 @@
 
 from src.cli.commands.base import CommandContext, CommandResult
 from src.cli.commands.registry import registry
-from ui import print_error, print_system
+from argent.ui import print_error, print_system
 
 
 @registry.register("/plan", help_text="Режим плана: агент только изучает проект и показывает план, ничего не меняя "

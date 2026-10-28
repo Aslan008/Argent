@@ -2,7 +2,7 @@
 
 import pytest
 
-import config
+import argent.config as config
 
 
 class _Resp:
@@ -46,7 +46,7 @@ class TestConfig:
 
 class TestNativeBatching:
     def test_one_request_per_batch_not_per_text(self, monkeypatch):
-        import rag_engine
+        import argent.rag_engine as rag_engine
         calls = []
 
         def fake_post(url, json=None, timeout=None):
@@ -65,7 +65,7 @@ class TestNativeBatching:
         assert len(out) == 5 and out[0][0] == 0.5
 
     def test_splits_into_bounded_batches(self, monkeypatch):
-        import rag_engine
+        import argent.rag_engine as rag_engine
         calls = []
 
         def fake_post(url, json=None, timeout=None):
@@ -82,7 +82,7 @@ class TestNativeBatching:
         assert len(out) == 5
 
     def test_order_is_preserved_across_batches(self, monkeypatch):
-        import rag_engine
+        import argent.rag_engine as rag_engine
         counter = {"n": 0}
 
         def fake_post(url, json=None, timeout=None):
@@ -101,13 +101,13 @@ class TestNativeBatching:
         assert [v[0] for v in out] == [1.0, 2.0, 3.0]
 
     def test_empty_input(self, monkeypatch):
-        import rag_engine
+        import argent.rag_engine as rag_engine
         assert rag_engine.OllamaEmbeddingFunction()([]) == []
 
 
 class TestFallbackPath:
     def test_batch_failure_degrades_to_per_text(self, monkeypatch):
-        import rag_engine
+        import argent.rag_engine as rag_engine
         seen = []
 
         def fake_post(url, json=None, timeout=None):
@@ -130,7 +130,7 @@ class TestFallbackPath:
         assert all(v[0] == 0.9 for v in out)
 
     def test_short_response_triggers_fallback(self, monkeypatch):
-        import rag_engine
+        import argent.rag_engine as rag_engine
 
         def fake_post(url, json=None, timeout=None):
             payload = json["input"]
@@ -148,7 +148,7 @@ class TestFallbackPath:
 
     def test_fallback_concurrency_is_bounded(self, monkeypatch):
         import concurrent.futures as cf
-        import rag_engine
+        import argent.rag_engine as rag_engine
         seen = {}
 
         class SpyPool(cf.ThreadPoolExecutor):

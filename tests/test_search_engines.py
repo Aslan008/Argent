@@ -5,7 +5,7 @@ Network boundaries are monkeypatched, so nothing here touches the internet.
 
 import pytest
 
-import config
+import argent.config as config
 from src.research import search as search_mod
 from src.research.search import DEFAULT_ENGINES, active_engines, meta_search
 
@@ -357,7 +357,7 @@ class TestQueryGeneration:
     weak local models, so they're pinned."""
 
     def _prompt(self, monkeypatch):
-        import deep_research
+        import argent.deep_research as deep_research
         captured = {}
         monkeypatch.setattr(deep_research, "_call_llm_sync",
                             lambda prompt, **kw: captured.setdefault("p", prompt) or '["a"]')
@@ -384,7 +384,7 @@ class TestQueryGeneration:
         assert "NullReferenceException" in prompt
 
     def test_falls_back_to_the_objective_on_garbage(self, monkeypatch):
-        import deep_research
+        import argent.deep_research as deep_research
         monkeypatch.setattr(deep_research, "_call_llm_sync", lambda *a, **k: "not json")
         assert deep_research._generate_queries("topic") == ["topic"]
 
@@ -394,13 +394,13 @@ class TestDoctorDiscoverability:
     the active engines and how to add the optional one."""
 
     def test_lists_keyless_engines_and_hints_at_brave(self, no_brave_key):
-        import doctor
+        import argent.doctor as doctor
         status, detail = doctor._check_web_search()
         assert "DuckDuckGo" in detail and "GitHub" in detail
         assert "brave_api_key" in detail
 
     def test_no_hint_once_brave_is_active(self, brave_key):
-        import doctor
+        import argent.doctor as doctor
         _, detail = doctor._check_web_search()
         assert "Brave" in detail and "brave_api_key" not in detail
 

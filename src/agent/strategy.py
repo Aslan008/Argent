@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
 from typing import List, Dict, Any
-import config
-from config import get_model_size_category, is_moe_model, get_model_category_override
+import argent.config as config
+from argent.config import get_model_size_category, is_moe_model, get_model_category_override
 from src.agent.parser import parse_raw_tool_call
 from src.agent.trimmer import hard_reset_with_memory, soft_trim_with_summarization, sliding_window_trim
 

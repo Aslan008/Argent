@@ -53,7 +53,7 @@ def main():
     print("\n[2] FILE SEARCH BENCHMARK (tools.search_ops.search_files):")
     search_code = """
 import time
-from tools.search_ops import search_files
+from argent.tools.search_ops import search_files
 
 # Warmup
 search_files(name_contains="config.py")
@@ -91,8 +91,8 @@ print(f"{leeth.device}|{rss_mb:.1f}|{leeth.mmbert_active}")
     # 4. Tool Registry Contracts (Verify all 52 tools are intact and callable)
     print("\n[4] TOOL REGISTRY INTEGRITY CHECK:")
     registry_check_code = """
-from tools.schemas import AVAILABLE_TOOLS, TOOL_SCHEMAS
-from tools import search_files, read_file, run_command, calculate
+from argent.tools.schemas import AVAILABLE_TOOLS, TOOL_SCHEMAS
+from argent.tools import search_files, read_file, run_command, calculate
 
 assert len(AVAILABLE_TOOLS) >= 50, f'Expected >=50 tools, got {len(AVAILABLE_TOOLS)}'
 assert callable(search_files)

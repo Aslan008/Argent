@@ -15,10 +15,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 # Test runs must never pollute the training buffer.
 os.environ["LEETH_FEEDBACK_DISABLED"] = "1"
 
-from src.leeth import leeth  # noqa: E402
-from src.leeth.dispatcher import dispatcher  # noqa: E402
-from src.leeth.primitives import ChoiceQuestion, NoulQuestion  # noqa: E402
-import pytest  # noqa: E402
+from src.leeth import leeth  
+from src.leeth.dispatcher import dispatcher  
+from src.leeth.primitives import ChoiceQuestion, NoulQuestion  
+import pytest
 
 
 @pytest.fixture(autouse=True)
@@ -37,6 +37,7 @@ def _onnx_cpu():
     assert leeth.device == "onnx-cpu" and leeth.ort_session is not None, (
         f"Runtime must be pinned to ONNX CPU (got {leeth.device}); CUDA inference is nondeterministic"
     )
+    pytest.importorskip("transformers", reason="Leeth tests build a real ModernBERT backbone — pip install transformers")
     assert leeth.mmbert_active, "This module tests the production mmBERT router"
     yield
 

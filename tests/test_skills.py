@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-import skill_manager as sm_module
+import argent.skill_manager as sm_module
 
 
 @pytest.fixture
@@ -329,7 +329,9 @@ class TestShippedSourcedResearcher:
 
     @pytest.fixture
     def repo_manager(self, monkeypatch):
-        repo_skills = Path(sm_module.__file__).resolve().parent / "skills"
+        # skill_manager.py lives in argent/; the shipped skills are repo content
+        # one level above the package.
+        repo_skills = Path(sm_module.__file__).resolve().parents[1] / "skills"
         monkeypatch.setattr(sm_module, "get_skills_dir", lambda: str(repo_skills))
         return sm_module.SkillManager()
 

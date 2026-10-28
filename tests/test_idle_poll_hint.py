@@ -5,7 +5,7 @@ loop-guard normalisation of the 'RUNNING for NNs' status line.
 import queue
 import re
 
-import tools.command_ops as command_ops
+import argent.tools.command_ops as command_ops
 from src.agent.loop_guard import LoopGuard, _normalize_volatile
 
 

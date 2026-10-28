@@ -75,11 +75,11 @@ void OnLoaded()
 """
 
 def make_bridge(startup=False):
-    import config
+    import argent.config as config
     config.get_mcp_servers = lambda: [{"name": "kern", "command": "x"}] if startup else []
     config.get_telegram_enabled = lambda: False
     config.get_auto_kb = lambda: False
-    from hook_manager import hook_manager
+    from argent.hook_manager import hook_manager
     hook_manager.call_hook = lambda *a, **k: None
     if startup:
         # A previous session to offer, and a config file so this is not a first run.
@@ -94,7 +94,7 @@ def make_bridge(startup=False):
         st.carried_over_memory = lambda: ["цель: починить меню"]
         if not config.CONFIG_FILE.exists():
             config.CONFIG_FILE.write_text("{}", encoding="utf-8")
-        from mcp_client import mcp_client
+        from argent.mcp_client import mcp_client
         mcp_client.register_and_start = lambda name, cfg: "Started " + name
 
     class Agent:

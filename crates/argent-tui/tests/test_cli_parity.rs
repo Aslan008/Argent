@@ -48,7 +48,7 @@ def setup(root):
 
 def _console(width):
     from rich.console import Console
-    import ui
+    import argent.ui as ui
     return Console(file=io.StringIO(), theme=ui.custom_theme, safe_box=True, width=width,
                    height=40, force_terminal=False, color_system="truecolor",
                    legacy_windows=False)
@@ -67,7 +67,7 @@ class _Agent:
     def get_context_breakdown(self): return {}
 
 def cli_transcript(chunks_json, width):
-    import ui
+    import argent.ui as ui
     from src.cli import cli_ui
     chunks = json.loads(chunks_json)
     con = _console(width)
@@ -106,7 +106,7 @@ def make_bridge():
 
 def cli_live(kind, payload_json, width):
     """One frame of a REPL live display, from the REPL's own classes."""
-    import ui
+    import argent.ui as ui
     from src.cli import cli_ui
     p = json.loads(payload_json)
     con = _console(width)
@@ -145,10 +145,10 @@ def cli_live(kind, payload_json, width):
 
 def snapshot_case(width):
     """The post-response lines: the REPL's printer vs the bridge's event."""
-    import ui
+    import argent.ui as ui
     from src.cli import cli_ui
     from src.bridge.session import AgentSession
-    from usage_tracker import usage as su
+    from argent.usage_tracker import usage as su
     usage = {"prompt": 1200, "completion": 340, "cached": 900, "cost": 0.0021}
     con = _console(width)
     saved = (ui.console, cli_ui.console)
@@ -175,8 +175,8 @@ def toolbar_case(mode):
     import os, time
     from prompt_toolkit.formatted_text import to_formatted_text
     from src.cli import cli_prompt as cp
-    import config as cfg
-    from usage_tracker import usage as su
+    import argent.config as cfg
+    from argent.usage_tracker import usage as su
 
     class A:
         provider = "openrouter"
@@ -257,7 +257,7 @@ fn cli_rows(env: &Env<'_>, chunks: &Value) -> Vec<Line<'static>> {
 }
 
 /// The TUI's frame for the same chunks; returns (buffer, transcript row count).
-fn tui_screen(env: &Env<'_>, py: Python<'_>, chunks: &Value) -> (Buffer, usize) {
+fn tui_screen(env: &Env<'_>, py: Python<'_>, chunks: &Value, expand_reasoning: bool) -> (Buffer, usize) {
     let events: Bound<'_, PyList> = env
         .shim
         .getattr("bridge_events")
@@ -271,6 +271,9 @@ fn tui_screen(env: &Env<'_>, py: Python<'_>, chunks: &Value) -> (Buffer, usize) 
     app.renderer = Box::new(PyRenderer::new(env.bridge.clone_ref(py)));
     let raw: String = env.bridge.call_method0(py, "get_ui_config").unwrap().extract(py).unwrap();
     app.ui = UiConfig::from_json(&raw);
+    // Parity is about how each block is drawn, not about the compact view: once the turn
+    // folds on `Done`, the rows the REPL prints are deliberately out of sight.
+    app.compact_view = false;
 
     app.insert_str("prompt");
     app.submit_input(); // the user's own row sits above the reply
@@ -281,6 +284,11 @@ fn tui_screen(env: &Env<'_>, py: Python<'_>, chunks: &Value) -> (Buffer, usize) 
         }
     }
     app.handle_event(ArgentEvent::Done);
+    if expand_reasoning {
+        // What a click on a folded block does: the REPL shows reasoning in full,
+        // so the parity check has to look at it in full too.
+        app.toggle_all_reasoning(true);
+    }
 
     let mut term = Terminal::new(TestBackend::new(WIDTH, HEIGHT)).unwrap();
     term.draw(|f| draw_ui(f, &app)).unwrap();
@@ -318,6 +326,20 @@ static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// Assert that the TUI shows, below the user's row, exactly what the REPL printed.
 fn assert_parity(name: &str, chunks: Value) {
+    assert_parity_with(name, chunks, false);
+}
+
+/// As `assert_parity`, but with finished reasoning blocks opened first.
+///
+/// Reasoning folds as soon as it ends — that is the TUI's own default — while the
+/// REPL prints it in full. Comparing the folded line with the REPL's output would
+/// compare two different things, so a scenario that contains reasoning opens the
+/// block the way a click does and then checks the card itself.
+fn assert_parity_expanded(name: &str, chunks: Value) {
+    assert_parity_with(name, chunks, true);
+}
+
+fn assert_parity_with(name: &str, chunks: Value, expand_reasoning: bool) {
     let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     pyo3::prepare_freethreaded_python();
     Python::with_gil(|py| {
@@ -326,7 +348,7 @@ fn assert_parity(name: &str, chunks: Value) {
             return;
         };
         let want_rows = cli_rows(&env, &chunks);
-        let (got, got_rows) = tui_screen(&env, py, &chunks);
+        let (got, got_rows) = tui_screen(&env, py, &chunks, expand_reasoning);
         let want = paint(&want_rows);
 
         // Row 0 of the TUI is the user's prompt echo; the REPL's own prompt line
@@ -396,7 +418,7 @@ fn rich_markdown_in_an_answer() {
 
 #[test]
 fn reasoning_then_answer() {
-    assert_parity(
+    assert_parity_expanded(
         "reasoning",
         json!([
             {"type": "thinking_stream", "content": "First I read the file.\n"},
@@ -623,15 +645,31 @@ fn live_answer_tail_and_spinner() {
     });
 }
 
+/// The queue used to be a REPL box drawn inside the live region, and this test
+/// compared it against the CLI's own rendering.
+///
+/// It moved out on purpose: the box was a *picture* of the queue, so a message
+/// could only be changed by knowing that `/queue edit 2 …` existed. The panel
+/// above the prompt (`ui::queue_panel`) replaces it and every row in it is a
+/// button. Drawing the list twice would also mean two places that disagree
+/// about what can be clicked, so the live region deliberately stops at the
+/// spinner.
 #[test]
-fn live_queue_box() {
+fn the_live_region_no_longer_repeats_the_queue() {
     with_env(|py, env| {
         let mut app = busy_app(py, env, 8);
         app.message_queue = vec!["first queued".into(), "second queued message".into()];
-        let want = live_cli(env, "queue", &json!({"items": ["first queued", "second queued message"]}));
         let live = live_rows(&app, WIDTH, 40);
-        // The box sits under the waiting spinner.
-        assert_rows_equal("queue box", &want, &live[1..]);
+        let text: Vec<String> = live
+            .iter()
+            .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect::<String>())
+            .collect();
+        let text = text.join("\n");
+        assert!(
+            !text.contains("Очередь сообщений"),
+            "очередь рисует панель над полем ввода, а не чат:\n{text}"
+        );
+        assert!(!text.contains("first queued"), "и текста сообщений тут тоже нет:\n{text}");
     });
 }
 

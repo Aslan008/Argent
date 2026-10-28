@@ -12,11 +12,28 @@ Two ways to drive a turn:
   the Telegram bridge) never deadlocks on a questionary prompt.
 """
 
+import os
 import queue
 import threading
 from typing import Optional
 
+from argent import features
+from argent.replay.recorder import TraceRecorder
 from src.bridge.events import to_event
+
+
+#: How long a question may sit unanswered before the answer becomes "no".
+#: Nobody at the keyboard is the normal case for an unattended run, and the wait
+#: for an answer used to have no timeout at all: one prompt froze the whole turn
+#: until the person came back. Override with ARGENT_ANSWER_TIMEOUT (seconds).
+DEFAULT_ANSWER_TIMEOUT = 300.0
+
+
+def answer_timeout() -> float:
+    try:
+        return max(1.0, float(os.environ.get("ARGENT_ANSWER_TIMEOUT", DEFAULT_ANSWER_TIMEOUT)))
+    except (TypeError, ValueError):
+        return DEFAULT_ANSWER_TIMEOUT
 
 
 class AgentSession:
@@ -31,7 +48,14 @@ class AgentSession:
         self._stop_requested = False
         self._turn_running = False
         self._last_tool_output = ""
+        self._last_turn_tools = 0
+        self._last_turn_end = ""
         self.vibe = False
+        # Off by default: no trace file is opened unless replay is explicitly
+        # enabled. A feature typo must not silently create files.
+        self._trace_enabled = features.enabled("replay")
+        self._trace: Optional[TraceRecorder] = None
+        self._trace_turn = 1
 
     def set_event_sink(self, sink) -> None:
         """Set a direct callback for events (e.g. PyO3 Rust channel sender)."""
@@ -39,10 +63,11 @@ class AgentSession:
 
     def _emit(self, event: dict) -> None:
         """Deliver event to the active sink or fallback to internal queue."""
+        self._trace_event(event)
         # Attach an actionable hint to genuine failures, like the legacy CLI.
         if self._event_sink is not None and event.get("type") == "error":
             try:
-                from error_help import explain_error
+                from argent.error_help import explain_error
                 hint = explain_error(str(event.get("text", "")))
                 if hint and "hint" not in event:
                     event = dict(event, hint=hint)
@@ -59,7 +84,7 @@ class AgentSession:
     @property
     def agent(self):
         if self._agent is None:
-            from agent import ArgentAgent
+            from argent.agent import ArgentAgent
             self._agent = ArgentAgent()
         return self._agent
 
@@ -76,22 +101,93 @@ class AgentSession:
         """
         return self._last_tool_output
 
+    @property
+    def last_turn_tools(self) -> int:
+        """How many tools the last turn called.
+
+        A turn that called none changed nothing: the frontend uses this to tell an
+        agent that is working from one that is only repeating itself.
+        """
+        return self._last_turn_tools
+
+    @property
+    def last_turn_end(self) -> str:
+        """Why the last turn stopped: "final answer", "loop guard", “tool call written as text”…
+
+        A turn the agent cut short changed nothing, whatever tools it called
+        along the way — an unattended run must not take it for progress.
+        """
+        return self._last_turn_end
+
     # --- synchronous API (tests, non-interactive callers) ---------------------
-    def handle(self, text: str):
+    def handle(self, text: str, allowed_tools=None):
         """Run one turn inline, yielding normalized events then a terminal 'done'."""
-        for chunk in self.agent.process_user_input(text):
+        self._trace_event({"type": "turn_start"})
+        self._trace_event({"type": "user_message", "text": text})
+        chunks = (self.agent.process_user_input(text, allowed_tools=allowed_tools)
+                  if allowed_tools is not None else self.agent.process_user_input(text))
+        for chunk in chunks:
             event = to_event(chunk)
             if event is not None:
+                self._trace_event(event)
                 yield event
-        yield {"type": "done"}
+        done = {"type": "done"}
+        self._trace_event(done)
+        yield done
 
-    # --- threaded API with approvals-as-events --------------------------------
     def start(self, text: str) -> None:
         """Run one turn on a worker thread; consume it with get_event() or event_sink."""
         self._active = True
         self._stop_requested = False
         threading.Thread(target=self._run_turn, args=(text,), daemon=True).start()
 
+    # --- optional replay trace ------------------------------------------------
+    def _trace_event(self, event: dict) -> None:
+        """Record an event when replay is enabled; never affect the turn."""
+        if not self._trace_enabled:
+            return
+        try:
+            if self._trace is None:
+                self._trace = TraceRecorder(meta=self._trace_meta())
+            payload = dict(event)
+            payload.setdefault("turn", self._trace_turn)
+            self._trace.record(payload)
+            if event.get("type") == "done":
+                self._trace_turn += 1
+        except Exception:
+            # Tracing is an observer, not part of the turn.
+            pass
+
+    def _trace_meta(self) -> dict:
+        meta = {"session_id": getattr(self.agent, "session_id", None)}
+        try:
+            import os
+
+            meta["cwd"] = os.getcwd()
+        except Exception:
+            pass
+        try:
+            from argent.config import get_current_model, get_provider
+
+            meta["model"] = get_current_model()
+            meta["provider"] = get_provider()
+        except Exception:
+            pass
+        return meta
+
+    def link_trace_session(self, session_id: str) -> None:
+        if self._trace is not None and session_id:
+            self._trace.link_session(session_id)
+
+    def close_trace(self) -> None:
+        if self._trace is not None:
+            self._trace.close()
+
+    @property
+    def trace_path(self):
+        return self._trace.path if self._trace is not None else None
+
+    # --- threaded API with approvals-as-events --------------------------------
     def get_event(self) -> dict:
         """Block for the next event of the running turn."""
         ev = self._out.get()
@@ -101,7 +197,9 @@ class AgentSession:
 
     def _run_turn(self, text: str) -> None:
         import time
-        import approval
+        import argent.approval as approval
+        self._trace_event({"type": "turn_start"})
+        self._trace_event({"type": "user_message", "text": text})
         approval.set_approval_backend(self._approval_backend)
         gen = self.agent.process_user_input(text)
         tool_start_times = {}
@@ -159,6 +257,8 @@ class AgentSession:
             self._emit({"type": "error", "text": f"[System: turn failed: {e}]"})
         finally:
             approval.reset_approval_backend()
+            self._last_turn_tools = tool_calls
+            self._last_turn_end = getattr(self._agent, "_turn_end_reason", "") or ""
             self._active = False
             if not self._stop_requested:
                 try:
@@ -187,11 +287,16 @@ class AgentSession:
             # 'cancelling' instead, so the frontend never observes a turn as
             # finished while this worker is still unwinding (which used to let
             # a queued message start a second concurrent turn).
-            self._emit({"type": "done"})
+            # The flag goes first, the event second: 'done' must mean the turn is
+            # really over. Emitted the other way round, anyone reacting to 'done'
+            # — the queue draining the next message, a test checking the lock —
+            # could still be told the bridge is busy. That race rejected a queued
+            # message now and then, and made one test flaky for months.
             with self._lock:
                 self._turn_running = False
                 # Consume the cancel so the next turn starts clean.
                 self._stop_requested = False
+            self._emit({"type": "done"})
 
     def _snapshot_markup(self, snap: dict, usage: dict) -> dict:
         """The REPL's own snapshot text for this turn, as Rich markup.
@@ -201,11 +306,19 @@ class AgentSession:
         the session totals first (exactly once), as the REPL does.
         """
         from src.cli.cli_ui import turn_snapshot_lines
-        from usage_tracker import usage as session_usage
-        from ui import context_usage_markup
+        from argent.usage_tracker import usage as session_usage
+        from argent.ui import context_usage_markup
 
         if usage:
             session_usage.add(usage)
+        try:
+            # Refresh off the UI thread; the worker runs this after every turn,
+            # so the toolbar's balance catches up without blocking the screen.
+            from argent.provider_balance import prime_balance
+
+            prime_balance(force=True)
+        except Exception:
+            pass
         agent = self.agent
         lines = turn_snapshot_lines(
             agent,
@@ -268,7 +381,7 @@ class AgentSession:
             play_sound("prompt")
         except Exception:
             pass
-        from approval import approval_prompt_spec
+        from argent.approval import approval_prompt_spec
         spec = approval_prompt_spec(grant_key, bool(destructive))
         self._emit({
             "type": "approval_request",
@@ -282,7 +395,13 @@ class AgentSession:
             "decisions": spec["decisions"],
             "prompt_kind": spec["kind"],
         })
-        ev.wait()
+        if not ev.wait(answer_timeout()):
+            # Nobody answered: the turn must go on, not hang here until morning.
+            with self._lock:
+                self._pending.pop(aid, None)
+            self._emit({"type": "notice", "text": (
+                f"[System: подтверждение не получено за {int(answer_timeout())} с — действие отклонено]")})
+            return "deny"
         with self._lock:
             return self._pending.pop(aid, {}).get("decision", "deny")
 
@@ -317,7 +436,12 @@ class AgentSession:
             "multi": bool(multi),
             "initial_checked": [bool(b) for b in initial_checked] if initial_checked else None,
         })
-        ev.wait()
+        if not ev.wait(answer_timeout()):
+            with self._lock:
+                self._pending.pop(sid, None)
+            self._emit({"type": "notice", "text": (
+                f"[System: ответа на выбор не было за {int(answer_timeout())} с — отменено]")})
+            return None
         with self._lock:
             return self._pending.pop(sid, {}).get("value")
 
@@ -357,7 +481,7 @@ class AgentSession:
         a = self.agent
         model = getattr(a, "model_name", "?")
         try:
-            from config import get_model_size_category
+            from argent.config import get_model_size_category
             tier = get_model_size_category(model)
         except Exception:
             tier = "?"
@@ -371,7 +495,7 @@ class AgentSession:
         except Exception:
             cps = []
         try:
-            import config as _cfg
+            import argent.config as _cfg
             cfg_max = _cfg.get_context_window()
         except Exception:
             cfg_max = 32768
@@ -401,7 +525,7 @@ class AgentSession:
         }
 
     def set_vibe(self, enabled: bool) -> bool:
-        import approval
+        import argent.approval as approval
         from src.agent.checkpoints import set_auto_checkpoint
         self.vibe = bool(enabled)
         approval.set_policy(approval.POLICY_AUTO if self.vibe else approval.POLICY_ASK)

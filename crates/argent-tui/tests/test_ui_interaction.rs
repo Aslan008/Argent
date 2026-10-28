@@ -464,15 +464,30 @@ fn l9_free_text_prompt_shows_the_typed_answer() {
 
 /// L9 x D3. A very long free-text answer must stay readable instead of running
 /// off the right edge: the tail (what is being typed) stays visible.
+///
+/// The window follows the caret, so the setup goes through the real path: a
+/// prefilled answer puts the caret at its end, exactly like typing does.
 #[test]
 fn l9_a_very_long_free_text_answer_shows_its_tail() {
-    let mut sel = SelectModalData::new("sel".into(), "Свой вариант".into(), Vec::new(), None);
-    sel.filter = format!("{}END", "x".repeat(500));
+    let long = format!("{}END", "x".repeat(500));
+    let sel = SelectModalData::new("sel".into(), "Свой вариант".into(), Vec::new(), Some(long));
     let frame = render(&app_with_select(sel), 60, 24);
     assert!(frame.contains("END"), "the end of a long answer is not visible:\n{frame}");
     for row in frame.lines() {
         assert!(row.chars().count() <= 60, "a row runs past the terminal: {row:?}");
     }
+}
+
+/// The other half of that contract: with the caret in the middle of a long
+/// answer, the window stays where the caret is instead of jumping to the end.
+#[test]
+fn l9_a_caret_inside_a_long_answer_keeps_that_character_visible() {
+    let long = format!("{}Z{}", "a".repeat(300), "b".repeat(300));
+    let mut sel = SelectModalData::new("sel".into(), "Свой вариант".into(), Vec::new(), Some(long));
+    sel.filter_cursor = 301; // just after the marker
+    let frame = render(&app_with_select(sel), 60, 24);
+    assert!(frame.contains('Z'), "the character before the caret stays on screen:\n{frame}");
+    assert!(!frame.contains("x"), "the window is not the whole 600-char text");
 }
 
 // ── L9: the approval prompt uses the REPL's wording and honest choices ──────

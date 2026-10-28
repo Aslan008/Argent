@@ -5,12 +5,12 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 import pytest
 
-from tools.search_ops import grep_search, search_files
-from tools.file_ops import replace_in_file, multi_replace_in_file, _parse_multi_replace_changes
-from tools.browser_tools import browser_open, browser_action, browser_inspect, browser_close
-from tools.schemas import TOOL_SCHEMAS
-from tools.lazy_registry import LAZY_TOOL_REGISTRY
-from tool_profiles import MODE_TOOLS, CORE_CHAT_TOOLS
+from argent.tools.search_ops import grep_search, search_files
+from argent.tools.file_ops import replace_in_file, multi_replace_in_file, _parse_multi_replace_changes
+from argent.tools.browser_tools import browser_open, browser_action, browser_inspect, browser_close
+from argent.tools.schemas import TOOL_SCHEMAS
+from argent.tools.lazy_registry import LAZY_TOOL_REGISTRY
+from argent.tool_profiles import MODE_TOOLS, CORE_CHAT_TOOLS
 
 
 # ============================================================================
@@ -64,21 +64,21 @@ class TestL1Contract:
         """L1: replace_in_file contract for single replacement."""
         f = tmp_path / "foo.txt"
         f.write_text("alpha beta gamma", encoding="utf-8")
-        res = replace_in_file(file_path=str(f), target_text="beta", replacement_text="omega")
+        res = replace_in_file(path=str(f), target_text="beta", replacement_text="omega")
         assert isinstance(res, str)
         assert "Successfully replaced" in res
         assert f.read_text(encoding="utf-8") == "alpha omega gamma"
 
     def test_browser_action_contract_unknown_action(self):
         """L1: browser_action returns clean error string on unknown action."""
-        with patch("browser_engine.browser_engine._sessions", {"default": MagicMock()}):
+        with patch("argent.browser_engine.browser_engine._sessions", {"default": MagicMock()}):
             res = browser_action(action="fly_to_moon")
             assert isinstance(res, str)
             assert "Error: Unknown browser action 'fly_to_moon'" in res
 
     def test_browser_inspect_contract_unknown_mode(self):
         """L1: browser_inspect returns clean error string on unknown mode."""
-        with patch("browser_engine.browser_engine._sessions", {"default": MagicMock()}):
+        with patch("argent.browser_engine.browser_engine._sessions", {"default": MagicMock()}):
             res = browser_inspect(mode="xray_vision")
             assert isinstance(res, str)
             assert "Error: Unknown inspect mode 'xray_vision'" in res
@@ -124,9 +124,9 @@ class TestL2Boundary:
         """L2: Empty target_text returns clear error preventing character injection."""
         f = tmp_path / "test.py"
         f.write_text("def run(): pass", encoding="utf-8")
-        res = replace_in_file(file_path=str(f), target_text="", replacement_text="new")
+        res = replace_in_file(path=str(f), target_text="", replacement_text="new")
         assert "Error: 'target_text' is empty" in res
-        res_ws = replace_in_file(file_path=str(f), target_text="   \n  ", replacement_text="new")
+        res_ws = replace_in_file(path=str(f), target_text="   \n  ", replacement_text="new")
         assert "Error: 'target_text' is empty" in res_ws
 
     def test_replace_start_end_line_boundaries(self, tmp_path):
@@ -134,26 +134,26 @@ class TestL2Boundary:
         f = tmp_path / "data.py"
         f.write_text("a = 1\nb = 2\nc = 3\n", encoding="utf-8")
 
-        res_inv = replace_in_file(file_path=str(f), target_text="b = 2", replacement_text="b = 5",
+        res_inv = replace_in_file(path=str(f), target_text="b = 2", replacement_text="b = 5",
                                  start_line=3, end_line=1)
         assert "cannot be less than 'start_line'" in res_inv
 
-        res_exceed = replace_in_file(file_path=str(f), target_text="b = 2", replacement_text="b = 5",
+        res_exceed = replace_in_file(path=str(f), target_text="b = 2", replacement_text="b = 5",
                                     start_line=50)
         assert "exceeds total lines in file" in res_exceed
 
     def test_browser_inspect_query_forwarded_to_state(self):
         """L2: browser_inspect passes query parameter to browser_state for filtering."""
-        with patch("browser_engine.browser_engine._sessions", {"default": MagicMock()}), \
-             patch("tools.browser_tools.browser_state", return_value="Filtered State Result") as mock_state:
+        with patch("argent.browser_engine.browser_engine._sessions", {"default": MagicMock()}), \
+             patch("argent.tools.browser_tools.browser_state", return_value="Filtered State Result") as mock_state:
             res = browser_inspect(mode="dom_interactive", query="Sign In")
             mock_state.assert_called_once_with(session="default", query="Sign In")
             assert res == "Filtered State Result"
 
     def test_browser_action_instruction_alias(self):
         """L2: browser_action aliases instruction to text when text is not provided."""
-        with patch("browser_engine.browser_engine._sessions", {"default": MagicMock()}), \
-             patch("tools.browser_tools.browser_click", return_value="Clicked button") as mock_click:
+        with patch("argent.browser_engine.browser_engine._sessions", {"default": MagicMock()}), \
+             patch("argent.tools.browser_tools.browser_click", return_value="Clicked button") as mock_click:
             res = browser_action(action="click", instruction="Submit Order")
             mock_click.assert_called_once_with(
                 index=None, selector=None, text="Submit Order", session="default", return_state=True
@@ -168,8 +168,8 @@ class TestL3Property:
     def test_dom_inspection_truncation_invariant(self):
         """L3: DOM accessibility tree must never exceed 15KB context limit."""
         huge_state = "A" * 25000
-        with patch("browser_engine.browser_engine._sessions", {"default": MagicMock()}), \
-             patch("tools.browser_tools.browser_state", return_value=huge_state):
+        with patch("argent.browser_engine.browser_engine._sessions", {"default": MagicMock()}), \
+             patch("argent.tools.browser_tools.browser_state", return_value=huge_state):
             res = browser_inspect(mode="dom_interactive")
             assert len(res) < 16000
             assert "State truncated to 15KB to preserve context" in res
@@ -182,7 +182,7 @@ class TestL3Property:
         f.write_text(initial_code, encoding="utf-8")
 
         res = replace_in_file(
-            file_path=str(f),
+            path=str(f),
             target_text="return 100",
             replacement_text="return def def syntax error !!!"
         )
@@ -196,7 +196,7 @@ class TestL3Property:
         f.write_bytes(crlf_text.encode("utf-8"))
 
         res = replace_in_file(
-            file_path=str(f),
+            path=str(f),
             target_text="print('hi')",
             replacement_text="print('hello')\n    print('world')"
         )
@@ -218,12 +218,12 @@ class TestL4Adversarial:
 
     def test_nonexistent_file_path(self):
         """L4: Operating on a non-existent file returns clean error message."""
-        res = replace_in_file(file_path="non_existent_dir_999/foo.py", target_text="a", replacement_text="b")
+        res = replace_in_file(path="non_existent_dir_999/foo.py", target_text="a", replacement_text="b")
         assert "does not exist" in res
 
     def test_path_traversal_restricted(self):
         """L4: Attempting to edit files with restricted extensions is halted."""
-        res = replace_in_file(file_path="Assets/foo.cs.meta", target_text="guid", replacement_text="new_guid")
+        res = replace_in_file(path="Assets/foo.cs.meta", target_text="guid", replacement_text="new_guid")
         assert "restricted" in res.lower() or "meta" in res.lower()
 
 
@@ -258,19 +258,19 @@ class TestL4bFallback:
 class TestL5State:
     def test_browser_action_fails_cleanly_when_no_active_session(self):
         """L5: Calling browser_action with no open session returns clear error."""
-        with patch("browser_engine.browser_engine._sessions", {}):
+        with patch("argent.browser_engine.browser_engine._sessions", {}):
             res = browser_action(action="click", selector="button")
             assert "Error: No active browser session. Call browser_open(url) first" in res
 
     def test_browser_inspect_fails_cleanly_when_no_active_session(self):
         """L5: Calling browser_inspect with no open session returns clear error."""
-        with patch("browser_engine.browser_engine._sessions", {}):
+        with patch("argent.browser_engine.browser_engine._sessions", {}):
             res = browser_inspect(mode="dom_interactive")
             assert "Error: No active browser session. Call browser_open(url) first" in res
 
     def test_browser_close_idempotent(self):
         """L5: Closing an already closed browser session returns clean inactive status."""
-        with patch("browser_engine.browser_engine._sessions", {}):
+        with patch("argent.browser_engine.browser_engine._sessions", {}):
             res = browser_close("default")
             assert "Session 'default' is not active" in res
 
@@ -285,7 +285,7 @@ class TestL6CrossSystem:
         f.write_text("item1 = 1\nitem2 = 2\n", encoding="utf-8")
 
         res = replace_in_file(
-            file_path=str(f),
+            path=str(f),
             changes={"changes": [
                 {"target_text": "item1 = 1", "replacement_text": "item1 = 10"},
                 {"target_text": "item2 = 2", "replacement_text": "item2 = 20"}
@@ -296,19 +296,19 @@ class TestL6CrossSystem:
 
     def test_agent_diagnostics_extracts_all_target_fps(self):
         """L6: Agent _maybe_run_lsp_diagnostics accumulates all modified files in a batch."""
-        from agent import ArgentAgent
+        from argent.agent import ArgentAgent
         agent = ArgentAgent.__new__(ArgentAgent)
 
         filtered_args = {
-            "file_path": "src/main.py",
+            "path": "src/main.py",
             "changes": [
-                {"file_path": "src/helper.py", "target_text": "a", "replacement_text": "b"},
-                {"file_path": "src/main.py", "target_text": "c", "replacement_text": "d"},
+                {"path": "src/helper.py", "target_text": "a", "replacement_text": "b"},
+                {"path": "src/main.py", "target_text": "c", "replacement_text": "d"},
             ]
         }
         # Simulate logic extracted from agent.py
         target_fps = []
-        fp = filtered_args.get("file_path") or filtered_args.get("path")
+        fp = filtered_args.get("path")
         if fp and fp not in target_fps:
             target_fps.append(fp)
         raw_changes = filtered_args.get("changes") or filtered_args.get("changes_json")
@@ -316,8 +316,8 @@ class TestL6CrossSystem:
             items, _ = _parse_multi_replace_changes(raw_changes)
             if items:
                 for it in items:
-                    if isinstance(it, dict) and it.get("file_path") and it["file_path"] not in target_fps:
-                        target_fps.append(it["file_path"])
+                    if isinstance(it, dict) and it.get("path") and it["path"] not in target_fps:
+                        target_fps.append(it["path"])
 
         assert target_fps == ["src/main.py", "src/helper.py"]
 
@@ -385,7 +385,7 @@ class TestL9NegativeSpace:
         code_file = tmp_path / "app.py"
         code_file.write_text("print('hello')", encoding="utf-8")
 
-        res = search_files(directory=str(tmp_path), pattern="*")
+        res = search_files(path=str(tmp_path), pattern="*")
         assert ".git" not in res
         assert "test.exe" not in res
         assert "app.py" in res

@@ -319,7 +319,7 @@ def test_only_in_a_run_steps_are_refused(make_server):
 def test_tool_catalog_describes_every_tool():
     cat = tool_catalog()
     names = {e["name"] for e in cat}
-    from tools.schemas import AVAILABLE_TOOLS
+    from argent.tools.schemas import AVAILABLE_TOOLS
     assert names == set(AVAILABLE_TOOLS)
     by = {e["name"]: e for e in cat}
     assert by["leeth_map"]["group"] == "leeth"

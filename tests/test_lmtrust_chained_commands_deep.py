@@ -13,7 +13,7 @@ LMTrust Deep Blind Spot & Neuro-Symbolic Audit for Chained / Compound Shell Comm
 
 import pytest
 
-from approval import (
+from argent.approval import (
     assess_command_risk,
     is_destructive_command,
     command_grant_key,

@@ -146,7 +146,10 @@ class TestInProgramHints:
     def test_hints_do_not_point_at_removed_commands(self, source):
         """A message telling the user to run a command that was deleted is
         worse than no message."""
-        text = (_ROOT / source).read_text(encoding="utf-8")
+        path = _ROOT / source
+        if not path.exists():                       # these modules live under argent/ now
+            path = _ROOT / "argent" / source
+        text = path.read_text(encoding="utf-8")
         handled = _handled_commands()
         # Only check commands mentioned in user-facing strings.
         for command in set(re.findall(r"/(?:enable_rag|disable_rag|rag_provider|"

@@ -4,7 +4,7 @@ Integrates with existing command_handler implementations for /model, /provider, 
 """
 
 import questionary
-from config import (
+from argent.config import (
     get_current_model, set_current_model,
     get_provider, set_provider,
     get_zai_api_key, set_zai_api_key,
@@ -17,7 +17,7 @@ from config import (
 )
 from src.cli.commands.base import CommandContext, CommandResult
 from src.cli.commands.registry import registry
-from ui import console, print_system, print_error, select_model, print_context_usage, _select_from_list
+from argent.ui import console, print_system, print_error, select_model, print_context_usage, _select_from_list
 
 
 def _server_problem(base_url: str, timeout: float = 3.0):
@@ -33,7 +33,7 @@ def _server_problem(base_url: str, timeout: float = 3.0):
 def _set_koboldcpp_address(raw: str) -> bool:
     """Save the KoboldCPP address a person typed. The server is only asked afterwards and never decides
     whether the address is kept: it may well be started after Argent."""
-    from vision import forget_capabilities
+    from argent.vision import forget_capabilities
     try:
         url = normalize_koboldcpp_url(raw)
     except ValueError as e:
@@ -66,7 +66,7 @@ def _ask_koboldcpp_address() -> None:
 @registry.register("/ui", help_text="Стиль интерфейса TUI: premium (оформленный) или classic (как в терминале)", category="config", is_prefix=True)
 def handle_ui(ctx: CommandContext) -> CommandResult:
     import os
-    from config import UI_STYLES, get_ui_style, set_ui_style
+    from argent.config import UI_STYLES, get_ui_style, set_ui_style
 
     parts = ctx.user_input.strip().split(maxsplit=1)
     current = get_ui_style()
@@ -98,14 +98,14 @@ def handle_ui(ctx: CommandContext) -> CommandResult:
 
 @registry.register("/exit", aliases=["/quit", "/q"], help_text="Выход из Argent с сохранением сессии", category="config")
 def handle_exit(ctx: CommandContext) -> CommandResult:
-    from command_handler import export_chat_history
+    from argent.command_handler import export_chat_history
     export_chat_history(ctx.agent, auto=True)
     return CommandResult.exit_repl()
 
 
 @registry.register("/model", aliases=["/models"], help_text="Выбор и переключение LLM модели (например: /model glm-5.3-flash:cloud)", category="config", is_prefix=True)
 def handle_model(ctx: CommandContext) -> CommandResult:
-    from command_handler import switch_model
+    from argent.command_handler import switch_model
     parts = ctx.user_input.strip().split(maxsplit=1)
     if len(parts) > 1:
         new_model = parts[1].strip()
@@ -123,12 +123,12 @@ def handle_model(ctx: CommandContext) -> CommandResult:
         if new_model and new_model != current:
             switch_model(ctx.agent, new_model)
         else:
-            from providers import create_provider
+            from argent.providers import create_provider
             try:
                 prov = create_provider()
                 models = prov.list_models()
                 _say_catalog_problem(prov)
-                from claude_catalog import label_for
+                from argent.claude_catalog import label_for
                 models_preview = ", ".join(label_for(prov.name, m) for m in models[:10]) + ("..." if len(models) > 10 else "")
                 current = label_for(prov.name, current)
                 print_system(f"Текущая модель: [bold cyan]{current}[/bold cyan]\n"
@@ -152,7 +152,7 @@ def _say_catalog_problem(provider) -> None:
 
 @registry.register("/provider", help_text="Выбор провайдера API (например: /provider zai; адрес KoboldCPP: /provider koboldcpp http://host:5001/v1)", category="config", is_prefix=True)
 def handle_provider(ctx: CommandContext) -> CommandResult:
-    from command_handler import switch_model
+    from argent.command_handler import switch_model
     current_prov = get_provider()
     choices = ["ollama", "zai", "openrouter", "claude", "deepseek", "xkiro", "wormsoft", "koboldcpp"]
     parts = ctx.user_input.strip().split(maxsplit=2)
@@ -203,7 +203,7 @@ def handle_provider(ctx: CommandContext) -> CommandResult:
                 except Exception:
                     pass
         elif new_prov == "claude":
-            from config import get_claude_api_key, set_claude_api_key
+            from argent.config import get_claude_api_key, set_claude_api_key
             current_key = get_claude_api_key()
             if not current_key:
                 try:
@@ -214,7 +214,7 @@ def handle_provider(ctx: CommandContext) -> CommandResult:
                 except Exception:
                     pass
         elif new_prov == "xkiro":
-            from config import get_xkiro_api_key, set_xkiro_api_key
+            from argent.config import get_xkiro_api_key, set_xkiro_api_key
             current_key = get_xkiro_api_key()
             if not current_key:
                 try:
@@ -225,7 +225,7 @@ def handle_provider(ctx: CommandContext) -> CommandResult:
                 except Exception:
                     pass
         elif new_prov == "wormsoft":
-            from config import get_wormsoft_api_key, set_wormsoft_api_key
+            from argent.config import get_wormsoft_api_key, set_wormsoft_api_key
             current_key = get_wormsoft_api_key()
             if not current_key:
                 try:
@@ -236,7 +236,7 @@ def handle_provider(ctx: CommandContext) -> CommandResult:
                 except Exception:
                     pass
         elif new_prov == "deepseek":
-            from config import get_deepseek_api_key, set_deepseek_api_key
+            from argent.config import get_deepseek_api_key, set_deepseek_api_key
             current_key = get_deepseek_api_key()
             if not current_key:
                 try:
@@ -253,9 +253,9 @@ def handle_provider(ctx: CommandContext) -> CommandResult:
 
         print_system(f"Провайдер изменён: {new_prov}{options_text}")
         if new_prov != current_prov:
-            from config import get_model_for_provider
+            from argent.config import get_model_for_provider
             saved_model = get_model_for_provider(new_prov)
-            from providers import starting_model
+            from argent.providers import starting_model
             # A model name from the PREVIOUS provider means nothing here: start from one this provider knows.
             prompt_model = starting_model(new_prov, saved_model, get_current_model(new_prov))
             print_system(f"Выберите модель {new_prov.upper()} (активная: {prompt_model}):")
@@ -273,7 +273,7 @@ def handle_compact(ctx: CommandContext) -> CommandResult:
     agent = ctx.agent
     parts = ctx.user_input.strip().split()
     if len(parts) > 1 and parts[1].lower() in ("model", "модель"):
-        from command_handler import _handle_aux_command
+        from argent.command_handler import _handle_aux_command
         _handle_aux_command(preset_provider="openrouter")
         return CommandResult.continue_loop()
     if len(agent.messages) <= 2:
@@ -316,7 +316,7 @@ def _parse_duration(text: str) -> float | None:
 
 @registry.register("/network", aliases=["/сеть"], help_text="Сколько ждать, если пропал интернет или провайдер перегружен (/network 15м | off)", category="config", is_prefix=True)
 def handle_network(ctx: CommandContext) -> CommandResult:
-    from config import get_network_patience, set_network_patience
+    from argent.config import get_network_patience, set_network_patience
     from src.agent.netstate import clock_text
     parts = ctx.user_input.strip().split(maxsplit=1)
     if len(parts) > 1:
@@ -336,7 +336,7 @@ def handle_network(ctx: CommandContext) -> CommandResult:
 
 @registry.register("/think", aliases=["/thinking"], help_text="Настройки размышлений модели (ON/OFF/AUTO, effort, budget, strip, rethink, summary/full)", category="config", is_prefix=True)
 def handle_think(ctx: CommandContext) -> CommandResult:
-    from config import (
+    from argent.config import (
         get_thinking_mode, set_thinking_mode,
         get_reasoning_effort, set_reasoning_effort,
         get_thinking_budget, set_thinking_budget,
@@ -485,7 +485,7 @@ def handle_think(ctx: CommandContext) -> CommandResult:
 
 @registry.register("/effort", help_text="Глубина размышлений модели (low / medium / high / xhigh / off)", category="config", is_prefix=True)
 def handle_effort(ctx: CommandContext) -> CommandResult:
-    from config import get_reasoning_effort, set_reasoning_effort, get_thinking_display_label
+    from argent.config import get_reasoning_effort, set_reasoning_effort, get_thinking_display_label
     parts = ctx.user_input.strip().split()
     if len(parts) > 1:
         val = parts[1].lower()
@@ -533,7 +533,7 @@ def handle_effort(ctx: CommandContext) -> CommandResult:
 
 @registry.register("/rethink", help_text="Режим самопроверки модели (<rethink>): on / off / status", category="config", is_prefix=True)
 def handle_rethink(ctx: CommandContext) -> CommandResult:
-    from config import get_thinking_rethink, set_thinking_rethink, get_thinking_display_label
+    from argent.config import get_thinking_rethink, set_thinking_rethink, get_thinking_display_label
     parts = ctx.user_input.strip().split()
     if len(parts) > 1:
         sub = parts[1].lower()
@@ -559,42 +559,51 @@ def handle_rethink(ctx: CommandContext) -> CommandResult:
 
 @registry.register("/mcp", help_text="Управление серверами MCP", category="config", is_prefix=True)
 def handle_mcp(ctx: CommandContext) -> CommandResult:
-    from command_handler import _handle_mcp_command
+    from argent.command_handler import _handle_mcp_command
     _handle_mcp_command(ctx.user_input)
     return CommandResult.continue_loop()
 
 
 @registry.register("/telegram", help_text="Управление мостом Telegram", category="config", is_prefix=True)
 def handle_telegram(ctx: CommandContext) -> CommandResult:
-    from command_handler import _handle_telegram_command
+    from argent.command_handler import _handle_telegram_command
     _handle_telegram_command(ctx.user_input)
     return CommandResult.continue_loop()
 
 
 @registry.register("/kb", help_text="База знаний (Knowledge Base)", category="config", is_prefix=True)
 def handle_kb(ctx: CommandContext) -> CommandResult:
-    from command_handler import _handle_kb_command
+    from argent.command_handler import _handle_kb_command
     _handle_kb_command(ctx.user_input)
     return CommandResult.continue_loop()
 
 
 @registry.register("/lmtrust", aliases=["/blindspot"], help_text="Тесты доверия LMTrust", category="config", is_prefix=True)
 def handle_lmtrust(ctx: CommandContext) -> CommandResult:
-    from command_handler import _handle_lmtrust_command
+    from argent.command_handler import _handle_lmtrust_command
     _handle_lmtrust_command(ctx.user_input)
     return CommandResult.continue_loop()
 
 
-@registry.register("/jobs", help_text="Список фоновых задач", category="config")
+@registry.register("/jobs", help_text="Фоновые задачи: список, завершённые, вывод", category="config", is_prefix=True)
 def handle_jobs(ctx: CommandContext) -> CommandResult:
-    from tools.command_ops import list_background_commands
-    print_system(list_background_commands())
+    from argent.tools.command_ops import (
+        background_output, completed_background_commands, list_background_commands,
+    )
+    parts = ctx.user_input.strip().split()
+    arg = parts[1] if len(parts) > 1 else ""
+    if arg in ("done", "finished", "завершённые", "завершенные"):
+        print_system(completed_background_commands())
+    elif arg:
+        print_system(background_output(arg))
+    else:
+        print_system(list_background_commands())
     return CommandResult.continue_loop()
 
 
 @registry.register("/stop", help_text="Остановить фоновую задачу", category="config", is_prefix=True)
 def handle_stop(ctx: CommandContext) -> CommandResult:
-    from tools.command_ops import stop_background_command, list_background_commands
+    from argent.tools.command_ops import stop_background_command, list_background_commands
     parts = ctx.user_input.strip().split()
     if len(parts) < 2:
         print_system(list_background_commands())
@@ -606,14 +615,14 @@ def handle_stop(ctx: CommandContext) -> CommandResult:
 
 @registry.register("/aux", help_text="Настройка вспомогательной модели", category="config")
 def handle_aux(ctx: CommandContext) -> CommandResult:
-    from command_handler import _handle_aux_command
+    from argent.command_handler import _handle_aux_command
     _handle_aux_command()
     return CommandResult.continue_loop()
 
 
 @registry.register("/fast", help_text="Быстрый режим Fast-Path (инструменты без обращения к LLM)", category="config", is_prefix=True)
 def handle_fast(ctx: CommandContext) -> CommandResult:
-    from config import (
+    from argent.config import (
         get_fast_dispatch_backend, set_fast_dispatch_backend,
         get_fast_mode, set_fast_mode
     )
@@ -631,7 +640,7 @@ def handle_fast(ctx: CommandContext) -> CommandResult:
         set_fast_dispatch_backend(arg)
         print_system(f"Быстрый режим (Fast-Path): переключен на [bold cyan]{arg}[/bold cyan]")
     elif arg == "model":
-        from config import LEETH_BACKENDS, get_leeth_backend, set_leeth_backend
+        from argent.config import LEETH_BACKENDS, get_leeth_backend, set_leeth_backend
 
         choice = parts[2].lower() if len(parts) > 2 else ""
         if choice in LEETH_BACKENDS:
@@ -662,14 +671,14 @@ def handle_fast(ctx: CommandContext) -> CommandResult:
 
 @registry.register("/search", help_text="Настройки веб-поиска", category="config", is_prefix=True)
 def handle_search(ctx: CommandContext) -> CommandResult:
-    from command_handler import _handle_search_command
+    from argent.command_handler import _handle_search_command
     _handle_search_command(ctx.user_input)
     return CommandResult.continue_loop()
 
 
 @registry.register("/checkpoint", help_text="Создать страховочный git-чекпоинт", category="config", is_prefix=True)
 def handle_checkpoint(ctx: CommandContext) -> CommandResult:
-    from tools.misc_tools import git_checkpoint
+    from argent.tools.misc_tools import git_checkpoint
     parts = ctx.user_input.strip().split(maxsplit=1)
     msg = parts[1].strip() if len(parts) > 1 else "ручной чекпоинт"
     print_system(git_checkpoint(msg))
@@ -678,7 +687,7 @@ def handle_checkpoint(ctx: CommandContext) -> CommandResult:
 
 @registry.register("/audit", help_text="Аудит безопасности проекта", category="config", is_prefix=True)
 def handle_audit(ctx: CommandContext) -> CommandResult:
-    from tools.security_tools import audit_security
+    from argent.tools.security_tools import audit_security
     parts = ctx.user_input.strip().split(maxsplit=1)
     level = parts[1].strip() if len(parts) > 1 else "standard"
     print_system(audit_security(level=level))
@@ -687,7 +696,7 @@ def handle_audit(ctx: CommandContext) -> CommandResult:
 
 @registry.register("/doctor", help_text="Самодиагностика окружения и зависимостей", category="config")
 def handle_doctor(ctx: CommandContext) -> CommandResult:
-    from doctor import print_diagnostics
+    from argent.doctor import print_diagnostics
     print_diagnostics()
     return CommandResult.continue_loop()
 
@@ -695,7 +704,7 @@ def handle_doctor(ctx: CommandContext) -> CommandResult:
 
 @registry.register("/tokens", aliases=["/context"], help_text="Использование токенов контекста", category="config")
 def handle_tokens(ctx: CommandContext) -> CommandResult:
-    from config import get_current_model
+    from argent.config import get_current_model
     b = ctx.agent.get_context_breakdown()
     print_context_usage(b.get("total", 0), b.get("max", 1), get_current_model(), breakdown=b)
     return CommandResult.continue_loop()
@@ -733,7 +742,7 @@ def handle_key(ctx: CommandContext) -> CommandResult:
             set_wormsoft_api_key(k)
             print_system("WormSoft API Key сохранён.")
     elif prov == "claude":
-        from config import get_claude_workspace_id, set_claude_api_key, set_claude_workspace_id
+        from argent.config import get_claude_workspace_id, set_claude_api_key, set_claude_workspace_id
         words = ctx.user_input.strip().split()
         if len(words) > 1 and words[1].lower() == "workspace":
             # An organisation-level key needs the workspace named on every call.
@@ -749,7 +758,7 @@ def handle_key(ctx: CommandContext) -> CommandResult:
             set_claude_api_key(k)
             print_system("Claude API Key сохранён.")
     elif prov == "deepseek":
-        from config import set_deepseek_api_key
+        from argent.config import set_deepseek_api_key
         k = questionary.password("Введите DeepSeek API Key:").ask()
         if k:
             set_deepseek_api_key(k)
@@ -787,7 +796,7 @@ def handle_endpoint(ctx: CommandContext) -> CommandResult:
 
 @registry.register("/temperature", aliases=["/temp"], help_text="Настройка температуры генерации (0.0–2.0)", category="config", is_prefix=True)
 def handle_temperature(ctx: CommandContext) -> CommandResult:
-    from config import get_temperature, set_temperature
+    from argent.config import get_temperature, set_temperature
     parts = ctx.user_input.strip().split(maxsplit=1)
     if len(parts) > 1:
         val_str = parts[1].strip()
@@ -889,13 +898,13 @@ def _switch(ctx: CommandContext, get, set_, label: str, note_off: str = "") -> C
 
 @registry.register("/verbose", help_text="Переключить индикаторы статуса (спиннеры)", category="config", is_prefix=True)
 def handle_verbose(ctx: CommandContext) -> CommandResult:
-    from config import get_verbose_status, set_verbose_status
+    from argent.config import get_verbose_status, set_verbose_status
     return _switch(ctx, get_verbose_status, set_verbose_status, "Индикаторы статуса")
 
 
 @registry.register("/results", help_text="Полный вывод инструментов вместо сводки", category="config", is_prefix=True)
 def handle_results(ctx: CommandContext) -> CommandResult:
-    from config import get_show_tool_results, set_show_tool_results
+    from argent.config import get_show_tool_results, set_show_tool_results
     return _switch(ctx, get_show_tool_results, set_show_tool_results,
                    "Полный вывод результатов инструментов",
                    note_off="Остаётся строка-сводка; ошибки показываются целиком всегда.")
@@ -903,7 +912,7 @@ def handle_results(ctx: CommandContext) -> CommandResult:
 
 @registry.register("/debug", help_text="Подробные логи инструментов (режим отладки)", category="config", is_prefix=True)
 def handle_debug(ctx: CommandContext) -> CommandResult:
-    from config import get_debug_mode, set_debug_mode
+    from argent.config import get_debug_mode, set_debug_mode
     return _switch(ctx, get_debug_mode, set_debug_mode, "Подробные логи в чате (режим отладки)")
 
 
@@ -927,7 +936,7 @@ def _parse_token_count(raw: str):
                    help_text="Лимит токенов на один ответ (например 16384, 32768)",
                    category="config", is_prefix=True)
 def handle_max_tokens(ctx: CommandContext) -> CommandResult:
-    from config import get_max_generation_tokens, set_max_generation_tokens
+    from argent.config import get_max_generation_tokens, set_max_generation_tokens
     parts = ctx.user_input.strip().split(maxsplit=1)
     current = get_max_generation_tokens()
     if len(parts) < 2:
@@ -958,7 +967,7 @@ def handle_max_tokens(ctx: CommandContext) -> CommandResult:
 @registry.register("/sampling", aliases=["/params", "/sampler"], help_text="Тонкая настройка сэмплеров (top_p, min_p, top_k, temp, repeat_penalty)", category="config", is_prefix=True)
 def handle_sampling(ctx: CommandContext) -> CommandResult:
     from rich.table import Table
-    from config import (
+    from argent.config import (
         get_temperature, set_temperature,
         get_top_p, set_top_p,
         get_top_k, set_top_k,
@@ -970,7 +979,7 @@ def handle_sampling(ctx: CommandContext) -> CommandResult:
     args = ctx.user_input.strip().split()
     # /sampling preset <name>
     if len(args) > 1 and args[1].lower() in ("preset", "presets", "profile"):
-        from config import SAMPLING_PRESETS, apply_sampling_preset
+        from argent.config import SAMPLING_PRESETS, apply_sampling_preset
         if len(args) > 2:
             preset_name = args[2]
             try:
@@ -1142,7 +1151,7 @@ def handle_sampling(ctx: CommandContext) -> CommandResult:
         return CommandResult.continue_loop()
 
     if "пресет" in action.lower():
-        from config import apply_sampling_preset
+        from argent.config import apply_sampling_preset
         preset_choice = questionary.select(
             "Выберите готовый пресет сэмплирования:",
             choices=[
@@ -1235,7 +1244,7 @@ def handle_sampling(ctx: CommandContext) -> CommandResult:
 
 @registry.register("/snapshot", help_text="Режим снимков хода (compact, verbose, off)", category="config", is_prefix=True)
 def handle_snapshot(ctx: CommandContext) -> CommandResult:
-    from config import get_turn_snapshot_mode, set_turn_snapshot_mode
+    from argent.config import get_turn_snapshot_mode, set_turn_snapshot_mode
     parts = ctx.user_input.strip().split(maxsplit=1)
     if len(parts) > 1:
         arg = parts[1].strip().lower()
@@ -1269,7 +1278,7 @@ def handle_snapshot(ctx: CommandContext) -> CommandResult:
     is_prefix=True,
 )
 def handle_local_model(ctx: CommandContext) -> CommandResult:
-    from config import (
+    from argent.config import (
         is_local_agent_enabled, set_local_agent_enabled,
         get_local_model_tier, set_local_model_tier,
         get_local_model_path, set_local_model_path,
@@ -1278,7 +1287,7 @@ def handle_local_model(ctx: CommandContext) -> CommandResult:
         is_local_agent_cloud_fallback, set_local_agent_cloud_fallback,
         get_local_agent_timeout, set_local_agent_timeout,
     )
-    from local_inference import SystemResourceAuditor
+    from argent.local_inference import SystemResourceAuditor
 
     parts = ctx.user_input.strip().split()
     if len(parts) > 1:
@@ -1415,7 +1424,7 @@ def handle_local_model(ctx: CommandContext) -> CommandResult:
 
 @registry.register("/needle", help_text="Сопроцессор Needle 3 (быстрый локальный dispatch)", category="config", is_prefix=True)
 def handle_needle(ctx: CommandContext) -> CommandResult:
-    from config import (
+    from argent.config import (
         get_needle_enabled, set_needle_enabled,
         get_needle_fast_path, set_needle_fast_path,
     )
@@ -1508,7 +1517,7 @@ def handle_needle(ctx: CommandContext) -> CommandResult:
 
 @registry.register("/micro", help_text="Собственные микромодели и активное обучение (Fast-Path)", category="config", is_prefix=True)
 def handle_micro(ctx: CommandContext) -> CommandResult:
-    from config import (
+    from argent.config import (
         get_fast_dispatch_backend, set_fast_dispatch_backend,
         get_micromodel_enabled, set_micromodel_enabled,
     )
@@ -1623,19 +1632,28 @@ def handle_micro(ctx: CommandContext) -> CommandResult:
 @registry.register("/help", aliases=["/?"], help_text="Справка по доступным командам", category="config")
 def handle_help(ctx: CommandContext) -> CommandResult:
     from rich.table import Table
-    table = Table(title="Команды Argent CLI (Claude Code style)", border_style="dim #30363d", header_style="bold #79c0ff")
-    table.add_column("Команда", style="bold #58a6ff", min_width=18)
-    table.add_column("Категория", style="dim", min_width=10)
-    table.add_column("Описание", style="white")
 
+    # One table per category instead of one long table with a category column: the
+    # list is read to find ONE thing, and a repeated word in every row is noise.
+    # Same idea as /tools, which groups by `TOOL_GROUPS`.
     entries = sorted(registry._entries, key=lambda e: (e.category, e.name))
     seen = set()
+    by_category: dict[str, list] = {}
     for e in entries:
         if e.name in seen:
             continue
         seen.add(e.name)
-        aliases = f" [dim]({', '.join(e.aliases)})[/dim]" if e.aliases else ""
-        table.add_row(f"{e.name}{aliases}", e.category, e.help_text)
+        by_category.setdefault(e.category or "general", []).append(e)
 
-    console.print(table)
+    console.print("[bold]Команды Argent CLI[/bold] — по категориям; /tools показывает инструменты по группам")
+    for category, items in by_category.items():
+        table = Table(title=category, title_justify="left", title_style="bold #79c0ff",
+                      border_style="dim #30363d", header_style="bold #79c0ff")
+        table.add_column("Команда", style="bold #58a6ff", min_width=18)
+        table.add_column("Описание", style="white")
+        for e in items:
+            aliases = f" [dim]({', '.join(e.aliases)})[/dim]" if e.aliases else ""
+            table.add_row(f"{e.name}{aliases}", e.help_text)
+        console.print(table)
+
     return CommandResult.continue_loop()

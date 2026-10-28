@@ -10,8 +10,8 @@ import logging
 
 import pytest
 
-import mcp_client
-from mcp_client import SLOW_CALL_SECONDS, MCPServer
+import argent.mcp_client as mcp_client
+from argent.mcp_client import SLOW_CALL_SECONDS, MCPServer
 
 
 class _Transport:
@@ -52,17 +52,17 @@ class TestTimeout:
     def test_the_default_is_not_ten_minutes(self):
         """A frozen terminal with no output and no way to cancel is never the
         right default; an editor silent for two minutes is stuck, not busy."""
-        from config import get_mcp_call_timeout
+        from argent.config import get_mcp_call_timeout
         assert get_mcp_call_timeout() <= 300
 
     def test_configured_value_reaches_the_transport(self, monkeypatch):
-        monkeypatch.setattr("config.get_mcp_call_timeout", lambda: 45.0)
+        monkeypatch.setattr("argent.config.get_mcp_call_timeout", lambda: 45.0)
         srv = _server(OK)
         srv.call_tool("editor_status", {})
         assert srv.transport.timeouts == [45.0]
 
     def test_absurd_values_are_clamped(self, monkeypatch, tmp_path):
-        import config
+        import argent.config as config
         monkeypatch.setattr(config, "_get", lambda k, d=None: 0.1)
         assert config.get_mcp_call_timeout() == 5.0
         monkeypatch.setattr(config, "_get", lambda k, d=None: "nonsense")

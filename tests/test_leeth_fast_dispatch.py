@@ -16,7 +16,7 @@ module with its own calibrated queries: tests/test_leeth_mmbert_router.py.
 import os
 
 import pytest
-import config
+import argent.config as config
 from src.leeth.dispatcher import LeethDispatcher, dispatcher
 from src.leeth.runtime import leeth
 

@@ -18,7 +18,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional
 
-from logger import get_logger
+from argent.logger import get_logger
 from src.agent.workflow import roles
 
 log = get_logger("advisor")
@@ -53,7 +53,7 @@ class Advice:
 
 
 def resolve(main_provider: str, main_model: str) -> Target:
-    import config
+    import argent.config as config
     from src.agent.local_backend import classify
 
     model = (config.get_advisor_model() or "").strip()
@@ -70,7 +70,7 @@ def resolve(main_provider: str, main_model: str) -> Target:
 
 
 def _ask(target: Target, messages: list, timeout: float) -> str:
-    from providers import create_provider
+    from argent.providers import create_provider
     from src.agent import governor
     try:
         with governor.priority(governor.P_ADVISOR):

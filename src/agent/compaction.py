@@ -225,7 +225,7 @@ def collect_facts(messages: List[Dict]) -> Facts:
             for tc in m.get("tool_calls") or []:
                 name = (tc.get("function") or {}).get("name", "")
                 args = _tool_args(tc)
-                fp = args.get("file_path") or args.get("path") or ""
+                fp = args.get("path") or ""
                 if name == "read_file" and fp:
                     f.read.append(fp)
                 elif name in ("write_file", "replace_in_file") and fp:
@@ -366,11 +366,11 @@ def archive_transcript(messages: List[Dict], compression_id: int, root: Optional
         elif override:
             folder = Path(override)
         else:
-            from project_paths import project_root_or_cwd
+            from argent.project_paths import project_root_or_cwd
             folder = Path(project_root_or_cwd() or Path.cwd()) / ".argent" / "transcripts"
         folder.mkdir(parents=True, exist_ok=True)
         path = folder / f"compact-{datetime.now():%Y%m%d-%H%M%S}-{compression_id}.md"
-        from atomic_io import atomic_write_text
+        from argent.atomic_io import atomic_write_text
         atomic_write_text(path, render_transcript(rows))
         _prune(folder, path)
         return str(path)

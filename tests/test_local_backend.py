@@ -76,11 +76,17 @@ def test_tuner_lowers_and_restores_a_process(monkeypatch):
         monkeypatch.setattr(local_backend, "listener_pids", lambda port: [child.pid])
         before = psutil.Process(child.pid).nice()
         tuner = ServerTuner()
-        changed = tuner.lower(local_backend.Backend(True, "ollama", "localhost", 11434))
-        assert changed == [child.pid]
+        first = tuner.lower(local_backend.Backend(True, "ollama", "localhost", 11434))
+        assert child.pid in first
         assert psutil.Process(child.pid).nice() != before
-        assert tuner.lower(local_backend.Backend(True, "ollama", "localhost", 11434)) == [], "no double lowering"
-        assert tuner.restore() == 1
+        # A second call must not touch anything it already lowered. A NEW child of the
+        # same server may appear in between — Windows gives a console-host child — and
+        # lowering that one is the tuner working as intended, not a double lowering.
+        second = tuner.lower(local_backend.Backend(True, "ollama", "localhost", 11434))
+        assert child.pid not in second, "no double lowering"
+        assert not (set(second) & set(first)), "no double lowering"
+        saved = len(tuner._saved)
+        assert tuner.restore() == saved
         assert psutil.Process(child.pid).nice() == before
     finally:
         child.kill()

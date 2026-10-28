@@ -38,7 +38,7 @@ from src.telegram.render import (
 
 @pytest.fixture(autouse=True)
 def isolated_config(tmp_path, monkeypatch):
-    import config
+    import argent.config as config
     monkeypatch.setattr(config, "CONFIG_FILE", tmp_path / "cfg.json")
     monkeypatch.setattr(config, "_CONFIG_CACHE", None)
     config.set_telegram_chat_id("111222")
@@ -202,7 +202,7 @@ class TestSmallFormatters:
         assert tool_label("something_new", {})[1] == "something new"
 
     def test_every_real_tool_has_a_label(self):
-        import tools.schemas as schemas
+        import argent.tools.schemas as schemas
         names = set()
         for v in vars(schemas).values():
             if isinstance(v, list) and v and isinstance(v[0], dict):
@@ -530,7 +530,7 @@ class TestPanelAndCommands:
         assert "Состояние" in b.client.edit_message_text.call_args.kwargs["text"]
 
     def test_mode_change_from_the_panel(self):
-        from config import get_telegram_mode
+        from argent.config import get_telegram_mode
         b = make_bridge()
         self._cb(b, "ui:mode:shared")
         assert get_telegram_mode() == "shared"
@@ -658,7 +658,7 @@ class TestMirrorOfThePc:
         gate.set()
 
     def test_tui_approval_can_be_answered_from_the_phone(self, monkeypatch):
-        import config
+        import argent.config as config
         config.set_telegram_mode("shared")
         b = make_bridge()
         frontend = MagicMock()
@@ -676,7 +676,7 @@ class TestMirrorOfThePc:
         frontend.reply_approval.assert_called_once()
 
     def test_pc_answering_first_closes_the_phone_card(self, monkeypatch):
-        import config
+        import argent.config as config
         config.set_telegram_mode("shared")
         b = make_bridge()
         monkeypatch.setattr(type(b), "is_running", property(lambda self: True))
@@ -689,7 +689,7 @@ class TestMirrorOfThePc:
         assert b.client.edit_message_text.call_count == n
 
     def test_tui_questions_are_mirrored_with_buttons(self, monkeypatch):
-        import config
+        import argent.config as config
         config.set_telegram_mode("shared")
         b = make_bridge()
         frontend = MagicMock()
@@ -771,8 +771,8 @@ class TestAutomationNotice:
     def test_notification_is_html_and_escaped(self, monkeypatch):
         import json
         from src.automation import notify
-        monkeypatch.setattr("config.get_telegram_token", lambda: "1:T")
-        monkeypatch.setattr("config.get_telegram_chat_id", lambda: "42")
+        monkeypatch.setattr("argent.config.get_telegram_token", lambda: "1:T")
+        monkeypatch.setattr("argent.config.get_telegram_chat_id", lambda: "42")
         seen = {}
 
         class R:

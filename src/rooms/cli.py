@@ -636,7 +636,7 @@ def handle(arg: str, io: Io, *, library=None, runner=None, journal=None, record_
         io.out(HELP)
         return
     if sub == "spawn":
-        from config import get_rooms_spawn, set_rooms_spawn
+        from argent.config import get_rooms_spawn, set_rooms_spawn
         flag = rest.lower()
         if flag in ("on", "off"):
             set_rooms_spawn(flag == "on")
@@ -646,7 +646,7 @@ def handle(arg: str, io: Io, *, library=None, runner=None, journal=None, record_
                    "(через валидатор и твоё одобрение). Вкл: /rooms spawn on")
         return
     if sub == "hint":
-        from config import get_rooms_hint, set_rooms_hint
+        from argent.config import get_rooms_hint, set_rooms_hint
         flag = rest.lower()
         if flag in ("on", "off"):
             set_rooms_hint(flag == "on")

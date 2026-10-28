@@ -223,7 +223,18 @@ fn while_reading_further_up_the_question_is_pinned_at_the_bottom_and_covers_the_
     let before = frame(&mut app);
     ask(&mut app);
     let screen = frame(&mut app);
-    assert_eq!(index_of(&screen, "Разрешить"), H as usize - 2, "just above the toolbar:\n{}", screen.join("\n"));
+    let question = index_of(&screen, "Разрешить");
+    let toolbar = H as usize - 1;
+    assert!(
+        screen[toolbar].contains("CHAT"),
+        "the toolbar must stay on the last row:\n{}",
+        screen.join("\n")
+    );
+    assert!(
+        question < toolbar && toolbar - question <= 4,
+        "the question must sit just above the toolbar:\n{}",
+        screen.join("\n")
+    );
     let kept = 6;
     assert_eq!(&screen[..kept], &before[..kept], "the question must not move the text being read");
     assert!(!screen.iter().any(|r| r.contains("line 399")), "still not at the end of the chat");

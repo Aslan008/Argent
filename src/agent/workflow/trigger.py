@@ -10,7 +10,7 @@ from __future__ import annotations
 import re
 from typing import Optional
 
-from logger import get_logger
+from argent.logger import get_logger
 
 log = get_logger("ultracode")
 
@@ -38,7 +38,7 @@ def on_user_message(text: str) -> bool:
     from src.agent.workflow import runtime
     runtime.keyword_turn(False)
     try:
-        import config
+        import argent.config as config
         if not config.is_ultracode_keyword_enabled():
             return False
         from src.agent import plan_mode

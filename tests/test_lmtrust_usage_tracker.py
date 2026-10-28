@@ -10,7 +10,7 @@ import math
 
 import pytest
 
-from usage_tracker import SessionUsage, _fmt_cost, _short
+from argent.usage_tracker import SessionUsage, _fmt_cost, _short
 
 
 # ---------------------------------------------------------------------------

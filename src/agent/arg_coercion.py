@@ -24,7 +24,7 @@ message than a guess made in this file.
 
 import json
 
-from logger import get_logger
+from argent.logger import get_logger
 
 log = get_logger("tools")
 
@@ -34,7 +34,8 @@ _FALSE = {"false", "no", "n", "0", "off", "нет", "none", "null"}
 
 def _schema_types(tool_name: str) -> dict:
     """{parameter: declared type} for one tool, or {} if it has no schema."""
-    from tools.schemas import TOOL_SCHEMAS
+    from argent.tools.schemas import TOOL_SCHEMAS
+
     for schema in TOOL_SCHEMAS:
         fn = schema.get("function") or {}
         if fn.get("name") != tool_name:
@@ -160,7 +161,9 @@ TOOL_ARG_ALIASES: dict = {
         "new_text": "replacement_text",
         "replacement": "replacement_text",
         "replace": "replacement_text",
-        "path": "file_path",
+        "file_path": "path",
+        "file": "path",
+        "filename": "path",
         "start": "start_line",
         "from_line": "start_line",
         "start_lineno": "start_line",
@@ -169,31 +172,49 @@ TOOL_ARG_ALIASES: dict = {
         "end_lineno": "end_line",
     },
     "read_file": {
-        "path": "file_path",
-        "file": "file_path",
-        "filename": "file_path",
+        "file_path": "path",
+        "file": "path",
+        "filename": "path",
     },
     "write_file": {
-        "path": "file_path",
-        "file": "file_path",
-        "filename": "file_path",
+        "file_path": "path",
+        "file": "path",
+        "filename": "path",
         "text": "content",
     },
     "delete_file": {
-        "path": "file_path",
-        "file": "file_path",
+        "file_path": "path",
+        "file": "path",
     },
     "get_file_outline": {
-        "path": "file_path",
-        "file": "file_path",
+        "file_path": "path",
+        "file": "path",
     },
     "read_file_chunk": {
-        "path": "file_path",
-        "file": "file_path",
+        "file_path": "path",
+        "file": "path",
     },
     "multi_replace_in_file_chunk": {
-        "path": "file_path",
-        "file": "file_path",
+        "file_path": "path",
+        "file": "path",
+    },
+    "create_directory": {
+        "dir_path": "path",
+        "dir": "path",
+        "directory": "path",
+        "folder": "path",
+    },
+    "list_directory": {
+        "dir_path": "path",
+        "dir": "path",
+        "directory": "path",
+        "folder": "path",
+    },
+    "search_files": {
+        "dir_path": "path",
+        "dir": "path",
+        "directory": "path",
+        "query": "pattern",
     },
     "run_command": {
         "cmd": "command",
@@ -215,7 +236,9 @@ TOOL_ARG_ALIASES: dict = {
     # rewrite a call that was already valid.
     "grep_search": {
         "regex": "pattern",
-        "dir": "directory",
+        "dir": "path",
+        "directory": "path",
+        "dir_path": "path",
     },
     # browser_action carries every verb's payload in `text`; these are the names a
     # model reaches for first (eval_js code, an upload path, a wait timeout).

@@ -12,8 +12,8 @@ does not have. The user still chooses.
 
 import pytest
 
-import model_limits
-from model_limits import context_choices, detect_context_length
+import argent.model_limits as model_limits
+from argent.model_limits import context_choices, detect_context_length
 
 
 class _Response:

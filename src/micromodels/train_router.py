@@ -34,7 +34,7 @@ from src.micromodels.schema_dataset_generator import (
 )
 from src.micromodels.semantic_registry import SemanticToolRegistry
 from src.micromodels.tokenizer import BPETokenizer
-from logger import get_logger
+from argent.logger import get_logger
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = get_logger("train_universal_router")

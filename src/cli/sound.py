@@ -165,7 +165,7 @@ def _play_worker(sound_type: str = "done") -> None:
     # Acquire lock so audio hardware or driver calls are serialized
     with _PLAY_LOCK:
         try:
-            from config import get_sound_event
+            from argent.config import get_sound_event
             target = get_sound_event(st)
         except Exception:
             target = "system"
@@ -207,7 +207,7 @@ def play_sound(sound_type: str = "done", force: bool = False, async_play: bool =
 
     if not force:
         try:
-            from config import get_sound_notification, get_sound_event
+            from argent.config import get_sound_notification, get_sound_event
             if not get_sound_notification():
                 return
 
@@ -233,8 +233,8 @@ def play_sound(sound_type: str = "done", force: bool = False, async_play: bool =
 
 def handle_sound_command(command: str) -> None:
     """Unified handler for /sound CLI command with Rich table output."""
-    from ui import print_system, print_error, console
-    from config import (
+    from argent.ui import print_system, print_error, console
+    from argent.config import (
         get_sound_notification,
         set_sound_notification,
         get_sound_events_config,

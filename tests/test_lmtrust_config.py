@@ -5,7 +5,7 @@ boundary checks, override validation, and cache correctness."""
 import json
 import pytest
 
-import config
+import argent.config as config
 
 
 # ─── Fixtures ────────────────────────────────────────────────────────────────

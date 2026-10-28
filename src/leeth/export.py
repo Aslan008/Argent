@@ -18,7 +18,7 @@ import numpy as np
 import torch
 
 from src.leeth.model import LeethConfig, LeethModel, config_from_checkpoint
-from logger import get_logger
+from argent.logger import get_logger
 
 logger = get_logger("leeth_export")
 

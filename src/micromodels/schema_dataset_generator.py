@@ -19,8 +19,8 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from tools.schemas import TOOL_SCHEMAS
-from logger import get_logger
+from argent.tools.schemas import TOOL_SCHEMAS
+from argent.logger import get_logger
 
 logger = get_logger("schema_dataset_generator")
 
@@ -392,12 +392,6 @@ class UniversalDatasetGenerator:
             "run_command",
             ["{cmd}", "запусти {cmd}", "выполни команду {cmd}", "выполни {cmd}", "запусти в терминале {cmd}"],
             ["{cmd}", "run command {cmd}", "execute command {cmd}", "run {cmd}", "run in terminal {cmd}", "exec {cmd}"],
-            lambda: {"command": random.choice(sample_commands)}
-        )
-        add_t(
-            "run_admin_command",
-            ["выполни с правами админа {cmd}", "запусти от имени администратора {cmd}"],
-            ["run admin command {cmd}", "execute as administrator {cmd}"],
             lambda: {"command": random.choice(sample_commands)}
         )
         add_t(

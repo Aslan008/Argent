@@ -46,7 +46,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional, Tuple
 
-from logger import get_logger
+from argent.logger import get_logger
 
 log = get_logger("hooks")
 
@@ -118,7 +118,7 @@ def command_parts(command: str) -> List[str]:
     """The whole line and each of its chained commands (so `cd x && git push` is a `git push`)."""
     parts = [command.strip()]
     try:
-        from approval import _split_unquoted_chain_commands
+        from argent.approval import _split_unquoted_chain_commands
         parts += [p.strip() for p in _split_unquoted_chain_commands(command)]
     except Exception:
         pass
@@ -142,7 +142,7 @@ def file_digest(path: Path) -> str:
 
 def _trusted() -> dict:
     try:
-        import config
+        import argent.config as config
         return dict(config.get_trusted_files() or {})
     except Exception:
         return {}
@@ -150,7 +150,7 @@ def _trusted() -> dict:
 
 def trust_file(path: Path) -> str:
     """Remember the file's current content as trusted; returns its digest."""
-    import config
+    import argent.config as config
     digest = file_digest(path)
     trusted = _trusted()
     trusted[str(path.resolve())] = digest
@@ -217,7 +217,7 @@ class ShellHooks:
     def project_root(self) -> Path:
         if self._project_dir:
             return self._project_dir
-        from project_paths import project_root_or_cwd
+        from argent.project_paths import project_root_or_cwd
         return project_root_or_cwd()
 
     def files(self) -> List[Tuple[str, Path]]:

@@ -210,6 +210,11 @@ _POWERSHELL_PARAMS = re.compile(
 )
 # cmd-style conditional chaining; invalid in Windows PowerShell 5.1.
 _CMD_CHAIN = re.compile(r"(?<![|&])(?:&&|\|\|)(?![|&])")
+# Native tools whose status output goes to stderr. PowerShell turns that into a
+# NativeCommandError and a non-zero exit even when the tool succeeded (cargo
+# clean "Removed 0 files" looked like a failure). Cargo is safe in cmd; other
+# tools keep the existing PowerShell default.
+_NATIVE_TOOLS = re.compile(r"^\s*cargo\b", re.IGNORECASE)
 
 
 def choose_shell(command: str) -> str:
@@ -217,6 +222,8 @@ def choose_shell(command: str) -> str:
     if _POWERSHELL_HINTS.search(command) or _POWERSHELL_PARAMS.search(command):
         return "powershell"
     if _CMD_CHAIN.search(command):
+        return "cmd"
+    if _NATIVE_TOOLS.search(command):
         return "cmd"
     return "powershell"
 
@@ -343,6 +350,40 @@ def _try_wrap_inline_python_ps(cmd: str) -> str | None:
 
 
 
+def _ps_chain_to_semicolon(command: str) -> str:
+    """Windows PowerShell 5.1 has no `&&` (only PowerShell 7+ does).
+
+    The model naturally writes `cd <dir> && Get-ChildItem`, which choose_shell
+    routes to PowerShell because of the cmdlet — and PS 5.1 then rejects the
+    whole line. Outside quotes, `&&` becomes `;`: the common `cd ... && ...`
+    case keeps working; a rare failure-dependent chain loses the short-circuit
+    (the alternative is not running the command at all).
+    """
+    out = []
+    quote = None
+    i = 0
+    while i < len(command):
+        ch = command[i]
+        if quote:
+            out.append(ch)
+            if ch == quote:
+                quote = None
+            i += 1
+            continue
+        if ch in "'\"":
+            quote = ch
+            out.append(ch)
+            i += 1
+            continue
+        if command[i:i + 2] == "&&":
+            out.append(";")
+            i += 2
+            continue
+        out.append(ch)
+        i += 1
+    return "".join(out)
+
+
 def build_command_argv(command: str, shell_kind: str):
     """What to hand subprocess (shell=False) for the chosen shell.
 
@@ -366,7 +407,7 @@ def build_command_argv(command: str, shell_kind: str):
     quotes around its own executable path and fails to launch.
     """
     if shell_kind == "powershell":
-        cmd = command
+        cmd = _ps_chain_to_semicolon(command)
         # Inline python -c commands: wrap via Base64 stdin so PowerShell's argument
         # parser never strips quotes, breaks on semicolons, or splits multiline scripts.
         ps_inline = _try_wrap_inline_python_ps(cmd)

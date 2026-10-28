@@ -125,21 +125,21 @@ class TestDiagnosticCacheNormalization:
 
 class TestLspToolRegistryParity:
     def test_all_lsp_tools_registered_in_available_tools(self):
-        from tools.schemas import AVAILABLE_TOOLS
+        from argent.tools.schemas import AVAILABLE_TOOLS
         required_tools = ["grep_search"]
         for name in required_tools:
             assert name in AVAILABLE_TOOLS, f"Tool '{name}' must be in AVAILABLE_TOOLS"
             assert callable(AVAILABLE_TOOLS[name]), f"Tool '{name}' must be a callable function"
 
     def test_all_lsp_tools_have_schemas(self):
-        from tools.schemas import TOOL_SCHEMAS
+        from argent.tools.schemas import TOOL_SCHEMAS
         schema_names = {t["function"]["name"] for t in TOOL_SCHEMAS}
         required_tools = ["grep_search"]
         for name in required_tools:
             assert name in schema_names, f"Tool '{name}' must have a schema in TOOL_SCHEMAS"
 
     def test_full_available_tools_and_schemas_parity(self):
-        from tools.schemas import AVAILABLE_TOOLS, TOOL_SCHEMAS
+        from argent.tools.schemas import AVAILABLE_TOOLS, TOOL_SCHEMAS
         schema_names = {t["function"]["name"] for t in TOOL_SCHEMAS}
         function_names = set(AVAILABLE_TOOLS.keys())
         diff_schemas = schema_names - function_names
@@ -158,7 +158,7 @@ class TestInputValidationAndExistence:
     def test_code_navigation_on_a_missing_file_says_so(self, target):
         """The separate LSP tools are gone; their input validation lives in
         grep_search(target=...), which must refuse a path that does not exist."""
-        from tools.search_ops import grep_search
+        from argent.tools.search_ops import grep_search
         res = grep_search(path="non_existent_xyz.py", symbol="foo", target=target,
                           line=1, column=0)
         assert "Error: Path" in res

@@ -12,10 +12,9 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-import tools.command_ops as cmd_ops
-from tools.command_ops import (
+import argent.tools.command_ops as cmd_ops
+from argent.tools.command_ops import (
     run_command,
-    run_admin_command,
     start_background_command,
     read_background_command,
     stop_background_command,
@@ -28,8 +27,8 @@ from tools.command_ops import (
 @pytest.fixture(autouse=True)
 def auto_approve(monkeypatch):
     """Auto-approve all commands in tests."""
-    monkeypatch.setattr("tools.command_ops.request_approval", lambda *a, **k: True)
-    monkeypatch.setattr("tools.command_ops.assess_command_risk", lambda c: ("safe", []))
+    monkeypatch.setattr("argent.tools.command_ops.request_approval", lambda *a, **k: True)
+    monkeypatch.setattr("argent.tools.command_ops.assess_command_risk", lambda c: ("safe", []))
     with ACTIVE_PROCESSES_LOCK:
         ACTIVE_PROCESSES.clear()
     yield
@@ -64,8 +63,8 @@ class TestCommandBlindSpotsLMTrust:
         out = run_command("python -c \"print('hi')\"", cwd=str(bad_dir))
         assert "Error" in out or "not exist" in out.lower()
 
-    # 3. L1 x D3: run_admin_command MUST decode UTF-16LE PowerShell redirection output
-    def test_l1_run_admin_command_decodes_utf16le(self, monkeypatch):
+    # 3. L1 x D3: elevation MUST decode UTF-16LE PowerShell redirection output
+    def test_l1_elevated_command_decodes_utf16le(self, monkeypatch):
         import base64
         import re
 
@@ -87,7 +86,7 @@ class TestCommandBlindSpotsLMTrust:
             raising=False,
         )
 
-        result = run_admin_command("Write-Host 'test'")
+        result = cmd_ops.run_command("Write-Host 'test'", admin=True)
         assert "Успешная операция админа: OK" in result
         assert "\x00" not in result  # Must not contain raw null bytes from bad UTF-8 decode
 
@@ -145,7 +144,7 @@ class TestCommandBlindSpotsLMTrust:
 
     # 8. L1 x D7: schemas.py for run_command documents cwd and timeout
     def test_l1_schema_documents_cwd_and_timeout(self):
-        from tools.schemas import TOOL_SCHEMAS
+        from argent.tools.schemas import TOOL_SCHEMAS
         schema = next(t["function"] for t in TOOL_SCHEMAS if t["function"]["name"] == "run_command")
         props = schema["parameters"]["properties"]
         assert "cwd" in props, "run_command schema should document 'cwd' parameter"

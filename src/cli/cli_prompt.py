@@ -621,7 +621,7 @@ def _fmt_session_uptime() -> str:
 def _thinking_segment() -> str:
     """Compact thinking label for the status bar (e.g. 'think:ON/high')."""
     try:
-        from config import get_thinking_display_label
+        from argent.config import get_thinking_display_label
         lbl = get_thinking_display_label()
         return f"think:{lbl}" if lbl else ""
     except Exception:
@@ -640,7 +640,7 @@ def build_bottom_toolbar(agent, ui_state):
             provider = getattr(agent, "provider", "?")
             model = getattr(agent, "model_name", "?")
             try:
-                from claude_catalog import label_for
+                from argent.claude_catalog import label_for
                 model = label_for(provider, model)
             except Exception:
                 pass
@@ -661,7 +661,7 @@ def build_bottom_toolbar(agent, ui_state):
             # Running session token/cost total, once anything has been spent.
             usage_str = ""
             try:
-                from usage_tracker import usage as session_usage
+                from argent.usage_tracker import usage as session_usage
                 if session_usage.requests:
                     usage_str = f"| {session_usage.format_session()} "
             except Exception:
@@ -737,7 +737,7 @@ def build_prompt_session(get_commands, agent, ui_state, history_path=None) -> Pr
         history = InMemoryHistory()
 
     from prompt_toolkit.styles import Style
-    from ui import c
+    from argent.ui import c
 
     try:
         sym_color = _to_pt_style(c.get("user_prompt_symbol", "#58a6ff"))

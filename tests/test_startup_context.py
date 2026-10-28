@@ -13,8 +13,8 @@ said so.
 
 import pytest
 
-import main as main_module
-from main import carried_over_memory, offer_previous_context
+import argent.main as main_module
+from argent.main import carried_over_memory, offer_previous_context
 
 
 class _Agent:
@@ -27,7 +27,7 @@ class _Agent:
 @pytest.fixture
 def memory(monkeypatch, tmp_path):
     """A real MemoryManager pointed at a scratch file."""
-    import memory_manager
+    import argent.memory_manager as memory_manager
 
     monkeypatch.setattr(memory_manager, "resolve_memory_file",
                         lambda: tmp_path / "memory.json")
@@ -39,8 +39,8 @@ def memory(monkeypatch, tmp_path):
 @pytest.fixture
 def ui(monkeypatch):
     printed = []
-    monkeypatch.setattr("ui.print_system", lambda t, *a, **k: printed.append(str(t)))
-    monkeypatch.setattr("ui.print_error", lambda t, *a, **k: printed.append(str(t)))
+    monkeypatch.setattr("argent.ui.print_system", lambda t, *a, **k: printed.append(str(t)))
+    monkeypatch.setattr("argent.ui.print_error", lambda t, *a, **k: printed.append(str(t)))
     return printed
 
 

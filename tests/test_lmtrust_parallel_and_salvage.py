@@ -51,15 +51,15 @@ class TestL1L2ParallelSafetyGates:
         assert precompute_readonly_parallel(tool_calls, tools) is None
 
     def test_resolve_args_filters_hallucinated_and_detects_missing(self):
-        def sample_tool(file_path: str, start_line: int = 1):
+        def sample_tool(path: str, start_line: int = 1):
             return "content"
 
         # Hallucinated extra param 'random_arg' filtered out
-        args = {"file_path": "test.py", "random_arg": "hallucination"}
+        args = {"path": "test.py", "random_arg": "hallucination"}
         resolved = _resolve_args(sample_tool, args)
-        assert resolved == {"file_path": "test.py"}
+        assert resolved == {"path": "test.py"}
 
-        # Missing required param 'file_path' returns None
+        # Missing required param 'path' returns None
         assert _resolve_args(sample_tool, {"start_line": 5}) is None
 
 
@@ -69,9 +69,9 @@ class TestL1L2ParallelSafetyGates:
 
 class TestL3L7L9ParallelExecutionAndDedup:
     def test_concurrent_execution_preserves_indices_and_handles_errors(self):
-        def tool_a(file_path: str):
+        def tool_a(path: str):
             time.sleep(0.02)
-            return f"read: {file_path}"
+            return f"read: {path}"
 
         def tool_b(query: str):
             time.sleep(0.02)
@@ -82,7 +82,7 @@ class TestL3L7L9ParallelExecutionAndDedup:
             "grep_search": tool_b,
         }
         tool_calls = [
-            {"function": {"name": "read_file", "arguments": {"file_path": "main.py"}}},
+            {"function": {"name": "read_file", "arguments": {"path": "main.py"}}},
             {"function": {"name": "grep_search", "arguments": {"query": "TODO"}}},
         ]
 
@@ -93,16 +93,16 @@ class TestL3L7L9ParallelExecutionAndDedup:
 
     def test_dedup_callback_short_circuits_read_file(self):
         tools = {
-            "read_file": lambda file_path: "from disk",
+            "read_file": lambda path: "from disk",
             "list_directory": lambda path: "dir contents",
         }
         tool_calls = [
-            {"function": {"name": "read_file", "arguments": {"file_path": "cached.py"}}},
+            {"function": {"name": "read_file", "arguments": {"path": "cached.py"}}},
             {"function": {"name": "list_directory", "arguments": {"path": "."}}},
         ]
 
         def fake_dedup(args):
-            if args.get("file_path") == "cached.py":
+            if args.get("path") == "cached.py":
                 return "[CACHED IN CONTEXT]"
             return None
 

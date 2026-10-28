@@ -29,7 +29,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from src.leeth.dataset_generator import LeethSample
-from logger import get_logger
+from argent.logger import get_logger
 
 logger = get_logger("leeth_feedback")
 
@@ -65,7 +65,7 @@ def _is_enabled() -> bool:
     if "pytest" in sys.modules:
         return False
     try:
-        import config
+        import argent.config as config
         return config.get_leeth_feedback_enabled()
     except Exception:
         return True

@@ -17,8 +17,8 @@ from types import SimpleNamespace
 from unittest.mock import patch
 import pytest
 
-import memory_manager
-from memory_manager import MemoryManager, _MemoryProxy
+import argent.memory_manager as memory_manager
+from argent.memory_manager import MemoryManager, _MemoryProxy
 
 
 @pytest.fixture

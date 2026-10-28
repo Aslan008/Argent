@@ -8,7 +8,7 @@ import os
 from pathlib import Path
 
 # --- Critical mocking: stub dependencies before importing the tools ---
-import memory_manager
+import argent.memory_manager as memory_manager
 
 
 class FakeMemory:
@@ -21,7 +21,7 @@ class FakeMemory:
 
 @pytest.fixture(autouse=True)
 def _stub_deps(monkeypatch):
-    import memory_manager
+    import argent.memory_manager as memory_manager
 
     class FakeMemory:
         def add_completed(self, *a, **k):
@@ -58,8 +58,8 @@ def search_tmp(tmp_path_factory):
     shutil.rmtree(d, ignore_errors=True)
 
 
-from tools.search_ops import search_files, grep_search, _python_grep_search
-from tools._helpers import (
+from argent.tools.search_ops import search_files, grep_search, _python_grep_search
+from argent.tools._helpers import (
     _maybe_unescape_content,
     _strip_read_line_numbers,
     _shift_indent,

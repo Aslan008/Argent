@@ -1,6 +1,6 @@
 import pytest
 from hypothesis import given, strategies as st
-from tools.search_ops import _normalize_grep_pattern, grep_search, _python_grep_search
+from argent.tools.search_ops import _normalize_grep_pattern, grep_search, _python_grep_search
 from src.agent.parser import normalize_tool_params, _PARAM_ALIASES
 
 

@@ -1,8 +1,8 @@
 import os
-from skill_manager import skill_manager
-from ui import console, print_markdown, print_error, print_system
-from config import get_current_model
-from providers import create_provider
+from argent.skill_manager import skill_manager
+from argent.ui import console, print_markdown, print_error, print_system
+from argent.config import get_current_model
+from argent.providers import create_provider
 
 def command_audit(*args):
     """

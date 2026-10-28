@@ -1,6 +1,6 @@
 import re
-from skill_manager import skill_manager
-from ui import console
+from argent.skill_manager import skill_manager
+from argent.ui import console
 
 # Keywords that trigger the Expert Architect skill
 ARCHITECT_KEYWORDS = [

@@ -44,7 +44,7 @@ def last_user_text(messages) -> str:
 def room_hint(messages, library=None) -> Optional[str]:
     """The line to add to this call's tail, or None."""
     try:
-        from config import get_rooms_hint
+        from argent.config import get_rooms_hint
         if not get_rooms_hint():
             return None
         text = last_user_text(messages).strip()

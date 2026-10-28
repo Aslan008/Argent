@@ -61,6 +61,7 @@ def tiny_cfg():
 
 @pytest.fixture
 def tiny_model(tiny_cfg):
+    pytest.importorskip("transformers", reason="Leeth tests build a real ModernBERT backbone — pip install transformers")
     import torch
     from transformers import ModernBertConfig, ModernBertModel
 

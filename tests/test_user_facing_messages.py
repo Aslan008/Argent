@@ -16,9 +16,9 @@ import re
 
 import pytest
 
-import ui
-from command_handler import known_commands, unknown_command_message
-from error_help import explain_error
+import argent.ui as ui
+from argent.command_handler import known_commands, unknown_command_message
+from argent.error_help import explain_error
 
 
 class TestErrorPrefix:
@@ -80,7 +80,7 @@ class TestExplanations:
 
     def test_every_explanation_is_in_one_language(self):
         """The point of the exercise: no mixed-language advice."""
-        import error_help
+        import argent.error_help as error_help
         for _, text in error_help._EXPLANATIONS:
             assert re.search(r"[а-яА-ЯёЁ]", text), text
 
@@ -127,7 +127,10 @@ class TestOneLanguage:
 
         offenders = []
         for name in ("main.py", "command_handler.py"):
-            text = (root / name).read_text(encoding="utf-8")
+            path = root / name
+            if not path.exists():                   # these modules live under argent/ now
+                path = root / "argent" / name
+            text = path.read_text(encoding="utf-8")
             for m in re.finditer(r'print_(?:system|error)\(\s*f?(["\'])([^"\']{8,120})\1', text):
                 s = m.group(2)
                 if not cyrillic.search(s) and english.search(s):

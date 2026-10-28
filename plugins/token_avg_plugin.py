@@ -9,7 +9,7 @@ Usage:
   /token_avg --reset  Reset the session token counters (new session from here).
 """
 
-from ui import console
+from argent.ui import console
 from rich.table import Table
 from rich.panel import Panel
 
@@ -40,7 +40,7 @@ def command_token_avg(*args):
     # Optional flags: /token_avg --reset
     if any(a in ("--reset", "-r", "reset") for a in args):
         try:
-            from usage_tracker import usage as session_usage
+            from argent.usage_tracker import usage as session_usage
             session_usage.reset()
             console.print("[green]Session token counters reset.[/green]")
             return
@@ -49,7 +49,7 @@ def command_token_avg(*args):
             return
 
     try:
-        from usage_tracker import usage as session_usage
+        from argent.usage_tracker import usage as session_usage
     except Exception as e:
         console.print(f"[red]Could not read session usage: {e}[/red]")
         return

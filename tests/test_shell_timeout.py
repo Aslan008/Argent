@@ -107,7 +107,7 @@ class TestValidationNeverInstalls:
         without a local tsc simply goes unchecked."""
         from pathlib import Path
 
-        source = (Path(__file__).resolve().parents[1] / "tools" / "_helpers.py").read_text(
+        source = (Path(__file__).resolve().parents[1] / "argent" / "tools" / "_helpers.py").read_text(
             encoding="utf-8")
         assert '"npx", "--no-install", "tsc"' in source
         assert '"--project"' in source
@@ -115,7 +115,7 @@ class TestValidationNeverInstalls:
     def test_ts_validation_without_tsconfig_skips(self, tmp_path):
         """If there is no tsconfig.json in the tree, TS validation is skipped
         to avoid false syntax errors on isolated files."""
-        from tools._helpers import _validate_code_syntax
+        from argent.tools._helpers import _validate_code_syntax
 
         ts_file = tmp_path / "app.ts"
         ts_file.write_text("const x: number = 42;", encoding="utf-8")
@@ -125,7 +125,7 @@ class TestValidationNeverInstalls:
         """Validates that a scoped .tsconfig.argent-check.json is created and cleaned up."""
         import json
         from unittest.mock import MagicMock
-        from tools._helpers import _validate_code_syntax
+        from argent.tools._helpers import _validate_code_syntax
 
         # Create tsconfig.json in project root
         project_root = tmp_path / "my_project"
@@ -149,7 +149,7 @@ class TestValidationNeverInstalls:
                 temp_config_content.update(json.loads(temp_cfg.read_text(encoding="utf-8")))
             return MagicMock(returncode=0, stdout="", stderr="")
 
-        monkeypatch.setattr("tools._helpers.run_text", fake_run_text)
+        monkeypatch.setattr("argent.tools._helpers.run_text", fake_run_text)
 
         err = _validate_code_syntax(str(ts_file))
         assert err is None
@@ -161,7 +161,7 @@ class TestValidationNeverInstalls:
     def test_ts_validation_filters_unrelated_errors(self, tmp_path, monkeypatch):
         """Pre-existing errors in other project files should not block edits to target file."""
         from unittest.mock import MagicMock
-        from tools._helpers import _validate_code_syntax
+        from argent.tools._helpers import _validate_code_syntax
 
         project_root = tmp_path / "proj"
         project_root.mkdir()
@@ -177,13 +177,13 @@ class TestValidationNeverInstalls:
                 stderr="",
             )
 
-        monkeypatch.setattr("tools._helpers.run_text", fake_run_text)
+        monkeypatch.setattr("argent.tools._helpers.run_text", fake_run_text)
         assert _validate_code_syntax(str(ts_file)) is None
 
     def test_ts_validation_reports_target_file_syntax_errors(self, tmp_path, monkeypatch):
         """Syntax errors in the edited target file (TS1xxx) are reported."""
         from unittest.mock import MagicMock
-        from tools._helpers import _validate_code_syntax
+        from argent.tools._helpers import _validate_code_syntax
 
         project_root = tmp_path / "proj"
         project_root.mkdir()
@@ -198,7 +198,7 @@ class TestValidationNeverInstalls:
                 stderr="",
             )
 
-        monkeypatch.setattr("tools._helpers.run_text", fake_run_text)
+        monkeypatch.setattr("argent.tools._helpers.run_text", fake_run_text)
         err = _validate_code_syntax(str(ts_file))
         assert err is not None
         assert "TypeScript Syntax Error" in err
@@ -207,7 +207,7 @@ class TestValidationNeverInstalls:
     def test_ts_validation_ignores_semantic_type_errors(self, tmp_path, monkeypatch):
         """Semantic type mismatches (TS2xxx) in-flight during multi-file refactoring do not block."""
         from unittest.mock import MagicMock
-        from tools._helpers import _validate_code_syntax
+        from argent.tools._helpers import _validate_code_syntax
 
         project_root = tmp_path / "proj"
         project_root.mkdir()
@@ -222,14 +222,14 @@ class TestValidationNeverInstalls:
                 stderr="",
             )
 
-        monkeypatch.setattr("tools._helpers.run_text", fake_run_text)
+        monkeypatch.setattr("argent.tools._helpers.run_text", fake_run_text)
         err = _validate_code_syntax(str(ts_file))
         assert err is None
 
     def test_ts_validation_ignores_unused_variable_errors(self, tmp_path, monkeypatch):
         """Unused variable/parameter errors (TS6xxx) during incremental editing do not block."""
         from unittest.mock import MagicMock
-        from tools._helpers import _validate_code_syntax
+        from argent.tools._helpers import _validate_code_syntax
 
         project_root = tmp_path / "proj"
         project_root.mkdir()
@@ -244,6 +244,6 @@ class TestValidationNeverInstalls:
                 stderr="",
             )
 
-        monkeypatch.setattr("tools._helpers.run_text", fake_run_text)
+        monkeypatch.setattr("argent.tools._helpers.run_text", fake_run_text)
         err = _validate_code_syntax(str(ts_file))
         assert err is None

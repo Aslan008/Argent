@@ -28,7 +28,7 @@ import threading
 import time
 from typing import Optional
 
-from logger import get_logger
+from argent.logger import get_logger
 
 log = get_logger("pty")
 
@@ -45,9 +45,9 @@ class PtyUnavailable(RuntimeError):
 def available() -> bool:
     try:
         if os.name == "nt":
-            import winpty  # noqa: F401
+            import winpty
         else:
-            import pty  # noqa: F401
+            import pty
         return True
     except Exception:
         return False

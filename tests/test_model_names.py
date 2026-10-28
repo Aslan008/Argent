@@ -2,8 +2,8 @@
 
 import pytest
 
-from claude_catalog import ModelEntry, sort_newest_first
-from model_names import (
+from argent.claude_catalog import ModelEntry, sort_newest_first
+from argent.model_names import (
     canonical_claude, fold, match_known, parse_claude_name, resolve_claude, suggest,
 )
 

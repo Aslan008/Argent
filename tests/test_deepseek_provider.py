@@ -1,9 +1,9 @@
 import pytest
 from unittest.mock import patch, MagicMock
 
-import config
-import providers
-from providers import DeepSeekProvider, _is_openai_reasoning_model
+import argent.config as config
+import argent.providers as providers
+from argent.providers import DeepSeekProvider, _is_openai_reasoning_model
 from src.agent.strategy import get_model_strategy, CloudStrategy
 from src.agent.critic import parse_critic_model
 
@@ -60,24 +60,26 @@ class TestDeepSeekValidation:
 
 
 class TestDeepSeekListModels:
-    def test_falls_back_to_curated_list_without_network(self):
+    def test_falls_back_to_current_models_without_network(self):
         p = DeepSeekProvider(api_key=None, base_url="https://api.deepseek.com")
         models = p.list_models()
-        assert "deepseek-chat" in models
-        assert "deepseek-reasoner" in models
+        assert "deepseek-flash" in models
+        assert "deepseek-v4-pro" in models
+        assert "deepseek-chat" not in models
+        assert "deepseek-reasoner" not in models
 
     def test_fetches_models_from_api_endpoint(self):
         p = DeepSeekProvider(api_key="sk-ds-test", base_url="https://api.deepseek.com")
         mock_client = MagicMock()
         mock_model_1 = MagicMock()
-        mock_model_1.id = "deepseek-chat"
+        mock_model_1.id = "deepseek-flash"
         mock_model_2 = MagicMock()
-        mock_model_2.id = "deepseek-reasoner"
+        mock_model_2.id = "deepseek-v4-pro"
         mock_client.models.list.return_value = MagicMock(data=[mock_model_1, mock_model_2])
 
         with patch.object(p, "_get_client", return_value=mock_client):
             models = p.list_models()
-            assert models == ["deepseek-chat", "deepseek-reasoner"]
+            assert models == ["deepseek-flash", "deepseek-v4-pro"]
 
 
 class TestDeepSeekErrorHandling:

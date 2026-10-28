@@ -21,7 +21,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Callable, Optional
 
-from logger import get_logger
+from argent.logger import get_logger
 from src.agent.wait_conditions import (
     ConditionError, MAX_TIMEOUT_SECONDS, condition_wake_message, evaluate,
 )
@@ -55,7 +55,7 @@ class Watch:
 
 def _registry():
     try:
-        from tools import ACTIVE_PROCESSES, ACTIVE_PROCESSES_LOCK
+        from argent.tools import ACTIVE_PROCESSES, ACTIVE_PROCESSES_LOCK
     except ImportError:
         return None, None
     return ACTIVE_PROCESSES, ACTIVE_PROCESSES_LOCK

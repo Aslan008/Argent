@@ -22,9 +22,9 @@ import threading
 from pathlib import Path
 import pytest
 
-from tools.lazy_registry import LazyToolProxy, LazyToolRegistry
-from tools.search_ops import search_files
-from prompt_compressor import compress_tool_result, PRESERVE_CONTEXT_TOOLS
+from argent.tools.lazy_registry import LazyToolProxy, LazyToolRegistry
+from argent.tools.search_ops import search_files
+from argent.prompt_compressor import compress_tool_result, PRESERVE_CONTEXT_TOOLS
 
 
 # ============================================================================
@@ -34,8 +34,8 @@ from prompt_compressor import compress_tool_result, PRESERVE_CONTEXT_TOOLS
 class TestL0Smoke:
     def test_lazy_registry_smoke(self):
         reg = LazyToolRegistry({
-            "read_file": ("tools.file_ops", "read_file"),
-            "search_files": ("tools.search_ops", "search_files"),
+            "read_file": ("argent.tools.file_ops", "read_file"),
+            "search_files": ("argent.tools.search_ops", "search_files"),
         })
         assert "read_file" in reg
         assert "search_files" in reg
@@ -44,7 +44,7 @@ class TestL0Smoke:
     def test_search_files_smoke(self, tmp_path):
         f = tmp_path / "smoke.txt"
         f.write_text("Argent speedup verification", encoding="utf-8")
-        out = search_files(directory=str(tmp_path), pattern="*.txt", content_contains="speedup")
+        out = search_files(path=str(tmp_path), pattern="*.txt", content_contains="speedup")
         assert "smoke.txt" in out
         assert "speedup" in out
 
@@ -60,13 +60,13 @@ class TestL0Smoke:
 @pytest.mark.lmtrust(layer="L1", direction="D7")
 class TestL1Contract:
     def test_lazy_proxy_callable_and_introspection(self):
-        proxy = LazyToolProxy("tools.file_ops", "read_file")
+        proxy = LazyToolProxy("argent.tools.file_ops", "read_file")
         # 1. Callable contract
         assert callable(proxy)
 
         # 2. inspect.signature resolution via __wrapped__
         sig = inspect.signature(proxy)
-        assert "file_path" in sig.parameters
+        assert "path" in sig.parameters
 
         # 3. Docstring access
         doc = proxy.__doc__
@@ -74,14 +74,14 @@ class TestL1Contract:
 
         # 4. Attribute delegation via __getattr__
         assert hasattr(proxy, "__annotations__")
-        assert "file_path" in proxy.__annotations__
+        assert "path" in proxy.__annotations__
         assert hasattr(proxy, "__code__")
-        assert "file_path" in proxy.__code__.co_varnames
+        assert "path" in proxy.__code__.co_varnames
 
     def test_lazy_registry_dict_contract(self):
         reg = LazyToolRegistry({
-            "read_file": ("tools.file_ops", "read_file"),
-            "search_files": ("tools.search_ops", "search_files"),
+            "read_file": ("argent.tools.file_ops", "read_file"),
+            "search_files": ("argent.tools.search_ops", "search_files"),
         })
         # Must support full dict contract without eagerly loading
         proxy = reg["read_file"]
@@ -108,7 +108,7 @@ class TestL1Coordinates:
         suffix = "B" * 60
         f.write_text(f"{prefix}\n{target}\n{suffix}\n", encoding="utf-8")
 
-        res = search_files(directory=str(tmp_path), pattern="*.py", content_contains=target)
+        res = search_files(path=str(tmp_path), pattern="*.py", content_contains=target)
         assert "coordinates.py" in res
         assert ">> ..." in res
         assert target in res
@@ -133,21 +133,21 @@ class TestL2EdgeCases:
         f3.write_text("export_path = $env:ARGENT_HOME\n", encoding="utf-8")
 
         # 1. Square brackets [0] (in regex [0] is char class '0')
-        res1 = search_files(directory=str(tmp_path), pattern="*.py", content_contains="matrix[0]")
+        res1 = search_files(path=str(tmp_path), pattern="*.py", content_contains="matrix[0]")
         assert "array_access.py" in res1
         assert "function_call.py" not in res1
 
         # 2. Parentheses (x, y)
-        res2 = search_files(directory=str(tmp_path), pattern="*.py", content_contains="(x, y)")
+        res2 = search_files(path=str(tmp_path), pattern="*.py", content_contains="(x, y)")
         assert "function_call.py" in res2
         assert "array_access.py" not in res2
 
         # 3. Dollar sign $env
-        res3 = search_files(directory=str(tmp_path), pattern="*.py", content_contains="$env:ARGENT")
+        res3 = search_files(path=str(tmp_path), pattern="*.py", content_contains="$env:ARGENT")
         assert "env_var.py" in res3
 
         # 4. Unclosed bracket '[' which crashes regex parser if not using -F
-        res4 = search_files(directory=str(tmp_path), pattern="*.py", content_contains="matrix[")
+        res4 = search_files(path=str(tmp_path), pattern="*.py", content_contains="matrix[")
         assert "array_access.py" in res4
 
 
@@ -168,14 +168,14 @@ class TestL3Parity:
         (sub / "file3.txt").write_text("# Target query in text\ngamma = 3\n", encoding="utf-8")
 
         # Search with Ripgrep active
-        res_rg = search_files(directory=str(tmp_path), pattern="*.py", content_contains="Target query")
+        res_rg = search_files(path=str(tmp_path), pattern="*.py", content_contains="Target query")
 
         # Disable ripgrep by simulating absence of binary
         import shutil
         monkeypatch.setattr(shutil, "which", lambda cmd: None)
 
         # Search with Python fallback
-        res_py = search_files(directory=str(tmp_path), pattern="*.py", content_contains="Target query")
+        res_py = search_files(path=str(tmp_path), pattern="*.py", content_contains="Target query")
 
         assert "file1.py" in res_rg and "file1.py" in res_py
         assert "file2.py" in res_rg and "file2.py" in res_py
@@ -198,7 +198,7 @@ class TestL4Adversarial:
             (tmp_path / f"test_{i}.py").write_text(f"# Standard file content {i}\n", encoding="utf-8")
 
         t0 = time.perf_counter()
-        res = search_files(directory=str(tmp_path), pattern="*.py", content_contains="NON_EXISTENT_TOKEN_12345")
+        res = search_files(path=str(tmp_path), pattern="*.py", content_contains="NON_EXISTENT_TOKEN_12345")
         elapsed = time.perf_counter() - t0
 
         assert "No files found matching" in res
@@ -228,7 +228,7 @@ class TestL4bFallback:
 
         monkeypatch.setattr(subprocess, "run", mock_failing_rg)
 
-        res = search_files(directory=str(tmp_path), pattern="*.py", content_contains="critical_fallback_string")
+        res = search_files(path=str(tmp_path), pattern="*.py", content_contains="critical_fallback_string")
         assert "target.py" in res
         assert "critical_fallback_string" in res
 
@@ -239,7 +239,7 @@ class TestL4bFallback:
 @pytest.mark.lmtrust(layer="L5", direction="D2")
 class TestL5State:
     def test_lazy_tool_proxy_state_lifecycle(self):
-        proxy = LazyToolProxy("tools.file_ops", "get_file_outline")
+        proxy = LazyToolProxy("argent.tools.file_ops", "get_file_outline")
         assert proxy._target is None
         assert "unloaded" in repr(proxy)
 
@@ -260,7 +260,7 @@ class TestL5State:
 @pytest.mark.lmtrust(layer="L6", direction="D6")
 class TestL6Concurrency:
     def test_concurrent_proxy_resolution(self):
-        proxy = LazyToolProxy("tools.search_ops", "grep_search")
+        proxy = LazyToolProxy("argent.tools.search_ops", "grep_search")
         results = [None] * 10
         exceptions = [None] * 10
 
@@ -282,7 +282,7 @@ class TestL6Concurrency:
         assert len(set(id(r) for r in results)) == 1
 
     def test_rag_engine_async_update_concurrency(self, tmp_path):
-        import rag_engine
+        import argent.rag_engine as rag_engine
 
         test_file = tmp_path / "async_rag_test.py"
         test_file.write_text("def test_async_chunk(): pass\n", encoding="utf-8")
@@ -315,7 +315,7 @@ class TestL9NegativeSpace:
         assert len(compressed_read.splitlines()) >= 250
 
     def test_rag_worker_handles_deleted_or_missing_path(self, tmp_path):
-        import rag_engine
+        import argent.rag_engine as rag_engine
         missing_path = tmp_path / "does_not_exist_9999.py"
 
         # Should not raise exception and should complete cleanly

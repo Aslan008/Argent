@@ -1,6 +1,6 @@
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
-from tools.browser_tools import browser_action, browser_inspect, browser_close, browser_close_tab, browser_list_tabs
+from argent.tools.browser_tools import browser_action, browser_inspect, browser_close, browser_close_tab, browser_list_tabs
 
 
 @pytest.mark.asyncio
@@ -20,9 +20,9 @@ async def test_browser_list_tabs_formatting():
     mock_sc.context.pages = [page1, page2]
     mock_sc.page = page1
 
-    with patch("browser_engine.browser_engine._get_session", new_callable=AsyncMock) as mock_get_session:
+    with patch("argent.browser_engine.browser_engine._get_session", new_callable=AsyncMock) as mock_get_session:
         mock_get_session.return_value = mock_sc
-        from browser_engine import browser_engine
+        from argent.browser_engine import browser_engine
 
         result = await browser_engine.list_tabs(session="default")
         assert "Open browser tabs (2):" in result
@@ -50,9 +50,9 @@ async def test_browser_close_tab_by_index():
     mock_sc.context.pages = [page1, page2]
     mock_sc.page = page1
 
-    with patch("browser_engine.browser_engine._get_session", new_callable=AsyncMock) as mock_get_session:
+    with patch("argent.browser_engine.browser_engine._get_session", new_callable=AsyncMock) as mock_get_session:
         mock_get_session.return_value = mock_sc
-        from browser_engine import browser_engine
+        from argent.browser_engine import browser_engine
 
         # Close tab 1
         res = await browser_engine.close_tab(index=1, session="default")
@@ -79,9 +79,9 @@ async def test_browser_close_tab_by_url_match():
     mock_sc.context.pages = [page1, page2]
     mock_sc.page = page1
 
-    with patch("browser_engine.browser_engine._get_session", new_callable=AsyncMock) as mock_get_session:
+    with patch("argent.browser_engine.browser_engine._get_session", new_callable=AsyncMock) as mock_get_session:
         mock_get_session.return_value = mock_sc
-        from browser_engine import browser_engine
+        from argent.browser_engine import browser_engine
 
         res = await browser_engine.close_tab(text="wake-service-worker", session="default")
         page2.close.assert_awaited_once()
@@ -91,8 +91,8 @@ async def test_browser_close_tab_by_url_match():
 
 def test_browser_action_close_tab_facade():
     """Verify browser_action(action='close_tab') routes to close_tab."""
-    with patch("browser_engine.browser_engine._sessions", {"default": MagicMock()}), \
-         patch("tools.browser_tools.browser_close_tab", return_value="Closed tab [2]") as mock_ct:
+    with patch("argent.browser_engine.browser_engine._sessions", {"default": MagicMock()}), \
+         patch("argent.tools.browser_tools.browser_close_tab", return_value="Closed tab [2]") as mock_ct:
         res = browser_action(action="close_tab", index=2)
         mock_ct.assert_called_once_with(index=2, text=None, session="default")
         assert res == "Closed tab [2]"
@@ -100,8 +100,8 @@ def test_browser_action_close_tab_facade():
 
 def test_browser_inspect_tabs_facade():
     """Verify browser_inspect(mode='tabs') routes to browser_list_tabs."""
-    with patch("browser_engine.browser_engine._sessions", {"default": MagicMock()}), \
-         patch("tools.browser_tools.browser_list_tabs", return_value="Open browser tabs (1): ...") as mock_lt:
+    with patch("argent.browser_engine.browser_engine._sessions", {"default": MagicMock()}), \
+         patch("argent.tools.browser_tools.browser_list_tabs", return_value="Open browser tabs (1): ...") as mock_lt:
         res = browser_inspect(mode="tabs")
         mock_lt.assert_called_once_with(session="default")
         assert "Open browser tabs" in res
@@ -109,7 +109,7 @@ def test_browser_inspect_tabs_facade():
 
 def test_browser_close_selective_tab():
     """Verify browser_close(index=2) closes specific tab instead of entire session."""
-    with patch("tools.browser_tools.browser_close_tab", return_value="Closed tab [2]") as mock_ct:
+    with patch("argent.tools.browser_tools.browser_close_tab", return_value="Closed tab [2]") as mock_ct:
         res = browser_close(index=2)
         mock_ct.assert_called_once_with(index=2, text=None, session="default")
         assert res == "Closed tab [2]"

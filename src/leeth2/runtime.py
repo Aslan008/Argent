@@ -21,7 +21,7 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, Union
 import numpy as np
 import torch
 
-from ..leeth.primitives import (  # shared result types: callers do not care which model answered
+from ..leeth.primitives import (  
     BaseQuestion,
     ChoiceQuestion,
     ChoiceResult,

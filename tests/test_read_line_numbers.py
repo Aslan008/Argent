@@ -16,8 +16,8 @@ target, so replace_in_file strips it.
 
 import pytest
 
-from tools import file_ops
-from tools._helpers import _strip_read_line_numbers
+from argent.tools import file_ops
+from argent.tools._helpers import _strip_read_line_numbers
 
 
 @pytest.fixture(autouse=True)
@@ -92,7 +92,7 @@ class TestBudgetFollowsTheModel:
     def test_a_capable_model_reads_a_long_file_in_one_call(self, tmp_path, monkeypatch):
         """agent.py is 1529 lines. At the old 500-line cap that was four reads,
         four round trips and four chances to lose the thread."""
-        monkeypatch.setattr("config.get_model_size_category", lambda m: "cloud")
+        monkeypatch.setattr("argent.config.get_model_size_category", lambda m: "cloud")
         (tmp_path / "long.py").write_text("".join(f"# {i}\n" for i in range(1, 1401)),
                                           encoding="utf-8")
         out = file_ops.read_file("long.py")
@@ -100,7 +100,7 @@ class TestBudgetFollowsTheModel:
         assert " 1400\t# 1400\n" in out
 
     def test_a_tiny_model_is_still_protected(self, tmp_path, monkeypatch):
-        monkeypatch.setattr("config.get_model_size_category", lambda m: "tiny")
+        monkeypatch.setattr("argent.config.get_model_size_category", lambda m: "tiny")
         (tmp_path / "long.py").write_text("".join(f"# {i}\n" for i in range(1, 1401)),
                                           encoding="utf-8")
         out = file_ops.read_file("long.py")

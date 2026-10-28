@@ -6,9 +6,9 @@ from unittest.mock import MagicMock
 
 import pytest
 
-import agent as agent_module
-import approval
-from agent import ArgentAgent
+import argent.agent as agent_module
+import argent.approval as approval
+from argent.agent import ArgentAgent
 from src.agent import permissions, shell_hooks
 from src.agent.permissions import Permissions, Rule, matches, parse_file_data, parse_rule
 from src.agent.strategy import CloudStrategy
@@ -245,7 +245,7 @@ class ScriptedProvider:
 
     def stream_chat(self, **kwargs):
         if kwargs.get("tools"):
-            from providers import ProviderError
+            from argent.providers import ProviderError
             raise ProviderError("HTTP 404: No endpoints found that support tool use.")
         script = self.scripts[min(self.calls, len(self.scripts) - 1)]
         self.calls += 1
@@ -282,7 +282,7 @@ def run(agent, text="go"):
 
 def test_a_deny_rule_stops_the_edit_and_tells_the_model_it_is_the_persons_rule(make_agent, gate, project):
     gate.add("deny", "write_file(.env*)")
-    provider = ScriptedProvider([call("write_file", file_path=".env", content="SECRET=1"), [{"content": "ok"}]])
+    provider = ScriptedProvider([call("write_file", path=".env", content="SECRET=1"), [{"content": "ok"}]])
     chunks = run(make_agent(provider))
     assert not (project / ".env").exists()
     result = next(str(c["result"]) for c in chunks if c["type"] == "tool_end")
@@ -301,7 +301,7 @@ def test_an_ask_rule_on_a_file_puts_the_question_to_the_person(make_agent, gate,
     gate.add("ask", "write_file(prod/*)")
     backend = Recorder(answer="deny")
     approval.set_approval_backend(backend)
-    provider = ScriptedProvider([call("write_file", file_path="prod/db.yml", content="x"), [{"content": "ok"}]])
+    provider = ScriptedProvider([call("write_file", path="prod/db.yml", content="x"), [{"content": "ok"}]])
     chunks = run(make_agent(provider))
     assert backend.asked and "prod/db.yml" in backend.asked[0]
     assert not (project / "prod" / "db.yml").exists()
@@ -311,7 +311,7 @@ def test_an_ask_rule_on_a_file_puts_the_question_to_the_person(make_agent, gate,
 def test_an_ask_rule_that_is_answered_yes_lets_the_edit_through(make_agent, gate, project):
     gate.add("ask", "write_file(prod/*)")
     approval.set_approval_backend(Recorder(answer="once"))
-    provider = ScriptedProvider([call("write_file", file_path="prod/db.yml", content="x"), [{"content": "ok"}]])
+    provider = ScriptedProvider([call("write_file", path="prod/db.yml", content="x"), [{"content": "ok"}]])
     run(make_agent(provider))
     assert (project / "prod" / "db.yml").read_text(encoding="utf-8") == "x"
 

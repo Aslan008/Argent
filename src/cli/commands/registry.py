@@ -2,7 +2,7 @@
 
 from typing import Callable, Dict, List, Optional
 from src.cli.commands.base import CommandContext, CommandResult
-from logger import get_logger
+from argent.logger import get_logger
 
 logger = get_logger("command_registry")
 
@@ -115,7 +115,7 @@ class CommandRegistry:
                     return CommandResult.continue_loop()
                 except Exception as e:
                     logger.exception("Error executing command '%s': %s", entry.name, e)
-                    from ui import print_error
+                    from argent.ui import print_error
                     print_error(f"Ошибка при выполнении команды {entry.name}: {e}")
                     return CommandResult.continue_loop()
 

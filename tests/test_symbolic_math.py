@@ -2,8 +2,8 @@
 
 import pytest
 
-from tools.misc_tools import calculate
-from tools.symbolic_math import SymbolicError, evaluate_symbolic
+from argent.tools.misc_tools import calculate
+from argent.tools.symbolic_math import SymbolicError, evaluate_symbolic
 
 
 class TestCalculus:

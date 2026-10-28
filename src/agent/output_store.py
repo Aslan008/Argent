@@ -20,7 +20,7 @@ import time
 from pathlib import Path
 from typing import Optional
 
-from logger import get_logger
+from argent.logger import get_logger
 
 log = get_logger("output_store")
 
@@ -34,7 +34,7 @@ _COUNTER = [0]
 
 
 def output_dir() -> Path:
-    from project_paths import project_root_or_cwd
+    from argent.project_paths import project_root_or_cwd
     return Path(project_root_or_cwd()) / ".argent" / "run" / "output"
 
 
@@ -83,7 +83,7 @@ def footer(path: Path, text: str) -> str:
     """The line appended to a result whose middle may be cut."""
     lines = text.count("\n") + 1
     try:
-        from project_paths import project_root_or_cwd
+        from argent.project_paths import project_root_or_cwd
         shown = os.path.relpath(path, project_root_or_cwd())
     except Exception:
         shown = str(path)
@@ -97,7 +97,7 @@ def keep_if_long(text: str, label: str, model_name: str, tool_name: str = "run_c
     if not text:
         return text
     try:
-        from prompt_compressor import would_truncate
+        from argent.prompt_compressor import would_truncate
         if not would_truncate(text, model_name or "", tool_name):
             return text
     except Exception:

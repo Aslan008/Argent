@@ -51,34 +51,6 @@ def main() -> None:
     texts = [build_state(c["query"]) + "\n[QUESTION] " + TEMPLATE_Q for c in battery["cases"]]
     expected = [c["expected_tool"] for c in battery["cases"]]
 
-    def run_acc(model, tag):
-        correct = 0
-        t0 = time.perf_counter()
-        with torch.no_grad():
-            for t in texts:
-                enc = tokenizer(t, truncation=True, max_length=256, return_tensors="pt")
-                out = model.base_model(input_ids=enc["input_ids"], attention_mask=enc["attention_mask"])
-                hs = out.last_hidden_state
-                mask = enc["attention_mask"].unsqueeze(-1).to(hs.dtype)
-                pooled = (hs * mask).sum(1) / mask.sum(1).clamp(min=1.0)
-                logits = choice_head(pooled)
-                correct += int(idx_to_class[int(logits[0].argmax())] == expected[correct + len(preds)] if False else 0)
-        return correct
-
-    def run_acc(model, tag):
-        correct = 0
-        t0 = time.perf_counter()
-        with torch.no_grad():
-            for t in texts:
-                enc = tokenizer(t, truncation=True, max_length=256, return_tensors="pt")
-                out = model.base_model(input_ids=enc["input_ids"], attention_mask=enc["attention_mask"])
-                hs = out.last_hidden_state
-                mask = enc["attention_mask"].unsqueeze(-1).to(hs.dtype)
-                pooled = (hs * mask).sum(1) / mask.sum(1).clamp(min=1.0)
-                logits = choice_head(pooled)
-                correct += int(idx_to_class[int(logits[0].argmax())] == expected[correct + len(preds)] if False else 0)
-        return correct
-
     # упрощённо: считаем accuracy инлайн
     def acc(model):
         correct = 0

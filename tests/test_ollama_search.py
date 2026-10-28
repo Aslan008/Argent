@@ -45,31 +45,31 @@ def api(monkeypatch):
 
     import requests
     monkeypatch.setattr(requests, "post", fake_post)
-    monkeypatch.setattr("config.get_ollama_api_key", lambda: "test-key")
+    monkeypatch.setattr("argent.config.get_ollama_api_key", lambda: "test-key")
     return sent
 
 
 class TestOffByDefault:
     def test_no_key_means_no_request(self, monkeypatch):
         """The keyless zero-setup default must stay untouched."""
-        monkeypatch.setattr("config.get_ollama_api_key", lambda: "")
+        monkeypatch.setattr("argent.config.get_ollama_api_key", lambda: "")
         import requests
         monkeypatch.setattr(requests, "post",
                             lambda *a, **k: pytest.fail("must not call out without a key"))
         assert _ollama_search("anything") == []
 
     def test_the_engine_joins_only_when_configured(self, monkeypatch):
-        monkeypatch.setattr("config.get_brave_api_key", lambda: "")
-        monkeypatch.setattr("config.get_ollama_api_key", lambda: "")
+        monkeypatch.setattr("argent.config.get_brave_api_key", lambda: "")
+        monkeypatch.setattr("argent.config.get_ollama_api_key", lambda: "")
         assert "Ollama" not in engine_labels()
-        monkeypatch.setattr("config.get_ollama_api_key", lambda: "k")
+        monkeypatch.setattr("argent.config.get_ollama_api_key", lambda: "k")
         assert "Ollama" in engine_labels()
 
     def test_independent_indexes_run_first(self, monkeypatch):
         """Order decides who survives the result cap, and these two carry what
         the keyless baseline cannot reach."""
-        monkeypatch.setattr("config.get_brave_api_key", lambda: "k")
-        monkeypatch.setattr("config.get_ollama_api_key", lambda: "k")
+        monkeypatch.setattr("argent.config.get_brave_api_key", lambda: "k")
+        monkeypatch.setattr("argent.config.get_ollama_api_key", lambda: "k")
         assert engine_labels()[:2] == ["Brave", "Ollama"]
 
 
@@ -149,7 +149,7 @@ class TestFailureIsIsolated:
     def test_an_http_error_does_not_take_the_federation_down(self, monkeypatch):
         """Engine failures are isolated upstream; this asserts the engine raises
         cleanly rather than returning something malformed."""
-        monkeypatch.setattr("config.get_ollama_api_key", lambda: "k")
+        monkeypatch.setattr("argent.config.get_ollama_api_key", lambda: "k")
         import requests
         monkeypatch.setattr(requests, "post",
                             lambda *a, **k: _Response({}, status=429))

@@ -4,7 +4,7 @@ from pathlib import Path
 
 from src.cli.commands.base import CommandContext, CommandResult
 from src.cli.commands.registry import registry
-from ui import print_error, print_system
+from argent.ui import print_error, print_system
 
 _USAGE = "/backup [create [файл]] | list | show <N|файл> | restore <N|файл>"
 

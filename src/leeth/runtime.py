@@ -37,7 +37,7 @@ from src.leeth.primitives import (
     ScoreResult,
 )
 from src.leeth.tokenizer import LeethTokenizer
-from logger import get_logger
+from argent.logger import get_logger
 
 logger = get_logger("leeth_runtime")
 
@@ -138,7 +138,7 @@ class LeethRuntime:
     def _use_v2(self) -> Any:
         """The Leeth 2 runtime when the backend is selected and its weights load, else None (legacy path)."""
         try:
-            import config as _cfg
+            import argent.config as _cfg
 
             if _cfg.get_leeth_backend() != "leeth2":
                 return None
@@ -210,7 +210,7 @@ class LeethRuntime:
             preferred = os.environ.get("LEETH_DEVICE", "auto").strip().lower()
             if preferred == "auto":
                 try:
-                    import config as _cfg
+                    import argent.config as _cfg
                     preferred = (_cfg.get_leeth_device() or "auto").lower()
                 except Exception:
                     pass

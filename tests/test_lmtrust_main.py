@@ -15,9 +15,9 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 import pytest
 
-import approval
-import main
-from main import (
+import argent.approval as approval
+import argent.main as main
+from argent.main import (
     chat_allowed_tools,
     offer_safety_checkpoint,
     carried_over_memory,
@@ -43,7 +43,7 @@ class TestL1ParseTaskTools:
 
     def test_delimiters_comma_and_semicolon(self, monkeypatch):
         fake_registry = {"read_file": {}, "write_file": {}, "run_command": {}}
-        monkeypatch.setattr("tools.schemas.AVAILABLE_TOOLS", fake_registry)
+        monkeypatch.setattr("argent.tools.schemas.AVAILABLE_TOOLS", fake_registry)
 
         names, unknown = _parse_task_tools("tools: read_file, write_file; run_command")
         assert names == ["read_file", "write_file", "run_command"]
@@ -51,7 +51,7 @@ class TestL1ParseTaskTools:
 
     def test_unknown_and_typo_tools_flagged(self, monkeypatch):
         fake_registry = {"read_file": {}}
-        monkeypatch.setattr("tools.schemas.AVAILABLE_TOOLS", fake_registry)
+        monkeypatch.setattr("argent.tools.schemas.AVAILABLE_TOOLS", fake_registry)
 
         names, unknown = _parse_task_tools("tools: read_file, nonexistent_tool_123, typo_tool")
         assert names == ["read_file", "nonexistent_tool_123", "typo_tool"]
@@ -59,7 +59,7 @@ class TestL1ParseTaskTools:
 
     def test_prefix_case_insensitive(self, monkeypatch):
         fake_registry = {"read_file": {}}
-        monkeypatch.setattr("tools.schemas.AVAILABLE_TOOLS", fake_registry)
+        monkeypatch.setattr("argent.tools.schemas.AVAILABLE_TOOLS", fake_registry)
 
         names, unknown = _parse_task_tools("TOOLS: read_file")
         assert names == ["read_file"]
@@ -68,7 +68,7 @@ class TestL1ParseTaskTools:
 
 class TestL1CarriedOverMemory:
     def test_carried_over_memory_empty(self, monkeypatch):
-        monkeypatch.setattr("memory_manager.memory.data", {})
+        monkeypatch.setattr("argent.memory_manager.memory.data", {})
         assert carried_over_memory() == []
 
     def test_carried_over_memory_full_formatting(self, monkeypatch):
@@ -78,7 +78,7 @@ class TestL1CarriedOverMemory:
             "key_facts": ["Факт 1"],
             "errors_encountered": ["Ошибка 1", "Ошибка 2", "Ошибка 3"],
         }
-        monkeypatch.setattr("memory_manager.memory.data", fake_data)
+        monkeypatch.setattr("argent.memory_manager.memory.data", fake_data)
         parts = carried_over_memory()
         assert len(parts) == 4
         assert "цель «Разработать систему LMTrust для Argent»" in parts[0]
@@ -93,8 +93,8 @@ class TestL1CarriedOverMemory:
 
 class TestL2ToolAllowanceAndCheckpointSafety:
     def test_chat_allowed_tools_filters_disabled(self, monkeypatch):
-        monkeypatch.setattr("tools.schemas.get_available_tools", lambda: {"read_file": {}, "write_file": {}, "bash": {}})
-        monkeypatch.setattr("config.get_disabled_tools", lambda: ["bash"])
+        monkeypatch.setattr("argent.tools.schemas.get_available_tools", lambda: {"read_file": {}, "write_file": {}, "bash": {}})
+        monkeypatch.setattr("argent.config.get_disabled_tools", lambda: ["bash"])
 
         allowed = chat_allowed_tools()
         assert "read_file" in allowed
@@ -102,12 +102,12 @@ class TestL2ToolAllowanceAndCheckpointSafety:
         assert "bash" not in allowed
 
     def test_chat_allowed_tools_handles_list_and_none(self, monkeypatch):
-        monkeypatch.setattr("tools.schemas.get_available_tools", lambda: ["tool_a", "tool_b"])
-        monkeypatch.setattr("config.get_disabled_tools", lambda: None)
+        monkeypatch.setattr("argent.tools.schemas.get_available_tools", lambda: ["tool_a", "tool_b"])
+        monkeypatch.setattr("argent.config.get_disabled_tools", lambda: None)
         assert chat_allowed_tools() == ["tool_a", "tool_b"]
 
     def test_offer_safety_checkpoint_outside_git_is_noop(self, monkeypatch):
-        monkeypatch.setattr("main.run_text", lambda *a, **k: SimpleNamespace(returncode=128, stdout=""))
+        monkeypatch.setattr("argent.main.run_text", lambda *a, **k: SimpleNamespace(returncode=128, stdout=""))
         # Must return silently without throwing
         offer_safety_checkpoint("test task")
 
@@ -119,7 +119,7 @@ class TestL2ToolAllowanceAndCheckpointSafety:
                 return SimpleNamespace(returncode=0, stdout="")  # clean tree
             return SimpleNamespace(returncode=0, stdout="")
 
-        monkeypatch.setattr("main.run_text", fake_run)
+        monkeypatch.setattr("argent.main.run_text", fake_run)
         confirm_called = []
         monkeypatch.setattr("questionary.confirm", lambda *a, **k: confirm_called.append(True))
         offer_safety_checkpoint("task")
@@ -172,7 +172,7 @@ class TestL4SessionRestoration:
         }
         monkeypatch.setattr("src.startup.load_session", lambda sid: saved_payload)
         printed = []
-        monkeypatch.setattr("ui.print_system", lambda text: printed.append(text))
+        monkeypatch.setattr("argent.ui.print_system", lambda text: printed.append(text))
 
         fake_agent = SimpleNamespace(messages=[], session_id=None, model_name="gpt-4o")
         ok = restore_session(fake_agent, {"id": "sess_123"})
@@ -189,7 +189,7 @@ class TestL4SessionRestoration:
         }
         monkeypatch.setattr("src.startup.load_session", lambda sid: saved_payload)
         printed = []
-        monkeypatch.setattr("ui.print_system", lambda text: printed.append(text))
+        monkeypatch.setattr("argent.ui.print_system", lambda text: printed.append(text))
 
         fake_agent = SimpleNamespace(messages=[], session_id=None, model_name="")
         ok = restore_session(fake_agent, {"id": "sess_456"})
@@ -204,7 +204,7 @@ class TestL4SessionRestoration:
         }
         monkeypatch.setattr("src.startup.load_session", lambda sid: saved_payload)
         printed = []
-        monkeypatch.setattr("ui.print_system", lambda text: printed.append(text))
+        monkeypatch.setattr("argent.ui.print_system", lambda text: printed.append(text))
         monkeypatch.setattr("questionary.confirm", lambda *a, **k: SimpleNamespace(ask=lambda: False))
 
         fake_agent = SimpleNamespace(messages=[], session_id=None, model_name="")
@@ -221,7 +221,7 @@ class TestL7TasksCRUDAndValidation:
     @pytest.fixture(autouse=True)
     def _own_project(self, tmp_path, monkeypatch):
         """/tasks writes into the project's .argent/: give it a throwaway one."""
-        monkeypatch.setattr("project_paths.project_root_or_cwd", lambda *a, **k: tmp_path)
+        monkeypatch.setattr("argent.project_paths.project_root_or_cwd", lambda *a, **k: tmp_path)
 
     def test_invalid_task_subcommand_prints_error(self, monkeypatch):
         errors = []
@@ -285,7 +285,7 @@ class TestL9OfferPreviousContext:
         monkeypatch.setattr("questionary.select", lambda *a, **k: SimpleNamespace(ask=lambda: CLEAN))
 
         cleared = []
-        monkeypatch.setattr("memory_manager.memory.clear", lambda: cleared.append(True))
+        monkeypatch.setattr("argent.memory_manager.memory.clear", lambda: cleared.append(True))
         offer_previous_context(agent=None)
         assert cleared == [True]
 
@@ -296,7 +296,7 @@ class TestL9OfferPreviousContext:
         monkeypatch.setattr("questionary.select", lambda *a, **k: SimpleNamespace(ask=lambda: KEEP_MEMORY))
 
         cleared = []
-        monkeypatch.setattr("memory_manager.memory.clear", lambda: cleared.append(True))
+        monkeypatch.setattr("argent.memory_manager.memory.clear", lambda: cleared.append(True))
         offer_previous_context(agent=None)
         assert cleared == []
 

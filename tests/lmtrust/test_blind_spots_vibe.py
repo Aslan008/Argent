@@ -19,7 +19,7 @@ from pathlib import Path
 from types import SimpleNamespace
 import pytest
 
-import approval
+import argent.approval as approval
 from src.agent import checkpoints
 
 
@@ -43,7 +43,7 @@ def reset_policy_and_grants():
 
 class TestL0Smoke:
     def test_set_vibe_mode_explicit(self, monkeypatch):
-        import main
+        import argent.main as main
         monkeypatch.setattr(main, "print_system", lambda *a, **k: None)
 
         assert main.set_vibe_mode(True) is True
@@ -53,7 +53,7 @@ class TestL0Smoke:
         assert approval.get_policy() == approval.POLICY_ASK
 
     def test_set_vibe_mode_idempotent(self, monkeypatch):
-        import main
+        import argent.main as main
         monkeypatch.setattr(main, "print_system", lambda *a, **k: None)
 
         assert main.set_vibe_mode(True) is True
@@ -72,7 +72,7 @@ class TestL0Smoke:
 
 class TestL1ContractParsing:
     def test_parse_vibe_command_variants(self):
-        import main
+        import argent.main as main
         parse = getattr(main, "parse_vibe_command", None)
         assert parse is not None, "main.parse_vibe_command must be implemented for contract parsing"
 
@@ -114,7 +114,7 @@ class TestL1ContractParsing:
 
 class TestL2BoundaryCases:
     def test_tab_and_multiple_whitespace_separation(self):
-        import main
+        import argent.main as main
         parse = getattr(main, "parse_vibe_command")
 
         action, payload = parse("/vibe\t\ton")
@@ -129,7 +129,7 @@ class TestL2BoundaryCases:
 
     def test_prefix_collision_prevention(self):
         """Commands that only share the prefix '/vibe' must not trigger /vibe."""
-        import main
+        import argent.main as main
         parse = getattr(main, "parse_vibe_command")
         assert parse("/vibecheck") is None
         assert parse("/vibe-mode") is None
@@ -142,7 +142,7 @@ class TestL2BoundaryCases:
 
 class TestL3PropertyInvariants:
     def test_vibe_on_guarantees_auto_policy_and_checkpoints(self, monkeypatch):
-        import main
+        import argent.main as main
         monkeypatch.setattr(main, "print_system", lambda *a, **k: None)
 
         checkpoints.set_auto_checkpoint(False)
@@ -152,7 +152,7 @@ class TestL3PropertyInvariants:
         assert checkpoints.auto_checkpoint_enabled() is True
 
     def test_vibe_off_restores_ask_policy(self, monkeypatch):
-        import main
+        import argent.main as main
         monkeypatch.setattr(main, "print_system", lambda *a, **k: None)
 
         main.set_vibe_mode(True)
@@ -169,7 +169,7 @@ class TestL3PropertyInvariants:
 class TestL4AdversarialSafety:
     def test_destructive_actions_are_denied_in_vibe_mode(self, monkeypatch):
         """In Vibe mode, destructive actions must NOT silently run."""
-        import main
+        import argent.main as main
         monkeypatch.setattr(main, "print_system", lambda *a, **k: None)
         main.set_vibe_mode(True)
 
@@ -179,13 +179,31 @@ class TestL4AdversarialSafety:
         # Destructive rm command
         assert approval.request_approval("run command: rm -rf node_modules", destructive=True) is False
 
-    def test_obfuscated_and_inline_code_commands_flagged_destructive(self):
-        from approval import is_destructive_command
+    def test_what_is_flagged_depends_on_what_it_can_destroy(self):
+        """The gate no longer calls every unreadable command destructive.
 
-        assert is_destructive_command('python -c "import os; os.system(\'calc\')') is True
-        assert is_destructive_command('powershell -Command "Remove-Item foo"') is True
-        assert is_destructive_command('bash -c "rm -f bar"') is True
-        assert is_destructive_command('Invoke-Expression "Write-Host test"') is True
+        A snippet that cannot be vetted but plainly deletes nothing runs in /vibe
+        (with a line in the transcript); one that deletes, or that builds itself at
+        run time, is still refused.
+        """
+        from argent.approval import classify_command_risk, is_destructive_command
+
+        # Unreadable, but nothing in it deletes anything.
+        unreadable = 'python -c "import os; os.system(\'calc\')"'
+        assert classify_command_risk(unreadable).kind == "unvetted"
+        assert is_destructive_command(unreadable) is False
+
+        # Deletion: in plain sight, or hidden in the payload.
+        for cmd in ('powershell -Command "Remove-Item foo"',
+                    'bash -c "rm -f bar"',
+                    'python -c "import os; os.remove(\'x\')"'):
+            assert classify_command_risk(cmd).kind == "deletes", cmd
+            assert is_destructive_command(cmd) is True, cmd
+
+        # Built at run time: nothing can be said about it, so it stays refused.
+        obfuscated = 'Invoke-Expression "Write-Host test"'
+        assert classify_command_risk(obfuscated).kind == "undecidable"
+        assert is_destructive_command(obfuscated) is True
 
 
 # ============================================================================
@@ -194,7 +212,7 @@ class TestL4AdversarialSafety:
 
 class TestL4bFallbackResilience:
     def test_offer_safety_checkpoint_outside_git_does_not_crash(self, tmp_path, monkeypatch):
-        import main
+        import argent.main as main
         monkeypatch.chdir(tmp_path)
         # Should cleanly return without raising any exception
         main.offer_safety_checkpoint("some task outside git")
@@ -206,7 +224,7 @@ class TestL4bFallbackResilience:
 
 class TestL5StateSync:
     def test_terminal_vibe_syncs_with_telegram_shared_bridge(self, monkeypatch):
-        import main
+        import argent.main as main
         from src.telegram.bot import telegram_bridge
 
         monkeypatch.setattr(main, "print_system", lambda *a, **k: None)
@@ -227,7 +245,7 @@ class TestL5StateSync:
         assert telegram_bridge.session.state()["vibe"] is False
 
     def test_telegram_vibe_syncs_with_terminal_state(self, monkeypatch):
-        import main
+        import argent.main as main
         from src.telegram.bot import telegram_bridge
 
         monkeypatch.setattr(main, "print_system", lambda *a, **k: None)
@@ -254,25 +272,25 @@ class TestL5StateSync:
 
 class TestL6ToolIntegration:
     def test_safe_command_auto_approved_in_vibe_mode(self, monkeypatch):
-        import main
+        import argent.main as main
         monkeypatch.setattr(main, "print_system", lambda *a, **k: None)
         main.set_vibe_mode(True)
 
-        from tools.command_ops import run_command
+        from argent.tools.command_ops import run_command
         # Running a purely safe command (e.g. echo)
         res = run_command("python -V")
         assert "Python" in res
         assert "aborted" not in res.lower()
 
     def test_delete_file_aborted_in_vibe_mode(self, tmp_path, monkeypatch):
-        import main
+        import argent.main as main
         monkeypatch.setattr(main, "print_system", lambda *a, **k: None)
         main.set_vibe_mode(True)
 
         target = tmp_path / "protected.txt"
         target.write_text("keep me safe", encoding="utf-8")
 
-        from tools.file_ops import delete_file
+        from argent.tools.file_ops import delete_file
         res = delete_file(str(target))
         assert "aborted" in res.lower()
         # File must remain untouched on disk
@@ -286,7 +304,7 @@ class TestL6ToolIntegration:
 class TestL7CompositionalIsolation:
     def test_vibe_does_not_leak_into_unattended_gate(self, monkeypatch):
         """Unattended scheduler run must refuse gated actions even if vibe mode was on."""
-        import main
+        import argent.main as main
         from src.automation.runner import UnattendedGate
 
         monkeypatch.setattr(main, "print_system", lambda *a, **k: None)
@@ -308,7 +326,7 @@ class TestL7CompositionalIsolation:
 class TestL8TemporalSession:
     def test_session_restore_starts_with_safe_policy(self, monkeypatch):
         """Restoring a session must default to POLICY_ASK for safety."""
-        import main
+        import argent.main as main
         from types import SimpleNamespace
 
         monkeypatch.setattr(main, "print_system", lambda *a, **k: None)

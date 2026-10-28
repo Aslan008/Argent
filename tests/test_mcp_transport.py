@@ -4,7 +4,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-import mcp_client
+import argent.mcp_client as mcp_client
 
 
 class _FakePipe:
@@ -86,6 +86,7 @@ def _server_with_transport(reply):
     srv.name = "srv"
     srv._tools_cache = []
     srv._tools_unavailable = False
+    srv._listed_once = False          # «answered with an empty list» is its own state
     srv.transport = MagicMock()
     srv.transport.send_request.return_value = reply
     return srv

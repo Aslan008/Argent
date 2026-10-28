@@ -7,7 +7,7 @@ already had.
 
 import pytest
 
-from tools.file_ops import write_file, replace_python_function
+from argent.tools.file_ops import write_file, replace_python_function
 
 GOOD = "def foo():\n    return 1\n"
 BROKEN = "def foo(:\n    return 1\n"  # SyntaxError py_compile reliably catches
@@ -17,7 +17,7 @@ BROKEN = "def foo(:\n    return 1\n"  # SyntaxError py_compile reliably catches
 def _isolate(tmp_path, monkeypatch):
     # Resolve relative paths and write memory/snapshots under tmp, not the repo/home.
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr("file_tracker.HISTORY_DIR", tmp_path / "_hist", raising=False)
+    monkeypatch.setattr("argent.file_tracker.HISTORY_DIR", tmp_path / "_hist", raising=False)
 
 
 class TestWriteFileSafetyNet:

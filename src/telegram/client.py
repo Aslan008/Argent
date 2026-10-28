@@ -17,7 +17,7 @@ from typing import Any, Dict, List, Optional
 
 import requests
 
-from logger import get_logger
+from argent.logger import get_logger
 from src.telegram.render import MAX_HTML, split_html, strip_html
 
 log = get_logger("telegram_bot")

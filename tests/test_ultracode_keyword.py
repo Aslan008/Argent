@@ -10,7 +10,7 @@ from src.agent.workflow import runtime, trigger
 def _clean(monkeypatch):
     runtime.set_enabled(False)
     runtime.keyword_turn(False)
-    monkeypatch.setattr("config.is_ultracode_keyword_enabled", lambda: True)
+    monkeypatch.setattr("argent.config.is_ultracode_keyword_enabled", lambda: True)
     monkeypatch.setattr(runtime, "say", lambda text: None)
     yield
     runtime.set_enabled(False)
@@ -56,7 +56,7 @@ def test_the_note_is_for_that_message_only():
 
 
 def test_the_setting_turns_the_trigger_off(monkeypatch):
-    monkeypatch.setattr("config.is_ultracode_keyword_enabled", lambda: False)
+    monkeypatch.setattr("argent.config.is_ultracode_keyword_enabled", lambda: False)
     assert trigger.on_user_message("ultracode: перепиши модуль") is False
     assert not runtime.enabled()
 

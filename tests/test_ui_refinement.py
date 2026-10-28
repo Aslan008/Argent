@@ -10,9 +10,9 @@ import pytest
 from unittest.mock import patch
 from io import StringIO
 
-from ui import _format_tool_header, _format_tool_header_markup, _format_tool_summary, print_reasoning, print_rethink, print_tool_end
-from approval import _ALWAYS_PREFIX
-from error_help import explain_error
+from argent.ui import _format_tool_header, _format_tool_header_markup, _format_tool_summary, print_reasoning, print_rethink, print_tool_end
+from argent.approval import _ALWAYS_PREFIX
+from argent.error_help import explain_error
 
 
 class TestToolHeaderFormatting:
@@ -118,7 +118,7 @@ class TestToolSummaryFormatting:
 class TestTwoLineToolEndDisplay:
     def test_print_tool_end_two_line_layout(self):
         out = StringIO()
-        with patch("ui.console.print", side_effect=lambda *args, **kw: out.write(str(args[0]) + "\n")):
+        with patch("argent.ui.console.print", side_effect=lambda *args, **kw: out.write(str(args[0]) + "\n")):
             print_tool_end("read_file", "line 1\nline 2\nline 3", duration=0.045, args={"path": "agent.py"})
         output = out.getvalue()
         # Проверяем наличие границы '│' и стрелки '↳'
@@ -132,7 +132,7 @@ class TestTwoLineToolEndDisplay:
 class TestNoCheapEmojis:
     def test_reasoning_uses_glyph_not_emoji(self):
         out = StringIO()
-        with patch("ui.console.print", side_effect=lambda *args, **kw: out.write(str(args[0]) + "\n")):
+        with patch("argent.ui.console.print", side_effect=lambda *args, **kw: out.write(str(args[0]) + "\n")):
             print_reasoning("Some thought process", duration=4.2)
         val = out.getvalue()
         assert "◇" in val
@@ -142,7 +142,7 @@ class TestNoCheapEmojis:
 
     def test_rethink_uses_glyph_not_emoji(self):
         out = StringIO()
-        with patch("ui.console.print", side_effect=lambda *args, **kw: out.write(str(args[0]) + "\n")):
+        with patch("argent.ui.console.print", side_effect=lambda *args, **kw: out.write(str(args[0]) + "\n")):
             print_rethink("Let me double check", duration=1.5)
         val = out.getvalue()
         assert "◈" in val

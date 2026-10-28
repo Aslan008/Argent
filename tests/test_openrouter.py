@@ -1,8 +1,8 @@
 import pytest
 
-import config
-import providers
-from providers import OpenRouterProvider, OllamaProvider, ZAIProvider
+import argent.config as config
+import argent.providers as providers
+from argent.providers import OpenRouterProvider, OllamaProvider, ZAIProvider
 from src.agent.strategy import get_model_strategy, CloudStrategy
 
 

@@ -85,6 +85,12 @@ pub enum ArgentEvent {
     System(String),
     /// The start-screen rule; carries the version string.
     Banner(String),
+    /// Toolbar numbers, pulled by the background poller.
+    ///
+    /// State arrives as an event so the drawing thread never calls into Python: taking
+    /// the GIL there meant waiting for the agent's worker, and while it held the GIL
+    /// the whole interface stopped — no typing, no scrolling, nothing — until it let go.
+    State(HashMap<String, String>),
     ToolStart {
         name: String,
         args: HashMap<String, serde_json::Value>,
@@ -123,6 +129,9 @@ pub enum ArgentEvent {
         diff: String,
     },
     Notice(String),
+    /// Live console output captured from the REPL (stdout/stderr). Fragments belong
+    /// to one line until a fragment ends it, so `App::push_output` joins them.
+    Output(String),
     /// The model is still streaming a tool call's raw JSON arguments.
     ToolGenerating { name: String, bytes: usize, delta: String },
     Error {
@@ -333,6 +342,10 @@ pub fn parse_py_event(dict: &Bound<'_, PyDict>) -> PyResult<Option<ArgentEvent>>
         "notice" => {
             let text: String = dict.get_item("text")?.map(|v| v.extract()).unwrap_or(Ok(String::new()))?;
             Ok(Some(ArgentEvent::Notice(text)))
+        }
+        "output" => {
+            let text: String = dict.get_item("text")?.map(|v| v.extract()).unwrap_or(Ok(String::new()))?;
+            Ok(Some(ArgentEvent::Output(text)))
         }
         "error" => {
             let text: String = dict.get_item("text")?.map(|v| v.extract()).unwrap_or(Ok(String::new()))?;

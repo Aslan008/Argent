@@ -2,7 +2,7 @@
 
 from src.cli.commands.base import CommandContext, CommandResult
 from src.cli.commands.registry import registry
-from ui import print_error, print_system
+from argent.ui import print_error, print_system
 
 _USAGE = (
     "Правила разрешений (.argent/permissions.json для проекта, ~/.argent/permissions.json везде):\n"

@@ -17,8 +17,8 @@ from typing import Callable, Optional, Dict, Any, List
 from src.bridge.session import AgentSession
 from src.cli.commands import dispatch_command, CommandContext, CommandResult
 from src.cli.cli_prompt import expand_file_mentions
-from session import save_session
-from config import get_provider
+from argent.session import save_session
+from argent.config import get_provider
 
 _ANSI_STRIP_RE = re.compile(r'\x1b\[[0-9;]*[a-zA-Z]')
 
@@ -27,6 +27,20 @@ _ANSI_STRIP_RE = re.compile(r'\x1b\[[0-9;]*[a-zA-Z]')
 # Rich `Live` or a progress bar emits) would corrupt the alternate screen and
 # must never reach it.
 _NON_SGR_CSI_RE = re.compile(r'\x1b\[[0-9;?]*[@-ln-~]')
+
+
+def _flatten_on_white(img):
+    """A clipboard grab carries an alpha channel; a model needs opaque pixels."""
+    from PIL import Image
+
+    if img.mode != "RGBA":
+        return img.convert("RGB")
+    alpha = img.getchannel("A")
+    if alpha.getextrema()[0] == 255:
+        return img.convert("RGB")
+    bg = Image.new("RGB", img.size, (255, 255, 255))
+    bg.paste(img, mask=alpha)
+    return bg
 
 
 class StdoutTrap:
@@ -48,7 +62,7 @@ class StdoutTrap:
                 sys.stdout = self
                 sys.stderr = self
                 try:
-                    from ui import console
+                    from argent.ui import console
                     self._orig_console_file = console.file
                     console.file = self
                 except Exception:
@@ -61,7 +75,7 @@ class StdoutTrap:
                 sys.stdout = self._orig_stdout
                 sys.stderr = self._orig_stderr
                 try:
-                    from ui import console
+                    from argent.ui import console
                     if hasattr(self, "_orig_console_file"):
                         console.file = self._orig_console_file
                 except Exception:
@@ -70,7 +84,13 @@ class StdoutTrap:
     def write(self, s: str):
         if not s or not self._active:
             return
-        clean = _NON_SGR_CSI_RE.sub('', s).rstrip('\n')
+        # Newlines are KEPT. The REPL streams a command's output one write at a
+        # time with `console.print(..., end="")`, so the next write continues the
+        # line the previous one left open; dropping the newline here (as this used
+        # to) told the frontend that every write ended a line, and a chunk boundary
+        # in the middle of one became a hard break (`git status --short` printed
+        # " M" and the path as two separate rows).
+        clean = _NON_SGR_CSI_RE.sub('', s)
         if clean and self._on_output is not None:
             try:
                 self._on_output(clean)
@@ -261,13 +281,37 @@ def _mirrored(sink: Optional[Callable[[dict], None]]) -> Optional[Callable[[dict
     return deliver
 
 
-#: Safety limits for unattended turns. The frontend may keep the agent talking
-#: to itself via vibe mode or the heartbeat protocol, but never without a bound.
-AUTO_MAX_TURNS = 20
-AUTO_MAX_SECONDS = 1800
+#: Unattended turns in a row that ran no tool at all before the run is stopped: the
+#: agent is repeating itself, not working. There is no ceiling on how long real work
+#: may take — vibe runs until it is switched off or the work stops moving.
+AUTO_MAX_IDLE_TURNS = 3
 AUTO_DELAY_S = 1.0
 #: Wake-ups the agent may chain on its own (wait, wake, wait, wake…) before a person has to say something.
 AUTO_MAX_WAKES = 40
+
+#: Turn endings that mean "the agent stopped itself, nothing was achieved". An
+#: unattended run must not treat any of them as progress and wake again.
+_FORCED_STOP_REASONS = {"loop guard", "tool call written as text"}
+
+#: Turn endings that mean "the work is not done — pick it up again". Everything else
+#: ends the run: a final answer, a stop by the person, or a reason nobody anticipated.
+#: The list is explicit rather than a blacklist on purpose — a mode that keeps poking
+#: on an unknown ending is exactly the heartbeat nobody asked for.
+_UNFINISHED_ENDINGS = (
+    "heartbeat_signal",
+    "tool call limit",
+    "length limit hit repeatedly",
+    "context overflow",
+    "provider error",
+    "provider could not be created",
+    "provider config invalid",
+    "network lost",
+    "fallback stream failed",
+    "salvage continuations exhausted",
+    "turn raised",
+    "unhandled error",
+    "interrupted — the caller stopped reading",
+)
 
 _HEARTBEAT_FULL = re.compile(
     r"\[HEARTBEAT_REQUEST:\s*(\d+)\s*\|\s*(.*?)\s*\|\s*until=(.*?)\s*\|\s*timeout=(\d+)\s*\]"
@@ -300,6 +344,78 @@ def parse_heartbeat(text: str) -> Optional[str]:
     )
 
 
+def _spend_breakdown(usage, provider: str = "", model: str = "") -> str:
+    """Hover text for the spend chip: what the last request took, and how it is known.
+
+    Two different numbers live here and they must not be confused. A provider
+    that reports a cost per request (OpenRouter) gives an exact figure; DeepSeek
+    does not, so the only evidence is the prepaid balance moving, which another
+    client on the same key can move too — hence "~". The ``est`` line is a third
+    number: Argent-only tokens priced at the current public list price. It is an
+    estimate, not an invoice.
+    """
+    def _tokens(n) -> str:
+        n = int(n or 0)
+        return f"{n / 1000:.1f}k" if n >= 1000 else str(n)
+
+    def _money(value: float) -> str:
+        return f"{value:.4f}" if value < 1 else f"{value:.2f}"
+
+    lines = []
+    if usage.last_prompt or usage.last_completion:
+        lines.append(f"Последний запрос   {_tokens(usage.last_prompt)} -> "
+                     f"{_tokens(usage.last_completion)} tok")
+        if usage.last_cached:
+            pct = int(usage.last_cached / usage.last_prompt * 100) if usage.last_prompt else 0
+            lines.append(f"Из кэша            {_tokens(usage.last_cached)} tok ({pct}%)")
+    if usage.last_spent is not None and usage.last_spent > 0:
+        symbol = "$" if usage.last_spent_currency == "USD" else f"{usage.last_spent_currency} "
+        if usage.last_spent_approx:
+            lines.append(f"Списано с баланса  ~{symbol}{usage.last_spent:.4f}")
+            lines.append("Оценка по изменению баланса: другой клиент")
+            lines.append("с тем же ключом тоже мог его изменить.")
+        else:
+            lines.append(f"Стоимость запроса  {symbol}{usage.last_spent:.4f}")
+            lines.append("Точная цифра от провайдера.")
+    if usage.balance is not None:
+        symbol = "$" if usage.balance_currency == "USD" else f"{usage.balance_currency} "
+        lines.append(f"Баланс             {symbol}{usage.balance:.2f}")
+    if usage.requests:
+        total = usage.prompt + usage.completion
+        lines.append("")
+        lines.append(f"За сессию          {_tokens(total)} tok, {usage.requests} запр.")
+        if usage.cost > 0:
+            lines.append(f"Всего по счетам    ${usage.cost:.4f}")
+        elif usage.session_spent > 0:
+            symbol = "$" if usage.session_spent_currency == "USD" else f"{usage.session_spent_currency} "
+            lines.append(f"Списано (аккаунт)  ~{symbol}{usage.session_spent:.2f}")
+
+    try:
+        from argent.model_pricing import PRICE_VERSION, estimate_cost, is_peak
+
+        session_est = estimate_cost(
+            provider, model, usage.prompt, usage.completion, usage.cached
+        )
+        last_est = estimate_cost(
+            provider, model, usage.last_prompt, usage.last_completion, usage.last_cached
+        )
+        if session_est is not None:
+            lines.append("")
+            lines.append(f"Оценка Argent      est ${_money(session_est)}")
+            if last_est is not None:
+                lines.append(f"Оценка запроса     est ${_money(last_est)}")
+            lines.append(
+                "По токенам и прайсу DeepSeek; не биллинг."
+            )
+            lines.append(
+                f"Тариф {PRICE_VERSION}, {'peak' if is_peak() else 'off-peak'}; "
+                "праздники КНР не учтены."
+            )
+    except Exception:
+        pass
+    return "\n".join(lines)
+
+
 class ReplBridge:
     """Central orchestration bridge for TUI frontends."""
     active_bridge: Optional['ReplBridge'] = None
@@ -315,8 +431,7 @@ class ReplBridge:
         self.vibe_mode = False
         self._event_sink: Optional[Callable[[dict], None]] = None
         self.turn_rejected = False
-        self._auto_remaining = 0
-        self._auto_started_at = 0.0
+        self._idle_turns = 0
         self._auto_timer: Optional[threading.Timer] = None
         self._shutting_down = False
         self._trap = StdoutTrap(on_output=self._on_trap_output)
@@ -370,7 +485,7 @@ class ReplBridge:
         """Emit to the frontend, attaching an actionable hint to failures."""
         if event.get("type") == "error" and "hint" not in event:
             try:
-                from error_help import explain_error
+                from argent.error_help import explain_error
                 hint = explain_error(str(event.get("text", "")))
                 if hint:
                     event = dict(event, hint=hint)
@@ -383,13 +498,73 @@ class ReplBridge:
                 pass
 
     def _on_trap_output(self, text: str) -> None:
-        # Route stray console prints as notice events
-        self._emit({"type": "notice", "text": text})
+        # Route stray console prints to the frontend as live output. Distinct from
+        # `notice`: output fragments belong to the same line until a write ends it,
+        # and the frontend joins them (a notice is always a message of its own).
+        self._emit({"type": "output", "text": text})
+
+    def queue_clipboard_image(self, width: int, height: int, rgba: bytes) -> str:
+        """Attach a picture from the clipboard to the next turn.
+
+        The Rust frontend can only hand over raw RGBA (that is the shape a
+        clipboard gives), so Pillow turns it into a PNG and `vision.queue_image`
+        — the same queue `view_image` and the browser tools use — carries it into
+        the turn. Returns the label to show, or the reason it did not work.
+        """
+        try:
+            from PIL import Image
+        except Exception:
+            return "Pillow не установлен"
+        try:
+            w, h = int(width), int(height)
+            if w <= 0 or h <= 0:
+                return "пустое изображение"
+            data = bytes(rgba)
+            if len(data) < w * h * 4:
+                return "повреждённые данные буфера"
+            img = _flatten_on_white(Image.frombytes("RGBA", (w, h), data))
+
+            import tempfile
+            import time
+            path = Path(tempfile.gettempdir()) / f"argent-paste-{int(time.time() * 1000)}.png"
+            img.save(path, "PNG")
+
+            from argent import vision
+            payload, media, note = vision.encode_image(str(path))
+            if not payload:
+                return note or "не удалось подготовить изображение"
+            vision.queue_image(payload, media, f"скриншот из буфера ({w}×{h})")
+            return f"{w}×{h}"
+        except Exception as exc:
+            return f"ошибка: {exc}"
+
+    def drop_pending_image(self, index: int) -> int:
+        """Take an attached picture back out of the queue; returns how many remain."""
+        from argent import vision
+
+        return vision.drop_image(int(index))
+
+    def pending_image_full(self, index: int) -> str:
+        """One attached picture as a full-screen payload (the `image_preview` shape)."""
+        from argent import vision
+
+        return vision.image_full(int(index))
+
+    def preview_full(self) -> str:
+        """The last preview at screen resolution, built on demand.
+
+        The state poll carries only a cheap frame (96 columns): a grid wide enough to
+        fill a terminal is ~200 KB of base64, and the poll runs every couple of seconds.
+        This builds the big one the moment the person opens the picture.
+        """
+        from argent import image_preview
+
+        return image_preview.full_snapshot()
 
     def _on_attached(self) -> None:
         """Run startup sequences and emit onboarding banners once sink is ready."""
         try:
-            from version import __version__ as _ver
+            from argent.version import __version__ as _ver
         except Exception:
             _ver = "?"
         prov = get_provider().upper()
@@ -415,8 +590,8 @@ class ReplBridge:
             # the same way).
             # MCP servers startup
             try:
-                from config import get_mcp_servers
-                from mcp_client import mcp_client
+                from argent.config import get_mcp_servers
+                from argent.mcp_client import mcp_client
                 mcp_servers = get_mcp_servers()
                 if mcp_servers:
                     for srv in mcp_servers:
@@ -441,7 +616,7 @@ class ReplBridge:
 
             # Startup hook
             try:
-                from hook_manager import hook_manager
+                from argent.hook_manager import hook_manager
                 hook_manager.call_hook("on_startup")
             except Exception:
                 pass
@@ -485,7 +660,7 @@ class ReplBridge:
                 from src.telegram.bot import telegram_bridge
                 telegram_bridge.attach_terminal_agent(self.agent)
                 telegram_bridge.attach_terminal_frontend(self)
-                from config import get_telegram_enabled, get_telegram_token
+                from argent.config import get_telegram_enabled, get_telegram_token
                 if get_telegram_enabled() and get_telegram_token():
                     ok, msg = telegram_bridge.start()
                     if ok:
@@ -495,9 +670,9 @@ class ReplBridge:
 
             # Auto-KB
             try:
-                from config import get_auto_kb
+                from argent.config import get_auto_kb
                 if get_auto_kb():
-                    from rag_engine import init_external_kbs
+                    from argent.rag_engine import init_external_kbs
                     kb_res = init_external_kbs()
                     if "Successfully" in kb_res:
                         self._emit({"type": "notice", "text": f"KB: {kb_res}"})
@@ -509,6 +684,23 @@ class ReplBridge:
             from src.startup import (
                 StartupIO, offer_first_run_setup, offer_previous_context, previous_session,
             )
+
+            # A Low-integrity process can read the project but cannot write to
+            # the config, target/ or the project even when the ACL grants
+            # FullControl (Windows no-write-up). Say it once instead of making
+            # every permission error look like a new mystery.
+            try:
+                from argent.integrity import integrity_label
+
+                if integrity_label() == "Low":
+                    self._emit({"type": "notice", "text": (
+                        "[yellow]Argent запущен с Low integrity: запись в конфиг, "
+                        "проект и target будет запрещена. Запустите его из обычного "
+                        "терминала/Проводника, а не из песочницы или low-integrity "
+                        "окна.[/yellow]"
+                    )})
+            except Exception:
+                pass
 
             io = StartupIO(
                 system=lambda text: self._emit({"type": "system", "text": text}),
@@ -612,13 +804,11 @@ class ReplBridge:
             pass
 
     def set_vibe(self, enabled: bool) -> None:
-        """Centralized setter for vibe mode ensuring session sync and budget initialization."""
+        """Centralized setter for vibe mode ensuring session sync."""
         self.vibe_mode = bool(enabled)
         self.session.set_vibe(self.vibe_mode)
-        if self.vibe_mode:
-            self._auto_remaining = AUTO_MAX_TURNS
-        else:
-            self._auto_remaining = 0
+        self._idle_turns = 0
+        if not self.vibe_mode:
             self._cancel_auto()
 
     def start_turn(self, raw_input: str, _wake: bool = False) -> None:
@@ -642,13 +832,13 @@ class ReplBridge:
             self.session._turn_running = True
             self.turn_rejected = False
 
-        # Any real user input resets the unattended-turn budget.
+        # A new instruction from the person starts the run over; an unattended turn
+        # does not. Re-arming on every turn is what made the old budget meaningless
+        # and kept the "[Heartbeat завершен] Продолжай." loop alive.
+        self._cancel_auto()
         if not _wake:
             self._wakes_in_a_row = 0
-        self._cancel_auto()
-        self._auto_started_at = __import__("time").time()
-        if self.vibe_mode:
-            self._auto_remaining = AUTO_MAX_TURNS
+            self._idle_turns = 0
 
         self.session._active = True
         if not user_input.startswith(("/", "!")):
@@ -710,37 +900,49 @@ class ReplBridge:
             self._auto_timer = None
 
     def _maybe_auto_continue(self) -> None:
-        """Queue the next unattended turn if vibe mode or a heartbeat asked for one.
+        """Queue the next unattended turn while there is work, not while a clock allows.
 
-        Bounded three ways: a turn counter, a wall-clock deadline, and the
-        shutdown flag, so the agent can never loop forever.
+        Vibe mode is an approval switch, not a one-shot: it stays on until the person
+        turns it off, and this function never flips it. What ends a run is the agent
+        standing still — a turn that called no tool changed nothing, and asking again
+        only repeats the same answer. That repetition is the real defect the old budget
+        was built around (and then hid).
         """
         if self._shutting_down:
             return
         wake = parse_heartbeat(self.session.last_tool_output)
         if wake is None and not self.vibe_mode:
-            self._auto_remaining = 0
-            return
-        if wake is None and self._auto_remaining <= 0:
-            # Vibe mode with no budget left: report once and stop.
-            self.set_vibe(False)
-            self._emit({"type": "notice", "text": f"[System: vibe остановлен — исчерпан лимит {AUTO_MAX_TURNS} автоходов]"})
+            self._idle_turns = 0
             return
 
-        import time as _t
-        if self._auto_started_at and (_t.time() - self._auto_started_at) > AUTO_MAX_SECONDS:
-            self.set_vibe(False)
-            self._emit({"type": "notice", "text": f"[System: vibe остановлен — лимит времени {AUTO_MAX_SECONDS}с]"})
+        ended = self.session.last_turn_end
+
+        # A turn the agent itself cut short did no work, however many tools it waved
+        # at the problem. Counting those as progress is how an unattended run spun:
+        # the loop guard stopped the turn, and this function immediately started the
+        # next one, forever. Its own message says why, so this comes first.
+        if ended in _FORCED_STOP_REASONS:
+            self._idle_turns = 0
+            self._emit({"type": "notice", "text": (
+                f"[System: ход остановлен принудительно ({ended}) — "
+                f"автономный прогон прекращён, чтобы не крутиться вхолостую. "
+                f"Vibe остаётся включён; напишите что-нибудь, чтобы продолжить.]")})
             return
 
-        if self._auto_remaining <= 0:
-            self._auto_remaining = AUTO_MAX_TURNS
-        self._auto_remaining -= 1
+        # The agent's own final answer means the work is finished. Poking it afterwards
+        # is what made vibe feel broken: a heartbeat arrived after every completed turn,
+        # while nothing was running. The same goes for a turn the person stopped — they
+        # took control — and for an ending nobody anticipated. Vibe itself stays on:
+        # only the auto-run stops, and the person is the one who turns the switch off.
+        ends_the_run = not any(ended == r or ended.startswith(r) for r in _UNFINISHED_ENDINGS)
+        if wake is None and ends_the_run:
+            self._idle_turns = 0
+            return
+
         prompt = wake or "[Heartbeat завершен] Продолжай."
-        left = self._auto_remaining
         self._emit({
             "type": "notice",
-            "text": f"[System: автоход через {AUTO_DELAY_S:g}с (осталось {left}): {prompt}]",
+            "text": f"[System: автоход через {AUTO_DELAY_S:g}с: {prompt}]",
         })
         self._auto_timer = threading.Timer(AUTO_DELAY_S, self._auto_turn, args=(prompt,))
         self._auto_timer.daemon = True
@@ -752,9 +954,9 @@ class ReplBridge:
         with self.session._lock:
             if self.session._turn_running:
                 # Something else started meanwhile; let that run and stop here.
-                self._auto_remaining = 0
+                self._idle_turns = 0
                 return
-        self.start_turn(prompt)
+        self.start_turn(prompt, _wake=True)
 
     def _run_turn_worker(self, user_input: str) -> None:
         """Runs on a background worker thread: handles commands and agent execution safely."""
@@ -767,7 +969,7 @@ class ReplBridge:
             #    Mirrors the legacy CLI, which called this before @file expansion
             #    and slash dispatch (main.py).
             try:
-                from hook_manager import hook_manager
+                from argent.hook_manager import hook_manager
                 user_input = hook_manager.call_modifier_hook("pre_prompt", user_input)
             except Exception as exc:
                 self._emit({"type": "notice", "text": f"[System: pre_prompt hook failed: {exc}]"})
@@ -843,7 +1045,11 @@ class ReplBridge:
                 self._auto_save_session()
 
             # 4. Run agent turn (runs inline inside this worker thread)
-            self.session._run_turn(user_input)
+            # The agent and its tools may print from arbitrary threads. Without
+            # the trap those writes land on the alternate screen and can shift
+            # the toolbar/cards until a resize forces a full repaint.
+            with self._trap:
+                self.session._run_turn(user_input)
             try:
                 from src.agent.shell_hooks import turn_stopped
                 printed = turn_stopped()
@@ -859,6 +1065,15 @@ class ReplBridge:
             self._emit({"type": "done"})
         finally:
             mark_interactive(False)
+            try:
+                # A denied/aborted turn never reaches _snapshot_markup, so
+                # refresh here as well: the balance follows actual spend even
+                # when the turn ended early.
+                from argent.provider_balance import prime_balance
+
+                prime_balance(force=True)
+            except Exception:
+                pass
             with self.session._lock:
                 self.session._turn_running = False
                 self.session._active = False
@@ -922,6 +1137,21 @@ class ReplBridge:
             )
         return None
 
+    def background_view(self, pid: str) -> str:
+        """What the background window shows, as JSON.
+
+        The TUI polls this while its window is open. Unlike `/jobs <pid>` it takes
+        nothing away from the agent: the process's output tail is copied, not drained.
+        """
+        from argent.tools.command_ops import background_view
+
+        try:
+            view = background_view(pid)
+        except Exception as e:                     # a window must never break a turn
+            view = {"pid": str(pid), "status": "unknown", "command": "", "elapsed": 0,
+                    "code": None, "output": "", "error": str(e)}
+        return json.dumps(view, ensure_ascii=False)
+
     def get_state(self) -> Dict[str, Any]:
         """Get snapshot of current runtime state for TUI status/header."""
         state = self.session.state()
@@ -934,7 +1164,7 @@ class ReplBridge:
             pass
         try:
             # The toolbar shows "Claude Sonnet 5.5", the config keeps "claude-sonnet-5-5".
-            from claude_catalog import label_for
+            from argent.claude_catalog import label_for
             state["model"] = label_for(state.get("provider"), state.get("model"))
         except Exception:
             pass
@@ -948,7 +1178,7 @@ class ReplBridge:
         state["is_project_mode"] = self.is_project_mode
         state["cwd"] = os.path.basename(os.getcwd()) or os.getcwd()
         try:
-            import config as _cfg
+            import argent.config as _cfg
             configured_max = _cfg.get_context_window()
         except Exception:
             configured_max = 32768
@@ -957,7 +1187,7 @@ class ReplBridge:
         state["ctx_max"] = ctx_usage.get("max") or configured_max
         state["ctx_percent"] = float(ctx_usage.get("percent", 0.0))
         try:
-            import config as _cfg
+            import argent.config as _cfg
             state["thinking_level"] = _cfg.get_thinking_level()
         except Exception:
             state["thinking_level"] = "auto"
@@ -978,18 +1208,184 @@ class ReplBridge:
                 state["mode"] = "PLAN"
             # The checklist rides as JSON text: the frontend's state map holds strings.
             state["todos"] = json.dumps(TODOS.snapshot("main"), ensure_ascii=False)
+            # Delegated work has its own list. Without it the panel shows one item
+            # ("delegate") while a sub-agent works through eight, unseen.
+            state["todos_sub"] = json.dumps(TODOS.snapshot_subagents(), ensure_ascii=False)
         except Exception:
             state["todos"] = "[]"
         try:
-            from usage_tracker import usage as _usage
+            # Only the running ones ride here: the panel is a glance, and a finished
+            # process can carry kilobytes of output that must not be polled twice a
+            # second. `background_done` is just a number for the panel's button.
+            from argent.tools.command_ops import (
+                ACTIVE_PROCESSES, ACTIVE_PROCESSES_LOCK, COMPLETED_PROCESSES,
+            )
+            import time as _time
+
+            now = _time.time()
+            with ACTIVE_PROCESSES_LOCK:
+                # A process that has exited must leave the "running" list even when
+                # the agent is idle: the bg_done event is drained only during a turn,
+                # so a finished sleep(240) used to sit in the panel as "9:29" and keep
+                # counting. poll() is free, so the panel heals itself.
+                from argent.tools.command_ops import _close_proc_pipes, _record_completed
+
+                for _pid in list(ACTIVE_PROCESSES.keys()):
+                    _info = ACTIVE_PROCESSES[_pid]
+                    _proc = _info.get("process")
+                    if _proc is None or not hasattr(_proc, "poll"):
+                        continue
+                    try:
+                        _code = _proc.poll()
+                    except Exception:
+                        continue
+                    if _code is None:
+                        continue
+                    try:
+                        _close_proc_pipes(_proc)
+                    except Exception:
+                        pass
+                    del ACTIVE_PROCESSES[_pid]
+                    _record_completed(_pid, _info, _code)
+
+                running = [
+                    {
+                        "pid": str(pid),
+                        "command": str(info.get("command", "")),
+                        "elapsed": int(now - info["started"]) if info.get("started") else 0,
+                        "pty": bool(info.get("pty")),
+                    }
+                    for pid, info in ACTIVE_PROCESSES.items()
+                ]
+                # The finished ones ride along as a short list: no output here, the
+                # panel only names them. Their text comes from /jobs <pid> on a click.
+                finished = [
+                    {
+                        "pid": str(pid),
+                        "command": str(info.get("command", "")),
+                        "code": info.get("exit_code"),
+                        "secs": (
+                            int((info.get("finished") or 0) - info["started"])
+                            if info.get("finished") and info.get("started") else 0
+                        ),
+                    }
+                    for pid, info in list(COMPLETED_PROCESSES.items())[-10:]
+                ]
+                done = len(COMPLETED_PROCESSES)
+            state["background"] = json.dumps(running, ensure_ascii=False)
+            state["background_finished"] = json.dumps(finished, ensure_ascii=False)
+            state["background_done"] = str(done)
+        except Exception:
+            state["background"] = "[]"
+            state["background_finished"] = "[]"
+            state["background_done"] = "0"
+        try:
+            # The picture the last image tool brought back, as a grid the frontend
+            # draws with half blocks. Only the newest one rides here: a card keeps
+            # the copy it was given, so this never has to be polled per frame.
+            from argent import image_preview
+
+            state["image_preview"] = image_preview.snapshot()
+        except Exception:
+            state["image_preview"] = ""
+        try:
+            # Pictures waiting to be sent with the next message. Tools attach them
+            # (view_image, a screenshot) as well as a paste, and until now the only
+            # trace of them was a notice in the chat: there was no way to see what
+            # was going with the message or to take it back.
+            from argent import vision as _vision
+
+            state["pending_images"] = _vision.pending_snapshot()
+        except Exception:
+            state["pending_images"] = "[]"
+        try:
+            from argent.usage_tracker import usage as _usage
+
+            # Kick a background refresh on the first state read and let the
+            # toolbar keep rendering from the last known value. The worker also
+            # refreshes after every turn, so the number follows real spend.
+            try:
+                from argent.provider_balance import current_balance, prime_balance
+
+                prime_balance()
+                _bal = current_balance()
+                if _bal is not None:
+                    _usage.set_balance(_bal.amount, _bal.currency, provider=state.get("provider", ""))
+                elif (
+                    state.get("provider")
+                    and _usage.balance_provider
+                    and state.get("provider") != _usage.balance_provider
+                ):
+                    _usage.clear_balance(state.get("provider", ""))
+            except Exception:
+                pass
+
             state["session_prompt"] = float(_usage.prompt)
             state["session_completion"] = float(_usage.completion)
             state["session_cost"] = float(_usage.cost)
             state["session_requests"] = int(_usage.requests)
-            # Same one-liner the REPL's toolbar prints, once anything was spent.
-            state["session_summary"] = _usage.format_session() if _usage.requests else ""
+            # Same one-liner the REPL's toolbar prints. Balance alone is enough
+            # to show before the first request (the provider was just probed).
+            state["session_summary"] = (
+                _usage.format_session()
+                if (_usage.requests or _usage.balance is not None)
+                else ""
+            )
+            # What the LAST request took, and the hover text that explains it.
+            # Survives a restart because the session file carries it.
+            state["last_spend"] = _usage.format_last_spend()
+            state["spend_breakdown"] = _spend_breakdown(
+                _usage, state.get("provider", ""), state.get("model", "")
+            )
         except Exception:
             pass
+        try:
+            from argent.model_capabilities import inert_label
+            from argent.config import get_current_model as _current_model
+
+            # The raw provider/model, not the display label set above: the
+            # Ollama capability cache is keyed by the real model name.
+            _provider = state.get("provider", "") or ""
+            state["inert_label"] = inert_label(_provider, _current_model(_provider or None))
+        except Exception:
+            state["inert_label"] = ""
+        try:
+            # Hover text for the context chip: where the next request's tokens go.
+            # The gauge must count the SAME total: system prompt + tool schemas
+            # + history. It used to show history only, so the chip said 16%
+            # while its own hover said 18%.
+            signature = (len(self.agent.messages), state.get("provider", ""), state.get("model", ""))
+            cached = getattr(self, "_ctx_breakdown_cache", None)
+            if cached and len(cached) >= 5 and cached[0] == signature:
+                text = cached[1]
+                total, ctx_max, percent = cached[2], cached[3], cached[4]
+            else:
+                breakdown = self.agent.get_context_breakdown()
+
+                def _tokens(n) -> str:
+                    n = int(n or 0)
+                    return f"{n / 1000:.1f}k" if n >= 1000 else str(n)
+
+                lines = [
+                    f"Системный промпт   {_tokens(breakdown.get('system'))} tok",
+                    f"Инструменты ({breakdown.get('tool_count', 0)})   {_tokens(breakdown.get('tools'))} tok",
+                    f"История разговора   {_tokens(breakdown.get('history'))} tok",
+                    "",
+                    f"Всего   {_tokens(breakdown.get('total'))} / {_tokens(breakdown.get('max'))} tok"
+                    f"  ·  {float(breakdown.get('percent', 0.0)):.0f}%",
+                ]
+                text = "\n".join(lines)
+                total = int(breakdown.get("total", 0) or 0)
+                ctx_max = int(breakdown.get("max", 0) or 0)
+                percent = float(breakdown.get("percent", 0.0) or 0.0)
+                self._ctx_breakdown_cache = (signature, text, total, ctx_max, percent)
+            state["ctx_breakdown"] = text
+            state["ctx_tokens"] = total
+            state["ctx_max"] = ctx_max
+            state["ctx_percent"] = percent
+            state["context"] = {"tokens": total, "max": ctx_max, "percent": percent}
+        except Exception:
+            state["ctx_breakdown"] = ""
         return state
 
     def render_block(self, kind: str, payload_json: str, width: int) -> str:
@@ -1015,7 +1411,7 @@ class ReplBridge:
         it is a real change, not a display toggle. Raises ValueError on an
         unknown level, which surfaces to the TUI as an error message.
         """
-        import config as _cfg
+        import argent.config as _cfg
         applied = _cfg.set_thinking_level(level)
         try:
             from src.cli.sound import play_sound
@@ -1026,7 +1422,7 @@ class ReplBridge:
 
     def get_thinking_levels(self) -> List[str]:
         """The cycle of levels the frontend may step through."""
-        import config as _cfg
+        import argent.config as _cfg
         return list(_cfg.THINKING_LEVELS)
 
     def get_command_completions(self) -> List[Dict[str, str]]:
@@ -1042,7 +1438,7 @@ class ReplBridge:
         res = completion_catalog()
         seen = {c["name"] for c in res}
         try:
-            from hook_manager import hook_manager
+            from argent.hook_manager import hook_manager
             for name in hook_manager.get_custom_commands():
                 if f"/{name}" not in seen:
                     res.append({"name": f"/{name}", "help": "(команда плагина)",
@@ -1051,18 +1447,50 @@ class ReplBridge:
             pass
         return res
 
+    def _session_state(self) -> dict:
+        """What belongs to the conversation but is not a message.
+
+        Today that is the checklist. The messages came back on restore while the list
+        did not, so the agent's own notes vanished under a history that still talked
+        about them, and the panel went blank mid-plan.
+        """
+        state = {}
+        try:
+            from src.agent.todos import TODOS
+
+            snap = TODOS.snapshot("main")
+            if snap:
+                state["todos"] = json.dumps(snap, ensure_ascii=False)
+        except Exception:
+            pass
+        return state
+
     def _auto_save_session(self) -> None:
         try:
+            # The spend rides along: a session restored without it starts its
+            # counters at zero, and the last task's cost is then unknowable.
+            try:
+                from argent.usage_tracker import usage as _usage
+
+                usage_snapshot = _usage.snapshot()
+            except Exception:
+                usage_snapshot = {}
             saved_id = save_session(
                 getattr(self.agent, "messages", []),
                 {
                     "model": getattr(self.agent, "model_name", "unknown"),
                     "provider": get_provider(),
                 },
-                session_id=getattr(self.agent, "session_id", None)
+                session_id=getattr(self.agent, "session_id", None),
+                usage=usage_snapshot,
+                state=self._session_state(),
             )
             if saved_id:
                 self.agent.session_id = saved_id
+                try:
+                    self.session.link_trace_session(saved_id)
+                except Exception:
+                    pass
         except Exception:
             pass
 
@@ -1080,13 +1508,13 @@ class ReplBridge:
         self.stop_trap()
         # Shut down browser engine
         try:
-            from browser_engine import browser_engine
+            from argent.browser_engine import browser_engine
             browser_engine.run(browser_engine.shutdown(), timeout=5)
         except Exception:
             pass
         # Stop background command processes
         try:
-            from tools.command_ops import ACTIVE_PROCESSES, _kill_process_tree, _close_proc_pipes
+            from argent.tools.command_ops import ACTIVE_PROCESSES, _kill_process_tree, _close_proc_pipes
             items = list(ACTIVE_PROCESSES.items()) if isinstance(ACTIVE_PROCESSES, dict) else list(ACTIVE_PROCESSES)
             for item in items:
                 try:
@@ -1101,7 +1529,7 @@ class ReplBridge:
             pass
         # Stop MCP servers
         try:
-            from mcp_client import mcp_client
+            from argent.mcp_client import mcp_client
             mcp_client.stop_all()
         except Exception:
             pass
@@ -1114,3 +1542,7 @@ class ReplBridge:
             pass
         # Save session
         self._auto_save_session()
+        try:
+            self.session.close_trace()
+        except Exception:
+            pass

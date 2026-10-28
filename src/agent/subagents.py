@@ -32,7 +32,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
-from logger import get_logger
+from argent.logger import get_logger
 from src.agent import governor, lanes, worktrees
 from src.agent.subagent_worker import RESULT_MARKER
 
@@ -47,7 +47,7 @@ DEFAULT_WAIT_SECONDS = 1800
 #: A sub-agent never gets these, whatever the supervisor asks for: they need a person, spawn more
 #: agents, or rewrite what runs later.
 FORBIDDEN_TOOLS = frozenset({
-    "ask_user_questions", "request_user_approval", "exit_plan_mode", "run_admin_command",
+    "ask_user_questions", "request_user_approval", "exit_plan_mode",
     "wait_heartbeat", "manage_automations", "run_subagent", "subagents", "ultracode", "rooms", "memory", "desktop_inspect", "desktop_act",
 })
 
@@ -77,7 +77,7 @@ def tools_for(role: str, requested: Optional[List[str]] = None) -> List[str]:
 
 def inherited_authority() -> dict:
     """What the supervisor's person has already allowed, as a child can use it."""
-    import approval
+    import argent.approval as approval
     from src.agent.permissions import PERMISSIONS
 
     allowed = []
@@ -110,7 +110,15 @@ class Run:
     patch: Optional[Path] = None
     worktree: Optional[worktrees.Worktree] = None
     repo: Optional[Path] = None      # the real tree a patch goes back to
+    # Where this worker's conversation is kept so a retry can continue it instead of
+    # starting over (the `resume` of a worker, by run id).
+    resume_from: Optional[str] = None
     disposition: str = ""            # "" | applied | discarded
+    # What this worker ran on. Kept on the run so the report (and the person) can see
+    # that a cheap model or a low thinking level was chosen, not guessed.
+    model: str = ""
+    provider: str = ""
+    thinking: str = ""
     proc: Optional[subprocess.Popen] = None
     log_tail: str = ""
     done: threading.Event = field(default_factory=threading.Event)
@@ -129,6 +137,10 @@ def _child_python() -> str:
 
 
 class SubagentManager:
+    #: Every line a child prints, as it prints it: `(run, line)`. The supervisor uses it
+    #: to show a worker's work while it happens instead of one line at the end.
+    on_line: Optional[Callable[["Run", str], None]] = None
+
     def __init__(self, argv_builder: Optional[Callable[[Path], List[str]]] = None):
         self._lock = threading.RLock()
         self._runs: Dict[int, Run] = {}
@@ -149,11 +161,17 @@ class SubagentManager:
             return [r for r in self._runs.values() if r.running]
 
     def spawn(self, role: str, task: str, tools: Optional[List[str]] = None, isolation: str = "none",
-              model: str = "", provider: str = "", cwd: Optional[Path] = None) -> Run:
+              model: str = "", provider: str = "", thinking: str = "", cwd: Optional[Path] = None,
+              resume_from: Optional[Path] = None) -> Run:
         from src.agent.plan_mode import PLAN
 
         if isolation not in ("none", "worktree"):
             raise ValueError("isolation must be 'none' or 'worktree'")
+        # Rejected here rather than in the child: a typo in the level must not start a
+        # process that then dies with a traceback nobody reads.
+        from argent.config import thinking_settings
+        thinking = (thinking or "").strip().lower()
+        thinking_settings(thinking)
         role = (role or "Researcher").strip()
         with self._lock:
             if len(self.running()) >= MAX_RUNNING:
@@ -168,11 +186,15 @@ class SubagentManager:
             wt = worktrees.create(f"{role}-{run_id}", work)
             work = wt.path
         run = Run(id=run_id, role=role, task=task, isolation=isolation, cwd=str(work), worktree=wt,
-                  repo=wt.repo if wt else None)
+                  repo=wt.repo if wt else None,
+                  resume_from=str(resume_from) if resume_from else None,
+                  model=model or "", provider=provider or "", thinking=thinking)
 
         spec = {
             "role": role, "task": task, "tools": tools_for(role, tools), "cwd": str(work),
-            "model": model or "", "provider": provider or "", "plan_mode": PLAN.active,
+            "model": model or "", "provider": provider or "", "thinking": thinking,
+            "plan_mode": PLAN.active,
+            "resume_from": run.resume_from or "",
             **inherited_authority(),
         }
         spec_dir = Path(tempfile.mkdtemp(prefix="argent-subagent-"))
@@ -209,22 +231,46 @@ class SubagentManager:
     # -- ending -------------------------------------------------------------------------
 
     def _reap(self, run: Run, spec_dir: Path) -> None:
-        """Wait for the child, read its verdict, turn its work into a patch."""
-        output = ""
+        """Wait for the child, read its verdict, turn its work into a patch.
+
+        Output is read line by line as it arrives, not in one go at the end: the child's
+        own dialogue (what it is reading, what it is running) is the only window a
+        person has into a worker, and `communicate()` kept it shut until the work was
+        already done.
+        """
+        lines: List[str] = []
+        verdict = None
         try:
-            out, _ = run.proc.communicate()
-            output = (out or b"").decode("utf-8", errors="replace")
+            assert run.proc.stdout is not None
+            for raw in iter(run.proc.stdout.readline, b""):
+                text = raw.decode("utf-8", errors="replace").rstrip("\r\n")
+                if not text:
+                    continue
+                if text.startswith(RESULT_MARKER):
+                    try:
+                        verdict = json.loads(text[len(RESULT_MARKER):])
+                    except ValueError:
+                        pass
+                    continue
+                lines.append(text)
+                run.log_tail = "\n".join(lines[-80:])[-LOG_TAIL_CHARS:]
+                hook = self.on_line
+                if hook is not None:
+                    try:
+                        hook(run, text)
+                    except Exception as e:                # a screen must never kill a worker
+                        log.debug("sub-agent #%d: on_line failed: %s", run.id, e)
+            run.proc.wait()
         except Exception as e:                               # the pipe broke: still finish the run
             log.warning("sub-agent #%d: reading its output failed: %s", run.id, e)
-        verdict = None
-        for line in reversed(output.splitlines()):
-            if line.startswith(RESULT_MARKER):
-                try:
-                    verdict = json.loads(line[len(RESULT_MARKER):])
-                except ValueError:
-                    pass
-                break
-        run.log_tail = output[-LOG_TAIL_CHARS:]
+        if verdict is None:
+            for line in reversed(lines):
+                if line.startswith(RESULT_MARKER):
+                    try:
+                        verdict = json.loads(line[len(RESULT_MARKER):])
+                    except ValueError:
+                        pass
+                    break
         try:
             self._collect_work(run)
         except Exception as e:
@@ -339,6 +385,103 @@ class SubagentManager:
 MANAGER = SubagentManager()
 
 
+# -- what a worker may run on ---------------------------------------------------------------
+
+PROVIDERS = ("ollama", "openrouter", "zai", "deepseek", "claude", "xkiro", "wormsoft", "koboldcpp")
+
+_KEY_GETTERS = {
+    "openrouter": "get_openrouter_api_key",
+    "zai": "get_zai_api_key",
+    "deepseek": "get_deepseek_api_key",
+    "claude": "get_claude_api_key",
+    "xkiro": "get_xkiro_api_key",
+    "wormsoft": "get_wormsoft_api_key",
+}
+
+
+def provider_ready(provider: str) -> tuple[bool, str]:
+    """Whether a worker could actually run on this provider now, and why not.
+
+    Checked before a process is started: a cloud provider with no key would fail
+    halfway through an unattended run, where nobody reads the traceback.
+    """
+    name = (provider or "").strip().lower()
+    if name == "anthropic":
+        name = "claude"
+    if name not in PROVIDERS:
+        return False, f"unknown provider {provider!r}; known: {', '.join(PROVIDERS)}"
+    if name in ("ollama", "koboldcpp"):
+        return True, ""                        # a local server is its own configuration
+    from argent import config
+    getter = getattr(config, _KEY_GETTERS.get(name, ""), None)
+    if getter is not None and not getter():
+        return False, f"{name} has no API key configured"
+    return True, ""
+
+
+def resolve_target(model: str = "", provider: str = "", thinking: str = "",
+                   strict: bool | None = None) -> tuple[str, str, str]:
+    """Model, provider and thinking level for a sub-agent, with the defaults applied.
+
+    Precedence: what the caller asked for, then the person's `subagent_*` keys,
+    then "as the main agent". A provider without a model uses that provider's
+    saved model; a model without a provider keeps the main provider.
+
+    `strict` decides whether an unconfigured provider is an error. A target the
+    caller picked explicitly is checked before a process starts — a 401 halfway
+    through an unattended run is the worst kind of surprise. A target that came
+    from the person's own config is attempted as written: that path already has
+    a fallback, and refusing it would take the choice away from them.
+    """
+    from argent import config
+
+    explicit_provider = bool((provider or "").strip())
+    if strict is None:
+        strict = explicit_provider
+
+    thinking = (thinking or "").strip().lower() or config.get_subagent_thinking()
+    config.thinking_settings(thinking)         # a typo fails here, before anything runs
+
+    model = (model or "").strip() or config.get_subagent_model()
+    provider = (provider or "").strip() or config.get_subagent_provider()
+
+    if provider:
+        if strict:
+            ok, why = provider_ready(provider)
+            if not ok:
+                raise ValueError(why)
+        if provider.lower() == "anthropic":
+            provider = "claude"
+        if not model:
+            model = config.get_current_model(provider) or ""
+    elif model:
+        provider = config.get_provider()
+    return model, provider, thinking
+
+
+def available_targets() -> str:
+    """What a sub-agent may be told to run on, and where each one runs."""
+    from argent import config
+    from src.agent.local_backend import classify
+
+    main_provider, main_model = config.get_provider(), config.get_current_model()
+    saved = config.get_provider_models() or {}
+    lines = [f"Main agent: {main_provider}:{main_model} "
+             f"[{'local' if classify(main_provider, main_model).local else 'cloud'}]"]
+    for name in PROVIDERS:
+        ok, _why = provider_ready(name)
+        if not ok:
+            continue
+        model = saved.get(name) or (main_model if name == main_provider else "")
+        where = "local" if classify(name, model).local else "cloud"
+        lines.append(f"  {name}: {model or '(pass model= explicitly)'} [{where}]")
+    lines.append("thinking: off | low | medium | high | xhigh | auto "
+                 "(auto or empty = as the main agent).")
+    lines.append("Defaults: config subagent_model / subagent_provider / subagent_thinking; "
+                 "unset = the main agent's own model and thinking.")
+    return "\n".join(lines)
+
+
 # -- how a run is told to the model / the person -------------------------------------------
 
 def describe(run: Run, full: bool = True) -> str:
@@ -347,6 +490,12 @@ def describe(run: Run, full: bool = True) -> str:
     head += f" after {run.elapsed():.0f}s" if not run.running else f" for {run.elapsed():.0f}s"
     if run.isolation == "worktree":
         head += " [isolated copy]"
+    if run.model or run.provider or run.thinking:
+        target = f"{run.provider}:" if run.provider else ""
+        target += run.model or "main model"
+        if run.thinking:
+            target += f", thinking {run.thinking}"
+        head += f" on {target}"
     lines = [head + "."]
     if run.running:
         lines.append(f"Task: {run.task[:200]}")

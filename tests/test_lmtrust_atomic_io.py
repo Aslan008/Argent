@@ -10,7 +10,7 @@ from unittest.mock import patch
 
 import pytest
 
-from atomic_io import atomic_write_bytes, atomic_write_text
+from argent.atomic_io import atomic_write_bytes, atomic_write_text
 
 
 # ---------------------------------------------------------------------------
@@ -149,7 +149,7 @@ class TestDefaultEncoding:
 
     def test_atomic_write_text_default_encoding(self, tmp_path):
         """atomic_write_text with explicit encoding=None path via _atomic_write."""
-        from atomic_io import _atomic_write
+        from argent.atomic_io import _atomic_write
         target = tmp_path / "default_enc.txt"
         # Call _atomic_write directly with mode="w" and no encoding (defaults to None)
         _atomic_write(target, lambda f: f.write("hello world"), "w")
@@ -158,7 +158,7 @@ class TestDefaultEncoding:
     def test_atomic_write_bytes_no_encoding_param(self, tmp_path):
         """atomic_write_bytes passes no encoding — _atomic_write uses None default.
         Binary mode ignores encoding, so this works regardless."""
-        from atomic_io import _atomic_write
+        from argent.atomic_io import _atomic_write
         target = tmp_path / "binary.bin"
         _atomic_write(target, lambda f: f.write(b"\x00\xff"), "wb")
         assert target.read_bytes() == b"\x00\xff"

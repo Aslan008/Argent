@@ -17,7 +17,7 @@ from typing import Any, Dict, List, Optional
 
 import torch
 import torch.nn.functional as F
-from logger import get_logger
+from argent.logger import get_logger
 
 logger = get_logger("leeth_browser_router")
 
@@ -65,7 +65,7 @@ def requires_confirmation_check(element: Dict) -> bool:
     if any(p.search(text) for p in DANGEROUS_PATTERNS):
         return True
     try:
-        from src.leeth.dispatcher import DENY_PATTERNS  # deferred: avoids import cycle
+        from src.leeth.dispatcher import DENY_PATTERNS  
         raw_txt = element.get("text") or element.get("label") or element.get("name") or ""
         return any(p.search(raw_txt) for p in DENY_PATTERNS)
     except Exception:

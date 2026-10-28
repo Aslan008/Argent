@@ -6,7 +6,7 @@ import time
 from unittest.mock import MagicMock, patch
 import pytest
 
-from agent import ArgentAgent, ArgentSubAgent, _ACTIVE_SUBAGENTS
+from argent.agent import ArgentAgent, ArgentSubAgent, _ACTIVE_SUBAGENTS
 from src.bridge.session import AgentSession
 from src.cli.esc_listener import EscInterruptListener
 
@@ -15,7 +15,7 @@ class TestInterruptAudit:
     def test_run_command_orphan_process_on_keyboardinterrupt(self, monkeypatch):
         """D5 / L4: When run_command receives KeyboardInterrupt while reading output,
         _kill_process_tree MUST be called so child processes do not leak."""
-        from tools import command_ops
+        from argent.tools import command_ops
 
         killed = []
         mock_proc = MagicMock()
@@ -58,7 +58,7 @@ class TestInterruptAudit:
     def test_select_from_list_cancels_on_interrupt(self, monkeypatch):
         """L4b x D4: If user presses Ctrl+C during menu selection, _select_from_list
         MUST return None (cancel) instead of selecting the default/first choice."""
-        import ui
+        import argent.ui as ui
         monkeypatch.setattr("questionary.select", lambda *a, **k: MagicMock(ask=lambda: None))
         
         # When questionary returns None, ui._select_from_list falls through to ptk_prompt.

@@ -186,14 +186,14 @@ class TestPolicy:
 
 class TestEnforcedInTools:
     def test_call_mcp_tool_blocked(self, monkeypatch):
-        from tools.misc_tools import call_mcp_tool
+        from argent.tools.misc_tools import call_mcp_tool
         with policy.use(policy.Policy(["mcp:unity.delete_*"])):
             out = call_mcp_tool("unity", "delete_asset", "{}")
         assert out.startswith("Error:") and "ignored" in out
 
     def test_read_skill_cut(self, monkeypatch):
-        import skill_manager as sm
-        from tools import skill_tools
+        import argent.skill_manager as sm
+        from argent.tools import skill_tools
         monkeypatch.setattr(sm.skill_manager, "read_skill", lambda name: SKILL)
         with policy.use(policy.Policy(["skill:docs#Setup"])):
             out = skill_tools.read_skill("docs")
@@ -353,8 +353,8 @@ class TestIntegrations:
         assert out.startswith("Error:") and "ghost" in out
 
     def test_mcp_call_passes_through(self, monkeypatch):
-        import mcp_client as mc
-        import tools.schemas as schemas
+        import argent.mcp_client as mc
+        import argent.tools.schemas as schemas
         monkeypatch.setattr(Integrations, "ensure_server", lambda self, name: "")
         monkeypatch.setattr(Integrations, "_required_params", staticmethod(lambda s, t: ["query"]))
         got = {}
@@ -366,7 +366,7 @@ class TestIntegrations:
         assert json.loads(got["a"]) == {"limit": 2, "query": "cats"}
 
     def test_skill_cut_and_missing(self, monkeypatch):
-        import skill_manager as sm
+        import argent.skill_manager as sm
         monkeypatch.setattr(sm.skill_manager, "read_skill", lambda n: SKILL if n == "docs" else "")
         node = Node(id="s", type="skill", skill="docs", ignore=["skill:docs#Setup"])
         out = Integrations().skill(node, State())
@@ -376,7 +376,7 @@ class TestIntegrations:
         assert Integrations().skill(blocked, State()).startswith("Error:")
 
     def test_plugin_command_output_and_return(self, monkeypatch):
-        import hook_manager as hm
+        import argent.hook_manager as hm
 
         def command_hi(*words):
             print("printed", *words)
@@ -387,7 +387,7 @@ class TestIntegrations:
         assert Integrations().plugin(Node(id="p", type="plugin", command="nope"), State()).startswith("Error:")
 
     def test_leeth_filter_uses_map_tool(self, monkeypatch):
-        import tools.schemas as schemas
+        import argent.tools.schemas as schemas
         got = {}
         monkeypatch.setattr(schemas, "AVAILABLE_TOOLS", {"leeth_map": lambda **kw: got.update(kw) or "{}"})
         node = Node(id="l", type="leeth", mode="filter", input_from="posts", instruction="about animals?")
@@ -400,7 +400,7 @@ class TestIntegrations:
         assert Integrations().leeth(node, State(data={"posts": []})).startswith("Error:")
 
     def test_leeth_delegate(self, monkeypatch):
-        import tools.schemas as schemas
+        import argent.tools.schemas as schemas
         monkeypatch.setattr(schemas, "AVAILABLE_TOOLS", {"delegate_to_leeth": lambda task: f"did {task}"})
         node = Node(id="l", type="leeth", instruction="sum up")
         assert Integrations().leeth(node, State()) == "did sum up"
@@ -474,7 +474,7 @@ class TestAllTools:
 
     def test_every_registered_tool_is_a_valid_step_except_runs_in_runs(self):
         from src.rooms.validator import NOT_IN_ROOMS
-        from tools.schemas import AVAILABLE_TOOLS
+        from argent.tools.schemas import AVAILABLE_TOOLS
         names = set(AVAILABLE_TOOLS)
         assert len(names) > 40
         for name in sorted(names - NOT_IN_ROOMS):
@@ -514,7 +514,7 @@ class TestAgentNode:
         assert "mcp_servers" not in seen[0] and seen[1]["mcp_servers"] == []
 
     def test_skills_block_applies_the_rules(self, monkeypatch):
-        import skill_manager as sm
+        import argent.skill_manager as sm
         from src.rooms.runner import _skills_block
         monkeypatch.setattr(sm.skill_manager, "read_skill", lambda n: SKILL)
         block = _skills_block(["docs", "banned"], policy.Policy(["skill:docs#Setup", "skill:banned"]))
@@ -570,7 +570,7 @@ class TestLeethClick:
             Node(id="c", type="leeth", mode="click")
 
     def test_whole_leeth_click_goes_through_the_tool(self, monkeypatch):
-        import tools.schemas as schemas
+        import argent.tools.schemas as schemas
         got = {}
         monkeypatch.setattr(schemas, "AVAILABLE_TOOLS", {"leeth_click_many": lambda **kw: got.update(kw) or "{}"})
         node = self._node(args={"button": "закладк"})

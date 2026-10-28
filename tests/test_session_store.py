@@ -15,8 +15,8 @@ import json
 
 import pytest
 
-import session as session_module
-from session import (
+import argent.session as session_module
+from argent.session import (
     delete_session, find_session, get_last_session, list_sessions,
     load_session, save_session,
 )
@@ -236,7 +236,7 @@ class TestSessionEnhancements:
 
     def test_format_relative_time(self):
         from datetime import datetime, timedelta
-        from session import format_relative_time
+        from argent.session import format_relative_time
         
         now = datetime.now()
         just_now = now.isoformat()
@@ -247,7 +247,7 @@ class TestSessionEnhancements:
 
     def test_format_short_path(self, monkeypatch):
         from pathlib import Path
-        from session import format_short_path
+        from argent.session import format_short_path
         home = Path.home()
         test_path = home / "Desktop" / "Project"
         assert format_short_path(str(test_path)) == "~/Desktop/Project"

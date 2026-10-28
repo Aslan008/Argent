@@ -94,7 +94,7 @@ class TestStarterRooms:
                 assert ph in known, (room.room, "report", ph)
 
     def test_starter_tools_exist_in_the_real_registry(self):
-        from tools.lazy_registry import DEFAULT_TOOL_LOADERS
+        from argent.tools.lazy_registry import DEFAULT_TOOL_LOADERS
         real = set(DEFAULT_TOOL_LOADERS)
         used = set()
         for room in starter_lib().rooms.values():
@@ -463,9 +463,9 @@ class TestRoomsTool:
         assert "rooms" in FORBIDDEN_TOOLS
 
     def test_the_tool_is_registered_with_a_schema(self):
-        from tools.lazy_registry import DEFAULT_TOOL_LOADERS
-        from tools.schemas import TOOL_SCHEMAS
-        assert DEFAULT_TOOL_LOADERS["rooms"] == ("tools.rooms_tools", "rooms")
+        from argent.tools.lazy_registry import DEFAULT_TOOL_LOADERS
+        from argent.tools.schemas import TOOL_SCHEMAS
+        assert DEFAULT_TOOL_LOADERS["rooms"] == ("argent.tools.rooms_tools", "rooms")
         entry = [t for t in TOOL_SCHEMAS if t["function"]["name"] == "rooms"]
         assert len(entry) == 1 and "action" in entry[0]["function"]["parameters"]["required"]
 
@@ -545,14 +545,14 @@ class TestRoomHint:
         assert last_user_text(msgs) == "second"
 
     def test_switch_off(self, monkeypatch):
-        import config
+        import argent.config as config
         from src.rooms.hint import room_hint
         monkeypatch.setattr(config, "get_rooms_hint", lambda: False)
         assert room_hint([{"role": "user", "content": "почини падающие тесты в проекте"}],
                          library=starter_lib()) is None
 
     def test_command_switches_it(self, lib, monkeypatch):
-        import config
+        import argent.config as config
         state = {"on": True}
         monkeypatch.setattr(config, "get_rooms_hint", lambda: state["on"])
         monkeypatch.setattr(config, "set_rooms_hint", lambda v: state.update(on=v))

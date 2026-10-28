@@ -6,7 +6,7 @@ from rich.text import Text
 from rich.panel import Panel
 from rich.spinner import Spinner as RichSpinner
 from rich.markup import escape
-from ui import (
+from argent.ui import (
     console, print_system, print_error, print_tool_start, print_tool_end,
     s, c, create_content_panel,
     create_final_panel, safe_print, print_context_usage, print_assistant_header,
@@ -245,7 +245,7 @@ class _ToolWaitDisplay:
     def __rich_console__(self, console, options):
         now = time.time()
         phase_elapsed = _format_time_compact(now - self.phase_start)
-        from ui import _format_tool_header_markup
+        from argent.ui import _format_tool_header_markup
         header_markup = _format_tool_header_markup(self.tool_name, self.tool_args)
 
         self._spinner.text = Text.from_markup(
@@ -276,7 +276,7 @@ class _HeartbeatWaitDisplay:
 
         proc_parts = []
         try:
-            from tools.command_ops import ACTIVE_PROCESSES, ACTIVE_PROCESSES_LOCK
+            from argent.tools.command_ops import ACTIVE_PROCESSES, ACTIVE_PROCESSES_LOCK
             with ACTIVE_PROCESSES_LOCK:
                 if self.target_pids:
                     pids_to_check = sorted(self.target_pids, key=lambda x: int(x) if str(x).isdigit() else str(x))
@@ -404,13 +404,13 @@ def turn_snapshot_lines(agent, elapsed: float, timing: dict = None,
     Also warns when the context window exceeds 85%.
     """
     if mode is None:
-        from config import get_turn_snapshot_mode
+        from argent.config import get_turn_snapshot_mode
         mode = get_turn_snapshot_mode()
     timing = timing or {}
     usage = usage or {}
     lines: list = []
 
-    from usage_tracker import usage as session_usage, _short, _fmt_cost
+    from argent.usage_tracker import usage as session_usage, _short, _fmt_cost
 
     # ── OFF mode: minimal classic line ──
     if mode == "off":
@@ -419,6 +419,13 @@ def turn_snapshot_lines(agent, elapsed: float, timing: dict = None,
         if usage:
             try:
                 usage_str = " · " + session_usage.format_last(usage)
+            except Exception:
+                usage_str = ""
+        if not usage_str:
+            # No per-request cost reported: the balance drop is the only number.
+            try:
+                last_spend = session_usage.format_last_spend()
+                usage_str = f" · {last_spend}" if last_spend else ""
             except Exception:
                 usage_str = ""
         tools_t = timing.get("tools", 0.0)
@@ -471,6 +478,10 @@ def turn_snapshot_lines(agent, elapsed: float, timing: dict = None,
             tok_parts.append(_fmt_cost(cost))
         elif session_usage.cost > 0:
             tok_parts.append(f"session {_fmt_cost(session_usage.cost)}")
+        else:
+            last_spend = session_usage.format_last_spend()
+            if last_spend:
+                tok_parts.append(last_spend)
 
         if tok_parts:
             lines.append(f"  [dim]┄ {' · '.join(tok_parts)}[/dim]")
@@ -536,10 +547,16 @@ def turn_snapshot_lines(agent, elapsed: float, timing: dict = None,
         except Exception:
             pass
 
-        # 5. Cost
+        # 5. Cost. A provider that reports no per-request cost (DeepSeek) still
+        # moves the prepaid balance, so the last request's drop is shown as an
+        # approximate spend — otherwise this turn looks free.
         cost = usage.get("cost", 0.0) or 0.0
         if cost > 0:
             parts.append(_fmt_cost(cost))
+        else:
+            last_spend = session_usage.format_last_spend()
+            if last_spend:
+                parts.append(last_spend)
 
         # 6. Session total (if multiple requests)
         session_total = session_usage.prompt + session_usage.completion
@@ -568,7 +585,7 @@ def turn_snapshot_lines(agent, elapsed: float, timing: dict = None,
 def _print_turn_snapshot(agent, elapsed: float, timing: dict = None,
                          usage: dict = None, tool_calls: int = 0):
     """Prints a turn snapshot after the model response (see turn_snapshot_lines)."""
-    from usage_tracker import usage as session_usage
+    from argent.usage_tracker import usage as session_usage
     if usage:
         try:
             session_usage.add(usage)
@@ -705,7 +722,7 @@ def render_response_stream(
                                 break
 
                     # Re-render thinking as static text or compact summary
-                    from ui import print_reasoning
+                    from argent.ui import print_reasoning
                     if current_thinking_block:
                         thinking_duration = time.time() - thinking_start_time
                         print_reasoning(current_thinking_block, duration=thinking_duration)
@@ -744,7 +761,7 @@ def render_response_stream(
                             else:
                                 break
 
-                    from ui import print_rethink
+                    from argent.ui import print_rethink
                     if current_rethink_block:
                         rethink_duration = time.time() - rethink_start_time
                         print_rethink(current_rethink_block, duration=rethink_duration)
@@ -787,8 +804,13 @@ def render_response_stream(
                     current_tool_args = {}
                     current_tool_start_ts = None
                 elif type_ == "diff":
-                    from ui import print_inline_diff
+                    from argent.ui import print_inline_diff
                     print_inline_diff(chunk.get("file", ""), chunk.get("diff", ""))
+                elif type_ == "notice":
+                    # A notice of the agent's own (the unfinished checklist at the end
+                    # of a turn): neutral, not an error — the task may be paused on
+                    # purpose, and red would say something else.
+                    print_system((chunk.get("text") or "").strip())
                 elif type_ == "error":
                     _render_stream_error(chunk["content"])
                 elif type_ == "checkpoint":
@@ -880,7 +902,7 @@ def render_response_stream(
                             current_tool_args = {}
                             current_tool_start_ts = None
                         elif type_ == "diff":
-                            from ui import print_inline_diff
+                            from argent.ui import print_inline_diff
                             print_inline_diff(chunk.get("file", ""), chunk.get("diff", ""))
                         elif type_ == "error":
                             _render_stream_error(chunk["content"])
@@ -891,7 +913,7 @@ def render_response_stream(
                 # ====================================================
                 # Tool execution — wait for tool_end
                 # ====================================================
-                from tools.schemas import INTERACTIVE_TOOLS
+                from argent.tools.schemas import INTERACTIVE_TOOLS
                 use_spinner = current_tool_name not in INTERACTIVE_TOOLS
 
                 if use_spinner:
@@ -935,7 +957,7 @@ def render_response_stream(
                         current_tool_args = {}
                         current_tool_start_ts = None
                     elif type_ == "diff":
-                        from ui import print_inline_diff
+                        from argent.ui import print_inline_diff
                         print_inline_diff(chunk.get("file", ""), chunk.get("diff", ""))
                     elif type_ == "tool_start":
                         assistant_header_printed = False
@@ -955,7 +977,7 @@ def render_response_stream(
             break
         except Exception as e:
             try:
-                from logger import get_logger
+                from argent.logger import get_logger
                 get_logger("ui").exception("Stream exception in render_response_stream: %s", e)
             except Exception:
                 pass

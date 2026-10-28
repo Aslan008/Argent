@@ -17,8 +17,8 @@ from pathlib import Path
 
 import pytest
 
-import tools.file_ops as file_ops
-import tools._helpers as helpers
+import argent.tools.file_ops as file_ops
+import argent.tools._helpers as helpers
 
 
 class TestTheApprovalNamesTheResolvedPath:
@@ -28,7 +28,7 @@ class TestTheApprovalNamesTheResolvedPath:
         target.write_text("x", encoding="utf-8")
 
         asked = []
-        monkeypatch.setattr("approval.request_approval",
+        monkeypatch.setattr("argent.approval.request_approval",
                             lambda action, **k: asked.append(action) or False)
         result = file_ops.delete_file("scratch.txt")
 
@@ -41,7 +41,7 @@ class TestTheApprovalNamesTheResolvedPath:
     def test_the_same_name_in_two_directories_reads_differently(self, tmp_path, monkeypatch):
         """The point of an absolute path: /cd changes what a relative one means."""
         asked = []
-        monkeypatch.setattr("approval.request_approval",
+        monkeypatch.setattr("argent.approval.request_approval",
                             lambda action, **k: asked.append(action) or False)
         for folder in ("a", "b"):
             here = tmp_path / folder

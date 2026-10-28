@@ -1,7 +1,7 @@
 """read_git_diff caps a huge diff into a summary + bounded slice."""
 
-import tools.command_ops as command_ops
-from tools.command_ops import read_git_diff
+import argent.tools.command_ops as command_ops
+from argent.tools.command_ops import read_git_diff
 
 
 class R:

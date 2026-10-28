@@ -45,7 +45,7 @@ class TestWhenToSpeak:
 
 class TestDelivery:
     def test_disabled_in_config_means_no_subprocess(self, monkeypatch):
-        monkeypatch.setattr("config.get_desktop_notifications", lambda: False)
+        monkeypatch.setattr("argent.config.get_desktop_notifications", lambda: False)
         monkeypatch.setattr(notify.subprocess, "run",
                             lambda *a, **k: pytest.fail("must not shell out"))
         assert notify.desktop_notify("t", "b") is False
@@ -53,7 +53,7 @@ class TestDelivery:
     def test_a_broken_notifier_is_not_a_failed_run(self, monkeypatch):
         """Delivery is best-effort; a missing notify-send must never turn a
         successful automation into a failed one."""
-        monkeypatch.setattr("config.get_desktop_notifications", lambda: True)
+        monkeypatch.setattr("argent.config.get_desktop_notifications", lambda: True)
 
         def boom(*a, **k):
             raise FileNotFoundError("notify-send")
@@ -68,7 +68,7 @@ class TestDelivery:
     def test_model_text_never_reaches_the_shell_body(self, monkeypatch):
         """A summary can contain quotes, $ and backticks. Interpolating it into
         a PowerShell command would be both broken and an injection."""
-        monkeypatch.setattr("config.get_desktop_notifications", lambda: True)
+        monkeypatch.setattr("argent.config.get_desktop_notifications", lambda: True)
         monkeypatch.setattr(notify.sys, "platform", "win32")
         seen = {}
 

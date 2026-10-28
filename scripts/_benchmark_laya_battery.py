@@ -9,8 +9,8 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "scripts"))
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-from _leeth_calibration import CHOICE_CASES, NOUL_CASES, TOOL_CHOICES  # noqa: E402
-from _benchmark_laya import extract_laya_choice, extract_laya_noul, ece  # noqa: E402
+from _leeth_calibration import CHOICE_CASES, NOUL_CASES, TOOL_CHOICES  
+from _benchmark_laya import extract_laya_choice, extract_laya_noul, ece  
 
 
 def main():

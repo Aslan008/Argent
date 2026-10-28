@@ -11,7 +11,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-import config
+import argent.config as config
 from src.automation import desktop_guard as guard
 from src.automation import uia
 
@@ -54,16 +54,39 @@ class TestKeys:
         with pytest.raises(ValueError):
             uia.parse_keys(bad)
 
+    def test_every_call_into_uiautomation_exists(self):
+        """The stand-in for Windows in these tests cannot notice a missing method.
+
+        `auto.DoubleClick(...)` was called for months of passing tests: uiautomation
+        2.0.29 has Click, RightClick, MiddleClick and a press/release pair, and no
+        DoubleClick at all — the AttributeError only appeared on a real double click.
+        Read the AST, not the text: the docstring names the missing method too.
+        """
+        import ast
+        import pathlib
+
+        auto = pytest.importorskip("uiautomation")
+        tree = ast.parse(pathlib.Path(uia.__file__).read_text(encoding="utf-8"))
+        called = {node.attr for node in ast.walk(tree)
+                  if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name)
+                  and node.value.id == "auto"}
+        missing = sorted(name for name in called if not hasattr(auto, name))
+        assert not missing, f"uia.py calls what the installed uiautomation does not have: {missing}"
+
 
 # --- the rules -------------------------------------------------------------------------------------------------
 
 class TestWindows:
-    def test_unlisted_program_is_refused_with_the_way_to_allow_it(self):
-        d = guard.check_window("notepad.exe", "Untitled - Notepad", allowed=[])
-        assert not d and "/desktop allow notepad.exe" in d.reason
+    def test_any_program_passes_without_a_list(self):
+        """The allow-list used to be required and empty at the start — so nothing
+        worked until the person filled it by hand. It protected nothing and made
+        the tools useless on first use."""
+        assert guard.check_window("notepad.exe", "Untitled - Notepad")
+        assert guard.check_window("CalculatorApp.exe", "Калькулятор")
 
-    def test_listed_program_passes(self):
-        assert guard.check_window("Notepad.exe", "Untitled", allowed=["notepad.exe"])
+    def test_an_explicit_list_is_still_honoured(self):
+        assert not guard.check_window("notepad.exe", "Untitled", allowed=[])
+        assert guard.check_window("notepad.exe", "Untitled", allowed=["notepad.exe"])
 
     @pytest.mark.parametrize("proc", ["KeePass.exe", "consent.exe", "1Password.exe", "regedit.exe"])
     def test_secret_holders_are_never_acted_in_even_when_listed(self, proc):
@@ -175,22 +198,31 @@ class TestSettings:
     def test_commands(self, values, monkeypatch):
         from src.cli.commands import CommandContext, dispatch_command
         monkeypatch.setattr(uia, "available", lambda: True)
+        monkeypatch.setattr(uia, "windows", lambda: [])       # no real desktop read from a unit test
 
         def run(text):
             return dispatch_command(text, CommandContext(agent=MagicMock(), user_input=text))
 
-        assert run("/desktop allow Notepad").handled
-        assert values["desktop_allowed_apps"] == ["notepad.exe"]
-        run("/desktop allow keepass.exe")                      # refused: a password manager
-        assert "keepass.exe" not in values["desktop_allowed_apps"]
-        run("/desktop on")
-        assert guard.enabled()
         run("/desktop off")
         assert not guard.enabled()
+        run("/desktop on")
+        assert guard.enabled()
         run("/desktop key ctrl+alt+f11")
         assert values["desktop_stop_chord"] == "ctrl+alt+f11"
-        run("/desktop deny notepad")
-        assert values["desktop_allowed_apps"] == []
+
+    def test_allowing_programs_is_no_longer_part_of_the_ritual(self, values, monkeypatch):
+        """`/desktop allow` is gone: the list it filled no longer gates anything."""
+        from src.cli.commands import CommandContext, dispatch_command
+        from src.cli.commands import registry
+        from src.cli.commands.desktop_commands import _USAGE
+
+        assert "allow" not in _USAGE
+        monkeypatch.setattr(uia, "available", lambda: True)
+        monkeypatch.setattr(uia, "windows", lambda: [])
+        res = dispatch_command("/desktop allow notepad.exe",
+                               CommandContext(agent=MagicMock(), user_input="/desktop allow notepad.exe"))
+        assert res.handled
+        assert "desktop_allowed_apps" not in values or values.get("desktop_allowed_apps") in ([], None)
 
 
 class TestEmergencyKey:
@@ -220,7 +252,7 @@ def _element(id="e1", role="Button", name="Save", **kw):
 @pytest.fixture
 def fake(monkeypatch, values):
     """A window 'Notes' of 'notes.exe' with a field and two buttons; every call is recorded."""
-    from tools import desktop_control_tools as tools
+    from argent.tools import desktop_control_tools as tools
     window = uia.WindowInfo(hwnd=77, title="Notes", pid=1, process="notes.exe", rect=(0, 0, 400, 300))
     elements = [_element("e1", "Edit", "Title"), _element("e2", "Button", "Save"), _element("e3", "Button", "Delete"),
                 _element("e4", "Edit", "Secret", password=True)]
@@ -244,7 +276,8 @@ def fake(monkeypatch, values):
     monkeypatch.setattr(uia, "bring_to_front", lambda w: True)
     monkeypatch.setattr(uia, "foreground_window", lambda: window if state["front"] == window.hwnd else
                         uia.WindowInfo(hwnd=1, title="Other", pid=2, process="other.exe"))
-    import approval
+    import argent.approval as approval
+    state["real_approval"] = approval.request_approval        # kept before the stand-in replaces it
     monkeypatch.setattr(approval, "get_policy", lambda: approval.POLICY_ASK)
 
     def approve(action, *, destructive=False, grant_key=None):
@@ -264,14 +297,15 @@ class TestTools:
         assert "off" in fake.tools.desktop_inspect(action="windows")
         assert "off" in fake.tools.desktop_act(action="click", window="Notes", element="e2")
 
-    def test_windows_are_marked_by_permission(self, fake):
+    def test_windows_are_marked_by_whether_acting_is_possible(self, fake):
         out = fake.tools.desktop_inspect(action="windows")
-        assert "'Notes'" in out and "[allowed]" in out
+        assert "'Notes'" in out and "[yes]" in out
 
-    def test_a_program_that_is_not_allowed_is_not_even_read(self, fake):
+    def test_a_program_needs_no_list_to_be_read(self, fake):
         config.set_desktop_allowed_apps([])
         out = fake.tools.desktop_inspect(action="tree", window="Notes")
-        assert out.startswith("Refused") and "/desktop allow notes.exe" in out
+        assert not out.startswith("Refused"), out
+        assert "[e2] Button 'Save'" in out
 
     def test_tree_find_and_ids(self, fake):
         tree = fake.tools.desktop_inspect(action="tree", window="Notes")
@@ -284,23 +318,22 @@ class TestTools:
         assert out.startswith("Error") and "desktop_inspect" in out
         assert fake.calls == []
 
-    def test_click_goes_through_approval_and_shows_the_window_after(self, fake):
+    def test_an_ordinary_click_runs_without_asking_and_shows_the_window_after(self, fake):
         fake.tools.desktop_inspect(action="tree", window="Notes")
         out = fake.tools.desktop_act(action="click", window="Notes", element="e2")
         assert out.startswith("Done") and "[e2]" in out
         assert fake.calls == [("invoke", "Save")]
-        action, destructive, grant = fake.state["approvals"][0]
-        assert "«Save»" in action and not destructive and grant == "desktop:notes.exe"
+        assert fake.state["approvals"] == [], "an ordinary click must not wait for the person"
 
     def test_a_destructive_control_is_asked_as_destructive(self, fake):
         fake.tools.desktop_inspect(action="tree", window="Notes")
         fake.tools.desktop_act(action="click", window="Notes", element="e3")
         assert fake.state["approvals"][0][1] is True
 
-    def test_declined_means_nothing_happens(self, fake):
+    def test_a_declined_destructive_click_does_nothing(self, fake):
         fake.state["approve"] = False
         fake.tools.desktop_inspect(action="tree", window="Notes")
-        out = fake.tools.desktop_act(action="click", window="Notes", element="e2")
+        out = fake.tools.desktop_act(action="click", window="Notes", element="e3")
         assert out.startswith("Not done") and fake.calls == []
 
     def test_typing_into_a_password_field_is_refused(self, fake):
@@ -334,7 +367,7 @@ class TestTools:
         fake.tools.desktop_inspect(action="tree", window="Notes")
         out = fake.tools.desktop_act(action="scroll", window="Notes", element="e1", direction="down", amount=5)
         assert out.startswith("Done") and ("scroll", "down", 5, (50, 25)) in fake.calls
-        assert "прокрутить" in fake.state["approvals"][0][0] and "вниз ×5" in fake.state["approvals"][0][0]
+        assert "вниз ×5" in out, out
         fake.tools.desktop_inspect(action="tree", window="Notes")
         assert fake.tools.desktop_act(action="scroll", window="Notes", direction="up").startswith("Done")
         assert ("scroll", "up", 3, (200, 150)) in fake.calls, "no element: the middle of the window"
@@ -377,12 +410,38 @@ class TestTools:
         out = fake.tools.desktop_act(action="click", window="Notes", element="e2")
         assert "stopped" in out.lower() and fake.calls == []
 
-    def test_auto_mode_never_acts(self, fake, monkeypatch):
-        import approval
+    def _vibe(self, fake, monkeypatch):
+        """The real approval gate in auto mode — the backend (a human) must never be reached."""
+        import argent.approval as approval
+        asked = []
+        monkeypatch.setattr(approval, "_policy", approval.POLICY_AUTO)
         monkeypatch.setattr(approval, "get_policy", lambda: approval.POLICY_AUTO)
-        fake.tools.desktop_inspect(action="tree", window="Notes")
-        out = fake.tools.desktop_act(action="click", window="Notes", element="e2")
-        assert out.startswith("Refused") and "auto mode" in out and fake.calls == []
+        monkeypatch.setattr(approval, "request_approval", fake.state["real_approval"])
+        approval.set_approval_backend(lambda a, d, g: asked.append(a) or "deny")
+        return asked
+
+    def test_auto_mode_approves_an_ordinary_control(self, fake, monkeypatch):
+        import argent.approval as approval
+        asked = self._vibe(fake, monkeypatch)
+        try:
+            fake.tools.desktop_inspect(action="tree", window="Notes")
+            out = fake.tools.desktop_act(action="click", window="Notes", element="e2")
+            assert out.startswith("Done"), out
+            assert fake.calls == [("invoke", "Save")]
+            assert asked == []                     # the mode answered; nobody was prompted
+        finally:
+            approval.reset_approval_backend()
+
+    def test_auto_mode_refuses_a_control_that_says_delete(self, fake, monkeypatch):
+        import argent.approval as approval
+        asked = self._vibe(fake, monkeypatch)
+        try:
+            fake.tools.desktop_inspect(action="tree", window="Notes")
+            out = fake.tools.desktop_act(action="click", window="Notes", element="e3")      # «Delete»
+            assert out.startswith("Not done") and "/vibe off" in out, out
+            assert fake.calls == [] and asked == []
+        finally:
+            approval.reset_approval_backend()
 
     def test_plan_mode_and_sub_agents(self, fake):
         from src.agent import plan_mode
@@ -398,8 +457,8 @@ class TestTools:
         assert plan_mode.hides("desktop_act") and plan_mode.hides("desktop_inspect")
 
     def test_registered(self):
-        from tools.lazy_registry import DEFAULT_TOOL_LOADERS
-        from tools.schemas import TOOL_SCHEMAS
+        from argent.tools.lazy_registry import DEFAULT_TOOL_LOADERS
+        from argent.tools.schemas import TOOL_SCHEMAS
         names = [t["function"]["name"] for t in TOOL_SCHEMAS]
         for tool in ("desktop_inspect", "desktop_act"):
             assert names.count(tool) == 1 and tool in DEFAULT_TOOL_LOADERS
@@ -450,6 +509,10 @@ $src.Add_MouseDown({ $script:moves = 0; $label.Text = "pressed" })
 $src.Add_MouseMove({ if ($_.Button -eq "Left") { $script:moves++ } })
 $src.Add_MouseUp({ $label.Text = "released: moves=" + $script:moves + " dx=" + $_.X + " dy=" + $_.Y })
 $form.Controls.Add($src)
+$dbl = New-Object System.Windows.Forms.Label
+$dbl.Name = "dblLabel"; $dbl.Text = "no"; $dbl.Location = New-Object System.Drawing.Point(240, 190); $dbl.Width = 200
+$form.Controls.Add($dbl)
+$src.Add_DoubleClick({ $script:dbl.Text = "yes" })
 $dst = New-Object System.Windows.Forms.Panel
 $dst.Name = "dropTarget"; $dst.AccessibleName = "Drop here"; $dst.BorderStyle = "FixedSingle"; $dst.BackColor = "Khaki"
 $dst.Location = New-Object System.Drawing.Point(240, 100); $dst.Size = New-Object System.Drawing.Size(120, 40)
@@ -477,12 +540,13 @@ def target(tmp_path):
         proc.kill()
 
 
+@pytest.mark.integration
 @pytest.mark.skipif(not WINDOWS, reason="Windows only")
 class TestRealWindow:
     @pytest.fixture
     def armed(self, target, monkeypatch, values):
-        import approval
-        from tools import desktop_control_tools as tools
+        import argent.approval as approval
+        from argent.tools import desktop_control_tools as tools
         monkeypatch.setattr(approval, "get_policy", lambda: approval.POLICY_ASK)
         asked = []
 
@@ -514,6 +578,14 @@ class TestRealWindow:
         out = armed.tools.desktop_act(action="type", window="ArgentTarget", element=name_id, text="Привет {мир}")
         assert out.startswith("Done"), out
         assert "Привет {мир}" in out
+
+    def test_double_click_reaches_the_window(self, armed):
+        """Two presses, not one: `auto.DoubleClick` does not exist in uiautomation 2.0.29."""
+        tree = armed.tools.desktop_inspect(action="tree", window="ArgentTarget")
+        src_id = next(line.split("]")[0].strip()[1:] for line in tree.splitlines() if "id=dragSource" in line)
+        out = armed.tools.desktop_act(action="double_click", window="ArgentTarget", element=src_id)
+        assert out.startswith("Done"), out
+        assert "id=dblLabel" in out and "'yes'" in out, out          # the form saw a double click
 
     def test_scrolling_a_real_list(self, armed):
         tree = armed.tools.desktop_inspect(action="tree", window="ArgentTarget")

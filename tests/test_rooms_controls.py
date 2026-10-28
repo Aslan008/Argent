@@ -5,7 +5,7 @@ import json
 
 import pytest
 
-import config
+import argent.config as config
 from src.rooms import condition
 from src.rooms.diagram import render_flow
 from src.rooms.engine import Engine, replayable

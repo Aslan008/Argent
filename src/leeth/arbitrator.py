@@ -25,7 +25,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional
-from logger import get_logger
+from argent.logger import get_logger
 
 logger = get_logger("leeth_arbitrator")
 
@@ -204,7 +204,7 @@ class CDCLArbitrator:
     def _is_destructive(text: str) -> bool:
         if not text:
             return False
-        from src.leeth.dispatcher import DENY_PATTERNS  # deferred: breaks import cycle
+        from src.leeth.dispatcher import DENY_PATTERNS  
         return any(p.search(text) for p in DENY_PATTERNS)
 
     # ── Core extraction (deletion-based, subset-minimal) ─────────────────────

@@ -7,8 +7,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
-import agent as agent_module
-from agent import ArgentAgent, MAX_NO_ACTION_CONTINUES
+import argent.agent as agent_module
+from argent.agent import ArgentAgent, MAX_NO_ACTION_CONTINUES
 
 
 class FakeProvider:

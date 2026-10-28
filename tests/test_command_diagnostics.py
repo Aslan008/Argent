@@ -18,7 +18,44 @@ class TestDiagnose:
 
     def test_access_denied(self):
         hint = diagnose_command_error("net stop x", "Access is denied.", 5)
-        assert hint and "run_admin_command" in hint
+        assert hint and "admin=true" in hint
+
+    def test_a_taskkill_that_found_nothing_points_at_ownership_not_a_process(self):
+        out = 'ERROR: The process "cargo.exe" not found.\nERROR: The process "rustc.exe" not found.'
+        hint = diagnose_command_error("taskkill /F /IM cargo.exe /IM rustc.exe", out, 1)
+        assert hint and "No cargo/rustc process" in hint
+        assert "elevated" in hint and "retry" in hint.lower()
+
+    def test_removing_the_target_is_not_a_build_retry(self):
+        out = "Remove-Item : Access to the path 'C:\\proj\\target\\.cargo-lock' is denied."
+        hint = diagnose_command_error(
+            "Remove-Item -Recurse -Force C:\\proj\\target", out, 1)
+        assert hint and "cannot be removed" in hint
+        assert "elevated shell" in hint
+
+    def test_a_cargo_lock_is_not_a_reason_to_elevate(self):
+        out = (
+            "error: failed to open: C:\\proj\\target\\debug\\.cargo-lock\n"
+            "Caused by:\n  Access is denied. (os error 5)"
+        )
+        hint = diagnose_command_error("cargo build", out, 101)
+        assert hint and "cargo" in hint.lower() and "lock" in hint.lower()
+        assert "do not run cargo as administrator" in hint.lower()
+        assert "admin=true" not in hint
+
+    def test_argents_own_state_file_is_not_the_command(self):
+        out = (
+            "[Errno 13] Permission denied: "
+            "'C:\\proj\\.argent\\.memory.json.9832.7336.7cd77319.tmp'"
+        )
+        hint = diagnose_command_error("cargo clean", out, 101)
+        assert hint and "Argent" in hint and "NOT the command's failure" in hint
+        assert "admin=true" not in hint
+
+    def test_a_plain_file_denial_does_not_send_the_build_to_admin(self):
+        hint = diagnose_command_error("cargo build", "Access is denied. (os error 5)", 101)
+        assert hint and "ownership" in hint.lower()
+        assert "admin=true" not in hint
 
     def test_path_not_found(self):
         hint = diagnose_command_error("type nope.txt", "The system cannot find the path specified.", 1)

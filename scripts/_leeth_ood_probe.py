@@ -29,8 +29,8 @@ try:
 except Exception:
     pass
 
-from src.leeth import leeth  # noqa: E402
-from src.leeth.primitives import ChoiceQuestion, ExtractQuestion, NoulQuestion  # noqa: E402
+from src.leeth import leeth  
+from src.leeth.primitives import ChoiceQuestion, ExtractQuestion, NoulQuestion  
 
 TOOL_CHOICES = [
     "read_file", "write_file", "replace_in_file", "run_command",

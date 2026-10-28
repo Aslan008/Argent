@@ -30,7 +30,7 @@ def model_access_warning():
     wholesale — correct, because a list of servers with no way to act on them is
     worse than nothing — but silently, which cost a real debugging session.
     """
-    from config import get_disabled_tools, get_mcp_servers
+    from argent.config import get_disabled_tools, get_mcp_servers
 
     if not get_mcp_servers():
         return None
@@ -54,7 +54,10 @@ def _server_line(cfg: dict, names, error: str = None) -> str:
         # failure the model would otherwise blame on itself and retry.
         return f"- `{name}` ({stype}) — UNREACHABLE ({error}). Do not call it."
     if not names:
-        return f"- `{name}` ({stype}) — connected, but reports no tools."
+        # Its own state, not a synonym for "down": the server answered and offered
+        # nothing. Calling it will not help; the server's own log might.
+        return (f"- `{name}` ({stype}) — connected, but reports NO TOOLS. "
+                f"Check the server itself before calling it.")
     if len(names) <= FULL_LIST_LIMIT:
         return f"- `{name}` ({stype}, {len(names)} tools): {', '.join(names)}"
     sample = ", ".join(names[:SAMPLE_SIZE])
@@ -63,21 +66,17 @@ def _server_line(cfg: dict, names, error: str = None) -> str:
 
 
 def build_mcp_section(mcp_servers, client=None) -> str:
-    """One line per configured server. `client` is injectable for tests."""
-    if client is None:
-        from mcp_client import mcp_client as client
+    """One line per WORKING server. `client` is injectable for tests.
 
-    lines = [
-        "## MCP SERVERS (external tools)",
-        "These servers are connected to this session. Their tool signatures are NOT "
-        "listed here — one server can expose hundreds, and carrying them all would "
-        "cost more than the whole rest of these instructions.",
-        "- `list_mcp_tools(server_name, filter)` — look up the tools you need, by topic.",
-        "- `call_mcp_tool(server_name, tool_name, arguments_json)` — then run one.",
-        "When a request is clearly the job of one of these servers, use it without "
-        "being told to.",
-        "",
-    ]
+    A server that stopped answering is dropped from the section after its first
+    failed listing: it cannot be called anyway, and the line cost every single
+    request forever. It stays in `list_mcp_tools` and in `/mcp`, which is where
+    a person looks when something is missing from the prompt.
+    """
+    if client is None:
+        from argent.mcp_client import mcp_client as client
+
+    lines, dropped = [], []
     for cfg in mcp_servers:
         names, error = [], None
         try:
@@ -88,6 +87,23 @@ def build_mcp_section(mcp_servers, client=None) -> str:
                 error = str(broken[0].get("error", "unknown error"))[:80]
         except Exception as e:
             error = str(e)[:80]
-        lines.append(_server_line(cfg, names, error))
-    lines.append("")
-    return "\n".join(lines)
+        if error:
+            dropped.append(cfg["name"])
+            continue
+        lines.append(_server_line(cfg, names, None))
+
+    if not lines:
+        return ""
+
+    head = [
+        "## MCP SERVERS (external tools)",
+        "These servers are connected to this session. Their tool signatures are NOT "
+        "listed here — one server can expose hundreds, and carrying them all would "
+        "cost more than the whole rest of these instructions.",
+        "- `list_mcp_tools(server_name, filter)` — look up the tools you need, by topic.",
+        "- `call_mcp_tool(server_name, tool_name, arguments)` — then run one.",
+        "When a request is clearly the job of one of these servers, use it without "
+        "being told to.",
+        "",
+    ]
+    return "\n".join(head + lines + [""])

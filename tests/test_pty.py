@@ -5,7 +5,7 @@ import time
 
 import pytest
 
-import tools.command_ops as command_ops
+import argent.tools.command_ops as command_ops
 from src.agent import pty_process
 from src.agent.pty_process import PtyPopen, PtyUnavailable, TerminalText
 

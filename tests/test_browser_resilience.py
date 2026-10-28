@@ -1,8 +1,8 @@
 import pytest
 import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
-from browser_engine import browser_engine, _SessionContext
-from tools.browser_tools import (
+from argent.browser_engine import browser_engine, _SessionContext
+from argent.tools.browser_tools import (
     browser_state,
     browser_click,
     browser_wait_for,

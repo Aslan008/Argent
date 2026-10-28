@@ -13,7 +13,7 @@ bottom reproduces that against the real model; the rest run offline.
 
 import pytest
 
-import config
+import argent.config as config
 from src.research import rerank as rerank_mod
 from src.research.rerank import _DEFAULT_MODEL, MULTILINGUAL_MODEL, active_model_name, rerank
 
@@ -44,6 +44,7 @@ class TestRerankerSelection:
         assert active_model_name() == _DEFAULT_MODEL
 
     def test_switching_the_setting_reloads_the_model(self, cfg, monkeypatch):
+        pytest.importorskip("sentence_transformers", reason="optional stack — pip install sentence_transformers")
         """A cached encoder for the previous model must not be reused, or
         turning multilingual on would silently do nothing for the session."""
         built = []
@@ -87,7 +88,7 @@ class TestRerankStillWorks:
 
 class TestQueryLanguageRule:
     def _rule(self, monkeypatch, languages):
-        import deep_research
+        import argent.deep_research as deep_research
         monkeypatch.setattr(config, "get_search_languages", lambda: languages)
         return deep_research._language_rule()
 
@@ -106,7 +107,7 @@ class TestQueryLanguageRule:
         assert "xx" in rule
 
     def test_rule_reaches_the_prompt(self, monkeypatch):
-        import deep_research
+        import argent.deep_research as deep_research
         monkeypatch.setattr(config, "get_search_languages", lambda: ["en", "ru"])
         captured = {}
         monkeypatch.setattr(deep_research, "_call_llm_sync",
@@ -133,7 +134,7 @@ class TestSearchLanguagesConfig:
 
 class TestDoctorFlagsTheMismatch:
     def test_warns_when_languages_outpace_the_reranker(self, monkeypatch):
-        import doctor
+        import argent.doctor as doctor
         monkeypatch.setattr(config, "get_search_languages", lambda: ["en", "ru"])
         monkeypatch.setattr(config, "get_reranker_model", lambda: "")
         status, detail = doctor._check_web_search()
@@ -141,7 +142,7 @@ class TestDoctorFlagsTheMismatch:
         assert "English-only" in detail and "reranker_model" in detail
 
     def test_no_warning_when_they_match(self, monkeypatch):
-        import doctor
+        import argent.doctor as doctor
         monkeypatch.setattr(config, "get_search_languages", lambda: ["en", "ru"])
         monkeypatch.setattr(config, "get_reranker_model", lambda: MULTILINGUAL_MODEL)
         status, _ = doctor._check_web_search()

@@ -11,7 +11,7 @@ import time
 import pytest
 
 import src.agent.service_llm as sl
-from providers import OpenRouterProvider, ProviderError, UpstreamBodyError
+from argent.providers import OpenRouterProvider, ProviderError, UpstreamBodyError
 from src.agent.service_llm import Kind, Result, UI, classify, clean_summary, run
 
 GOOD = "## Done\n" + "Изменён файл config.py: добавлены настройки сжатия контекста. " * 3
@@ -514,7 +514,7 @@ def test_sync_chat_turns_an_error_body_into_a_retryable_provider_error():
                     return Resp()
 
     p._get_client = lambda: Client()
-    import providers
+    import argent.providers as providers
     monkey = pytest.MonkeyPatch()
     monkey.setattr(providers.time, "sleep", lambda s: None)
     try:
@@ -546,9 +546,9 @@ class _NamedProvider:
 def test_a_missing_aux_model_falls_back_to_the_main_model(monkeypatch):
     """Seen in the logs for days: /aux pointed at 'qwen2.5-3b-instruct' (removed from Ollama) and every
     compaction ended in the model-free summary, while the main model answered every turn."""
-    import config
-    import providers
-    from providers import ProviderError
+    import argent.config as config
+    import argent.providers as providers
+    from argent.providers import ProviderError
     from src.agent import service_llm
 
     aux = _NamedProvider("ollama", error=ProviderError(
@@ -567,9 +567,9 @@ def test_a_missing_aux_model_falls_back_to_the_main_model(monkeypatch):
 
 
 def test_without_an_aux_model_there_is_nothing_to_fall_back_to(monkeypatch):
-    import config
-    import providers
-    from providers import ProviderError
+    import argent.config as config
+    import argent.providers as providers
+    from argent.providers import ProviderError
     from src.agent import service_llm
 
     main = _NamedProvider("ollama", error=ProviderError("model 'x' not found (status code: 404)"))

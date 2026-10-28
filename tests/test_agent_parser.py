@@ -41,7 +41,7 @@ class TestAgentParser(unittest.TestCase):
         parsed = try_parse_json_tool(valid_json)
         self.assertIsNotNone(parsed)
         self.assertEqual(parsed["parsed"]["name"], "read_file")
-        self.assertEqual(parsed["parsed"]["arguments"]["file_path"], "test.txt")
+        self.assertEqual(parsed["parsed"]["arguments"]["path"], "test.txt")
 
     def test_parse_raw_tool_call(self):
         # Markdown JSON code block format
@@ -59,7 +59,7 @@ class TestAgentParser(unittest.TestCase):
         parsed = parse_raw_tool_call(md_block)
         self.assertIsNotNone(parsed)
         self.assertEqual(parsed["parsed"]["name"], "write_file")
-        self.assertEqual(parsed["parsed"]["arguments"]["file_path"], "hello.py")
+        self.assertEqual(parsed["parsed"]["arguments"]["path"], "hello.py")
 
     def test_decode_escapes_preserves_cyrillic(self):
         # Regression: codecs 'unicode_escape' mojibaked non-ASCII content,
@@ -75,17 +75,17 @@ class TestAgentParser(unittest.TestCase):
     def test_shorthand_tool_format(self):
         parsed = try_parse_json_tool('{"read_file": {"file_path": "a.txt"}}')
         self.assertEqual(parsed["parsed"]["name"], "read_file")
-        self.assertEqual(parsed["parsed"]["arguments"]["file_path"], "a.txt")
+        self.assertEqual(parsed["parsed"]["arguments"]["path"], "a.txt")
 
     def test_param_alias_normalization(self):
         parsed = try_parse_json_tool('{"name":"read_file","arguments":{"filename":"a.txt"}}')
-        self.assertEqual(parsed["parsed"]["arguments"]["file_path"], "a.txt")
+        self.assertEqual(parsed["parsed"]["arguments"]["path"], "a.txt")
         self.assertNotIn("filename", parsed["parsed"]["arguments"])
 
     def test_trailing_comma_recovered(self):
         parsed = try_parse_json_tool('{"name":"read_file","arguments":{"file_path":"a.txt",}}')
         self.assertIsNotNone(parsed)
-        self.assertEqual(parsed["parsed"]["arguments"]["file_path"], "a.txt")
+        self.assertEqual(parsed["parsed"]["arguments"]["path"], "a.txt")
 
     def test_json_embedded_in_prose(self):
         text = 'Sure! {"name": "read_file", "arguments": {"file_path": "x.py"}} done.'

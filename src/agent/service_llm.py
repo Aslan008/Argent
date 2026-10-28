@@ -39,7 +39,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Callable, List, Optional
 
-from logger import get_logger
+from argent.logger import get_logger
 
 log = get_logger("service_llm")
 
@@ -366,13 +366,13 @@ def default_ui(status=None) -> UI:
         log.warning(msg)
         try:
             from rich.markup import escape
-            from ui import print_system
+            from argent.ui import print_system
             print_system("[yellow]" + escape(msg) + "[/yellow]")
         except Exception:
             pass
 
     def ask(title: str, options: List[str]) -> Optional[str]:
-        from ui import _select_from_list
+        from argent.ui import _select_from_list
         return _select_from_list(title, options, options[0])
 
     def pause() -> None:
@@ -479,7 +479,7 @@ def _status(info: ErrorInfo) -> str:
 
 def _ordered_candidates(provider, primary: str, tried: List[str], extra: Optional[Callable[[], List[str]]]):
     """(fresh, cooling): other free models worth trying, split by whether they failed recently."""
-    from config import get_compress_fallback_models
+    from argent.config import get_compress_fallback_models
 
     order: List[str] = []
     source = extra() if extra is not None else list(get_compress_fallback_models()) + live_free_models(provider)
@@ -544,13 +544,13 @@ def run(prompt: str, *, per_call_timeout: float = 120.0, total_budget: Optional[
 
 
 def _run(prompt, per_call_timeout, total_budget, ui, retries, policy, service, candidates, started) -> Result:
-    from config import get_compress_on_failure, get_compress_retries
+    from argent.config import get_compress_on_failure, get_compress_retries
 
     retries = max(1, int(retries if retries is not None else get_compress_retries()))
     policy = policy or get_compress_on_failure()
     main_fallback = None
     if service is None:
-        from providers import create_service_provider
+        from argent.providers import create_service_provider
         provider, primary = create_service_provider()
         main_fallback = _main_model_fallback(provider, primary)
     else:
@@ -592,13 +592,13 @@ def _main_model_fallback(service_provider, service_model):
     """(provider, model) of the main conversation when the service call uses a separate auxiliary model,
     else None (the service model already is the main one)."""
     try:
-        from config import get_auxiliary_model, get_current_model, get_provider
+        from argent.config import get_auxiliary_model, get_current_model, get_provider
         if not get_auxiliary_model():
             return None
         main_model = get_current_model()
         if not main_model or (main_model == service_model and _pname(service_provider) == get_provider()):
             return None
-        from providers import create_provider
+        from argent.providers import create_provider
         return create_provider(), main_model
     except Exception:
         log.debug("no main-model fallback for the service call", exc_info=True)

@@ -5,7 +5,7 @@ import time
 
 import pytest
 
-import tools.command_ops as command_ops
+import argent.tools.command_ops as command_ops
 from src.agent import output_store as store
 from tests.test_command_ops_streaming import _MockProc, _mock_approve
 
@@ -64,7 +64,7 @@ def test_run_command_points_at_the_saved_output(monkeypatch, _folder):
     _mock_approve(monkeypatch)
     body = (_lines(300) + "\n").encode()
     monkeypatch.setattr(command_ops, "_spawn", lambda *a, **k: _MockProc([body]))
-    monkeypatch.setattr("config.get_current_model", lambda: TINY)
+    monkeypatch.setattr("argent.config.get_current_model", lambda: TINY)
 
     out = command_ops.run_command("make all")
     assert "[Full output: " in out
@@ -77,7 +77,7 @@ def test_secrets_are_not_written_to_the_saved_file(monkeypatch, _folder):
     key = "sk-" + "Ab1" * 12
     body = (_lines(300) + f"\nKEY={key}\n").encode()
     monkeypatch.setattr(command_ops, "_spawn", lambda *a, **k: _MockProc([body]))
-    monkeypatch.setattr("config.get_current_model", lambda: TINY)
+    monkeypatch.setattr("argent.config.get_current_model", lambda: TINY)
 
     command_ops.run_command("env")
     assert all(key not in p.read_text(encoding="utf-8") for p in _folder.glob("*.log"))

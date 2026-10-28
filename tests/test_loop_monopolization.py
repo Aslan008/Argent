@@ -11,8 +11,8 @@ Comprehensive tests for Anti-Doom-Loop and turn monopolization safeguards:
 import pytest
 from unittest.mock import MagicMock, AsyncMock, patch
 
-import config
-from tools.browser_tools import (
+import argent.config as config
+from argent.tools.browser_tools import (
     browser_eval_js,
     _reset_poll_tracker,
     _SESSION_EVAL_TRACKER,
@@ -21,7 +21,7 @@ from src.agent.semantic_loop_guard import (
     SemanticLoopGuard,
     build_semantic_loop_note,
 )
-from agent import ArgentAgent
+from argent.agent import ArgentAgent
 
 
 # ---------------------------------------------------------------------------
@@ -43,7 +43,7 @@ class TestBrowserEvalProbingBreaker:
             'JS result: "x42"',
             "JS result: null",
         ]
-        monkeypatch.setattr("tools.browser_tools.browser_engine", mock_engine)
+        monkeypatch.setattr("argent.tools.browser_tools.browser_engine", mock_engine)
 
         for i in range(1, 4):
             res = browser_eval_js(f"probe{i}()")
@@ -73,7 +73,7 @@ class TestBrowserEvalProbingBreaker:
             'JS result: {"__type": "Element", "tag": "button", "text": "Submit"}',
             "JS result: null",
         ]
-        monkeypatch.setattr("tools.browser_tools.browser_engine", mock_engine)
+        monkeypatch.setattr("argent.tools.browser_tools.browser_engine", mock_engine)
 
         for i in range(3):
             browser_eval_js(f"expr{i}()")
@@ -100,7 +100,7 @@ class TestBrowserEvalProbingBreaker:
             "JS result: null",
             "JS result: null",
         ]
-        monkeypatch.setattr("tools.browser_tools.browser_engine", mock_engine)
+        monkeypatch.setattr("argent.tools.browser_tools.browser_engine", mock_engine)
 
         for i in range(3):
             browser_eval_js(f"expr{i}()")

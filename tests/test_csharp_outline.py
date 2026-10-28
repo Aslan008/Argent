@@ -1,7 +1,7 @@
 """C# structural outline so a 500-line Unity script needn't be read whole."""
 
-from tools._helpers import _csharp_outline
-from tools.file_ops import get_file_outline
+from argent.tools._helpers import _csharp_outline
+from argent.tools.file_ops import get_file_outline
 
 CS = """using UnityEngine;
 

@@ -17,7 +17,7 @@ def world(tmp_path, monkeypatch):
     project = tmp_path / "proj"
     project.mkdir()
     monkeypatch.chdir(project)
-    monkeypatch.setattr("project_paths.project_root_or_cwd", lambda *a, **k: project)
+    monkeypatch.setattr("argent.project_paths.project_root_or_cwd", lambda *a, **k: project)
     home = tmp_path / "home"
     monkeypatch.setattr("pathlib.Path.home", classmethod(lambda cls: home))
 

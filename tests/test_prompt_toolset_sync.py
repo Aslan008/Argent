@@ -13,10 +13,10 @@ from unittest.mock import MagicMock
 
 import pytest
 
-import agent as agent_module
-import config
-from agent import ArgentAgent, ArgentSubAgent
-from prompt_compressor import drop_unavailable_tool_lines
+import argent.agent as agent_module
+import argent.config as config
+from argent.agent import ArgentAgent, ArgentSubAgent
+from argent.prompt_compressor import drop_unavailable_tool_lines
 
 
 @pytest.fixture
@@ -80,6 +80,15 @@ class TestPromptFollowsToolset:
             agent_module, "get_mcp_servers",
             lambda: [{"name": "srv", "type": "stdio", "command": "x", "args": []}],
         )
+        # The section only renders for a server that answers: a dead one is dropped
+        # now (it cannot be called), so the test must not rely on "configured" alone.
+        import argent.mcp_client as mcp_client
+
+        class _Client:
+            def list_tools(self, name):
+                return [{"name": "some_tool"}]
+
+        monkeypatch.setattr(mcp_client, "mcp_client", _Client())
         with_tool = agent.build_system_prompt({"read_file", "call_mcp_tool"})
         without = agent.build_system_prompt({"read_file"})
         assert "MCP SERVERS" in with_tool

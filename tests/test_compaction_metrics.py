@@ -11,7 +11,7 @@ from src.agent import trimmer
 @pytest.fixture(autouse=True)
 def _fresh(tmp_path, monkeypatch):
     trimmer.reset_compaction_history()
-    monkeypatch.setattr("project_paths.project_root_or_cwd", lambda *a, **k: tmp_path)
+    monkeypatch.setattr("argent.project_paths.project_root_or_cwd", lambda *a, **k: tmp_path)
     yield
     trimmer.reset_compaction_history()
 
@@ -84,7 +84,7 @@ def test_while_thrashing_the_summariser_is_not_called():
 def test_a_normal_compaction_records_its_metrics_and_announces_them(capsys):
     said = []
     with patch("src.agent.trimmer._summarize_with_llm", return_value="## Done\n- old turns"), \
-         patch("ui.print_system", side_effect=lambda t, *a, **k: said.append(t)):
+         patch("argent.ui.print_system", side_effect=lambda t, *a, **k: said.append(t)):
         out = trimmer.soft_trim_with_summarization(_long_history(), "mock", max_history_messages=10,
                                                    max_context_tokens=30000)
     assert len(out) < 53

@@ -1,8 +1,8 @@
 """Edits echo the changed region + exact-match ambiguity lists line numbers +
 replace_python_function honours the plugin guard."""
 
-import tools._helpers as helpers
-from tools.file_ops import replace_in_file, replace_python_function
+import argent.tools._helpers as helpers
+from argent.tools.file_ops import replace_in_file, replace_python_function
 
 
 def test_replace_in_file_returns_updated_region(tmp_path):
@@ -42,7 +42,7 @@ def test_replace_python_function_previews(tmp_path):
 
 
 def test_replace_python_function_blocks_plugin_dir(tmp_path, monkeypatch):
-    import config
+    import argent.config as config
     plugins = tmp_path / "plugins"
     plugins.mkdir()
     f = plugins / "myplugin.py"

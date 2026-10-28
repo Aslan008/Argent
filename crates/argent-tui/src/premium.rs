@@ -75,6 +75,8 @@ pub(crate) fn prompt_block(app: &App, width: u16, max_rows: usize, edges: bool) 
         // The classic echo (label, text with a block cursor, the hint line), laid out
         // two columns narrower and then set into the panel.
         let inner = crate::ui::prompt_block_classic(app, width.saturating_sub(2), max_rows);
+        // The echo of the queue prompt is not an editor.
+        app.set_input_box(0, 1, 0, 0, 0);
         let mut rows: Vec<Line<'static>> = Vec::new();
         if edges {
             rows.push(edge_row(true, w, p.surface));
@@ -137,12 +139,16 @@ pub(crate) fn prompt_block(app: &App, width: u16, max_rows: usize, edges: bool) 
         rows.push(panel_row(Line::from(spans), w, p.surface));
     }
 
-    let skip = if rows.len() > max_rows {
+    let base_skip = if rows.len() > max_rows {
         (cur_row + 1).saturating_sub(max_rows).min(rows.len() - max_rows)
     } else {
         0
     };
+    app.set_input_base_skip(base_skip);
+    let skip = base_skip.saturating_sub(app.input_scroll.min(base_skip));
     let mut rows: Vec<Line<'static>> = rows.into_iter().skip(skip).take(max_rows).collect();
+    // The box the mouse works in: the panel's edge is not text.
+    app.set_input_box(PROMPT_PREFIX, avail, skip, rows.len(), edge as u16);
     if edges {
         rows.insert(0, edge_row(true, w, p.surface));
         rows.push(edge_row(false, w, p.surface));
@@ -228,13 +234,15 @@ pub fn ctx_gauge(p: &Palette, pct: i64, cells: usize) -> Vec<Span<'static>> {
 
 /// The bottom toolbar as chips on one tinted row, plus the click targets in it
 /// (model, thinking level) — the same ones the classic bar has.
-pub fn toolbar(app: &App, width: u16) -> (Line<'static>, Vec<(u16, u16, ClickAction)>) {
+#[allow(clippy::type_complexity)]
+pub fn toolbar(app: &App, width: u16) -> (Line<'static>, Vec<(u16, u16, ClickAction)>, Vec<(u16, u16, String)>) {
     let p = &app.ui.palette;
     let st = &app.status;
     let text = Style::default().fg(p.text).bg(p.surface);
     let muted = Style::default().fg(p.muted).bg(p.surface);
     let mut spans: Vec<Span<'static>> = Vec::new();
     let mut targets: Vec<(u16, u16, ClickAction)> = Vec::new();
+    let mut hovers: Vec<(u16, u16, String)> = Vec::new();
     let mut x: u16 = 0;
 
     let push = |spans: &mut Vec<Span<'static>>, s: Span<'static>, x: &mut u16| {
@@ -277,6 +285,7 @@ pub fn toolbar(app: &App, width: u16) -> (Line<'static>, Vec<(u16, u16, ClickAct
 
     if st.ctx_tokens > 0 || st.ctx_percent > 0.0 {
         gap(&mut spans, &mut x);
+        let x0 = x;
         let pct = st.ctx_percent.round() as i64;
         push(&mut spans, Span::styled("ctx ", muted), &mut x);
         for s in ctx_gauge(p, pct, 6) {
@@ -290,27 +299,76 @@ pub fn toolbar(app: &App, width: u16) -> (Line<'static>, Vec<(u16, u16, ClickAct
                 &mut x,
             );
         }
-    }
-    if !st.session_summary.is_empty() {
-        gap(&mut spans, &mut x);
-        push(&mut spans, Span::styled(st.session_summary.clone(), muted), &mut x);
+        if !st.ctx_breakdown.is_empty() {
+            hovers.push((x0, x.saturating_sub(x0), st.ctx_breakdown.clone()));
+        }
     }
     gap(&mut spans, &mut x);
     push(&mut spans, Span::styled(crate::ui::uptime_label(app), muted), &mut x);
 
-    // `/help` hugs the right edge when there is room for it.
-    let help = " /help ";
-    let help_w = UnicodeWidthStr::width(help);
+    // The right corner: what the session has spent, which settings this model
+    // or provider ignores, and `/help`. Pinned right, because a long left half
+    // used to push the numbers off the end of the row.
+    let spend = crate::ui::session_spend(st);
+    let mut right: Vec<(String, Style)> = Vec::new();
+    if !spend.is_empty() {
+        right.push((spend, muted));
+    }
+    // What the last request took. Its own chip, because it answers a different
+    // question than the running total — and it is the one that survives a
+    // restart, so it is what a returning session can still show.
+    if !st.last_spend.is_empty() {
+        right.push((st.last_spend.clone(), muted));
+    }
+    if !st.inert_label.is_empty() {
+        right.push((
+            st.inert_label.clone(),
+            Style::default().fg(p.warn).bg(p.surface).add_modifier(Modifier::DIM),
+        ));
+    }
+    right.push((
+        " /help ".to_string(),
+        Style::default().fg(p.muted).bg(p.surface).add_modifier(Modifier::DIM),
+    ));
+
+    let right_w: usize = right.iter().map(|(s, _)| UnicodeWidthStr::width(s.as_str())).sum::<usize>()
+        + right.len().saturating_sub(1) * 2;
     let w = width as usize;
     let used = x as usize;
-    if used + help_w < w {
-        spans.push(Span::styled(" ".repeat(w - used - help_w), muted));
-        spans.push(Span::styled(help, Style::default().fg(p.muted).bg(p.surface).add_modifier(Modifier::DIM)));
+    // `/help` is last; the spend hover covers every money chip before it, so
+    // hovering `spent`, `bal` or `last` all open the same explanation.
+    let help = right.pop();
+    let mut spend_span: Option<(u16, u16)> = None;
+    if used + right_w + 1 < w {
+        let pad = w - used - right_w;
+        spans.push(Span::styled(" ".repeat(pad), muted));
+        // `x` must follow the padding, or the hover is registered over the
+        // uptime/timestamp region instead of over the spend chips.
+        x = x.saturating_add(pad as u16);
+    }
+    if !st.spend_breakdown.is_empty() && !right.is_empty() {
+        spend_span = Some((x, 0));
+    }
+    let has_right = !right.is_empty();
+    for (i, (text, style)) in right.into_iter().enumerate() {
+        if i > 0 {
+            push(&mut spans, Span::styled("  ", muted), &mut x);
+        }
+        push(&mut spans, Span::styled(text, style), &mut x);
+    }
+    if let Some((x0, _)) = spend_span {
+        hovers.push((x0, x.saturating_sub(x0), st.spend_breakdown.clone()));
+    }
+    if let Some((text, style)) = help {
+        if has_right {
+            push(&mut spans, Span::styled("  ", muted), &mut x);
+        }
+        push(&mut spans, Span::styled(text, style), &mut x);
     }
 
     let line = panel_row(Line::from(spans), w, p.surface);
     targets.retain(|(a, _, _)| *a < width);
-    (line, targets)
+    (line, targets, hovers)
 }
 
 /// The chip that appears over the transcript while it is scrolled back.

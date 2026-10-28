@@ -19,15 +19,15 @@ context management and resilience wrap the whole loop.
 
 ```mermaid
 flowchart TD
-    User(["You — terminal"]) -->|"prompt / slash-command"| REPL["main.py — REPL"]
-    REPL --> Agent["ArgentAgent — turn loop<br/>agent.py"]
+    User(["You — terminal"]) -->|"prompt / slash-command"| REPL["argent/main.py — REPL"]
+    REPL --> Agent["ArgentAgent — turn loop<br/>argent/agent.py"]
 
     Agent --> Strategy{"Model tier<br/>tiny · small · medium · cloud"}
     Strategy -->|"schemas · catalog · anchors"| Provider["Provider<br/>Ollama · Z.ai · OpenRouter · KoboldCPP"]
     Provider -->|"stream"| Parse["Tool-call parse<br/>native or constrained JSON"]
 
     Parse -->|"final answer"| User
-    Parse -->|"tool call"| Guard{"Approval + risk-gate<br/>approval.py"}
+    Parse -->|"tool call"| Guard{"Approval + risk-gate<br/>argent/approval.py"}
     Guard -->|"catastrophic"| Refuse["Refused"]
     Guard -->|"safe / approved"| Tools["Tools<br/>files · shell · search · browser · git"]
     Tools -->|"result"| Compress["compress_tool_result<br/>line + char budget"]
@@ -46,7 +46,7 @@ flowchart TD
 
 | Command | What it does | You are… |
 | --- | --- | --- |
-| `/vibe [task]` | Safe actions auto-approved, destructive ones still ask, checkpoint every turn | at the keyboard, running tasks quickly |
+| `/vibe [task]` | Everything auto-approved; a delete inside the project is copied to `/trash` first, so it can be undone — with a checkpoint every turn | at the keyboard, running tasks quickly |
 | `/tasks add …` | Scheduled work with **nobody watching** — gated actions are refused, not approved | asleep |
 
 `/vibe` lets you run tasks fast without hitting 'y' on every safe tool call, while `/tasks` handles scheduled background work. Both are bounded: `/vibe` by per-turn checkpoints and refusal of dangerous actions, `/tasks` by a per-task toolset and turn budget.
@@ -93,10 +93,10 @@ Argent detects the model size from its name and silently adapts the whole pipeli
 Every dangerous action (shell commands, file deletion, git rollback) passes through a single approval gate:
 - **Destructive-command detection**: `rm` / `Remove-Item` / `format` / `git reset --hard` / `taskkill` and friends always require explicit confirmation — even in autonomous mode.
 - **Session grants**: approve once with *"always allow `git` this session"* and stop clicking through repeated prompts.
-- **Working autonomy**: in `/vibe` mode safe actions are auto-approved so the agent can actually run quickly, while destructive ones still pause for you.
+- **Working autonomy**: in `/vibe` mode everything is auto-approved so the agent can actually run quickly — a delete inside the project is copied to `/trash` first, and only what cannot be put back (a delete outside the project, `.argent/` itself, a command built at run time, powering the machine off) is refused outright.
 
 ### 📉 Context-Aware Prompting
-Every token in the system prompt costs a local model speed and focus, so Argent keeps it lean and tier-adaptive: weak models (tiny/small) get a slimmed core toolset instead of all ~52 schemas (a ~58% cut to the largest part of the prompt), the AGENTS.md memory is capped per tier, and `/stats` shows exactly where the budget goes (system prompt / tool schemas / history).
+Every token in the system prompt costs a local model speed and focus, so Argent keeps it lean and tier-adaptive: weak models (tiny/small) get a slimmed core toolset instead of all ~60 schemas (a ~58% cut to the largest part of the prompt), the AGENTS.md memory is capped per tier, and `/stats` shows exactly where the budget goes (system prompt / tool schemas / history).
 
 ### 🆓 OpenRouter: free and paid models, one key
 OpenRouter requires a single API key (a **free** one from [openrouter.ai/keys](https://openrouter.ai/keys) is enough). With it you can run the zero-cost `:free` models, and the moment you want a frontier model you just pick a paid one — same key, no reconfiguration. `/provider → openrouter` lets you list **free models only** or the full catalog, with free models surfaced first. For fully offline, no-key-at-all usage, Ollama remains the local option.
@@ -121,7 +121,7 @@ Before the **first file edit of every turn**, Argent commits a checkpoint of the
 - In natural language: *"вернись до того, как ты сломал меню"* — the agent matches the checkpoint by its message.
 
 ### 🌴 Vibe Mode
-`/vibe` is one switch over existing knobs: safe actions are auto-approved, destructive ones still prompt, and per-turn checkpoints are guaranteed. The cost of a bad experiment drops to one `/rewind`.
+`/vibe` is one switch over existing knobs: everything is auto-approved — the transcript says when a command could not be inspected — and a delete inside the project goes through only after its files are copied to `/trash`, so it can be undone with `/trash restore <id>`. Refused are the things that cannot be put back: a delete outside the project, `.argent/` itself, a command built at run time, and powering the machine off. Per-turn checkpoints are guaranteed, so the cost of a bad experiment drops to one `/rewind`. The switch stays on until you turn it off: a finished task does not reset it, only `/vibe off` does.
 
 ### 🧭 Working in Steps: Plan Mode, Checklist, Sub-agents
 - **`/plan [task]`** — plan mode. The agent may only *look* (read, search, the web, read-only shell like `git status` or `grep`); every tool that changes anything is withdrawn and a call to one is refused before it runs. It ends by handing you the full plan (`exit_plan_mode`); your yes turns editing back on, your no sends it back to revise. `/plan off` leaves by hand. The toolbar shows `PLAN`.
@@ -138,7 +138,7 @@ Before the **first file edit of every turn**, Argent commits a checkpoint of the
 
 ### 🚪 Rooms — repeatable recipes with rails
 A room is a small JSON graph of steps for a job you do again and again — fix a bug, review a diff, add a feature, check a release, research a question. The engine, not the model, decides which step runs next; each step has hard limits (iterations, tokens, seconds); a verdict such as "the tests are green" comes from a process's exit code (`sets`), never from an agent's say-so; risky steps (a commit) ask you first (`confirm`); and the run ends with a report and a record in `.argent/rooms_runs/`.
-- **Nine starter rooms** — `fix_bug`, `debug_loop`, `implement_feature` (plan → you approve it → code → tests → review), `code_review`, `release_check`, `research`, `explain_repo`, `analyze`, `triage`. `/rooms list` shows them with their parameters, `/rooms show <name>` draws one.
+- **Ten starter rooms** — `fix_bug`, `debug_loop`, `implement_feature` (plan → you approve it → code → tests → review), `code_review`, `critic_review`, `release_check`, `research`, `explain_repo`, `analyze`, `triage`. `/rooms list` shows them with their parameters, `/rooms show <name>` draws one.
 - **`/rooms <task>`** picks the room from your words (no model call; asks you when it is not sure), **`/rooms run <room> [key=value] [task]`** runs a named one: `/rooms run debug_loop test_command="python -m pytest tests/unit -q"`. `/rooms resume` continues an interrupted run, `/rooms last` / `history` show what happened.
 - **The model can use them too** — the `rooms` tool (`list`, `show`, `run`, `resume`); when your message clearly fits a room the model gets a one-line nudge. Every `run` is put to you first; a room's workers can never start another room.
 - **Build rooms like blocks** — `/rooms build <what it should do, in words>` has the model draft a room, shows the diagram and saves only after you say yes; `/rooms edit <room> <change>` changes one the same way (a packaged room is saved as `<name>_custom`). `/rooms editor` opens a visual editor in your browser (drag steps, connect them, set conditions, retries and on-error paths; the same validator checks every save; only your own rooms are written). Blocks: `tool`, `agent`, `condition`, `human_pause`, `set`, `notify`, and `room` — a room can call another room as a sub-routine.
@@ -302,7 +302,7 @@ Another program's window as text (Windows UI Automation: "button *Save*", "field
 - **Never in:** password managers, UAC and Windows security dialogs, windows named like a password or a card, and password fields (a typed-into one is refused by the field's own flag).
 - **Actions:** click, double click, right click, type, set a field's value, hotkey, focus, **scroll** (a control's own scroll pattern, else the mouse wheel over it) and **drag** (element or point to element or point; a drop onto a control named like *Recycle Bin / Delete* is asked as destructive, and a point outside the window is refused).
 - **Observe → act → check:** ids come from the latest observation; the answer to every action is the window as it looks after it. No blind series of clicks, at most 25 actions per instruction, a pause between them.
-- **Every action asks you** with a description ("press *Save* in *Notes*"); a control named like *Delete / Send / Pay / Удалить / Отправить* is asked every time and never covered by "always". Auto mode (`/vibe`) does not approve desktop actions at all.
+- **Every action asks you** with a description ("press *Save* in *Notes*"); a control named like *Delete / Send / Pay / Удалить / Отправить* is asked every time and never covered by "always". In `/vibe` an ordinary desktop action runs without a prompt, but a control named like that is refused outright — and desktop control still has to be switched on (`/desktop on`) with the program on its list.
 - **Emergency stop:** hold **Ctrl+Alt+Shift+F12** anywhere (`/desktop key <chord>` to change it). Control stays off until `/desktop on`.
 - `/desktop audit` — every decision, allowed or refused, in `.argent/run/desktop_audit.jsonl` (typed text only by length and a redacted head).
 
@@ -329,6 +329,7 @@ Switch the existing fast-path to it with `LEETH_BACKEND=leeth2` (or `config.set_
 
 ## 🛠 Commands
 
+- `/help` — every command, one table per category; `/tools` — the model's tools, grouped by kind (files, search, processes, agents, planning, memory, web, browser, desktop, integrations). The tool reference — name, one line, required parameters — is [docs/TOOLS.md](docs/TOOLS.md), generated from the schemas by `scripts/gen_tools_doc.py` (a test fails when it goes stale).
 - `/commit` — Generate AI commit message and commit staged changes.
 - `/max_tokens [value]` — Set maximum generation token limit per response.
 - `/session` — View active session details.
@@ -355,10 +356,10 @@ Switch the existing fast-path to it with `LEETH_BACKEND=leeth2` (or `config.set_
 - `/ultracode [on|off|run <task>|night <when> | <task>|keyword on|off|stop|resume|level|budget|calibrate|status|list]` — A big job as a planned, checked, resumable workflow.
 - `/advisor [model <provider>:<model>|clear|consent on|off]` — The stronger second opinion Ultracode consults (cloud or local).
 - `/memory [list|show|search|add|forget|restore|migrate|undo|on|off|dream]` — Long-term Markdown notes for the project and globally; `dream` consolidates them while the PC is idle (`dream global on` includes the global notes).
-- `/desktop [on|off|allow <app.exe>|deny <app.exe>|windows|key <chord>|audit]` — Let the agent act in other programs (UI Automation): off by default, allow-listed programs only, every action asked.
+- `/desktop [on|off|windows|key <chord>|audit]` — Let the agent act in other programs (UI Automation): on by default, any window except Argent's own console, password managers/UAC and password fields; only irreversible controls (delete, pay, send) ask; `/desktop off` is the brake.
 - `/rooms [task|run <room> [k=v] [task]|list|show|route|resume|last|history|build|edit|diagram|editor|new|validate|delete|unquarantine|spawn|hint]` — Repeatable recipes with rails: a room fixes a bug, reviews a diff, ships a feature or checks a release with limits, process-decided verdicts and a report.
 - `/stats` — Session diagnostics (context budget breakdown).
-- `/jobs`, `/stop <pid>` — List / stop background processes.
+- `/jobs` — running background processes; `/jobs done` — the finished ones; `/jobs <pid>` — what it printed; `/stop <pid>` — stop one.
 - `/cd [path]` — Change or show the working directory.
 - `/mcp [subcommand]` — Manage MCP servers (list / add / remove / start / stop / test).
 - `/save [name]` — Export the conversation to Markdown and save a restorable session, labelled with `name`.
@@ -371,7 +372,8 @@ Switch the existing fast-path to it with `LEETH_BACKEND=leeth2` (or `config.set_
 - `/skills` — List available AI skills.
 - `/rewind` — Time machine: roll the whole tree back to any turn checkpoint.
 - `/back` — Back to before your last message: conversation and files (the *↩ Вернуться сюда* button in the TUI).
-- `/vibe [task]` — Vibe mode: auto-approve safe actions + a checkpoint every turn (or run a task in one line).
+- `/vibe [task]` — Vibe mode: auto-approve everything, copy project files to the trash before deleting them, plus a checkpoint every turn (or run a task in one line).
+- `/trash [restore <id>|drop <id>|purge]` — What `/vibe` deleted: list the snapshots, put files back, or clear them.
 - `/plan [task|off|status]` — Plan mode: the agent only looks and ends with a plan for your approval; nothing is changed before that.
 - `/todo [clear]` — The agent's checklist for the work in hand.
 - `/agents [N|diff N|apply N|discard N|stop N]` — Sub-agents running beside you: their reports, patches (from isolated worktrees), apply / drop / stop.
@@ -399,7 +401,7 @@ Switch the existing fast-path to it with `LEETH_BACKEND=leeth2` (or `config.set_
 - `/queue` (or `/qmsg`) [list|rm|edit|clear] — Inspect and edit the messages you typed while Argent was busy.
 - `/tokens` (or `/context`) — Show how the context window is being spent.
 - `/prompt` — Show the current system prompt.
-- `/key` — Set the current provider's API key. Or leave it out of the config file: a key saved here wins, otherwise Argent reads `ZAI_API_KEY`, `OPENROUTER_API_KEY`, `DEEPSEEK_API_KEY`, `ANTHROPIC_API_KEY`, `BRAVE_API_KEY` or `OLLAMA_API_KEY` from the environment.
+- `/key` — Set the current provider's API key. The key goes to the OS credential store (Windows Credential Manager, macOS Keychain, Secret Service) when one is available, so it is normally not in the config file at all; when no vault exists it falls back to `~/.argent_coder_config.json` with user-only permissions. A key saved here wins; otherwise Argent reads `ZAI_API_KEY`, `OPENROUTER_API_KEY`, `DEEPSEEK_API_KEY`, `ANTHROPIC_API_KEY`, `BRAVE_API_KEY` or `OLLAMA_API_KEY` from the environment.
 - `/endpoint` — Switch the Z.ai endpoint (general / coding); with KoboldCPP active, set its server address.
 - `/sampling` (or `/params`) — Fine-tune sampling: top_p, min_p, top_k, repeat_penalty.
 - `/rethink [on|off|status]` — Self-check pass (`<rethink>`) before the model answers.
@@ -432,7 +434,7 @@ Argent — это высокопроизводительный професси�
 
 | Команда | Что делает | Вы в этот момент… |
 | --- | --- | --- |
-| `/vibe [задача]` | Безопасные действия одобряются сами, опасные спрашивают, чекпоинт каждый ход | за клавиатурой, работаете без лишних пауз |
+| `/vibe [задача]` | Одобряется всё, кроме удаления ваших файлов (оно отклоняется) — плюс чекпоинт каждый ход | за клавиатурой, работаете без лишних пауз |
 | `/tasks add …` | Работа по расписанию **без присмотра** — действия, требующие подтверждения, отклоняются, а не одобряются | спите |
 
 `/vibe` позволяет быстро исполнять задачи без постоянного нажатия «y» на безопасных вызовах, а `/tasks` берет на себя периодическую работу по расписанию. Обе команды защищены: `/vibe` — чекпоинтами каждого хода и перехватом опасных действий, `/tasks` — своим набором инструментов и бюджетом ходов.
@@ -482,7 +484,7 @@ Argent определяет размер модели по имени и нез�
 - **Рабочая автономия**: в режиме `/vibe` безопасные действия одобряются автоматически, поэтому агент может быстро выполнять шаги, а деструктивные — по-прежнему ставятся на паузу.
 
 ### 📉 Контекстно-зависимый промпт
-Каждый токен системного промпта стоит локальной модели скорости и внимания, поэтому Argent держит его компактным и адаптивным по ярусам: слабые модели (tiny/small) получают урезанный набор инструментов вместо всех ~52 схем (−58% к самой крупной части промпта), память AGENTS.md ограничивается по ярусу, а `/stats` показывает, куда именно уходит бюджет (системный промпт / схемы инструментов / история).
+Каждый токен системного промпта стоит локальной модели скорости и внимания, поэтому Argent держит его компактным и адаптивным по ярусам: слабые модели (tiny/small) получают урезанный набор инструментов вместо всех ~60 схем (−58% к самой крупной части промпта), память AGENTS.md ограничивается по ярусу, а `/stats` показывает, куда именно уходит бюджет (системный промпт / схемы инструментов / история).
 
 ### 🆓 OpenRouter: бесплатные и платные модели, один ключ
 OpenRouter требует один API-ключ (достаточно **бесплатного** с [openrouter.ai/keys](https://openrouter.ai/keys)). С ним доступны бесплатные модели с суффиксом `:free`, а как только понадобится топовая модель — просто выберите платную: тот же ключ, без перенастройки. В `/provider → openrouter` можно показать **только бесплатные** модели или весь каталог, причём бесплатные идут первыми. Для полностью офлайн-работы без ключа остаётся локальный вариант — Ollama.
@@ -507,7 +509,7 @@ dsolve(Derivative(y(x), x, 2) + y(x), y(x))  →  C1*sin(x) + C2*cos(x)
 - Естественным языком: *«вернись до того, как ты сломал меню»* — агент найдёт чекпоинт по его сообщению.
 
 ### 🌴 Vibe-режим
-`/vibe` — один переключатель поверх существующих механизмов: безопасные действия одобряются автоматически, опасные по-прежнему спрашивают, а чекпоинт каждого хода гарантирован. Цена неудачного эксперимента падает до одного `/rewind`.
+`/vibe` — один переключатель поверх существующих механизмов: одобряется всё, кроме удаления ваших файлов (вне `%TEMP%` и `.argent/`), команд, собранных в рантайме, и выключения машины — они отклоняются; если команду не удалось проверить, это видно в транскрипте. Чекпоинт каждого хода гарантирован, так что цена неудачного эксперимента падает до одного `/rewind`. Переключатель остаётся включённым, пока вы сами его не выключите: законченная задача его не сбрасывает, только `/vibe off`.
 
 ### 🧭 Работа по шагам: режим плана, список задач, подагенты
 - **`/plan [задача]`** — режим плана. Агент может только *смотреть* (читать, искать, ходить в сеть, читающие команды вроде `git status` или `grep`); всё, что что-то меняет, убирается из набора инструментов, а вызов такого инструмента отклоняется до запуска. Заканчивается он полным планом (`exit_plan_mode`): ваше «да» возвращает правки, «нет» отправляет план на доработку. `/plan off` выходит вручную. В панели внизу горит `PLAN`.
@@ -521,7 +523,7 @@ dsolve(Derivative(y(x), x, 2) + y(x), y(x))  →  C1*sin(x) + C2*cos(x)
 
 ### 🚪 Комнаты — повторяемые рецепты с рельсами
 Комната — небольшой JSON-граф шагов для дела, которое повторяется: починить баг, сделать ревью, добавить функцию, проверить релиз, исследовать вопрос. Какой шаг следующий, решает движок, а не модель; у каждого шага жёсткие лимиты (итерации, токены, секунды); вердикт вроде «тесты зелёные» даёт код возврата процесса (`sets`), а не слова агента; рискованные шаги (коммит) спрашивают вас (`confirm`); в конце — отчёт и запись прогона в `.argent/rooms_runs/`.
-- **Девять комнат в комплекте** — `fix_bug`, `debug_loop`, `implement_feature` (план → вы его одобряете → код → тесты → ревью), `code_review`, `release_check`, `research`, `explain_repo`, `analyze`, `triage`. `/rooms list` показывает их с параметрами, `/rooms show <имя>` рисует граф.
+- **Десять комнат в комплекте** — `fix_bug`, `debug_loop`, `implement_feature` (план → вы его одобряете → код → тесты → ревью), `code_review`, `critic_review`, `release_check`, `research`, `explain_repo`, `analyze`, `triage`. `/rooms list` показывает их с параметрами, `/rooms show <имя>` рисует граф.
 - **`/rooms <задача>`** выбирает комнату по вашим словам (без вызова модели; если не уверена — спросит), **`/rooms run <комната> [ключ=значение] [задача]`** запускает конкретную: `/rooms run debug_loop test_command="python -m pytest tests/unit -q"`. `/rooms resume` продолжает прерванный прогон, `/rooms last` / `history` показывают, что было.
 - **Модель тоже может ими пользоваться** — инструмент `rooms` (`list`, `show`, `run`, `resume`); когда ваше сообщение явно подходит к комнате, модель получает подсказку в одну строку. Каждый `run` сначала спрашивает вас; рабочие комнаты никогда не запускают другую комнату.
 - **Комнаты из блоков** — `/rooms build <что должна делать, словами>` просит модель набросать комнату, показывает схему и сохраняет только после вашего «да»; `/rooms edit <комната> <правка>` меняет существующую так же (комплектная сохраняется копией `<имя>_custom`). `/rooms editor` открывает в браузере визуальный редактор (перетаскивайте шаги, соединяйте, задавайте условия, повторы и пути при сбое; каждое сохранение проверяет тот же валидатор; пишется только в ваши комнаты). Блоки: `tool`, `agent`, `condition`, `human_pause`, `set`, `notify` и `room` — комната может вызывать другую комнату как подпрограмму.
@@ -714,10 +716,10 @@ res["tool"].choice, res["tool"].confidence, res["safe"].probability
 - `/ultracode [on|off|run <задача>|night <когда> | <задача>|keyword on|off|stop|resume|level|budget|calibrate|status|list]` — Большая задача как спланированный, проверяемый и возобновляемый воркфлоу.
 - `/advisor [model <провайдер>:<модель>|clear|consent on|off]` — Более сильное второе мнение, к которому обращается Ultracode (облако или локально).
 - `/memory [list|show|search|add|forget|restore|migrate|undo|on|off|dream]` — Долговременные Markdown-заметки проекта и глобальные; `dream` сводит их в простое ПК (`dream global on` — и глобальные).
-- `/desktop [on|off|allow <программа.exe>|deny <программа.exe>|windows|key <сочетание>|audit]` — Разрешить агенту действовать в других программах (UI Automation): по умолчанию выключено, только разрешённые программы, каждое действие спрашивается.
+- `/desktop [on|off|windows|key <сочетание>|audit]` — Разрешить агенту действовать в других программах (UI Automation): включено по умолчанию, любое окно кроме консоли самого Argent, менеджеров паролей/UAC и полей пароля; спрашивается только необратимое (удалить, оплатить, отправить); `/desktop off` — ручной тормоз.
 - `/rooms [задача|run <комната> [k=v] [задача]|list|show|route|resume|last|history|build|edit|diagram|editor|new|validate|delete|unquarantine|spawn|hint]` — Повторяемые рецепты с рельсами: комната чинит баг, делает ревью, выпускает функцию или проверяет релиз с лимитами, вердиктами от процессов и отчётом.
 - `/stats` — Диагностика сессии (разбор бюджета контекста).
-- `/jobs`, `/stop <pid>` — Список / остановка фоновых процессов.
+- `/jobs` — работающие фоновые процессы; `/jobs done` — завершённые; `/jobs <pid>` — что процесс напечатал; `/stop <pid>` — остановить.
 - `/cd [path]` — Сменить или показать рабочую директорию.
 - `/mcp [subcommand]` — Управление MCP-серверами (list / add / remove / start / stop / test).
 - `/session` — Просмотр информации об активной сессии.
@@ -732,7 +734,8 @@ res["tool"].choice, res["tool"].confidence, res["safe"].probability
 - `/skills` — Показать список доступных навыков ИИ.
 - `/rewind` — Машина времени: откатить всё дерево к любому чекпоинту хода.
 - `/back` — Вернуться до последнего сообщения: диалог и файлы (кнопка *↩ Вернуться сюда* в TUI).
-- `/vibe [задача]` — Vibe-режим: авто-одобрение безопасных действий + чекпоинт каждый ход (или запуск задачи в одну строку).
+- `/vibe [задача]` — Vibe-режим: авто-одобрение безопасных действий, удаление внутри проекта — только после копии в корзину, + чекпоинт каждый ход (или запуск задачи в одну строку).
+- `/trash [restore <id>|drop <id>|purge]` — Что удалил `/vibe`: список снимков, возврат файлов, очистка.
 - `/plan [задача|off|status]` — Режим плана: агент только изучает и в конце предлагает план на утверждение; до этого ничего не меняется.
 - `/todo [clear]` — Список задач агента на текущую работу.
 - `/agents [N|diff N|apply N|discard N|stop N]` — Подагенты рядом с вами: отчёты, патчи (из изолированных worktree), применить / выбросить / остановить.
@@ -781,9 +784,11 @@ res["tool"].choice, res["tool"].confidence, res["safe"].probability
 
 ```bash
 pip install -r requirements.txt   # full runtime dependencies
-python main.py                    # run from the source tree
-python -m pytest                  # unit tests (browser tests excluded)
-python -m pytest -m integration   # browser tests (launch a real CDP browser)
+pip install -e ".[dev]"           # + pytest, pytest-timeout, pytest-cov, ruff
+python -m argent.main             # run from the source tree
+python -m pytest                  # unit tests (browser and real-desktop tests excluded)
+python -m ruff check .            # the lint gate CI runs (undefined names, syntax, shadows)
+python -m pytest -m integration   # browser (CDP) and real-window desktop tests
 ```
 
 Or install it as a CLI (adds an `argent` command):
@@ -791,15 +796,32 @@ Or install it as a CLI (adds an `argent` command):
 ```bash
 pip install -e .                  # editable install with the argent entry point
 pip install -e ".[rag,browser]"   # include optional RAG / browser stacks
+pip install -e ".[leeth]"         # local router + Leeth2 model (torch, transformers, scipy)
 argent                            # launch from anywhere
 ```
 
-CI runs the unit suite on `windows-latest` for every push and pull request
-using the lightweight `requirements-ci.txt` set.
+Optional stacks are extras, and each one is optional on purpose — the agent imports
+them lazily. Without one, the tests that need it **skip with a reason** instead of
+failing as if the code had broken: `browser` (Playwright + stagehand), `rag`
+(chromadb), `research` (crawl4ai), `lsp` (multilspy), `leeth` (torch, transformers,
+scipy, onnx). A red test in a clean environment therefore means a real defect, not a
+missing package.
+
+CI (`.github/workflows/ci.yml`) runs, on every push and pull request:
+
+- the unit suite on `windows-latest` for Python **3.11 and 3.12**, with the
+  lightweight `requirements-ci.txt` set, a 300-second per-test timeout and a
+  coverage report (reported, not yet gated);
+- `ruff` — errors that are bugs (undefined names, syntax, shadowed definitions),
+  not style;
+- a **wheel** build that is installed outside the source tree and imported, so a
+  module missing from the `argent` package fails the build, not the user;
+- a Linux smoke job (core imports + platform-independent tests) for the POSIX
+  claims, and the Rust TUI's build, tests and `clippy -D warnings`.
 
 ### Native TUI (Rust)
 
-`Argent.bat` (or `python run_tui.py`) starts the in-process Rust interface
+`Argent.bat` (or `python -m argent.run_tui`) starts the in-process Rust interface
 (ratatui + PyO3). It is meant to look exactly like the terminal REPL while keeping
 what a full-screen app can do that a scrolling terminal cannot: typing while a
 turn runs, a message queue, click-to-open reasoning and tool cards, mouse-wheel
@@ -815,7 +837,14 @@ it there). *premium*, the default, keeps the same layout and keys and dresses th
 tinted panels for the prompt and for your messages with an accent bar, a toolbar of
 chips with a context gauge, a suggestion list that lights the current item, and
 answers whose headings, quotes, code (a card with a language label), tables and task
-lists (`☑` / `☐`) are drawn as designed blocks. Terminals have no alpha channel, so
+lists (`☑` / `☐`) are drawn as designed blocks. The toolbar's right corner carries
+the session spend (`sum 12.3k tok · $0.0123`) and, when the current provider is known
+to ignore a control, a quiet `n/a: thinking, depth` note (see
+`argent/model_capabilities.py`). Expandable things say so: a card or a reasoning
+block carries `▸` folded and `▾` open, and hovering a control explains it — the
+context chip, for one, opens a breakdown of the system prompt, tool schemas and
+history. An approval is a framed `! ТРЕБУЕТСЯ ПОДТВЕРЖДЕНИЕ` banner, not a line of
+output. Terminals have no alpha channel, so
 the "translucent" panels are tints mixed ahead of time; only panels get a background,
 the rest keeps the terminal's own, so a translucent window still shows through.
 Switch with `/ui premium|classic` (saved in the config; `ARGENT_UI_STYLE` overrides it
@@ -829,7 +858,7 @@ native widgets in `crates/argent-tui/src/premium.rs`.
 | `Tab` / `Shift+Tab`, `↓` / `↑` | with suggestions open: next / previous one, shown in the prompt; the list stays |
 | `Enter` / `Esc` | accept the suggestion / close the list (undoing a Tab preview) |
 | `Ctrl+A` | select the whole prompt; with nothing typed, the whole conversation |
-| `Ctrl+C` | copy a selection (mouse or prompt); otherwise stop the turn, twice to leave |
+| `Ctrl+C` | while a turn runs: stop it at once (a second press leaves, and a draft in the prompt is kept); otherwise copy a selection, else clear the prompt |
 | `Shift+←/→`, `Ctrl+Shift+←/→`, `Shift+Home/End` | select by character, by word, to the ends |
 | typing, paste, `Delete`, `Backspace` | replace or remove the selection |
 | drag in the chat | select; the selection is tied to the text, so it survives scrolling, and dragging past the top or bottom edge scrolls on its own |
@@ -852,6 +881,21 @@ cd crates/argent-tui && cargo test                 # unit, parity and end-to-end
 renderer and through the TUI and compares the two screens cell by cell. It needs
 the project's Python dependencies; set `ARGENT_REQUIRE_PARITY=1` to make missing
 ones a failure instead of a skip (CI does).
+
+**`cargo test` needs the base Python on PATH.** The test binaries link `libpython`,
+and the venv does not ship `python3.dll` — so on a machine where only the venv is
+set up every test binary dies at load time with `0xc0000135 (STATUS_DLL_NOT_FOUND)`,
+which reads like a broken crate rather than a missing runtime. Put the interpreter
+directory first:
+
+```powershell
+$env:PATH = "$env:LOCALAPPDATA\Programs\Python\Python311;$env:PATH"
+$env:VIRTUAL_ENV = "C:\Users\<you>\Desktop\Argent\.venv"
+cd crates\argent-tui; cargo test
+```
+
+The tests themselves skip (with a reason) when the *bridge* cannot be driven; this
+note is about the step before that, where the process never starts.
 
 Handy diagnostic scripts (require a configured provider / Ollama):
 

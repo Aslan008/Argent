@@ -8,7 +8,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-import config
+import argent.config as config
 from src.agent import subagents, worktrees
 from src.agent.workflow import advisor, calibration, control, roles, runtime, store
 from src.agent.workflow.calibration import Hardware, Profile, choose_level
@@ -145,7 +145,7 @@ class TestAdvisor:
             def sync_chat(self, model, messages, temperature=0.3, json_format=False, timeout=None):
                 seen["text"] = messages[-1]["content"]
                 return "- add a test\nVERDICT: REVISE"
-        import providers
+        import argent.providers as providers
         monkeypatch.setattr(providers, "create_provider", lambda name=None: P())
         t = advisor.Target("claude", "big", configured=True, cloud=True, leaves_pc=True)
         out = advisor.consult("plan", "make it", "key is sk-ant-api03-" + "A" * 40, t)
@@ -164,7 +164,7 @@ class TestAdvisor:
                 if self.name == "claude":
                     raise RuntimeError("quota")
                 return "VERDICT: APPROVE"
-        import providers
+        import argent.providers as providers
         monkeypatch.setattr(providers, "create_provider", lambda name=None: P(name))
         t = advisor.Target("claude", "big", True, True, True)
         fb = advisor.Target("ollama", "small", False, False, False)
@@ -175,7 +175,7 @@ class TestAdvisor:
         class P:
             def sync_chat(self, *a, **k):
                 raise RuntimeError("down")
-        import providers
+        import argent.providers as providers
         monkeypatch.setattr(providers, "create_provider", lambda name=None: P())
         with pytest.raises(advisor.AdvisorError):
             advisor.consult("final", "g", "b", advisor.Target("claude", "x", True, True, True))
@@ -218,7 +218,7 @@ class TestSwitch:
         assert "обычным способом" in runtime.start("refactor the whole package into modules")
 
     def test_the_tool_dispatches(self, monkeypatch):
-        from tools.workflow_tools import ultracode
+        from argent.tools.workflow_tools import ultracode
         monkeypatch.setattr(runtime, "status", lambda: "S")
         monkeypatch.setattr(runtime, "stop", lambda: "T")
         assert ultracode("status") == "S" and ultracode("stop") == "T"
@@ -260,7 +260,7 @@ class TestSwitch:
 
 class TestParts:
     def test_check_reads_the_exit_code(self, monkeypatch):
-        import tools.command_ops as ops
+        import argent.tools.command_ops as ops
         monkeypatch.setattr(ops, "run_command", lambda c, cwd=None, timeout=None: "Exit code: 0\n3 passed")
         assert runtime.run_check("pytest", ".") == (True, "Exit code: 0\n3 passed")
         monkeypatch.setattr(ops, "run_command", lambda c, cwd=None, timeout=None: "Exit code: 1\nFAILED")
@@ -279,7 +279,7 @@ class TestParts:
         assert control.stop_requested()
 
     def test_agent_stop_stops_a_workflow(self):
-        import agent as agent_module
+        import argent.agent as agent_module
         a = agent_module.ArgentAgent.__new__(agent_module.ArgentAgent)
         a._stop_requested = False
         agent_module.ArgentAgent.request_stop(a)
@@ -341,8 +341,8 @@ def test_a_workflow_runs_through_real_subagents_worktrees_and_patches(repo, tmp_
                 return plan_text
             return "Looks right.\nVERDICT: APPROVE" if "review the plan" in text else "VERDICT: ACCEPT"
 
-    import approval
-    import providers
+    import argent.approval as approval
+    import argent.providers as providers
     monkeypatch.setattr(providers, "create_provider", lambda name=None: Provider())
     monkeypatch.setattr(approval, "request_approval", lambda *a, **k: True)
     monkeypatch.setattr(config, "get_provider", lambda: "deepseek")
@@ -356,7 +356,7 @@ def test_a_workflow_runs_through_real_subagents_worktrees_and_patches(repo, tmp_
         return done.returncode == 0, f"Exit code: {done.returncode}\n{done.stdout}{done.stderr}"
     monkeypatch.setattr(runtime, "run_check", fake_check)
 
-    import agent as agent_module
+    import argent.agent as agent_module
     monkeypatch.setattr(agent_module, "run_plan_critique", lambda target, goal=None, what="": "fine\nVERDICT: SOLID")
 
     runtime.set_enabled(True)
@@ -380,7 +380,7 @@ def test_a_workflow_runs_through_real_subagents_worktrees_and_patches(repo, tmp_
 class TestWhatTheModelSees:
     @pytest.fixture
     def agent(self, monkeypatch):
-        import agent as agent_module
+        import argent.agent as agent_module
         mem = MagicMock()
         mem.data = {}
         monkeypatch.setattr(agent_module, "memory", mem)

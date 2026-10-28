@@ -3,11 +3,11 @@ import re
 import threading
 import time
 from typing import List, Dict, Any, Optional
-from memory_manager import memory
-from providers import create_provider, ProviderError
-from logger import get_logger
+from argent.memory_manager import memory
+from argent.providers import create_provider, ProviderError
+from argent.logger import get_logger
 from src.agent import compaction, summary_precompute
-from config import get_provider, get_context_window, get_model_size_category, get_strip_reasoning
+from argent.config import get_provider, get_context_window, get_model_size_category, get_strip_reasoning
 
 # Was logging.getLogger("argent.agent.trimmer") — a name nothing ever attaches a
 # handler to, so every record below vanished. That is the one place you would
@@ -50,7 +50,7 @@ def _query_tokenize_api(text: str, model_name: str, provider: str) -> int | None
                 timeout=1.0
             )
         elif provider == "koboldcpp":
-            from config import get_koboldcpp_url
+            from argent.config import get_koboldcpp_url
             base_url = get_koboldcpp_url()
             if base_url.endswith("/v1"):
                 api_url = base_url[:-3] + "/api/v1/tokenize"
@@ -283,7 +283,7 @@ def _render_for_summarizer(messages: List[Dict], caps: Dict[str, int]) -> List[s
                             args = _json.loads(args)
                         except Exception:
                             args = {}
-                    key = (args.get("file_path") or args.get("command")
+                    key = (args.get("path") or args.get("command")
                            or args.get("pattern") or "")
                     calls_desc.append(f"{name}({str(key)[:caps['key']]})")
                 thinking = content[:caps["think"]] + "…" if len(content) > caps["think"] else content
@@ -441,7 +441,7 @@ def _rehydrate_files(messages: List[Dict], max_files: int = 3,
                         args = _json.loads(args.replace('\\', '/'))
                     except Exception:
                         continue
-            fp = args.get("file_path") or "" if isinstance(args, dict) else ""
+            fp = args.get("path") or "" if isinstance(args, dict) else ""
             if fp:
                 bucket = read_files if name == "read_file" else edited_files
                 if fp in bucket:
@@ -483,7 +483,7 @@ def _rehydrate_files(messages: List[Dict], max_files: int = 3,
 
 # ── Compaction metrics and the thrash guard ─────────────────────────────
 
-from src.agent.compaction_log import (  # noqa: E402,F401  (re-exported: callers and tests use trimmer.<name>)
+from src.agent.compaction_log import (  
     THRASH_ADVICE, THRASH_MIN_SAVING, THRASH_RUNS, THRASH_WINDOW_SECONDS, _COMPACTIONS,
     describe_compaction, is_thrashing, last_compaction, record_compaction, reset_compaction_history,
 )
@@ -499,7 +499,7 @@ def _count_tokens(messages: List[Dict], model_name: str) -> int:
 
 def _announce_compaction(entry: Dict[str, Any], thrashing: bool) -> None:
     try:
-        from ui import print_system
+        from argent.ui import print_system
         print_system(f"[dim]{describe_compaction(entry)}[/dim]")
         if thrashing:
             print_system(f"[yellow]{THRASH_ADVICE}[/yellow]")
@@ -520,7 +520,7 @@ def _write_compact_boundary(messages_before: List[Dict],
     metrics = record_compaction(kind, compression_id, pre, post, model_name)
     try:
         from datetime import datetime
-        from project_paths import project_root_or_cwd
+        from argent.project_paths import project_root_or_cwd
         from pathlib import Path
 
         root = project_root_or_cwd() or Path.cwd()
@@ -694,7 +694,7 @@ def _infer_tool_context(messages: List[Dict], tool_msg_index: int) -> tuple:
                         args = _json.loads(args)
                     except Exception:
                         args = {}
-                key = (args.get("file_path") or args.get("command")
+                key = (args.get("path") or args.get("command")
                        or args.get("pattern") or args.get("directory") or "")
                 return name, str(key)[:100]
         break
@@ -702,32 +702,49 @@ def _infer_tool_context(messages: List[Dict], tool_msg_index: int) -> tuple:
 
 
 def _build_aged_stub(tool_name: str, key_arg: str, content: str) -> str:
-    """Build a compact metadata replacement for an old tool result."""
+    """Build a compact metadata replacement for an old tool result.
+
+    The stub keeps a few REAL lines, not only counters. A header that says "123 строк"
+    tells the model that a file was read but not what was in it, so anything that has to
+    be quoted costs a fresh call — on a long task that is a round trip per reference, and
+    a fresh call is also a chance to lose the thread. One head line and one or two tail
+    lines cost ~300 characters against a result that was thousands: still a 30x saving,
+    and now the stub can answer "what was in there" on its own.
+    """
     char_count = len(content)
     line_count = content.count("\n") + 1
+    body = [l for l in content.strip().split("\n") if l.strip()]
+
+    def head(count: int = 1) -> str:
+        return " / ".join(l.strip()[:110] for l in body[:count])
+
+    def tail(count: int = 1) -> str:
+        return " / ".join(l.strip()[:110] for l in body[-count:])
 
     if tool_name == "read_file":
         return (f"[aged: read_file({key_arg}) — {line_count} строк, "
-                f"{char_count} символов. Содержимое доступно на диске.]")
+                f"{char_count} символов. Начало: {head()} … Хвост: {tail()}. "
+                f"Полный текст — перечитай файл.]")
     elif tool_name == "grep_search":
         match_count = content.count("\n")
-        return (f"[aged: grep_search({key_arg}) — "
-                f"{match_count} совпадений. Можно перезапустить.]")
+        return (f"[aged: grep_search({key_arg}) — {match_count} совпадений. "
+                f"Первое: {head()}. Перезапусти, если нужен весь список.]")
     elif tool_name == "run_command":
-        lines = content.strip().split("\n")
-        first = lines[0][:120] if lines else ""
         exit_info = ""
-        for line in lines:
+        for line in body:
             if "exit code" in line.lower():
                 exit_info = f" ({line.strip()[:60]})"
                 break
-        return (f"[aged: run_command({key_arg}) — "
-                f"{line_count} строк{exit_info}. Начало: {first}]")
+        # The tail is what carries a verdict: "2 failed, 15 passed" lives in the last
+        # lines, and that is exactly the thing a model has to be able to quote.
+        return (f"[aged: run_command({key_arg}) — {line_count} строк{exit_info}. "
+                f"Начало: {head()}. Хвост: {tail(2)}. "
+                f"Вывод не сохранён — перезапусти команду, если нужна точная цитата.]")
     elif tool_name in ("write_file", "replace_in_file"):
-        first_line = content.strip().split("\n")[0][:150]
+        first_line = body[0][:150] if body else ""
         return f"[aged: {tool_name}({key_arg}) — {first_line}]"
     else:
-        first_line = content.strip().split("\n")[0][:120]
+        first_line = body[0][:120] if body else ""
         return f"[aged: {tool_name}({key_arg}) — {char_count} chars. {first_line}]"
 
 
@@ -965,13 +982,28 @@ def soft_trim_with_summarization(
     # The dropped messages go to a file FIRST, whole: whatever the summary loses, the agent can read back.
     archive_path = compaction.archive_transcript(msgs_to_compress, compression_id)
     skip_model = is_thrashing()
-    from ui import console
+    from contextlib import nullcontext
+    import os
+
+    from argent.ui import console
     from src.agent import service_llm
-    with console.status(
-        "[dim #58a6ff]Оптимизация контекста (Progressive Distillation)..."
-        "[/dim #58a6ff]",
-        spinner="dots",
-    ) as status:
+
+    # A Rich spinner writes carriage-return frames. The TUI traps stdout and
+    # turns every frame into a notice, which is why "Оптимизация контекста"
+    # appeared twice in the transcript. In the TUI say it once, as a note, and
+    # keep the real spinner for the terminal REPL.
+    if os.environ.get("ARGENT_TUI") == "1":
+        from argent.ui import print_system
+
+        print_system("[dim #58a6ff]Оптимизация контекста (Progressive Distillation)...[/dim #58a6ff]")
+        status_context = nullcontext(None)
+    else:
+        status_context = console.status(
+            "[dim #58a6ff]Оптимизация контекста (Progressive Distillation)..."
+            "[/dim #58a6ff]",
+            spinner="dots",
+        )
+    with status_context as status:
         try:
             if skip_model:
                 # Compacting again and again without a gain: the summariser would be paid for nothing.
@@ -1121,7 +1153,7 @@ def clean_messages_for_llm(messages: List[Dict[str, Any]], strip_reasoning: bool
     # every turn after it — the chat stays bricked until /clear. Repairing on
     # the way out means an ALREADY poisoned history heals itself, which fixing
     # the producer alone cannot do.
-    from text_safety import repair_structure
+    from argent.text_safety import repair_structure
     return repair_structure(cleaned)
 
 

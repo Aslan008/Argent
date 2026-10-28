@@ -9,8 +9,8 @@ was never trimmed and the request overflowed.
 
 import pytest
 
-import command_handler
-from agent import ArgentAgent
+import argent.command_handler as command_handler
+from argent.agent import ArgentAgent
 
 
 @pytest.fixture
@@ -85,7 +85,7 @@ class TestWarnings:
 
     def test_a_shrinking_context_window_warns(self, agent, monkeypatch, said):
         # agent.py binds the getter at import time, so patch it there.
-        import agent as agent_module
+        import argent.agent as agent_module
         monkeypatch.setattr(agent_module, "get_context_window", lambda: 4096)
         command_handler.switch_model(agent, "qwen3.5:9b")
         assert any("Окно контекста" in line for line in said)
@@ -105,7 +105,10 @@ class TestNeverAssignDirectly:
 
         root = Path(__file__).resolve().parents[1]
         for name in ("command_handler.py", "main.py"):
-            src = (root / name).read_text(encoding="utf-8")
+            path = root / name
+            if not path.exists():                   # these modules live under argent/ now
+                path = root / "argent" / name
+            src = path.read_text(encoding="utf-8")
             assert not re.search(r"agent\.model_name\s*=", src), (
                 f"{name} assigns agent.model_name directly; use set_model/switch_model "
                 f"so refresh_tier runs")
