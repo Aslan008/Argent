@@ -533,7 +533,7 @@ class ReplBridge:
             payload, media, note = vision.encode_image(str(path))
             if not payload:
                 return note or "не удалось подготовить изображение"
-            vision.queue_image(payload, media, f"скриншот из буфера ({w}×{h})")
+            vision.queue_image(payload, media, f"скриншот из буфера ({w}×{h})", path=str(path))
             return f"{w}×{h}"
         except Exception as exc:
             return f"ошибка: {exc}"
@@ -550,16 +550,105 @@ class ReplBridge:
 
         return vision.image_full(int(index))
 
-    def preview_full(self) -> str:
-        """The last preview at screen resolution, built on demand.
+    def open_path_externally(self, path: str = "") -> str:
+        """Hand a file to the system: Windows opens it in the default app.
+
+        A terminal draws a picture as blocks of colour; a photo viewer draws pixels.
+        For a screenshot of text that is the difference between readable and not, so
+        the card offers this next to the in-terminal overlay.
+        """
+        import os
+
+        target = (path or "").strip()
+        if not target or not os.path.exists(target):
+            return f"Файл не найден: {target or '(пустой путь)'}"
+        try:
+            os.startfile(target)  # type: ignore[attr-defined]
+        except Exception as e:
+            return f"Не удалось открыть {target}: {e}"
+        return ""
+
+    def touch_presence(self) -> str:
+        """The person pressed a key or clicked: re-arm the vibe presence window.
+
+        Vibe asks about a dangerous action only while somebody has touched the
+        interface recently (see `argent/presence.py`); this is the only place the
+        window is extended, and the agent loop never calls it.
+        """
+        from argent import presence
+
+        presence.touch()
+        return presence.describe()
+
+    def subagent_detail(self, run_id) -> str:
+        """One sub-agent's own dialogue, for its window. Empty when the id is unknown.
+
+        On demand only: the state poll carries the short list, because a worker's log
+        runs to hundreds of lines and is polled every second.
+        """
+        from src.agent.subagents import MANAGER
+
+        detail = MANAGER.detail(run_id)
+        return json.dumps(detail, ensure_ascii=False) if detail else ""
+
+    def stop_subagent(self, run_id) -> str:
+        """Stop one worker; an empty answer means it was stopped."""
+        from src.agent.subagents import MANAGER
+
+        run = MANAGER.get(run_id)
+        if run is None:
+            return "Нет такого субагента"
+        return "" if MANAGER.stop(run) else "Он уже не запущен"
+
+    def preview_full(self, path: str = "", cols: int = 0) -> str:
+        """One picture at the size it will be drawn, built on demand.
 
         The state poll carries only a cheap frame (96 columns): a grid wide enough to
         fill a terminal is ~200 KB of base64, and the poll runs every couple of seconds.
-        This builds the big one the moment the person opens the picture.
+        This builds the real one the moment the person opens the picture — for `path`
+        when given (an older card may have been clicked), else for the newest frame.
+
+        `cols` is the width the picture will actually occupy. Resampling once, here and
+        with LANCZOS, is crisper than asking for 320 columns and letting the frontend
+        average them down again — two passes of smoothing on text turn it to mush.
         """
         from argent import image_preview
 
-        return image_preview.full_snapshot()
+        width = int(cols or 0)
+        if width > 0:
+            return image_preview.full_snapshot(path or None, cols=max(16, width))
+        return image_preview.full_snapshot(path or None)
+
+    def open_image(self, path: str = "") -> str:
+        """Show the original file at full resolution in the system image viewer.
+
+        A terminal draws a picture as a grid of characters: even the 320-column
+        overlay is a tenth of a 1920-pixel screenshot, so the text on it cannot be
+        read. The file has no such limit and it is already on disk — this is the way
+        to actually look at what the screenshot shows. Empty answer means it opened.
+        """
+        target = (path or "").strip()
+        if not target:
+            from argent import image_preview
+
+            target = str(image_preview._last.get("path") or "")
+        if not target or not Path(target).is_file():
+            return "Файл изображения не найден — открывать нечего"
+        try:
+            from argent.host_os import system
+
+            if system() == "Windows":
+                import os
+
+                os.startfile(target)
+            else:
+                import subprocess
+                import sys
+
+                subprocess.Popen(["open" if sys.platform == "darwin" else "xdg-open", target])
+            return ""
+        except Exception as exc:
+            return f"Не удалось открыть изображение: {exc}"
 
     def _on_attached(self) -> None:
         """Run startup sequences and emit onboarding banners once sink is ready."""
@@ -1213,6 +1302,14 @@ class ReplBridge:
             state["todos_sub"] = json.dumps(TODOS.snapshot_subagents(), ensure_ascii=False)
         except Exception:
             state["todos"] = "[]"
+        try:
+            # Sub-agents have their own list and their own window: the poll carries only
+            # the short state (status, elapsed, last line), never the logs.
+            from src.agent.subagents import MANAGER
+
+            state["subagents"] = json.dumps(MANAGER.snapshot(), ensure_ascii=False)
+        except Exception:
+            state["subagents"] = "[]"
         try:
             # Only the running ones ride here: the panel is a glance, and a finished
             # process can carry kilobytes of output that must not be polled twice a

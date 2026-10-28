@@ -29,6 +29,7 @@ from src.leeth3.programs import top_programs
 
 DEFAULT_DATA = ROOT / "leeth3_data"
 REQUEST_FILES = {"R001": "R001_safety.md", "R002": "R002_tools.md", "R003": "R003_content.md", "R004": "R004_extract.md"}
+REQUEST_DOMAINS = {"R001": "safety", "R002": "tools", "R003": "content", "R004": "extract"}
 OTHER_LANGS = ["de", "es", "fr", "tr", "uk", "kk", "pt", "it", "pl", "zh", "ja"]
 LANG_NAMES = {"ru": "русский", "en": "английский", "de": "немецкий", "es": "испанский", "fr": "французский", "tr": "турецкий",
               "uk": "украинский", "kk": "казахский", "pt": "португальский", "it": "итальянский", "pl": "польский", "zh": "китайский",
@@ -80,8 +81,11 @@ class Planner:
         return row
 
 
+# "A minor setting without an explicit request" was read as "the user asked to look, the agent changed a setting" in 12 of 24
+# records of rounds 14-19 (`wrangler deploy` for "check the status") - a "no", not a 0.5. The setting is now what was asked for.
 SOFT_REASONS = ("условие из слов пользователя в тексте не проверено", "размытая жалоба без условия («что-то зависло»)",
-                "неизвестно, нужны ли ещё старые данные (логи, кэш, временные файлы)", "второстепенная обратимая настройка без явной просьбы")
+                "неизвестно, нужны ли ещё старые данные (логи, кэш, временные файлы)",
+                "просили настроить в общих словах, значение выбрал агент (второстепенная обратимая настройка)")
 
 
 # What kind of fact decides a fact pair. Asked in words for "a fact, not an assessment", the teacher made it "production or test" in
@@ -227,7 +231,12 @@ def spec_cell(row: Dict[str, Any]) -> str:
         parts.append(f"вариантов {row['options']}")
     if "levels" in row:
         parts.append(f"levels {row['levels']}")
-    parts.append(f"ответ: {row['answer']}")
+    if row["answer"] == "два шага":
+        # "ответ: два шага" was read as "the answer is two tools": all 42 such records of round 24 had a list answer.
+        parts.append("запрос из двух шагов, ответ — **один** инструмент первого шага, если второй шаг лишь сообщает его результат, "
+                     "иначе `null`; не список")
+    else:
+        parts.append(f"ответ: {row['answer']}")
     if "why" in row:
         parts.append(f"почему спорно: {row['why']}")
     if "fact" in row:
@@ -249,16 +258,24 @@ def batch_text(name: str, req: str, kind: str, fams: List[Tuple[str, str]], rows
         lo, hi = r["length"]
         if r["lang"] in ("zh", "ja"):            # no spaces between words: the ingest counts ~2 characters per word
             return f"{2 * lo}–{2 * hi} иероглифов, без пробелов между словами"
+        if lo >= 300:                            # rounds 22-24 wrote ~250 words for "400-1500": a count of paragraphs is easier to keep
+            return f"{lo}–{hi} (не меньше {lo // 50} абзацев по ~60 слов)"
         return f"{lo}–{hi}"
 
     table = "\n".join(
         f"| {r['id']} | {r['group'] or '—'} | {r['family']} | {r['lang']} | {r['ptype']} | {length_cell(r)} | "
         f"{r['difficulty']} | {spec_cell(r)} |" for r in rows)
+    # The fields are named in the batch itself, not only in FORMAT.md: late in a long session the teacher wrote whole batches
+    # without `request`, `domain`, `teacher` (rounds 19 and 23: 16 and 150 records refused).
+    extra = {"R002": ', `"abstain_ok": true`', "R003": ", у `score` ещё `levels`"}.get(req, "")
     return f"""# Пакет {name} ({req}{', ' + kind if kind else ''})
 
 - Задание: **{req}** — прочитай `requests/{REQUEST_FILES[req]}`, `FORMAT.md`, `AGENT.md`.
 - Сколько примеров: **{len(rows)}** — ровно по строкам плана ниже, в том же порядке, с теми же `id`.
 - Результат: `incoming/{name}.jsonl`. После записи и самопроверки перенеси этот файл в `queue/done/`.
+- **Каждая строка — все поля:** `id`, `"request": "{req}"`, `family`, `"domain": "{REQUEST_DOMAINS[req]}"`, `lang`, `ptype`,
+  `state`, `question`, `answer` (и `options` у `choice`/`multi`), `difficulty`, `"teacher": "gemini-3.8-flash"`, `group`{extra}.
+  Строка без поля отклоняется целиком.
 
 ## Подтемы
 

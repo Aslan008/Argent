@@ -686,9 +686,18 @@ fn the_turn_snapshot_matches_the_repls_lines() {
         app.renderer = Box::new(PyRenderer::new(env.bridge.clone_ref(py)));
         let parsed = parse_py_event(&ev).unwrap().expect("turn_snapshot event");
         app.handle_event(parsed);
-        let view = item_view(&app, app.messages.len() - 1, WIDTH);
+        // The summary comes folded to one row; what the REPL prints is the breakdown
+        // underneath it, so parity is checked with that breakdown opened.
+        let idx = app.messages.len() - 1;
+        assert!(app.toggle_block_by_idx(idx), "сводка раскрывается кликом");
+        let view = item_view(&app, idx, WIDTH);
         let got: Vec<Line<'static>> = view.lines();
-        assert_rows_equal("turn snapshot", &want, &got);
+        assert!(
+            got[0].spans.iter().any(|s| s.content.contains("клик — свернуть")),
+            "первая строка — сама сводка с путём назад: {:?}",
+            got[0]
+        );
+        assert_rows_equal("turn snapshot", &want, &got[1..]);
     });
 }
 

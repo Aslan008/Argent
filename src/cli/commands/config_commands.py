@@ -139,6 +139,43 @@ def handle_model(ctx: CommandContext) -> CommandResult:
     return CommandResult.continue_loop()
 
 
+@registry.register("/fallback", help_text="Авто-смена модели при отказе (429/404): /fallback [on|off|auto|status|<модели>]", category="config", is_prefix=True)
+def handle_fallback(ctx: CommandContext) -> CommandResult:
+    """What happens when the chosen model says no: switch, or report it."""
+    from argent.config import (
+        get_model_fallback_chain, get_model_fallback_enabled,
+        set_model_fallback_chain, set_model_fallback_enabled,
+    )
+    parts = ctx.user_input.strip().split(maxsplit=1)
+    arg = parts[1].strip() if len(parts) > 1 else ""
+    low = arg.lower()
+
+    if low in ("on", "off"):
+        set_model_fallback_enabled(low == "on")
+        print_system("Авто-смена модели: " + ("включена" if low == "on" else "выключена"))
+        return CommandResult.continue_loop()
+
+    if low == "auto":
+        set_model_fallback_chain([])
+        print_system("Цепочка сброшена: буду брать бесплатные модели провайдера, какие есть сейчас.")
+        return CommandResult.continue_loop()
+
+    if arg and low != "status":
+        models = [m.strip() for m in arg.replace(",", " ").split() if m.strip()]
+        set_model_fallback_chain(models)
+        print_system("Цепочка моделей: " + ", ".join(models))
+        return CommandResult.continue_loop()
+
+    chain = get_model_fallback_chain()
+    enabled = get_model_fallback_enabled()
+    print_system(
+        f"Авто-смена модели: {'включена' if enabled else 'выключена'}\n"
+        f"Текущая модель: {get_current_model()} ({get_provider()})\n"
+        f"Цепочка: {', '.join(chain) or 'бесплатные модели провайдера, какие есть сейчас'}\n"
+        "Настройка: /fallback on|off · /fallback auto · /fallback <модель1> <модель2>")
+    return CommandResult.continue_loop()
+
+
 def _say_catalog_problem(provider) -> None:
     """Tell the person why the model list is not the live one from the provider, if it is not."""
     catalog = getattr(provider, "_last_catalog", None)
@@ -710,11 +747,117 @@ def handle_tokens(ctx: CommandContext) -> CommandResult:
     return CommandResult.continue_loop()
 
 
-@registry.register("/prompt", help_text="Просмотр текущего системного промпта", category="config")
+@registry.register("/prompt", help_text="Системный промпт: показать, открыть файл, движок", category="config")
 def handle_prompt(ctx: CommandContext) -> CommandResult:
+    """Show the system prompt, edit either prompt file, or switch the engine.
+
+    `/prompt` prints what the model actually gets this turn.
+    `/prompt project|global` opens that file in an external editor — the input box
+    is for messages, not for editing a Markdown file.
+    `/prompt show [project|global]` prints the file here.
+    `/prompt new [project|global]` creates it from a template.
+    `/prompt minimal|full` switches which built-in instructions it carries.
+    """
+    from argent import prompt_files
+
+    words = ctx.user_input.strip().split()
+    arg = words[1].lower() if len(words) > 1 else ""
+    which = words[2].lower() if len(words) > 2 else "project"
+
+    if arg in ("full", "minimal"):
+        from argent.config import set_system_prompt_style
+
+        set_system_prompt_style(arg)
+        try:
+            ctx.agent._refresh_system_prompt()
+        except Exception:
+            pass
+        print_system(
+            f"Движок промпта: {arg}" +
+            (" — полный набор секций" if arg == "full" else " — только самое нужное")
+        )
+        return CommandResult.continue_loop()
+
+    if arg in ("project", "global", "проект", "глобальный"):
+        print_system(prompt_files.open_in(arg))
+        return CommandResult.continue_loop()
+
+    if arg == "new":
+        print_system(prompt_files.create(which))
+        print_system("Теперь можно написать его вручную: /prompt " + which)
+        return CommandResult.continue_loop()
+
+    if arg == "show":
+        text = prompt_files.read(which)
+        from rich.syntax import Syntax
+        console.print(Syntax(text, "markdown", theme="monokai", word_wrap=True))
+        print_system(f"Открыть для правки: /prompt {which}")
+        return CommandResult.continue_loop()
+
+    # No argument: say where things stand and what can be done about it.
+    print_system(f"Проектный:   {prompt_files.describe('project')}")
+    print_system(f"Глобальный:  {prompt_files.describe('global')}")
+    try:
+        from argent.config import get_system_prompt_style
+
+        style = get_system_prompt_style()
+    except Exception:
+        style = "minimal"
+    print_system(f"Движок:      {style} (переключить: /prompt full|minimal)")
+    print_system("Открыть: /prompt project  ·  /prompt global  ·  смотреть здесь: /prompt show")
+    print_system("Создать шаблон: /prompt new  ·  чем открывать: /editor")
+
     sp = ctx.agent.build_system_prompt()
     from rich.syntax import Syntax
     console.print(Syntax(sp, "markdown", theme="monokai", word_wrap=True))
+    return CommandResult.continue_loop()
+
+
+@registry.register("/editor", help_text="Чем открывать AGENTS.md (notepad/code/subl/system)", category="config")
+def handle_editor(ctx: CommandContext) -> CommandResult:
+    """Choose the program a prompt file opens in; remembered for the session."""
+    import os
+
+    from argent import prompt_files
+
+    words = ctx.user_input.strip().split()
+    if len(words) < 2:
+        current = os.environ.get("ARGENT_EDITOR_MD") or prompt_files.DEFAULT_EDITOR
+        print_system(f"Редактор для .md: {prompt_files.EDITORS.get(current, current)}")
+        print_system("Выбрать: " + " · ".join(f"/editor {name}" for name in prompt_files.editor_names()))
+        return CommandResult.continue_loop()
+
+    choice = words[1].strip().lower()
+    if choice not in prompt_files.EDITORS:
+        print_system(f"Нет такого: {choice}. Есть: {', '.join(prompt_files.editor_names())}")
+        return CommandResult.continue_loop()
+    os.environ["ARGENT_EDITOR_MD"] = choice
+    print_system(f"Открывать .md в: {prompt_files.EDITORS[choice]}")
+    return CommandResult.continue_loop()
+
+
+@registry.register("/prices", help_text="Тарифы моделей: состояние и /prices refresh", category="config")
+def handle_prices(ctx: CommandContext) -> CommandResult:
+    """Where the cost numbers come from, and how fresh they are.
+
+    Nothing here is typed in by hand: the table is a public JSON of per-token prices
+    (thousands of models), refreshed at most once a week in the background.
+    """
+    from argent import model_pricing as mp
+
+    words = ctx.user_input.strip().split()
+    if len(words) > 1 and words[1].lower() in ("refresh", "обновить"):
+        ok = mp.refresh_prices(force=True)
+        print_system("Тарифы обновлены." if ok else "Не удалось скачать список тарифов (нет сети или источник недоступен).")
+
+    age = mp.prices_age()
+    count = len(mp._load_cache())
+    if age is None or count == 0:
+        print_system("Тарифы ещё не скачаны. Первый запрос запустит загрузку; вручную: /prices refresh")
+    else:
+        days = age / 86400.0
+        print_system(f"Тарифы: {count} моделей, обновлены {days:.1f} дн. назад. Обновить: /prices refresh")
+    print_system("Стоимость хода считается по тарифам, если провайдер не сообщает цену сам.")
     return CommandResult.continue_loop()
 
 

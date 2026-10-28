@@ -714,21 +714,58 @@ _VIBE_REMEDY = {
 }
 
 
+def _vibe_may_ask() -> bool:
+    """Vibe refuses silently unless someone is actually there (see `argent.presence`)."""
+    try:
+        from argent import presence
+
+        return presence.is_attended()
+    except Exception:
+        return False
+
+
+def _vibe_ask(action: str, destructive: bool, why: str) -> bool:
+    """Ask instead of refusing — only while the person is at the keyboard.
+
+    The wait is bounded by the transport's own answer timeout, so a question that
+    nobody answers ends in a refusal just as it would have without asking.
+    """
+    from argent.ui import console
+
+    try:
+        decision = _active_backend()(action, destructive, None)
+    except Exception as e:
+        log.info("vibe ask failed, refusing as before: %s", e)
+        return False
+    if isinstance(decision, dict):
+        decision = str(decision.get("decision") or "deny")
+    if decision in ("once", "always"):
+        console.print(f"[yellow]✓ Одобрено (/vibe, вы разрешили): {action}[/yellow]")
+        log.info("Person approved an action vibe would have refused: %s", action)
+        return True
+    console.print(f"[red]✗ Отклонено (/vibe): {action}{f' — {why}' if why else ''}[/red]")
+    return False
+
+
 def _vibe_delete(command: str, action: str) -> bool:
     """Delete in an autonomous run: allow what is recoverable, refuse the rest."""
     from argent.ui import console
 
     plan, paths, why = _delete_plan(command)
     if plan == "deny":
+        # A deletion outside the project is exactly the kind of thing a person may
+        # mean on purpose, so an attended run is asked rather than refused.
+        if _vibe_may_ask() and _vibe_ask(action, True, why):
+            return True
         console.print(
-            f"[dim]✗ Авто-отклонено (/vibe, удаление): {action}"
+            f"[red]✗ Авто-отклонено (/vibe, удаление): {action}"
             f"{f' — {why}' if why else ''}. Удалять можно внутри проекта;"
             f" свой мусор держите в .argent/artifacts или во временной папке."
-            f" Вне /vibe решается вручную.[/dim]")
+            f" Вне /vibe решается вручную.[/red]")
         log.info("Auto-denied delete in AUTO policy: %s (%s)", action, why)
         return False
     if plan == "allow":
-        console.print(f"[dim]✓ Авто-одобрено (автономный режим, уборка): {action}[/dim]")
+        console.print(f"[yellow]✓ Авто-одобрено (автономный режим, уборка): {action}[/yellow]")
         log.info("Approved housekeeping delete in AUTO policy: %s", action)
         return True
 
@@ -738,17 +775,17 @@ def _vibe_delete(command: str, action: str) -> bool:
                               reason="удаление в автономном режиме")
     except Exception as e:                    # TooBig, TrashError, or worse
         console.print(
-            f"[dim]✗ Авто-отклонено (/vibe, удаление): {action}"
-            f" — копию сохранить не удалось ({e}). Ничего не удалено.[/dim]")
+            f"[red]✗ Авто-отклонено (/vibe, удаление): {action}"
+            f" — копию сохранить не удалось ({e}). Ничего не удалено.[/red]")
         log.info("Auto-denied delete: snapshot failed: %s (%s)", action, e)
         return False
 
     names = ", ".join(p.name for p in paths[:3])
     more = f" и ещё {len(paths) - 3}" if len(paths) > 3 else ""
     console.print(
-        f"[dim]✓ Авто-одобрено (/vibe, удаление отменяемо): {action}"
+        f"[yellow]✓ Авто-одобрено (/vibe, удаление отменяемо): {action}"
         f" — {names}{more} сохранены в .argent/trash/{snap.id}."
-        f" Вернуть: /trash restore {snap.id}[/dim]")
+        f" Вернуть: /trash restore {snap.id}[/yellow]")
     log.info("Approved delete with snapshot %s in AUTO policy: %s", snap.id, action)
     return True
 
@@ -1395,22 +1432,37 @@ def _request_approval_impl(action: str, *, destructive: bool = False,
 
     if not destructive and not _nobody_is_watching() and not vibe:
         if rule_allow is not None:
-            console.print(f"[dim]✓ Авто-одобрено (правило {rule_allow.raw}): {action}[/dim]")
+            console.print(f"[yellow]✓ Авто-одобрено (правило {rule_allow.raw}): {action}[/yellow]")
             log.info("Approved via permission rule %s: %s", rule_allow.raw, action)
             return _record_status(True, APPROVED, f"правило {rule_allow.raw}")
         if rule_ask is None and grant_key and grant_key in _session_grants:
-            console.print(f"[dim]✓ Авто-одобрено (сессионное разрешение '{grant_key}'): {action}[/dim]")
+            console.print(f"[yellow]✓ Авто-одобрено (сессионное разрешение '{grant_key}'): {action}[/yellow]")
             log.info("Approved via session grant '%s': %s", grant_key, action)
             return _record_status(True, APPROVED, f"сессионное разрешение '{grant_key}'")
 
     # Autonomous mode answers by itself, and says why in the same line the person
     # would otherwise have been asked in. Only the plain safe case stays silent.
     if vibe:
-        if kind in (CATASTROPHIC, POWER, UNDECIDABLE, IRREVERSIBLE):
+        # Things no one can sensibly say "yes" to: refused without asking, even while
+        # the person is watching. A question about `rm -rf /` only burns a minute.
+        if kind in (CATASTROPHIC, POWER, UNDECIDABLE):
             console.print(
-                f"[dim]✗ Авто-отклонено (автономный режим, {_kind_label(kind)}): {action}"
+                f"[red]✗ Авто-отклонено (автономный режим, {_kind_label(kind)}): {action}"
                 f"{f' — {why}' if why else ''}. {_VIBE_REMEDY.get(kind, '')}"
-                f" Выйдите из /vibe, чтобы решить вручную.[/dim]")
+                f" Выйдите из /vibe, чтобы решить вручную.[/red]")
+            log.info("Auto-denied %s action in AUTO policy: %s (%s)", kind, action, why)
+            return _record_status(
+                False, REJECTED,
+                f"автономный режим: {_kind_label(kind)}{f' — {why}' if why else ''}")
+        if kind == IRREVERSIBLE:
+            # An action whose effect cannot be read is the person's call, not a
+            # policy's — but only while they are actually there (see presence.py).
+            if _vibe_may_ask() and _vibe_ask(action, destructive, why):
+                return _record_status(True, APPROVED, "автономный режим: разрешено человеком")
+            console.print(
+                f"[red]✗ Авто-отклонено (автономный режим, {_kind_label(kind)}): {action}"
+                f"{f' — {why}' if why else ''}. {_VIBE_REMEDY.get(kind, '')}"
+                f" Выйдите из /vibe, чтобы решить вручную.[/red]")
             log.info("Auto-denied %s action in AUTO policy: %s (%s)", kind, action, why)
             return _record_status(
                 False, REJECTED,
@@ -1419,17 +1471,17 @@ def _request_approval_impl(action: str, *, destructive: bool = False,
             ok = _vibe_delete(command or "", action)
             return _record_status(ok, APPROVED if ok else REJECTED, "автономный режим: удаление")
         if kind == KILLS:
-            console.print(f"[dim]✓ Авто-одобрено (автономный режим, останавливает процесс): {action}[/dim]")
+            console.print(f"[yellow]✓ Авто-одобрено (автономный режим, останавливает процесс): {action}[/yellow]")
             log.info("Approved process stop in AUTO policy: %s", action)
             return _record_status(True, APPROVED, "автономный режим")
         if kind == UNVETTED:
             console.print(
-                f"[dim]✓ Авто-одобрено (автономный режим): {action}"
+                f"[yellow]✓ Авто-одобрено (автономный режим): {action}"
                 f" — проверить нельзя{f': {why}' if why else ''}."
-                f" Чекпоинт хода позволит откатить /rewind.[/dim]")
+                f" Чекпоинт хода позволит откатить /rewind.[/yellow]")
             log.info("Approved unvetted action in AUTO policy: %s (%s)", action, why)
             return _record_status(True, APPROVED, "автономный режим")
-        console.print(f"[dim]✓ Авто-одобрено (автономный режим): {action}[/dim]")
+        console.print(f"[yellow]✓ Авто-одобрено (автономный режим): {action}[/yellow]")
         log.info("Approved via AUTO policy: %s", action)
         return _record_status(True, APPROVED, "автономный режим")
 

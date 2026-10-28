@@ -514,8 +514,15 @@ def _print_diff(old_text, new_text, filename):
         diff_str = "".join(diff)
         if len(_PENDING_DIFFS) < _PENDING_DIFFS_MAX:
             _PENDING_DIFFS.append({"file": str(filename), "diff": diff_str})
-        syntax = Syntax(diff_str, "diff", theme="monokai", background_color="default")
-        console.print(Panel(syntax, title=f"Changes in {filename}", border_style="green"))
+        # The TUI draws this diff itself from the queued event (its own card with
+        # colours and counts), so printing the Rich panel as well showed every edit
+        # twice: a "Changes in …" block and then the card. The plain REPL has no
+        # such card, and there the panel is the only thing the person sees.
+        import os as _os
+
+        if _os.environ.get("ARGENT_TUI") != "1":
+            syntax = Syntax(diff_str, "diff", theme="monokai", background_color="default")
+            console.print(Panel(syntax, title=f"Changes in {filename}", border_style="green"))
 
 def _shift_indent(text: str, old_indent: str, new_indent: str) -> str:
     """Re-base the indentation of a block: every line carrying old_indent gets

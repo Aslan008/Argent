@@ -83,6 +83,11 @@ class TelegramClient:
         """Test the token and get bot metadata."""
         return self._call("getMe", req_timeout=10)
 
+    def get_chat_member_count(self, chat_id: str | int) -> Optional[int]:
+        """How many people are in the chat — the only `list` fact the Bot API gives a bot."""
+        res = self._call("getChatMemberCount", {"chat_id": chat_id}, req_timeout=10)
+        return res if isinstance(res, int) else None
+
     def get_updates(self, offset: Optional[int] = None, timeout: int = 20) -> List[Dict[str, Any]]:
         """Long poll for updates."""
         payload: Dict[str, Any] = {"timeout": timeout, "allowed_updates": ["message", "callback_query"]}

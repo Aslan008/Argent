@@ -22,11 +22,18 @@ from argent.replay.recorder import TraceRecorder
 from src.bridge.events import to_event
 
 
-#: How long a question may sit unanswered before the answer becomes "no".
+#: How long an approval may sit unanswered before it becomes "no".
 #: Nobody at the keyboard is the normal case for an unattended run, and the wait
-#: for an answer used to have no timeout at all: one prompt froze the whole turn
-#: until the person came back. Override with ARGENT_ANSWER_TIMEOUT (seconds).
+#: used to have no timeout at all: one prompt froze the whole turn. Override with
+#: ARGENT_ANSWER_TIMEOUT (seconds).
 DEFAULT_ANSWER_TIMEOUT = 300.0
+
+#: How long a QUESTION may sit unanswered. Much longer than an approval, and for a
+#: different reason: an approval left hanging blocks a turn, while a question left
+#: open is somebody thinking. Five minutes cut a person off mid-sentence — they were
+#: writing an answer, it came back empty, and nothing said why. Override with
+#: ARGENT_QUESTION_TIMEOUT (seconds); 0 means "wait as long as it takes".
+DEFAULT_QUESTION_TIMEOUT = 3600.0
 
 
 def answer_timeout() -> float:
@@ -34,6 +41,33 @@ def answer_timeout() -> float:
         return max(1.0, float(os.environ.get("ARGENT_ANSWER_TIMEOUT", DEFAULT_ANSWER_TIMEOUT)))
     except (TypeError, ValueError):
         return DEFAULT_ANSWER_TIMEOUT
+
+
+def question_timeout() -> float:
+    """Seconds to wait for an answer to a question; 0 = no limit."""
+    raw = os.environ.get("ARGENT_QUESTION_TIMEOUT", DEFAULT_QUESTION_TIMEOUT)
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return DEFAULT_QUESTION_TIMEOUT
+    return value if value > 0 else 0.0
+
+
+class _ApprovalDecider:
+    """This conversation's decision function, plus the one fact the gate reads about it.
+
+    ``unattended`` tells `argent.approval` that no present human stands behind session
+    grants or /vibe: every gated step is decided by this callable alone. A group chat
+    sets it, so vibe running at the PC cannot silently approve work for a group that
+    nobody at the keyboard is watching.
+    """
+
+    def __init__(self, session: "AgentSession") -> None:
+        self._session = session
+        self.unattended = not session.approvals_allowed
+
+    def __call__(self, action, destructive, grant_key):
+        return self._session._approval_backend(action, destructive, grant_key)
 
 
 class AgentSession:
@@ -51,6 +85,17 @@ class AgentSession:
         self._last_turn_tools = 0
         self._last_turn_end = ""
         self.vibe = False
+        #: False when this conversation may not be offered approvals at all (a group chat):
+        #: a gated step is refused instead of drawing a button nobody is allowed to press.
+        self.approvals_allowed = True
+        #: Character set for this chat, pushed onto the agent at the start of every turn.
+        #: Empty means "the default Argent".
+        self.persona = ""
+        #: "agent" for the coding agent, "chat" for a group conversation (no tools, no
+        #: project context, no coder role in the prompt). Pushed every turn.
+        self.prompt_mode = "agent"
+        #: Tools the running turn may use; None = every tool, [] = none (a group's chat-only turn).
+        self._turn_allowed_tools = None
         # Off by default: no trace file is opened unless replay is explicitly
         # enabled. A feature typo must not silently create files.
         self._trace_enabled = features.enabled("replay")
@@ -135,10 +180,15 @@ class AgentSession:
         self._trace_event(done)
         yield done
 
-    def start(self, text: str) -> None:
-        """Run one turn on a worker thread; consume it with get_event() or event_sink."""
+    def start(self, text: str, allowed_tools=None) -> None:
+        """Run one turn on a worker thread; consume it with get_event() or event_sink.
+
+        ``allowed_tools``: None = every tool; ``[]`` = none at all (a group reply is
+        a conversation, not an agent run).
+        """
         self._active = True
         self._stop_requested = False
+        self._turn_allowed_tools = allowed_tools
         threading.Thread(target=self._run_turn, args=(text,), daemon=True).start()
 
     # --- optional replay trace ------------------------------------------------
@@ -200,8 +250,18 @@ class AgentSession:
         import argent.approval as approval
         self._trace_event({"type": "turn_start"})
         self._trace_event({"type": "user_message", "text": text})
-        approval.set_approval_backend(self._approval_backend)
-        gen = self.agent.process_user_input(text)
+        # The character set for this chat. Pushed before the agent builds its prompt for the
+        # turn (`_refresh_system_prompt` runs at the start of `_run_turn`), so a role changed
+        # between turns applies from this one without rebuilding anything by hand.
+        try:
+            self.agent.persona = self.persona or ""
+            self.agent.prompt_mode = self.prompt_mode or "agent"
+        except Exception:
+            pass
+        approval.set_approval_backend(_ApprovalDecider(self))
+        allowed_tools = self._turn_allowed_tools
+        gen = (self.agent.process_user_input(text, allowed_tools=allowed_tools)
+               if allowed_tools is not None else self.agent.process_user_input(text))
         tool_start_times = {}
         turn_t0 = time.time()
         first_chunk_at = None
@@ -350,6 +410,11 @@ class AgentSession:
             "tool_s": round(tool_seconds, 3),
             "tool_calls": tool_calls,
         }
+        # Which model actually answered. Taken at the end of the turn on purpose: after an
+        # automatic switch (`/fallback`) this is the one that replied, not the saved setting.
+        model = str(getattr(self.agent, "model_name", "") or "")
+        if model:
+            snap["model"] = model
         for k_src, k_dst in (("prompt", "prompt_tokens"),
                              ("completion", "completion_tokens"),
                              ("cached", "cached_tokens")):
@@ -359,6 +424,17 @@ class AgentSession:
         cost = usage.get("cost")
         if isinstance(cost, (int, float)):
             snap["cost"] = round(float(cost), 6)
+        else:
+            # A provider that reports no per-request price still spends money: the
+            # price list fills the gap so the folded row always names a cost.
+            try:
+                from src.cli.cli_ui import _turn_cost
+
+                estimated = _turn_cost(self.agent, usage)
+                if estimated > 0:
+                    snap["cost"] = round(float(estimated), 6)
+            except Exception:
+                pass
         try:
             ctx = self.agent.get_context_usage() or {}
             if isinstance(ctx, dict):
@@ -367,10 +443,27 @@ class AgentSession:
                         snap[f"ctx_{k}"] = ctx[k]
         except Exception:
             pass
+        # How many times this turn had to compact the history. Absent when it never
+        # did: the folded summary adds nothing then, so an ordinary turn stays short.
+        try:
+            from src.cli.cli_ui import compaction_note
+
+            note = compaction_note(self.agent)
+            if note:
+                snap["compaction"] = note
+        except Exception:
+            pass
         return snap
 
     def _approval_backend(self, action: str, destructive: bool, grant_key):
         """Runs on the worker thread: emit a request event, block for the reply."""
+        if not self.approvals_allowed:
+            # Nobody in this chat may answer for the machine. Saying so costs one line;
+            # drawing a button that anyone could press is how a group chat runs commands.
+            self._emit({"type": "notice", "text": (
+                "[System: в этом чате подтверждения недоступны — шаг отклонён. "
+                "Полноценная работа с инструментами — в личке с ботом.]")})
+            return "deny"
         with self._lock:
             self._counter += 1
             aid = self._counter
@@ -399,12 +492,25 @@ class AgentSession:
             "decisions": spec["decisions"],
             "prompt_kind": spec["kind"],
         })
-        if not ev.wait(answer_timeout()):
+        # A gate question may not outlive the presence window: if nobody has touched
+        # the interface for five minutes, waiting the full timeout only delays the
+        # same refusal. The window can make the wait shorter, never longer.
+        wait_for = answer_timeout()
+        try:
+            from argent import presence
+
+            left = presence.remaining()
+            if left > 0:
+                wait_for = min(wait_for, left)
+        except Exception:
+            pass
+        if not ev.wait(wait_for):
             # Nobody answered: the turn must go on, not hang here until morning.
             with self._lock:
                 self._pending.pop(aid, None)
             self._emit({"type": "notice", "text": (
-                f"[System: подтверждение не получено за {int(answer_timeout())} с — действие отклонено]")})
+                f"[System: подтверждение не получено за {int(wait_for)} с — действие отклонено. "
+                f"Начните печатать — следующий опасный шаг спросит снова]")})
             return "deny"
         with self._lock:
             return self._pending.pop(aid, {}).get("decision", "deny")
@@ -440,11 +546,13 @@ class AgentSession:
             "multi": bool(multi),
             "initial_checked": [bool(b) for b in initial_checked] if initial_checked else None,
         })
-        if not ev.wait(answer_timeout()):
+        limit = question_timeout()
+        # No limit means exactly that: the person is writing, not absent.
+        if not ev.wait(limit if limit > 0 else None):
             with self._lock:
                 self._pending.pop(sid, None)
             self._emit({"type": "notice", "text": (
-                f"[System: ответа на выбор не было за {int(answer_timeout())} с — отменено]")})
+                f"[System: ответа на выбор не было за {int(limit)} с — отменено]")})
             return None
         with self._lock:
             return self._pending.pop(sid, {}).get("value")

@@ -593,13 +593,29 @@ pub fn item_view(app: &App, idx: usize, width: u16) -> ItemView {
                 }));
             }
             blocks.click_last(ClickAction::ToggleTool(idx));
+            // The picture under the card. The premium look draws it in its own file;
+            // the classic one used to draw nothing at all, so a person on that theme
+            // could not see the screenshot the model was looking at.
+            if !*is_running {
+                if let Some(prev) = app.previews.get(&idx) {
+                    let fp = hash_of((prev.seq, *expanded));
+                    let rows = app.cached_rows(idx, 21, fp, width, || {
+                        crate::cards::image_card_rows(app, prev, *expanded, width as usize)
+                    });
+                    if !rows.is_empty() {
+                        blocks.add(rows);
+                        blocks.click_last(ClickAction::ShowImage(idx));
+                    }
+                }
+            }
         }
 
-        MessageItem::Diff { file, diff } => {
-            let fp = hash_of((text_fp(file), text_fp(diff)));
+        MessageItem::Diff { file, diff, expanded } => {
+            let fp = hash_of((text_fp(file), text_fp(diff), *expanded));
             blocks.add(app.cached_block(idx, 0, fp, width, || {
-                ("diff", json!({"file": file, "diff": diff}))
+                ("diff", json!({"file": file, "diff": diff, "expanded": expanded}))
             }));
+            blocks.click_last(ClickAction::ToggleTool(idx));
         }
 
         MessageItem::Notice(text) => {
@@ -647,15 +663,26 @@ pub fn item_view(app: &App, idx: usize, width: u16) -> ItemView {
             blocks.add(app.cached_block(idx, 0, fp, width, || ("checkpoint", json!({"sha": sha}))));
         }
 
-        MessageItem::Snapshot { lines, context_line } => {
-            let fp = hash_of((lines.iter().map(|l| text_fp(l)).collect::<Vec<_>>(), context_line.as_deref().map(text_fp)));
-            blocks.add(app.cached_block(idx, 0, fp, width, || {
-                ("markup", json!({"lines": lines, "blank_after": true}))
-            }));
-            if let Some(ctx) = context_line {
-                blocks.add(app.cached_block(idx, 1, text_fp(ctx), width, || {
-                    ("markup", json!({"lines": [ctx], "blank_after": false}))
-                }));
+        MessageItem::Snapshot { lines, context_line, summary, expanded } => {
+            // Nothing to open (modes `compact`/`off`): the REPL's line, drawn as it is.
+            let foldable = lines.len() > 1 || context_line.is_some();
+            let fp = hash_of((
+                summary.as_str(),
+                *expanded,
+                foldable,
+                lines.iter().map(|l| text_fp(l)).collect::<Vec<_>>(),
+                context_line.as_deref().map(text_fp),
+            ));
+            let rows = app.cached_rows(idx, 6, fp, width, || {
+                if foldable {
+                    crate::cards::snapshot_rows(app, idx, summary, lines, context_line.as_deref(), *expanded, width, 0)
+                } else {
+                    crate::cards::snapshot_detail_rows(app, idx, lines, context_line.as_deref(), width, 0)
+                }
+            });
+            blocks.add(rows);
+            if foldable {
+                blocks.click_last(ClickAction::ToggleSnapshot(idx));
             }
         }
 

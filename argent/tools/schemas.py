@@ -132,7 +132,7 @@ TOOL_SCHEMAS = [
                 "properties": {
                     "target": {
                         "type": "string",
-                        "description": "Window title substring (e.g. 'Unity', 'Notepad', 'Argent') or numeric HWND."
+                        "description": "Window title substring, executable name or numeric HWND. For a browser pass the executable ('browser', 'chrome.exe'): its title is the page it shows, not the browser."
                     },
                     "output_path": {
                         "type": "string",
@@ -626,7 +626,7 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "run_command",
-            "description": "Runs a CLI shell command on the user's system and returns the stdout and stderr. Always prefer non-interactive flags (e.g. `npx -y ...`, `npm init -y`, `pip install --no-input ...`, `--no-pager`) so tools do not hang awaiting interactive input.",
+            "description": "Runs a CLI shell command on the user's system and returns the stdout and stderr. Always prefer non-interactive flags (e.g. `npx -y ...`, `npm init -y`, `pip install --no-input ...`, `--no-pager`) so tools do not hang awaiting interactive input. If this machine has `rtk` (Rust Token Killer), wrapping git/grep/find/ls with it (`rtk git status`) cuts the output dramatically — worth it for noisy commands; skip it otherwise.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -656,12 +656,11 @@ TOOL_SCHEMAS = [
         "function": {
             "name": "search_web",
             "description": (
-                "Searches several engines at once (DuckDuckGo, Wikipedia, StackOverflow, GitHub issues, "
-                "and Brave when configured) and merges the results. Operators work and are worth using: "
-                "\"exact phrase\" (best for error messages), site:docs.unity3d.com, filetype:pdf, "
-                "-word (exclude), intitle:word; each engine gets only what it understands, so writing "
-                "them never hurts. Returns short snippets and URLs only — call read_webpage for content. "
-                "More: read_skill('argent-tools-reference')."
+                "Universal search and semantic code navigation. Default target=all: fast ripgrep across "
+                "any file type; the pattern is a regex, case ignored. whole_word, literal and "
+                "case_sensitive tune the match. "
+                "target=definition|references|implementations|call_hierarchy uses LSP, no coordinates "
+                "needed. To find a file BY NAME use search_files."
             ),
             "parameters": {
                 "type": "object",
@@ -782,7 +781,7 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "send_background_command",
-            "description": "Sends string input to the stdin of a running background process. Use this to interact with REPLs or commands waiting for input.",
+            "description": "Sends input to a background process; its reply arrives in the same result, so send+read is one call. Batch: \"y\\ny\\ny\\n\".",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -1236,14 +1235,12 @@ TOOL_SCHEMAS = [
         "function": {
             "name": "manage_automations",
             "description": (
-                "Work that happens on a schedule while the person is away: monitoring, a digest, a "
-                "recurring check, a reminder. Use it for 'every day', 'every hour', 'remind me', "
-                "'keep an eye on'. Modes: agent (a model runs `task` with `tools`), command (a shell "
-                "command, cheapest), remind (a message). Unattended runs cannot ask or approve: list "
-                "allowed `commands` exactly. Every change asks the person. Actions: list, show, "
-                "create, update, remove, enable, disable, run, runs, templates (morning, tests, "
-                "command, page, releases, news, todo, deps). Schedules and modes: "
-                "read_skill('argent-tools-reference')."
+                "Scheduled work while the person is away: monitoring, a digest, a recurring check, a "
+                "reminder. Use for every day, every hour, remind me. Modes: agent (a model runs task with "
+                "tools), command (shell, cheapest), remind (a message). Unattended runs cannot ask or "
+                "approve: list allowed commands exactly. Actions: list, show, create, update, remove, "
+                "enable, disable, run, runs, templates (morning, tests, command, page, releases, news, "
+                "todo, deps). Details: read_skill(argent-tools-reference)."
             ),
             "parameters": {
                 "type": "object",
@@ -1386,13 +1383,13 @@ TOOL_SCHEMAS = [
         "function": {
             "name": "desktop_act",
             "description": (
-                "Act in another program's window: click, type, set a field's value, press keys, scroll, drag, bring "
-                "a window to the front. Use element ids from the LATEST desktop_inspect of that window; the answer shows the "
-                "window after the action, so check it before the next step. Every action goes through the "
-                "approval gate: in manual mode the person confirms each one, in /vibe an ordinary control "
-                "runs (with a line in the transcript) while a control named like Delete, Pay, Send or "
-                "Удалить is refused. Never for passwords, payments or security dialogs. Does nothing "
-                "unless the person switched desktop control on and allowed that program."
+                "Act in another program's window: click, type, set a value, press keys, scroll, drag, "
+                "bring a window forward. Use element ids from the LATEST desktop_inspect; the answer "
+                "shows the window after the action, so check it before the next step. Every action goes "
+                "through the approval gate: in manual mode the person confirms each, in /vibe an ordinary "
+                "control runs while one named like Delete, Pay, Send or Удалить is refused. Never for "
+                "passwords, payments or security dialogs. Does nothing unless desktop control is on for "
+                "that program."
             ),
             "parameters": {
                 "type": "object",
@@ -1545,8 +1542,13 @@ def get_available_tools() -> dict:
         pass
     return tools
 
-def get_tool_schemas(include_hidden: bool = False) -> list[dict]:
-    """Returns the JSON schemas for the available tools, dynamically adding RAG if enabled."""
+def get_tool_schemas(include_hidden: bool = False, category: str = None) -> list[dict]:
+    """Returns the JSON schemas for the available tools, dynamically adding RAG if enabled.
+
+    `category` (the model's size class) turns the gateway on: core groups now, the rest
+    behind `load_tools`. Left None — the whole registry, which is what tests and
+    diagnostics want.
+    """
     from argent.config import get_disabled_tools
     disabled = get_disabled_tools()
     
@@ -1612,4 +1614,143 @@ def get_tool_schemas(include_hidden: bool = False) -> list[dict]:
     except Exception:
         pass
 
+    if category is not None and gateway_enabled():
+        return _apply_gateway(schemas)
     return schemas
+
+
+# ── the tool gateway: schemas arrive when a group is actually needed ─────────
+
+#: Groups sent without asking.
+CORE_GROUPS: tuple = ("files", "search", "processes", "planning", "memory")
+
+#: Groups only opened on demand: a chat turn needs none of them.
+LATE_GROUPS: tuple = ("browser", "desktop", "web", "agents", "integrations")
+
+_OPEN_GROUPS: set = set()
+
+
+def opened_groups() -> set:
+    return set(_OPEN_GROUPS)
+
+
+def gateway_enabled() -> bool:
+    """Is the tool gateway on? Off by default (`tool_gateway` in config turns it on).
+
+    It is off because a few callers need the whole surface regardless of context
+    size: MoE models, ultracode's own tool and the mode-aware prompt. Until those
+    are expressed as "this group is required here", the gateway stays an opt-in
+    that has been measured (12.8k -> 5.1k tokens per request) and can be switched on.
+    """
+    try:
+        from argent.config import get_tool_gateway_enabled
+
+        return bool(get_tool_gateway_enabled())
+    except Exception:
+        return False
+
+
+def reset_opened_groups() -> None:
+    _OPEN_GROUPS.clear()
+
+
+def load_tools(group: str) -> str:
+    """Open a group of tool schemas for the rest of the session.
+
+    The point is the context, not permissions: fifty-four schemas cost ~13k tokens on
+    every request whether the turn touches a browser or not.
+    """
+    name = str(group or "").strip().lower()
+    if name not in LATE_GROUPS:
+        return (f"Нет такой группы: {group!r}. Доступны: {', '.join(LATE_GROUPS)}. "
+                f"Группы {', '.join(CORE_GROUPS)} уже загружены.")
+    _OPEN_GROUPS.add(name)
+    from argent.tools import TOOL_GROUPS
+
+    names = sorted(TOOL_GROUPS.get(name, ()))
+    return (f"Группа '{name}' открыта: {', '.join(names)}. Схемы этих инструментов "
+            f"появятся на следующем шаге — вызывай их напрямую.")
+
+
+AVAILABLE_TOOLS["load_tools"] = load_tools
+
+TOOL_SCHEMAS.append({
+    "type": "function",
+    "function": {
+        "name": "load_tools",
+        "description": (
+            "Load a tool group whose schemas are not in context yet "
+            "(browser, desktop, web, agents, integrations), then use it next step."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "group": {
+                    "type": "string",
+                    "enum": list(LATE_GROUPS),
+                    "description": "The group to open.",
+                }
+            },
+            "required": ["group"],
+        },
+    },
+})
+
+
+def _group_of(tool_name: str) -> str:
+    from argent.tools import group_of          # tools/__init__ imports this module
+
+    return group_of(tool_name)
+
+
+def _gateway_schema(closed: list) -> dict:
+    from argent.tools import TOOL_GROUPS
+
+    listing = "; ".join(f"{g}: {', '.join(sorted(TOOL_GROUPS.get(g, ())))}" for g in closed)
+    return {
+        "type": "function",
+        "function": {
+            "name": "load_tools",
+            "description": (
+                "Open a group of tools whose schemas are NOT in context yet. "
+                f"Available — {listing}. Call once, then use them next step."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "group": {
+                        "type": "string",
+                        "enum": list(closed),
+                        "description": "The group to open.",
+                    }
+                },
+                "required": ["group"],
+            },
+        },
+    }
+
+
+def _apply_gateway(schemas: list) -> list:
+    """Hide the late groups behind one `load_tools` line.
+
+    Tier slimming (which tools a weak model may choose) is a different question and
+    lives in `argent/tool_profiles.py`. A tool whose group is unknown is never
+    hidden by accident.
+    """
+    keep: list = []
+    closed: list = []
+    for schema in schemas:
+        group = _group_of(schema["function"]["name"])
+        if group == "" or group in CORE_GROUPS or group in _OPEN_GROUPS:
+            keep.append(schema)
+        elif group in LATE_GROUPS:
+            if group not in closed:
+                closed.append(group)
+        else:
+            keep.append(schema)
+    # The static gateway schema is in the registry; here it is either replaced by one
+    # listing only what is still closed, or dropped when everything is open.
+    keep = [s for s in keep if s["function"]["name"] != "load_tools"]
+    if closed:
+        keep.append(_gateway_schema(closed))
+    return keep

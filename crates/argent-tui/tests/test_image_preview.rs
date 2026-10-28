@@ -23,6 +23,43 @@ fn payload(seq: u64) -> String {
     )
 }
 
+/// Standard base64, the same twenty lines the crate uses: a grid payload needs
+/// a few kilobytes of bytes and nothing else here decodes them.
+fn b64_encode(bytes: &[u8]) -> String {
+    const T: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::new();
+    for chunk in bytes.chunks(3) {
+        let b = [chunk[0], *chunk.get(1).unwrap_or(&0), *chunk.get(2).unwrap_or(&0)];
+        let n = ((b[0] as u32) << 16) | ((b[1] as u32) << 8) | b[2] as u32;
+        out.push(T[(n >> 18) as usize & 63] as char);
+        out.push(T[(n >> 12) as usize & 63] as char);
+        out.push(if chunk.len() > 1 { T[(n >> 6) as usize & 63] as char } else { '=' });
+        out.push(if chunk.len() > 2 { T[n as usize & 63] as char } else { '=' });
+    }
+    out
+}
+
+fn grid(cols: usize, rows: usize) -> String {
+    let data = vec![0x40u8; cols * rows * 2 * 3];
+    format!(r#"{{"cols":{cols},"rows":{rows},"rgb":"{}"}}"#, b64_encode(&data))
+}
+
+fn image_tool_app() -> App {
+    let mut app = App::new();
+    // The shipped look: the drawn card lives in `cards.rs`, and the tests that
+    // check what the person actually sees have to ask for it.
+    app.ui.set_style(argent_tui::theme::UiStyle::Premium);
+    app.messages.push(MessageItem::Tool {
+        name: "view_image".into(),
+        args: HashMap::new(),
+        result: Some("ok".into()),
+        duration_secs: None,
+        expanded: false,
+        is_running: false,
+    });
+    app
+}
+
 fn render(app: &App, w: u16, h: u16) -> Vec<String> {
     let mut terminal = Terminal::new(TestBackend::new(w, h)).expect("terminal");
     terminal.draw(|f| draw_ui(f, app)).expect("draw");
@@ -149,6 +186,49 @@ fn a_click_on_the_thumbnail_opens_the_whole_screen() {
     app.image_view = app.previews.get(&0).cloned();
     let screen = render(&app, 60, 12);
     assert!(screen.iter().any(|r| r.contains("Esc — закрыть")), "есть путь назад: {screen:?}");
+    assert!(
+        screen.iter().any(|r| r.contains("открыть в системе")),
+        "терминал не покажет скриншот читаемо — нужен путь к оригиналу: {screen:?}"
+    );
     assert!(screen.iter().any(|r| r.contains('▀')), "картинка видна: {screen:?}");
     assert!(!screen.iter().any(|r| r.contains('❯')), "промпт перекрыт");
+}
+
+#[test]
+fn the_card_preview_is_drawn_from_the_wide_frame_not_the_thumb() {
+    // A 4-column thumb spread over a card was the mosaic: the folded card must
+    // draw the wide frame, scaled down, never the tiny grid.
+    let mut app = image_tool_app();
+    let raw = format!(
+        r#"{{"seq":1,"path":"shot.png","caption":"Скриншот","thumb":{},"full":{}}}"#,
+        grid(4, 2),
+        grid(50, 16)
+    );
+    app.update_status(HashMap::from([("image_preview".to_string(), raw)]));
+    assert_eq!(app.previews.len(), 1, "кадр не попал в карту: {:?}", app.previews.keys());
+
+    let screen = render(&app, 120, 40);
+    let widest = screen.iter().map(|r| r.matches('▀').count()).max().unwrap_or(0);
+    assert!(
+        widest >= 40,
+        "превью шириной {widest} знаков — та самая мозаика из миниатюры: {screen:?}"
+    );
+}
+
+#[test]
+fn a_wider_card_draws_a_wider_picture() {
+    // The point of scaling: the picture follows the room it is given instead of
+    // stopping at whatever width Python happened to send.
+    let mut app = image_tool_app();
+    let raw = format!(
+        r#"{{"seq":1,"path":"shot.png","caption":"","thumb":{},"full":{}}}"#,
+        grid(4, 2),
+        grid(50, 16)
+    );
+    app.update_status(HashMap::from([("image_preview".to_string(), raw)]));
+    app.toggle_block_by_idx(0); // раскрытая карточка — на всю ширину
+
+    let narrow = render(&app, 90, 40).iter().map(|r| r.matches('▀').count()).max().unwrap_or(0);
+    let wide = render(&app, 200, 40).iter().map(|r| r.matches('▀').count()).max().unwrap_or(0);
+    assert!(wide > narrow, "ширина {narrow} → {wide}: превью не растёт вместе с карточкой");
 }

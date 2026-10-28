@@ -250,12 +250,17 @@ def _repo_hint(cwd: str) -> str:
 
 
 def _stream_worker(run, line: str) -> None:
-    """A worker's own dialogue, line by line, on the supervisor's screen.
+    """A worker's own dialogue, line by line.
 
-    One line per thing it says: the step panel can only say "идёт", and a person watching
-    a run needs to see a worker that is stuck reading the wrong file, not discover it from
-    a report twenty minutes later.
+    The TUI draws it in the worker's own window (it reads `MANAGER.snapshot()` and
+    `detail()`), so pasting the same lines into the chat would show the work twice —
+    and a swarm of four agents would bury the conversation. In the plain REPL there is
+    no window, so the lines still go to the screen.
     """
+    import os
+
+    if os.environ.get("ARGENT_TUI") == "1":
+        return
     from rich.markup import escape
 
     text = " ".join((line or "").split())

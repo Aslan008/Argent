@@ -30,7 +30,8 @@
     "tests/test_subagents.py",
     "tests/test_telegram_premium.py",
     "tests/test_tool_profiles.py",
-    "tests/test_tool_result_display.py"
+    "tests/test_tool_result_display.py",
+    "tests/test_tool_result_semantics.py"
   ],
   "browser_action": [
     "tests/test_browser_facade_contract.py",
@@ -46,6 +47,7 @@
     "tests/test_prompt_names_real_tools.py",
     "tests/test_rooms_parallel.py",
     "tests/test_stagehand_tools.py",
+    "tests/test_tool_gateway.py",
     "tests/test_tool_registry_consistency.py"
   ],
   "browser_close": [
@@ -96,6 +98,7 @@
     "tests/test_rooms_parallel.py",
     "tests/test_shell_hooks.py",
     "tests/test_stagehand_tools.py",
+    "tests/test_tool_gateway.py",
     "tests/test_tool_profiles.py",
     "tests/test_universal_micromodels.py"
   ],
@@ -125,7 +128,6 @@
     "tests/test_universal_micromodels.py"
   ],
   "call_mcp_tool": [
-    "tests/test_arg_coercion.py",
     "tests/test_blind_spots_prompts.py",
     "tests/test_lmtrust_tool_profiles.py",
     "tests/test_mcp_prompt.py",
@@ -133,7 +135,8 @@
     "tests/test_prompt_toolset_sync.py",
     "tests/test_rooms_integrations.py",
     "tests/test_sarper_skill.py",
-    "tests/test_tool_profiles.py"
+    "tests/test_tool_profiles.py",
+    "tests/test_tool_result_semantics.py"
   ],
   "capture_desktop_screen": [
     "tests/test_telegram_premium.py",
@@ -152,6 +155,7 @@
     "tests/test_rooms_cli_tool.py"
   ],
   "create_artifact": [
+    "tests/test_artifacts_contract.py",
     "tests/test_feature_workflow_skill.py",
     "tests/test_lmtrust_prompt_compressor.py",
     "tests/test_prompt_toolset_sync.py",
@@ -165,6 +169,7 @@
     "tests/test_lmtrust_file_read.py",
     "tests/test_lmtrust_parser.py",
     "tests/test_lmtrust_tool_profiles.py",
+    "tests/test_tool_calls_end_to_end.py",
     "tests/test_universal_micromodels.py"
   ],
   "delegate_to_leeth": [
@@ -188,15 +193,19 @@
     "tests/test_rewind_last_turn.py",
     "tests/test_rooms_cli_tool.py",
     "tests/test_speculative_lookahead.py",
+    "tests/test_tool_calls_end_to_end.py",
     "tests/test_universal_micromodels.py"
   ],
   "desktop_act": [
     "tests/test_desktop_control.py",
-    "tests/test_lmtrust_tool_profiles.py"
+    "tests/test_lmtrust_tool_profiles.py",
+    "tests/test_run_command_and_desktop_semantics.py",
+    "tests/test_tool_gateway.py"
   ],
   "desktop_inspect": [
     "tests/test_desktop_control.py",
-    "tests/test_lmtrust_tool_profiles.py"
+    "tests/test_lmtrust_tool_profiles.py",
+    "tests/test_run_command_and_desktop_semantics.py"
   ],
   "exit_plan_mode": [
     "tests/test_plan_and_todos.py"
@@ -223,9 +232,11 @@
     "tests/test_read_truncation_hint.py",
     "tests/test_rooms_editor.py",
     "tests/test_rooms_library.py",
+    "tests/test_tool_calls_end_to_end.py",
     "tests/test_universal_micromodels.py"
   ],
   "git_checkpoint": [
+    "tests/test_git_tool_surface.py",
     "tests/test_lmtrust_tool_profiles.py",
     "tests/test_safety_checkpoint.py",
     "tests/test_tool_profiles.py",
@@ -233,6 +244,7 @@
   ],
   "git_rollback": [
     "tests/test_checkpoints.py",
+    "tests/test_git_tool_surface.py",
     "tests/test_interactive_tools.py",
     "tests/test_lmtrust_tool_profiles.py",
     "tests/test_speculative_lookahead.py",
@@ -243,6 +255,7 @@
     "tests/leeth2/test_argent_data.py",
     "tests/leeth2/test_finetune.py",
     "tests/lmtrust/test_optimization_blind_spots.py",
+    "tests/test_aged_output_is_kept.py",
     "tests/test_arg_coercion.py",
     "tests/test_automation_tasks_cli.py",
     "tests/test_dispatcher_path_guard.py",
@@ -276,9 +289,11 @@
     "tests/test_rooms_library.py",
     "tests/test_rooms_v2.py",
     "tests/test_tool_contracts.py",
+    "tests/test_tool_gateway.py",
     "tests/test_tool_profiles.py",
     "tests/test_tool_registry_consistency.py",
     "tests/test_tool_result_display.py",
+    "tests/test_trajectory_store.py",
     "tests/test_ui_refinement.py"
   ],
   "leeth_click_many": [
@@ -333,11 +348,13 @@
     "tests/test_rooms_editor.py",
     "tests/test_rooms_editor_integrations.py",
     "tests/test_rooms_library.py",
+    "tests/test_tool_calls_end_to_end.py",
     "tests/test_tool_registry_consistency.py",
     "tests/test_universal_micromodels.py"
   ],
   "list_mcp_tools": [
     "tests/test_blind_spots_prompts.py",
+    "tests/test_env_honesty.py",
     "tests/test_lmtrust_tool_profiles.py",
     "tests/test_mcp_call_logging.py",
     "tests/test_mcp_prompt.py",
@@ -349,10 +366,15 @@
     "tests/test_skills.py",
     "tests/test_universal_micromodels.py"
   ],
+  "load_tools": [
+    "tests/test_tool_gateway.py"
+  ],
   "manage_automations": [
+    "tests/test_automation.py",
     "tests/test_automation_modes.py",
     "tests/test_automation_tool.py",
-    "tests/test_tool_contracts.py"
+    "tests/test_tool_contracts.py",
+    "tests/test_tool_gateway.py"
   ],
   "memory": [
     "tests/lmtrust/test_blind_spots_browser.py",
@@ -407,6 +429,7 @@
     "tests/test_memory_notes.py",
     "tests/test_message_normalization.py",
     "tests/test_model_limits.py",
+    "tests/test_model_pricing_auto.py",
     "tests/test_model_tier_detection.py",
     "tests/test_moe_and_platform_cleanup.py",
     "tests/test_network_resilience.py",
@@ -417,6 +440,7 @@
     "tests/test_prompt_names_real_tools.py",
     "tests/test_prompt_toolset_sync.py",
     "tests/test_prompted_tool_fallback.py",
+    "tests/test_question_timeout.py",
     "tests/test_rag_gc.py",
     "tests/test_read_dedup.py",
     "tests/test_read_file_bounds.py",
@@ -437,6 +461,8 @@
     "tests/test_startup_context.py",
     "tests/test_subagents.py",
     "tests/test_textual_tool_calls.py",
+    "tests/test_tool_calls_end_to_end.py",
+    "tests/test_tool_result_semantics.py",
     "tests/test_trimmer_distillation.py",
     "tests/test_truncation.py",
     "tests/test_tui_startup_flow.py",
@@ -481,8 +507,10 @@
     "tests/replay/test_reader_render.py",
     "tests/replay/test_recorder.py",
     "tests/replay/test_session_trace.py",
+    "tests/test_aged_output_is_kept.py",
     "tests/test_agent_parser.py",
     "tests/test_arg_coercion.py",
+    "tests/test_artifacts_contract.py",
     "tests/test_automation.py",
     "tests/test_automation_modes.py",
     "tests/test_automation_store_v2.py",
@@ -499,6 +527,7 @@
     "tests/test_constrained.py",
     "tests/test_dispatcher_path_guard.py",
     "tests/test_enrich.py",
+    "tests/test_env_honesty.py",
     "tests/test_feature_workflow_skill.py",
     "tests/test_file_ops_edge.py",
     "tests/test_file_ops_read.py",
@@ -572,11 +601,14 @@
     "tests/test_telegram_wire.py",
     "tests/test_text_codec.py",
     "tests/test_textual_tool_calls.py",
+    "tests/test_tool_calls_end_to_end.py",
     "tests/test_tool_contracts.py",
+    "tests/test_tool_gateway.py",
     "tests/test_tool_profiles.py",
     "tests/test_tool_registry_consistency.py",
     "tests/test_tool_result_display.py",
     "tests/test_trajectory.py",
+    "tests/test_trajectory_store.py",
     "tests/test_trimmer_distillation.py",
     "tests/test_turn_end_reason.py",
     "tests/test_ui_refinement.py",
@@ -642,6 +674,7 @@
     "tests/test_lmtrust_tool_profiles.py",
     "tests/test_lmtrust_tools_consolidation_audit.py",
     "tests/test_prompt_names_real_tools.py",
+    "tests/test_prompt_toolset_sync.py",
     "tests/test_read_line_numbers.py",
     "tests/test_review.py",
     "tests/test_rooms_cli_tool.py",
@@ -651,6 +684,8 @@
     "tests/test_shell_timeout.py",
     "tests/test_speculative_lookahead.py",
     "tests/test_text_codec.py",
+    "tests/test_tool_calls_end_to_end.py",
+    "tests/test_tool_gateway.py",
     "tests/test_tool_profiles.py",
     "tests/test_tool_result_display.py",
     "tests/test_trimmer_distillation.py",
@@ -662,7 +697,8 @@
     "tests/test_interactive_tools.py",
     "tests/test_leeth_calibration.py",
     "tests/test_leeth_hard_negatives.py",
-    "tests/test_prompt_toolset_sync.py"
+    "tests/test_prompt_toolset_sync.py",
+    "tests/test_tool_result_semantics.py"
   ],
   "rooms": [
     "tests/test_backup.py",
@@ -713,6 +749,7 @@
     "tests/lmtrust/test_blind_spots_vibe.py",
     "tests/lmtrust/test_optimization_blind_spots.py",
     "tests/replay/test_schema.py",
+    "tests/test_aged_output_is_kept.py",
     "tests/test_automation.py",
     "tests/test_automation_modes.py",
     "tests/test_automation_tasks_cli.py",
@@ -729,6 +766,7 @@
     "tests/test_compaction_memory.py",
     "tests/test_constrained.py",
     "tests/test_dispatcher_path_guard.py",
+    "tests/test_env_honesty.py",
     "tests/test_healing.py",
     "tests/test_history_replay.py",
     "tests/test_interactive_prompt_detector.py",
@@ -766,6 +804,7 @@
     "tests/test_ollama_tool_call_index.py",
     "tests/test_output_store.py",
     "tests/test_permissions.py",
+    "tests/test_persona.py",
     "tests/test_plan_and_todos.py",
     "tests/test_prompt_toolset_sync.py",
     "tests/test_pty.py",
@@ -790,6 +829,8 @@
     "tests/test_rooms_spawn.py",
     "tests/test_rooms_triggers.py",
     "tests/test_rooms_v2.py",
+    "tests/test_run_command_admin.py",
+    "tests/test_run_command_and_desktop_semantics.py",
     "tests/test_secret_redactor.py",
     "tests/test_shell_hooks.py",
     "tests/test_shell_quoting.py",
@@ -799,6 +840,8 @@
     "tests/test_telegram_premium.py",
     "tests/test_telegram_wire.py",
     "tests/test_terminal_escapes.py",
+    "tests/test_tool_calls_end_to_end.py",
+    "tests/test_tool_gateway.py",
     "tests/test_tool_profiles.py",
     "tests/test_tool_registry_consistency.py",
     "tests/test_tool_result_display.py",
@@ -820,6 +863,7 @@
     "tests/test_research_improvements.py"
   ],
   "run_subagent": [
+    "tests/test_arg_coercion.py",
     "tests/test_lmtrust_critic_audit.py",
     "tests/test_lmtrust_tool_profiles.py",
     "tests/test_subagents.py",
@@ -839,7 +883,8 @@
     "tests/test_micromodels.py",
     "tests/test_no_phantom_tools.py",
     "tests/test_rooms_editor.py",
-    "tests/test_rooms_library.py"
+    "tests/test_rooms_library.py",
+    "tests/test_tool_calls_end_to_end.py"
   ],
   "search_web": [
     "tests/test_automation.py",
@@ -860,6 +905,7 @@
   "send_background_command": [
     "tests/test_lmtrust_background_lifecycle_deep.py",
     "tests/test_lmtrust_commands.py",
+    "tests/test_loop_guard_repeat_args.py",
     "tests/test_pty.py"
   ],
   "start_background_command": [
@@ -889,18 +935,21 @@
     "tests/test_rooms_integrations.py",
     "tests/test_subagent_model_and_thinking.py",
     "tests/test_subagent_stream_and_resume.py",
+    "tests/test_subagent_window.py",
     "tests/test_subagents.py",
     "tests/test_workflow_commands.py",
     "tests/test_workflow_runtime.py"
   ],
   "todo_write": [
     "tests/test_plan_and_todos.py",
+    "tests/test_prompt_toolset_sync.py",
     "tests/test_rooms_editor.py",
     "tests/test_rooms_examples.py",
     "tests/test_subagents.py",
     "tests/test_telegram_premium.py",
     "tests/test_todo_incremental.py",
-    "tests/test_todo_staleness.py"
+    "tests/test_todo_staleness.py",
+    "tests/test_tool_gateway.py"
   ],
   "ultracode": [
     "tests/test_ultracode_keyword.py",
@@ -911,6 +960,7 @@
     "tests/test_dependency_lists.py",
     "tests/test_lmtrust_tool_profiles.py",
     "tests/test_orphan_tool_repair.py",
+    "tests/test_tool_calls_end_to_end.py",
     "tests/test_tool_registry_consistency.py",
     "tests/test_tui_output_and_paste.py",
     "tests/test_vision.py"
@@ -996,6 +1046,7 @@
     "tests/test_shell_hooks.py",
     "tests/test_speculative_lookahead.py",
     "tests/test_subagents.py",
+    "tests/test_tool_calls_end_to_end.py",
     "tests/test_tool_contracts.py",
     "tests/test_tool_profiles.py",
     "tests/test_tool_registry_consistency.py",

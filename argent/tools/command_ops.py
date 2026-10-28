@@ -831,26 +831,7 @@ def read_background_command(pid: Any) -> str:
         elapsed = int(time.time() - started) if started is not None else 0
         status = f"Process {pid} is RUNNING for {elapsed}s."
         
-    if proc_info.get("pty"):
-        from src.agent.pty_process import TerminalText
-        terminal = proc_info.setdefault("terminal", TerminalText())
-        stdout = terminal.feed(stdout)
-        if retcode is not None:
-            stdout += terminal.flush()
-
-    # Output of a background command arrives in polls, not in one piece: one filter per process and
-    # stream keeps a secret that straddles two polls from slipping through.
-    from src.agent.secret_redactor import StreamRedactor
-    _r_out = proc_info.setdefault("redactor_out", StreamRedactor())
-    _r_err = proc_info.setdefault("redactor_err", StreamRedactor())
-    stdout = _r_out.feed(stdout)
-    stderr = _r_err.feed(stderr)
-    if retcode is not None:
-        stdout += _r_out.flush()
-        stderr += _r_err.flush()
-    else:
-        stdout += _r_out.release_stale(0.0)
-        stderr += _r_err.release_stale(0.0)
+    stdout, stderr = _convert_stream(proc_info, stdout, stderr, retcode)
 
     res = f"--- {status} ---\n"
     if stdout:
@@ -888,14 +869,103 @@ def read_background_command(pid: Any) -> str:
         
     return res
 
+def _drain_queue(q) -> str:
+    """Everything queued so far, decoded. Never blocks."""
+    data = bytearray()
+    while True:
+        try:
+            chunk = q.get_nowait()
+        except queue.Empty:
+            break
+        data.extend(chunk)
+        if len(data) > 1_000_000:
+            data.extend(b"\n[WARNING: Output exceeded 1MB. Truncated.]\n")
+            break
+    return _decode_output(bytes(data)) if data else ""
+
+
+def _convert_stream(proc_info: dict, stdout: str, stderr: str, retcode):
+    """Raw captures -> what a person sees.
+
+    Two stateful steps, both of which must happen exactly once per chunk and both of
+    which live on `proc_info`: a PTY's escape sequences are resolved into plain text
+    (otherwise the model reads `\x1b[?25l` instead of the prompt), and a streaming
+    redactor keeps a secret split across two polls from leaking in halves.
+    """
+    if proc_info.get("pty"):
+        from src.agent.pty_process import TerminalText
+        terminal = proc_info.setdefault("terminal", TerminalText())
+        stdout = terminal.feed(stdout)
+        if retcode is not None:
+            stdout += terminal.flush()
+
+    from src.agent.secret_redactor import StreamRedactor
+    r_out = proc_info.setdefault("redactor_out", StreamRedactor())
+    r_err = proc_info.setdefault("redactor_err", StreamRedactor())
+    stdout = r_out.feed(stdout)
+    stderr = r_err.feed(stderr)
+    if retcode is not None:
+        stdout += r_out.flush()
+        stderr += r_err.flush()
+    else:
+        stdout += r_out.release_stale(0.0)
+        stderr += r_err.release_stale(0.0)
+    return stdout, stderr
+
+
+def _drain_briefly(pid: Any, proc_info: dict, process, wait_s: float = 0.25) -> str:
+    """What the process said right after an answer.
+
+    A wizard answers instantly, but "instantly" still means "in the next tick", so a
+    short bounded wait turns send+read into one call. On timeout this returns "" and
+    the caller says so honestly.
+    """
+    out_q = proc_info["out_queue"]
+    deadline = time.time() + wait_s
+    while time.time() < deadline:
+        if not out_q.empty():
+            break
+        if process is not None and process.poll() is not None:
+            break
+        time.sleep(0.02)
+
+    stdout = _drain_queue(out_q)
+    stderr = _drain_queue(proc_info["err_queue"])
+    retcode = process.poll() if process else -1
+    if retcode is not None and process is not None:
+        # The same bookkeeping `read_background_command` does: a process that ended
+        # while we were reading must leave the active table and be recorded, or the
+        # next read reports "RUNNING" for something that is gone and has no output.
+        with ACTIVE_PROCESSES_LOCK:
+            info = ACTIVE_PROCESSES.pop(pid, None)
+        if info:
+            _record_completed(pid, info, retcode)
+        _close_proc_pipes(process)
+    if not stdout and not stderr and retcode is None:
+        return ""
+    stdout, stderr = _convert_stream(proc_info, stdout, stderr, retcode)
+
+    started = proc_info.get("started")
+    elapsed = int(time.time() - started) if started is not None else 0
+    head = (f"--- Process {pid} has EXITED with code {retcode} ---" if retcode is not None
+            else f"--- Process {pid} is RUNNING for {elapsed}s. ---")
+    parts = [head]
+    if stdout:
+        parts.append("STDOUT:\n" + stdout.rstrip())
+    if stderr:
+        parts.append("STDERR:\n" + stderr.rstrip())
+    return "\n".join(parts)
+
+
 def send_background_command(pid: Any, input_string: str) -> str:
     """Send text to the standard input of a running background process."""
     pid = _normalize_pid(pid)
     with ACTIVE_PROCESSES_LOCK:
         if pid not in ACTIVE_PROCESSES:
             return f"Error: No active process with PID {pid}."
-        process = ACTIVE_PROCESSES[pid].get("process")
-        secret_prompt = bool(ACTIVE_PROCESSES[pid].get("secret_prompt"))
+        proc_info = ACTIVE_PROCESSES[pid]
+        process = proc_info.get("process")
+        secret_prompt = bool(proc_info.get("secret_prompt"))
 
     if not process or process.poll() is not None:
         with ACTIVE_PROCESSES_LOCK:
@@ -917,7 +987,18 @@ def send_background_command(pid: Any, input_string: str) -> str:
             input_string += '\n'
         process.stdin.write(input_string.encode('utf-8'))
         process.stdin.flush()
-        return f"Sent input to PID {pid}."
+        # The answer and its reaction in one call.
+        #
+        # This used to return a constant "Sent input to PID X.", and answering a
+        # wizard prompt by prompt cost two calls each: send, then read. Worse, the
+        # constant result made a legitimate repeat look exactly like a stuck loop
+        # (same call, same answer), so the model learned to vary its input — "y",
+        # "Y", "yes" — to avoid the guard instead of answering the question.
+        block = _drain_briefly(pid, proc_info, process)
+        if block:
+            return f"Sent input to PID {pid}.\n{block}"
+        return (f"Sent input to PID {pid}.\n"
+                "(no new output yet — call read_background_command if it is still working)")
     except Exception as e:
         return f"Error sending input to PID {pid}: {e}"
 

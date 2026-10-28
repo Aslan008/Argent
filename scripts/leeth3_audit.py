@@ -26,12 +26,18 @@ first, last = int(sys.argv[1]), int(sys.argv[2])
 data = ROOT / "leeth3_data"
 new = []
 plans = {}
+unreadable = {}                                          # the ingest refuses these lines; the audit measures the rest
 for b in range(first, last + 1):
     name = f"B{b:04d}"
     plans.update(ing.load_plan(data, name) or {})
     for line in (data / "incoming" / f"{name}.jsonl").read_text(encoding="utf-8-sig").splitlines():
         if line.strip():
-            new.append(ing.neutralise(ing.parse_record(line)))
+            try:
+                new.append(ing.neutralise(ing.parse_record(line)))
+            except ing.RecordError:
+                unreadable[name] = unreadable.get(name, 0) + 1
+if unreadable:
+    print(f"unreadable records left out: {unreadable}")
 new_ids = {r.id for r in new}                            # an already-ingested round must not be counted twice
 acc = [r for r in (ing.parse_record(l) for l in (data / "accepted" / "records.jsonl").read_text(encoding="utf-8").splitlines() if l.strip())
        if r.id not in new_ids]

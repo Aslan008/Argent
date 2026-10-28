@@ -79,6 +79,10 @@ class LazyToolRegistry(dict):
 
 # Map of all standard Argent tools to their containing modules and function names
 DEFAULT_TOOL_LOADERS: Dict[str, Tuple[str, str]] = {
+    # The tool gateway: opens the late groups (browser, desktop, web, agents) so their
+    # schemas arrive only when a turn needs them.
+    "load_tools": ("argent.tools.schemas", "load_tools"),
+
     # File operations
     "read_file": ("argent.tools.file_ops", "read_file"),
     "write_file": ("argent.tools.file_ops", "write_file"),

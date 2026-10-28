@@ -293,6 +293,15 @@ def _cooldown_for(info: ErrorInfo, now: float) -> float:
     return float(_COOLDOWN.get(info.kind, 300))
 
 
+def cooldown_for(info: ErrorInfo, now: Optional[float] = None) -> float:
+    """How long a model that failed this way should be skipped.
+
+    Public because the conversation path (`argent/model_chain.py`) parks models for exactly
+    the same durations as the compression path — one table, not two that drift apart.
+    """
+    return _cooldown_for(info, time.time() if now is None else now)
+
+
 def _until(seconds: float, now: float) -> str:
     return time.strftime("%H:%M", time.localtime(now + seconds))
 

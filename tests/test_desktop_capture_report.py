@@ -12,6 +12,7 @@ from src.automation.desktop import (
     _frame_is_blank,
     _offscreen_pixels,
     _parse_region,
+    _pick_among,
 )
 from argent.tools.desktop_tools import _capture_report
 
@@ -118,12 +119,17 @@ def test_the_report_admits_when_the_picture_came_from_the_screen():
 
 
 def test_an_ambiguous_title_lists_the_candidates_instead_of_picking_one(monkeypatch):
+    # Two *different* programs answering to the same word: here a guess would be a
+    # guess. (`find_window_matches` is what a capture asks, and it reports how each
+    # window matched — the pairs are part of the answer.)
     monkeypatch.setattr(
         DesktopAutomation,
-        "find_windows",
+        "find_window_matches",
         classmethod(lambda cls, needle: [
-            {"hwnd": 101, "title": "cmd.exe", "pid": 1, "x": 0, "y": 0, "width": 100, "height": 50},
-            {"hwnd": 202, "title": "cmd.exe (2)", "pid": 2, "x": 0, "y": 60, "width": 100, "height": 50},
+            ({"hwnd": 101, "title": "cmd.exe", "pid": 1, "process": "cmd.exe",
+              "x": 0, "y": 0, "width": 100, "height": 50}, "title"),
+            ({"hwnd": 202, "title": "cmd.exe (2)", "pid": 2, "process": "cmd.exe (2).exe",
+              "x": 0, "y": 60, "width": 100, "height": 50}, "title"),
         ]),
     )
     res = DesktopAutomation.capture_window("cmd.exe")
@@ -132,3 +138,28 @@ def test_an_ambiguous_title_lists_the_candidates_instead_of_picking_one(monkeypa
     assert "matches 2 windows" in res["error"]
     assert "[HWND: 101]" in res["error"] and "[HWND: 202]" in res["error"]
     assert len(res["candidates"]) == 2
+
+
+def test_two_windows_of_one_program_are_not_a_question(monkeypatch, tmp_path):
+    """A browser keeps several windows; naming the program is still one answer.
+
+    Refusing here cost the agent a whole extra round trip for the ordinary case, and
+    the report says which window was photographed and what else matched.
+    """
+    monkeypatch.setattr(
+        DesktopAutomation,
+        "find_window_matches",
+        classmethod(lambda cls, needle: [
+            ({"hwnd": 101, "title": "первая страница", "pid": 1, "process": "browser.exe",
+              "x": 0, "y": 0, "width": 400, "height": 300}, "process"),
+            ({"hwnd": 202, "title": "вторая страница", "pid": 1, "process": "browser.exe",
+              "x": 0, "y": 0, "width": 800, "height": 600}, "process"),
+        ]),
+    )
+    monkeypatch.setattr(DesktopAutomation, "is_available", staticmethod(lambda: True))
+    monkeypatch.setattr("ctypes.windll.user32.IsWindow", lambda hwnd: True)
+    monkeypatch.setattr(DesktopAutomation, "describe_window", classmethod(
+        lambda cls, hwnd: {"hwnd": hwnd, "title": f"окно {hwnd}", "pid": 1}))
+
+    picked, reason = _pick_among(DesktopAutomation.find_window_matches("browser"), foreground=0)
+    assert picked[0]["hwnd"] == 202 and reason == "largest"

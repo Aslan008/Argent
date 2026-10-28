@@ -282,7 +282,9 @@ fn a_draft_survives_the_picture_being_attached() {
 
 #[test]
 fn the_preview_is_drawn_from_the_wide_frame_not_a_thumb() {
-    // 18 columns blown up to fill the panel is what looked like a mosaic.
+    // An 18-column thumb blown up to fill the panel is what looked like a mosaic.
+    // The strip draws the wide frame, scaled down — its width is now set by the
+    // row cap, not by the 56-column figure that used to crop the picture.
     let mut app = App::new();
     app.attachments.push(Attachment {
         label: "кадр".into(),
@@ -293,10 +295,49 @@ fn the_preview_is_drawn_from_the_wide_frame_not_a_thumb() {
     let rows = frame(&app, 120, 40);
     let widest = rows.iter().map(|r| r.matches('▀').count()).max().unwrap_or(0);
     assert!(
-        widest > 40,
-        "превью шириной {widest} знаков — это мозаика:\n{}",
+        widest > 30,
+        "превью шириной {widest} знаков ближе к миниатюре (18), чем к широкому кадру:\n{}",
         rows.join("\n")
     );
+}
+
+#[test]
+fn the_strip_shows_the_whole_frame_instead_of_its_top_half() {
+    // 16:9 at 320 columns is 90 rows of cells. A strip capped at 56 columns and 8
+    // rows drew the top of the picture and called it a preview; the limit is now
+    // on rows, so the whole frame fits however wide it is.
+    let mut app = App::new();
+    app.attachments.push(Attachment {
+        label: "кадр".into(),
+        thumb: tiny_grid(56, 32),
+        full: Some(tiny_grid(320, 90)),
+    });
+
+    let rows = frame(&app, 120, 40);
+    let image_rows: Vec<&String> = rows.iter().filter(|r| r.contains('▀')).collect();
+    assert_eq!(
+        image_rows.len(),
+        10,
+        "весь кадр — десять строк, а не обрезок:\n{}",
+        rows.join("\n")
+    );
+    let width = image_rows[1].matches('▀').count();
+    assert!(
+        (30..=42).contains(&width),
+        "16:9 при десяти строках — это ~35 знакомест, а не {width}"
+    );
+    assert_eq!(
+        image_rows[0].matches('▀').count() + 1,
+        width,
+        "в первой строке одна клетка занята ✕, остальное — та же ширина"
+    );
+    for r in &image_rows {
+        assert!(
+            r.matches('▀').count().abs_diff(width) <= 1,
+            "кадр обрезан по строке: {:?}",
+            r
+        );
+    }
 }
 
 fn b64_encode(bytes: &[u8]) -> String {

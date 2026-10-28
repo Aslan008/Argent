@@ -1000,12 +1000,20 @@ fn select_rows(s: &SelectModalData, width: u16, max_rows: usize) -> (Vec<Line<'s
 
     let filtered = s.filtered_options();
     let long = s.options.len() > 12;
-    let instruction = if s.multi {
-        "(Use arrow keys to move, <space> to select)"
+    let checked_count = if s.multi { s.checked.iter().filter(|c| **c).count() } else { 0 };
+    // The count is the visible proof of what is chosen: a lone ● at the left of a long
+    // option is easy to miss, and once the list is scrolled there may be no marked row
+    // on screen at all — which reads as "nothing was selected".
+    let instruction: String = if s.multi {
+        if checked_count == 0 {
+            "(↑↓ — двигаться, <space> — отметить)".to_string()
+        } else {
+            format!("(↑↓ — двигаться, <space> — отметить; выбрано: {checked_count})")
+        }
     } else if long {
-        "(печатайте для поиска, ↑↓ выбор, Enter подтвердить)"
+        "(печатайте для поиска, ↑↓ выбор, Enter подтвердить)".to_string()
     } else {
-        "(Use arrow keys)"
+        "(Use arrow keys)".to_string()
     };
     // A long title takes the rows it needs, but at least three are kept for the choices.
     let trows = title_rows(&s.title, w, max_rows.saturating_sub(3).max(1));
@@ -1020,7 +1028,13 @@ fn select_rows(s: &SelectModalData, width: u16, max_rows: usize) -> (Vec<Line<'s
         let mut spans = vec![answer_pointer(pointed)];
         if s.multi {
             let on = s.checked.get(*orig).copied().unwrap_or(false);
-            spans.push(Span::raw(if on { "● " } else { "○ " }));
+            spans.push(if on {
+                Span::styled("● ", Style::default()
+                    .fg(Color::Rgb(0x00, 0xd7, 0x5f))
+                    .add_modifier(Modifier::BOLD))
+            } else {
+                Span::styled("○ ", Style::default().add_modifier(Modifier::DIM))
+            });
         }
         spans.push(Span::raw((*opt).clone()));
         rows.push(clip_line(Line::from(spans), w));
@@ -1151,6 +1165,152 @@ pub(crate) fn queue_panel(app: &App, width: u16) -> (Vec<Line<'static>>, Vec<Str
     (rows, clicks)
 }
 
+// ── sub-agents ─────────────────────────────────────────────────────────────────
+
+/// Строки панели субагентов и кнопки внутри них.
+pub(crate) struct SubPanel {
+    pub rows: Vec<Line<'static>>,
+    /// Строка заголовка: клик сворачивает/разворачивает список.
+    pub header_row: Option<usize>,
+    /// Строки агентов: строка → id, окно которого она открывает.
+    pub agent_rows: Vec<(usize, u64)>,
+    /// Строки с ⏹ и id, который эта кнопка останавливает.
+    pub stop_rows: Vec<(usize, u64)>,
+}
+
+impl SubPanel {
+    fn empty() -> Self {
+        Self { rows: Vec::new(), header_row: None, agent_rows: Vec::new(), stop_rows: Vec::new() }
+    }
+}
+
+/// Субагенты этой сессии: свернутая — одна строка, развёрнутая — все, работающие сверху.
+///
+/// Строка открывает окно самого агента: его диалог живёт там и в чат не попадает.
+pub(crate) fn subagents_rows(app: &App, width: u16, max_rows: usize) -> SubPanel {
+    let runs = &app.status.subagents;
+    if runs.is_empty() || max_rows < 1 {
+        return SubPanel::empty();
+    }
+    let folded = app.sub_folded;
+    let (muted, accent, text, ok, bad) = if app.ui.is_premium() {
+        let p = &app.ui.palette;
+        (p.muted, p.accent, p.text, p.ok, p.danger)
+    } else {
+        (
+            Color::Rgb(0x88, 0x88, 0x88),
+            Color::Rgb(0xff, 0xb3, 0x00),
+            Color::Reset,
+            Color::Rgb(0x4c, 0xaf, 0x50),
+            Color::Rgb(0xe0, 0x52, 0x52),
+        )
+    };
+    let running = runs.iter().filter(|r| r.running()).count();
+    let finished = runs.len() - running;
+    let mut head = vec![
+        Span::styled(
+            if folded { "  \u{25b8} Субагенты " } else { "  \u{25be} Субагенты " },
+            Style::default().fg(muted).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(runs.len().to_string(), Style::default().fg(muted)),
+        Span::styled(
+            format!("  \u{b7}  {running} работают \u{b7} {finished} готово"),
+            Style::default().fg(muted),
+        ),
+    ];
+    if folded {
+        // Свёрнутая строка всe равно отвечает «что сейчас»: имя и последняя строка.
+        if let Some(run) = runs.iter().find(|r| r.running()) {
+            head.push(Span::styled("  \u{b7}  ", Style::default().fg(muted)));
+            head.push(Span::styled(run.label(), Style::default().fg(text)));
+            if !run.last.is_empty() {
+                let room = (width as usize).saturating_sub(60).max(12);
+                head.push(Span::styled(
+                    format!("  {}", clip_text(&run.last, room)),
+                    Style::default().fg(muted),
+                ));
+            }
+        }
+        let mut panel = SubPanel::empty();
+        panel.header_row = Some(0);
+        panel.rows.push(clip_line(Line::from(head), width as usize));
+        return panel;
+    }
+    let mut rows = vec![clip_line(Line::from(head), width as usize)];
+    let mut agent_rows: Vec<(usize, u64)> = Vec::new();
+    let mut stop_rows: Vec<(usize, u64)> = Vec::new();
+    let room = max_rows.saturating_sub(1);
+    let mut visible = runs.len().min(room);
+    if runs.len() > visible && room > 1 {
+        visible = room - 1;
+    }
+    for run in runs.iter().take(visible) {
+        let colour = if run.running() {
+            accent
+        } else if run.status == "failed" {
+            bad
+        } else {
+            ok
+        };
+        let detail = if run.running() {
+            if run.last.is_empty() {
+                "работает".to_string()
+            } else {
+                run.last.clone()
+            }
+        } else {
+            let mut parts: Vec<String> = Vec::new();
+            if run.files > 0 {
+                parts.push(format!("{} файлов", run.files));
+            }
+            if run.patch {
+                parts.push("патч".to_string());
+            }
+            if parts.is_empty() {
+                parts.push(run.status.clone());
+            }
+            parts.join(" \u{b7} ")
+        };
+        let task = if run.task.is_empty() { String::new() } else { format!(" \u{b7} {}", run.task) };
+        // ⏹ всегда в одной и той же колонке, текст под него не заходит.
+        let text_room = (width as usize).saturating_sub(2);
+        let line = clip_line(
+            Line::from(vec![
+                Span::styled(format!("  {} ", run.mark()), Style::default().fg(colour)),
+                Span::styled(run.label(), Style::default().fg(text).add_modifier(Modifier::BOLD)),
+                Span::styled(format!(" \u{b7} {}", mmss(run.elapsed)), Style::default().fg(muted)),
+                Span::styled(format!(" \u{b7} {detail}{task}"), Style::default().fg(muted)),
+            ]),
+            text_room,
+        );
+        let pad = text_room.saturating_sub(line.width());
+        let mut spans = line.spans.clone();
+        spans.push(Span::raw(" ".repeat(pad)));
+        if run.running() {
+            let armed = app.pending_sub_stop == Some(run.id);
+            spans.push(Span::styled(
+                "\u{23f9}",
+                Style::default().fg(if armed { bad } else { muted }),
+            ));
+            stop_rows.push((rows.len(), run.id));
+        } else {
+            spans.push(Span::raw(" "));
+        }
+        agent_rows.push((rows.len(), run.id));
+        rows.push(Line::from(spans));
+    }
+    if runs.len() > visible {
+        rows.push(clip_line(
+            Line::from(Span::styled(
+                format!("    \u{2026} ещё {}", runs.len() - visible),
+                Style::default().fg(muted),
+            )),
+            width as usize,
+        ));
+    }
+    SubPanel { rows, header_row: Some(0), agent_rows, stop_rows }
+}
+
 /// The pictures attached to the next message: a strip of previews.
 ///
 /// Each one opens on a click and carries a ✕ in its corner, so an accidental
@@ -1164,15 +1324,31 @@ pub(crate) fn attachment_strip(app: &App, width: u16) -> (Vec<Line<'static>>, Ve
     if app.attachments.is_empty() || w == 0 {
         return (Vec::new(), Vec::new());
     }
-    // A tall picture would otherwise eat the screen: a preview shows its top.
-    const MAX_ROWS: usize = 8;
-    // Wider than the old thumb, narrower than the whole screen: a preview is a
-    // glance, but a coarse one is not a glance at anything.
-    const MAX_COLS: usize = 56;
+    // A tall picture would otherwise eat the screen. The limit is on ROWS, not
+    // columns: a strip that fits 56 columns of a 16:9 screenshot into 8 rows shows
+    // its top half, which is not a preview of the picture. Wide frames get more
+    // columns, tall ones fewer, and the whole frame stays visible.
+    const MAX_ROWS: usize = 10;
+    const MAX_COLS: usize = 80;
 
     let strip_cols = |a: &crate::app::Attachment| -> usize {
         let source = a.full.as_ref().unwrap_or(&a.thumb);
-        source.cols.min(MAX_COLS).min(w.saturating_sub(1).max(1))
+        if source.cols == 0 {
+            return 1;
+        }
+        // Rows per column of the source: `grid` keeps the picture's proportions.
+        let rows_per_col = source.rows as f32 / source.cols as f32;
+        let by_rows = if rows_per_col > 0.0 {
+            (MAX_ROWS as f32 / rows_per_col).floor() as usize
+        } else {
+            MAX_COLS
+        };
+        source
+            .cols
+            .min(MAX_COLS)
+            .min(w.saturating_sub(1).max(1))
+            .min(by_rows.max(2))
+            .max(1)
     };
 
     // Previews sit side by side until the width runs out.
@@ -1347,6 +1523,17 @@ pub fn draw_ui(f: &mut Frame, app: &App) {
         bg.rows.clone()
     };
     let bg = BgPanel { rows: bg_rows, ..bg };
+    // The sub-agent list sits right under the background panel: work in progress,
+    // above everything that belongs to the next message.
+    let sub_room = h
+        .saturating_sub(prompt_rows.len() + menu.len() + toolbar_h + todo.len()
+            + bg.rows.len() + q_rows.len() + a_rows.len() + 2)
+        .min(10);
+    let sub = if modal {
+        SubPanel::empty()
+    } else {
+        subagents_rows(app, w, sub_room)
+    };
     // The stack may never squeeze the transcript out entirely.
     let reserved = prompt_rows.len() + menu.len() + toolbar_h;
     if reserved + 1 > h {
@@ -1358,13 +1545,13 @@ pub fn draw_ui(f: &mut Frame, app: &App) {
     // A preview is worth less than the prompt: if the stack still does not fit, the strip
     // gives way row by row instead of pushing the draft off the screen.
     while !a_rows.is_empty()
-        && todo.len() + bg.rows.len() + q_rows.len() + a_rows.len()
+        && todo.len() + bg.rows.len() + sub.rows.len() + q_rows.len() + a_rows.len()
             + prompt_rows.len() + menu.len() + toolbar_h + 1 > h
     {
         a_rows.pop();
     }
     a_clicks.retain(|(row, _, _, _)| *row < a_rows.len());
-    let bottom_h = todo.len() + bg.rows.len() + q_rows.len() + a_rows.len()
+    let bottom_h = todo.len() + bg.rows.len() + sub.rows.len() + q_rows.len() + a_rows.len()
         + prompt_rows.len() + menu.len() + toolbar_h;
     let view_max = h.saturating_sub(bottom_h).max(1);
     // Empty space the user scrolled open under the newest output (`App::lower`);
@@ -1546,9 +1733,34 @@ pub fn draw_ui(f: &mut Frame, app: &App) {
             app.register_clickable(area.x + w - 2, y, 2, 1, ClickAction::StopBackground(pid.clone()));
         }
     }
-    // The queue panel: what goes out once this turn ends. Measured above with the
-    // rest of the bottom stack; drawn here so its rows can be clicked.
-    let qy = bg_y + bg.rows.len() as u16;
+    // The sub-agent list, then the queue panel: what goes out once this turn ends.
+    let sub_y = bg_y + bg.rows.len() as u16;
+    for (i, row) in sub.rows.iter().enumerate() {
+        let y = sub_y + i as u16;
+        if y < area.y + area.height {
+            put_line(f.buffer_mut(), area, y, row, w);
+        }
+    }
+    for (row, id) in sub.agent_rows.iter() {
+        let y = sub_y + *row as u16;
+        if y < area.y + area.height {
+            app.register_clickable(area.x, y, w, 1, ClickAction::OpenSubagent(*id));
+        }
+    }
+    if let Some(row) = sub.header_row {
+        let y = sub_y + row as u16;
+        if y < area.y + area.height {
+            app.register_clickable(area.x, y, w, 1, ClickAction::ToggleSubagents);
+        }
+    }
+    // The ⏹ wins over the row where they overlap.
+    for (row, id) in sub.stop_rows.iter() {
+        let y = sub_y + *row as u16;
+        if y < area.y + area.height && w >= 3 {
+            app.register_clickable(area.x + w - 2, y, 2, 1, ClickAction::StopSubagent(*id));
+        }
+    }
+    let qy = sub_y + sub.rows.len() as u16;
     if q_rows.is_empty() {
         app.queue_hover.set(None);
     } else {
@@ -1648,6 +1860,10 @@ pub fn draw_ui(f: &mut Frame, app: &App) {
     // person asked to look at one job, so it is not drawn behind the chat.
     if app.bg_view.is_some() {
         draw_bg_view(f, area, app);
+    }
+    // The sub-agent's window is the same kind of thing: one worker, looked at closely.
+    if app.sub_view.is_some() {
+        draw_sub_view(f, area, app);
     }
 
     if let Some((cx, cy)) = cursor {
@@ -1793,10 +2009,13 @@ fn draw_image_overlay(f: &mut Frame, area: Rect, app: &App, prev: &ImagePreview)
     let lines = crate::cards::image_lines_scaled(&prev.full, cols);
     // No grid size in the caption: “120×34” read as “the picture is 120 pixels wide”,
     // which says how the terminal draws it, not how much of the frame is shown.
+    // The last part is the honest escape hatch: half-blocks give the picture a
+    // tenth of a screenshot's pixels, so readable text needs the real file.
+    let hint = "O — открыть в системе  ·  Esc — закрыть";
     let caption = if prev.caption.is_empty() {
-        "Esc — закрыть".to_string()
+        hint.to_string()
     } else {
-        format!("{}  ·  Esc — закрыть", prev.caption)
+        format!("{}  ·  {hint}", prev.caption)
     };
     let caption: String = caption.chars().take(area.width as usize).collect();
     let caption_w = UnicodeWidthStr::width(caption.as_str()) as u16;
@@ -1815,6 +2034,69 @@ fn draw_image_overlay(f: &mut Frame, area: Rect, app: &App, prev: &ImagePreview)
         cy,
         &Line::from(Span::styled(caption, Style::default().fg(pal.muted))),
         area.width,
+    );
+}
+
+/// The window on one sub-agent: its task, files and its own dialogue.
+///
+/// A worker's lines never enter the chat: a swarm of four would bury the conversation,
+/// and the question “what is #3 doing?” is about one agent, not all of them.
+fn draw_sub_view(f: &mut Frame, area: Rect, app: &App) {
+    let Some(view) = app.sub_view.as_ref() else { return };
+    let pal = &app.ui.palette;
+    if area.width < 24 || area.height < 7 {
+        return;
+    }
+    let width = area.width.saturating_sub(4).min(140);
+    let height = area.height.saturating_sub(2);
+    let x = area.x + area.width.saturating_sub(width) / 2;
+    let y = area.y + area.height.saturating_sub(height) / 2;
+    let rect = Rect { x, y, width, height };
+
+    f.render_widget(Clear, rect);
+    let title = format!(" {} ", view.headline());
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(pal.accent))
+        .title(Span::styled(
+            clip_text(&title, width.saturating_sub(2) as usize),
+            Style::default().fg(pal.accent).add_modifier(Modifier::BOLD),
+        ));
+    f.render_widget(block, rect);
+
+    let inner_w = width.saturating_sub(2);
+    // The border takes one row at the top and the key line one at the bottom.
+    let body_h = height.saturating_sub(2);
+    if inner_w == 0 || body_h == 0 {
+        return;
+    }
+    app.sub_view_bounds.set((inner_w as usize, body_h as usize));
+
+    for (i, text) in view.window(inner_w as usize, body_h as usize).iter().enumerate() {
+        let row = y + 1 + i as u16;
+        if row >= y + height - 1 {
+            break;
+        }
+        put_line(
+            f.buffer_mut(),
+            rect,
+            row,
+            &Line::from(Span::styled(clip_text(text, inner_w as usize), Style::default().fg(pal.text))),
+            inner_w,
+        );
+    }
+
+    let keys = if view.running() {
+        "Esc — закрыть · колесо/PgUp — листать · /agents stop <N> — остановить"
+    } else {
+        "Esc — закрыть · колесо/PgUp — листать"
+    };
+    put_line(
+        f.buffer_mut(),
+        rect,
+        y + height - 1,
+        &Line::from(Span::styled(clip_text(keys, inner_w as usize), Style::default().fg(pal.muted))),
+        inner_w,
     );
 }
 
@@ -1929,5 +2211,45 @@ mod caret_tests {
             None,
         );
         assert!(select_rows(&s, 80, 12).1.is_none(), "пока ничего не набрано, каретке негде стоять");
+    }
+
+    /// A checked option has to be visible as checked, and the count has to say how many
+    /// there are: a person reported selecting answers and not being able to see them.
+    #[test]
+    fn a_multi_choice_shows_what_is_checked() {
+        let mut s = SelectModalData::new_full(
+            "id".into(),
+            "Что включить?".into(),
+            vec!["alpha".into(), "beta".into(), "gamma".into()],
+            None,
+            true,
+            None,
+        );
+        s.selected_idx = 1;
+        s.toggle_current();
+
+        let (rows, _) = select_rows(&s, 80, 12);
+        let text: Vec<String> = rows.iter().map(|r| r.to_string()).collect();
+        let joined = text.join("\n");
+
+        assert!(joined.contains("● beta"), "отметка выбранного видна: {joined}");
+        assert!(joined.contains("выбрано: 1"), "счётчик говорит, сколько отмечено: {joined}");
+        assert!(joined.contains("○ alpha"), "невыбранные видны как пустые: {joined}");
+        assert!(!joined.contains("● alpha") && !joined.contains("● gamma"),
+                "отмечен только выбранный: {joined}");
+    }
+
+    #[test]
+    fn an_unchecked_multi_choice_has_no_counter_noise() {
+        let s = SelectModalData::new_full(
+            "id".into(),
+            "Что включить?".into(),
+            vec!["alpha".into()],
+            None,
+            true,
+            None,
+        );
+        let joined: String = select_rows(&s, 80, 12).0.iter().map(|r| r.to_string()).collect();
+        assert!(!joined.contains("выбрано:"), "пока ничего не отмечено, счётчика нет: {joined}");
     }
 }

@@ -18,6 +18,15 @@ def _maybe_auto_attach(res: dict, default_label: str) -> str:
 
     supports = model_supports_vision(get_current_model(), get_provider())
     if supports is False:
+        # The model cannot look, but the person should: a screenshot that only leaves
+        # a file path behind is invisible in practice. Publish the frame anyway.
+        if path:
+            try:
+                from argent.image_preview import publish
+
+                publish(str(path))
+            except Exception as e:
+                log.debug("no preview for %s: %s", path, e)
         return (
             f"\n\n[VISION NOTICE]: Captured image saved to disk ({path or label}). "
             f"Image was NOT attached to model context because the current model "
@@ -25,7 +34,7 @@ def _maybe_auto_attach(res: dict, default_label: str) -> str:
         )
 
     if supports is not False and b64 and media_type:
-        queue_image(b64, media_type, str(path or label))
+        queue_image(b64, media_type, str(path or label), path=str(path or ""))
         return (
             "\n\n[VISION ATTACHED]: The image has been attached to the conversation. "
             "You will SEE it in your very next message — continue and describe what is visible."
@@ -46,8 +55,9 @@ def list_desktop_windows() -> str:
 
         lines = [f"Found {len(windows)} visible desktop window(s):\n"]
         for w in windows:
+            process = f" [{w['process']}]" if w.get("process") else ""
             lines.append(
-                f"- [HWND: {w['hwnd']}] [PID: {w['pid']}] \"{w['title']}\" "
+                f"- [HWND: {w['hwnd']}] [PID: {w['pid']}] \"{w['title']}\"{process} "
                 f"({w['width']}x{w['height']} at {w['x']},{w['y']})"
             )
         return "\n".join(lines)
@@ -93,15 +103,29 @@ def _capture_report(res: dict, kind: str) -> str:
             "  ! PrintWindow returned an empty frame, so the picture was taken from the screen: "
             "anything covering the window is in it"
         )
+    match = res.get("match") or {}
+    if match.get("by") == "process":
+        lines.append(
+            "  found by executable name — a browser's title is the page it shows, not the browser"
+        )
+    if match.get("others"):
+        names = ", ".join(f'"{title}"' for title in match["others"][:3])
+        reason = "the one in front" if match.get("reason") == "foreground" else "the largest"
+        lines.append(
+            f"  several windows of this program — took {reason}; also matched: {names}"
+            " (pass an HWND to photograph another one)"
+        )
     lines.append(f"Saved screenshot to: {res.get('path')}")
     return "\n".join(lines)
 
 
 def capture_desktop_window(target: str, output_path: Optional[str] = None, region: Optional[str] = None) -> str:
     """Capture a screenshot of a desktop window by its title substring or numeric HWND.
-    
+
     Args:
-        target: Window title substring (e.g. 'Unity', 'Notepad') or numeric HWND.
+        target: Window title substring (e.g. 'Unity', 'Notepad'), executable name
+            (e.g. 'browser', 'chrome.exe') or numeric HWND. Prefer the executable name
+            for browsers: their window title is the page, not the browser.
         output_path: Optional custom path to save PNG image.
         region: Optional strip of the window: 'bottom:200', 'top:120', 'left:300',
             'right:400' or 'x,y,w,h' in pixels. Use it when only one part matters

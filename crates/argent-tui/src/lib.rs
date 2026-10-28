@@ -39,6 +39,84 @@ pub mod toolrender;
 pub mod ui;
 pub mod view;
 
+/// Where diagnostic lines go: `.argent/tui-diagnostics.log`, or the file named by
+/// `ARGENT_TUI_DIAG` (used by tests so they never write into the project).
+fn diag_path() -> std::path::PathBuf {
+    match std::env::var("ARGENT_TUI_DIAG") {
+        Ok(custom) => std::path::PathBuf::from(custom),
+        Err(_) => std::path::Path::new(".argent").join("tui-diagnostics.log"),
+    }
+}
+
+/// Append one line. Returns the error instead of hiding it, so a test can tell a
+/// working writer from a silent no-op.
+pub fn diag_to(path: &std::path::Path, text: &str) -> std::io::Result<()> {
+    use std::io::Write;
+
+    if let Some(dir) = path.parent() {
+        if !dir.as_os_str().is_empty() {
+            std::fs::create_dir_all(dir)?;
+        }
+    }
+    if let Ok(meta) = std::fs::metadata(path) {
+        if meta.len() > 512 * 1024 {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)?;
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    writeln!(file, "t={secs} {text}")
+}
+
+fn diag(text: &str) {
+    // Best effort: a diagnostics line must never be able to break a turn.
+    let _ = diag_to(&diag_path(), text);
+}
+
+#[cfg(test)]
+mod diag_tests {
+    use super::diag_to;
+
+    /// `target/` belongs to this build and is always writable; `%TEMP%` is not, and a
+    /// diagnostics test that cannot create its own file proves nothing.
+    fn scratch(name: &str) -> std::path::PathBuf {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("target").join("diag-tests");
+        std::fs::create_dir_all(&dir).expect("target доступен для записи");
+        dir.join(name)
+    }
+
+    #[test]
+    fn a_line_is_written_and_can_be_read_back() {
+        let path = scratch("unit.log");
+        let _ = std::fs::remove_file(&path);
+
+        diag_to(&path, "alive tick=7 busy=false").expect("строка пишется");
+        diag_to(&path, "resize 120x40").expect("и вторая тоже");
+
+        let text = std::fs::read_to_string(&path).expect("файл читается");
+        let _ = std::fs::remove_file(&path);
+
+        assert!(text.contains("alive tick=7 busy=false"), "{text}");
+        assert!(text.contains("resize 120x40"), "дописывается, а не перезаписывается: {text}");
+        assert!(text.contains("t="), "у каждой строки есть метка времени: {text}");
+    }
+
+    #[test]
+    fn a_file_that_cannot_be_written_reports_instead_of_panicking() {
+        // A directory where a file should be: the writer must say so, quietly.
+        let dir = scratch("blocked");
+        std::fs::create_dir_all(&dir).expect("каталог создан");
+        assert!(diag_to(&dir, "x").is_err());
+        let _ = std::fs::remove_dir(&dir);
+    }
+}
+
 use app::{App, ClickAction, CompletionItem, MessageItem, QueueTrigger, Submit};
 use events::ArgentEvent;
 
@@ -98,6 +176,23 @@ mod paste_tests {
     }
 }
 use sink::RustEventSink;
+
+/// The Latin key a Cyrillic letter sits on, so shortcuts work in a Russian layout.
+///
+/// A keyboard sends the character the layout produces, not the key's position:
+/// Ctrl+C in ЙЦУКЕН arrives as `с`, and a `KeyCode::Char('c')` arm never matches.
+/// Anything that is not Cyrillic is returned unchanged.
+fn latin_of(ch: char) -> char {
+    match ch.to_lowercase().next().unwrap_or(ch) {
+        'й' => 'q', 'ц' => 'w', 'у' => 'e', 'к' => 'r', 'е' => 't', 'н' => 'y',
+        'г' => 'u', 'ш' => 'i', 'щ' => 'o', 'з' => 'p', 'х' => '[', 'ъ' => ']',
+        'ф' => 'a', 'ы' => 's', 'в' => 'd', 'а' => 'f', 'п' => 'g', 'р' => 'h',
+        'о' => 'j', 'л' => 'k', 'д' => 'l', 'ж' => ';', 'э' => '\'',
+        'я' => 'z', 'ч' => 'x', 'с' => 'c', 'м' => 'v', 'и' => 'b', 'т' => 'n',
+        'ь' => 'm', 'б' => ',', 'ю' => '.', 'ё' => '`',
+        other => other,
+    }
+}
 
 /// Put the clipboard into the prompt.
 ///
@@ -295,6 +390,20 @@ fn run_tui(py: Python, bridge: PyObject) -> PyResult<()> {
     }
 
     impl TerminalGuard {
+        /// Re-assert mouse reporting without touching the flag.
+        ///
+        /// Restoring a minimized window (or switching away and back) can leave the
+        /// terminal with mouse reporting switched off while this process still
+        /// believes it is on: the wheel then arrives as arrow keys and clicks never
+        /// arrive at all. Writing the mode again is idempotent and costs one escape
+        /// sequence, so it is safe to do on every resize and every regain of focus.
+        fn ensure_mouse_capture(&mut self) -> Result<(), String> {
+            if self.mouse_capture {
+                execute!(self.terminal.backend_mut(), EnableMouseCapture).map_err(|e| e.to_string())?;
+            }
+            Ok(())
+        }
+
         fn toggle_mouse_capture(&mut self) -> Result<bool, String> {
             if self.mouse_capture {
                 execute!(self.terminal.backend_mut(), DisableMouseCapture).map_err(|e| e.to_string())?;
@@ -354,6 +463,9 @@ fn run_tui(py: Python, bridge: PyObject) -> PyResult<()> {
 
         let mut clipboard = arboard::Clipboard::new().ok();
         let mut last_ctrl_c: Option<std::time::Instant> = None;
+    // Throttle for the presence heartbeat: one call a second is enough to prove a
+    // human is here, and a keystroke storm must not cross the GIL per character.
+    let mut last_presence: Option<std::time::Instant> = None;
         let mut last_draw = std::time::Instant::now() - Duration::from_secs(1);
 
         // The mouse wheel scrolls the transcript and a click can open a block, so
@@ -374,6 +486,17 @@ fn run_tui(py: Python, bridge: PyObject) -> PyResult<()> {
 
         // Events read ahead while looking for a pasted burst and not consumed yet.
         let mut backlog: std::collections::VecDeque<Event> = std::collections::VecDeque::new();
+
+        // The terminal can drop mouse reporting without telling us — minimizing and
+        // restoring the window is enough. The fingerprint is unmistakable: the console
+        // turns a wheel notch into Up/Down, so the wheel scrolls the prompt's history
+        // while the chat sits still, and no click ever arrives. Re-asserting the mode
+        // is idempotent, so doing it on a timer costs one escape sequence and makes the
+        // loss self-healing instead of needing a restart.
+        let mut last_capture_check = std::time::Instant::now();
+        // One line a minute: it says whether the loop itself was alive when a report
+        // says "everything froze". Both are cheap, and both are the only evidence.
+        let mut last_heartbeat = std::time::Instant::now();
 
         loop {
             app.tick = app.tick.wrapping_add(1);
@@ -470,6 +593,28 @@ fn run_tui(py: Python, bridge: PyObject) -> PyResult<()> {
                     app.dirty.set(true);
                 }
             }
+            // The sub-agent window follows its worker the same way: a fresh copy of
+            // the log once a second while it is open.
+            if app.sub_view.is_some() {
+                let now = std::time::Instant::now();
+                let due = match app.sub_view_refresh.get() {
+                    None => true,
+                    Some(at) => now.duration_since(at) >= Duration::from_millis(900),
+                };
+                if due {
+                    let id = app.sub_view.as_ref().map(|v| v.id).unwrap_or(0);
+                    let fresh = Python::with_gil(|py| {
+                        bridge
+                            .call_method1(py, "subagent_detail", (id,))
+                            .ok()
+                            .and_then(|r| r.extract::<String>(py).ok())
+                    });
+                    if let Some(raw) = fresh {
+                        app.apply_sub_view(&raw);
+                    }
+                    app.sub_view_refresh.set(Some(now));
+                }
+            }
 
             // Draw only when something changed, or to advance a spinner while a
             // turn runs. An idle TUI therefore does no work at all.
@@ -494,6 +639,26 @@ fn run_tui(py: Python, bridge: PyObject) -> PyResult<()> {
 
             // Poll input events; short while a turn runs (spinners), longer idle.
             let poll_for = if app.is_busy { 30 } else { 60 };
+            // A slow heartbeat for the mouse mode: cheap, silent, and the only thing that
+            // heals a terminal which forgot it while the app was minimized.
+            if last_capture_check.elapsed() >= Duration::from_millis(2000) {
+                let _ = guard.ensure_mouse_capture();
+                last_capture_check = std::time::Instant::now();
+            }
+            if last_heartbeat.elapsed() >= Duration::from_secs(60) {
+                diag(&format!(
+                    "alive tick={} busy={} msgs={} mouse={:?} capture={} ask={} approval={} regions={}",
+                    app.tick,
+                    app.is_busy,
+                    app.messages.len(),
+                    app.mouse_pos,
+                    app.mouse_capture_enabled,
+                    app.active_select.is_some(),
+                    app.active_approval.is_some(),
+                    app.clickable_regions.borrow().len(),
+                ));
+                last_heartbeat = std::time::Instant::now();
+            }
             let mut from_backlog = false;
             let next_event = if let Some(queued) = backlog.pop_front() {
                 from_backlog = true;
@@ -505,6 +670,37 @@ fn run_tui(py: Python, bridge: PyObject) -> PyResult<()> {
             };
             if let Some(next_event) = next_event {
                 app.dirty.set(true);
+                // Presence: a real keystroke, paste or click re-arms the window in
+                // which vibe ASKS before refusing. Only these count — a moving
+                // pointer is not presence, and nothing from the agent passes here.
+                let human = match &next_event {
+                    Event::Key(_) | Event::Paste(_) => true,
+                    Event::Mouse(m) => !matches!(m.kind, MouseEventKind::Moved),
+                    _ => false,
+                };
+                if human
+                    && match last_presence {
+                        None => true,
+                        Some(at) => at.elapsed() >= Duration::from_millis(1000),
+                    }
+                {
+                    last_presence = Some(std::time::Instant::now());
+                    Python::with_gil(|py| {
+                        let _ = bridge.call_method0(py, "touch_presence");
+                    });
+                }
+                // An input event can only reach this process when the terminal window
+                // has keyboard focus, so the event itself is proof of focus. Trusting
+                // `FocusGained` alone is what broke the UI: a minimize or a window
+                // switch can lose the regain, `focused` stayed false, and every
+                // keystroke was dropped — no typing, no Enter, no fold toggles — while
+                // the last frame (tooltip included) stayed on screen. It looked dead
+                // until a restart.
+                if !app.focused
+                    && matches!(&next_event, Event::Key(_) | Event::Mouse(_) | Event::Paste(_))
+                {
+                    app.note_input();
+                }
                 match next_event {
                     // Mouse Wheel Scroll support & interactive button clicks
                     Event::Mouse(mouse) => match mouse.kind {
@@ -611,8 +807,93 @@ fn run_tui(py: Python, bridge: PyObject) -> PyResult<()> {
                                     ClickAction::ToggleThinking(idx) => {
                                         app.toggle_block_by_idx(idx);
                                     }
+                                    // The turn summary is an accordion: one row of numbers,
+                                    // the REPL's full breakdown on demand.
+                                    ClickAction::ToggleSnapshot(idx) => {
+                                        app.toggle_block_by_idx(idx);
+                                    }
+                                    ClickAction::ToggleSubagents => {
+                                        app.sub_folded = !app.sub_folded;
+                                        app.dirty.set(true);
+                                    }
+                                    // One worker, looked at closely: its own log is asked for
+                                    // on demand and never polled for every agent at once.
+                                    ClickAction::OpenSubagent(id) => {
+                                        app.open_sub_view(id);
+                                        let raw = Python::with_gil(|py| {
+                                            bridge
+                                                .call_method1(py, "subagent_detail", (id,))
+                                                .ok()
+                                                .and_then(|v| v.extract::<String>(py).ok())
+                                        });
+                                        if let Some(raw) = raw {
+                                            app.apply_sub_view(&raw);
+                                        }
+                                    }
+                                    // Stopping a worker takes two clicks, like stopping a
+                                    // process: the panel is scanned with the mouse.
+                                    ClickAction::StopSubagent(id) => {
+                                        if app.pending_sub_stop == Some(id) {
+                                            app.pending_sub_stop = None;
+                                            let answer = Python::with_gil(|py| {
+                                                bridge
+                                                    .call_method1(py, "stop_subagent", (id,))
+                                                    .ok()
+                                                    .and_then(|v| v.extract::<String>(py).ok())
+                                            });
+                                            match answer.as_deref() {
+                                                Some("") => app.messages.push(MessageItem::Notice(format!(
+                                                    "Субагент #{id} остановлен"
+                                                ))),
+                                                Some(msg) if !msg.is_empty() => {
+                                                    app.messages.push(MessageItem::Notice(msg.to_string()))
+                                                }
+                                                _ => {}
+                                            }
+                                        } else {
+                                            app.pending_sub_stop = Some(id);
+                                            app.dirty.set(true);
+                                        }
+                                    }
                                     ClickAction::ToggleTool(idx) => {
                                         app.toggle_block_by_idx(idx);
+                                        // An opened picture is meant to be looked at, and the
+                                        // frame in the poll is 96 columns wide: ask for the
+                                        // screen-size grid once, then the rows cache is
+                                        // invalidated by the new `seq` and the card redraws
+                                        // from it. A click that folds it back costs nothing.
+                                        let path = match app.messages.get(idx) {
+                                            Some(MessageItem::Tool { expanded: true, .. }) => app
+                                                .previews
+                                                .get(&idx)
+                                                .filter(|p| p.full.cols < 200)
+                                                .map(|p| p.path.clone()),
+                                            _ => None,
+                                        };
+                                        if let Some(path) = path {
+                                            let old_seq = app.previews.get(&idx).map(|p| p.seq).unwrap_or(0);
+                                            // Build the grid at the width it will be DRAWN, so
+                                            // PIL resamples once (LANCZOS) instead of the
+                                            // frontend averaging a 320-column grid down again.
+                                            let win_w = crossterm::terminal::size()
+                                                .map(|(w, _)| w as i64)
+                                                .unwrap_or(0);
+                                            let raw = Python::with_gil(|py| {
+                                                bridge
+                                                    .call_method1(py, "preview_full", (path, win_w))
+                                                    .ok()
+                                                    .and_then(|v| v.extract::<String>(py).ok())
+                                            });
+                                            if let Some(mut big) = raw
+                                                .as_deref()
+                                                .and_then(crate::app::parse_image_preview)
+                                            {
+                                                // A fresh `seq` is what makes the rows cache
+                                                // rebuild; the poll never sends it again.
+                                                big.seq = old_seq.saturating_add(1);
+                                                app.previews.insert(idx, big);
+                                            }
+                                        }
                                     }
                                     ClickAction::CopyResponse(idx) => {
                                         let text_opt = app.assistant_content_at(idx).or_else(|| app.last_assistant_content());
@@ -746,10 +1027,20 @@ fn run_tui(py: Python, bridge: PyObject) -> PyResult<()> {
                                         // Ask the bridge for a screen-sized grid: the one in
                                         // the poll is 96 columns wide, and a picture blown up
                                         // from it is exactly the blur people complain about.
+                                        // The path is passed so an OLDER card opens its own
+                                        // picture, not whichever frame was published last.
                                         // Falls back to the cached frame if the file is gone.
+                                        let path = app
+                                            .previews
+                                            .get(&idx)
+                                            .map(|p| p.path.clone())
+                                            .unwrap_or_default();
                                         let raw = Python::with_gil(|py| {
+                                            let win_w = crossterm::terminal::size()
+                                                .map(|(w, _)| w as i64)
+                                                .unwrap_or(0);
                                             bridge
-                                                .call_method0(py, "preview_full")
+                                                .call_method1(py, "preview_full", (path.clone(), win_w))
                                                 .ok()
                                                 .and_then(|v| v.extract::<String>(py).ok())
                                         });
@@ -760,6 +1051,27 @@ fn run_tui(py: Python, bridge: PyObject) -> PyResult<()> {
                                             app.image_view = Some(prev);
                                         } else if let Some(prev) = app.previews.get(&idx).cloned() {
                                             app.image_view = Some(prev);
+                                        }
+                                    }
+                                    // A terminal draws a picture as blocks of colour; the
+                                    // system viewer draws it as pixels. This is the honest
+                                    // way to examine a screenshot.
+                                    ClickAction::OpenImageExternally(idx) => {
+                                        let path = app
+                                            .previews
+                                            .get(&idx)
+                                            .map(|p| p.path.clone())
+                                            .unwrap_or_default();
+                                        if !path.is_empty() {
+                                            let answer = Python::with_gil(|py| {
+                                                bridge
+                                                    .call_method1(py, "open_path_externally", (path.clone(),))
+                                                    .ok()
+                                                    .and_then(|v| v.extract::<String>(py).ok())
+                                            });
+                                            if let Some(msg) = answer.filter(|m| !m.is_empty()) {
+                                                app.messages.push(MessageItem::Notice(msg));
+                                            }
                                         }
                                     }
                                     // A queued message: take it into the draft. The slot
@@ -856,27 +1168,40 @@ fn run_tui(py: Python, bridge: PyObject) -> PyResult<()> {
                         _ => {}
                     },
 
-                    Event::Resize(..) => {
+                    Event::Resize(w, h) => {
                         app.mouse_sel = None;
                         app.selecting = false;
+                        diag(&format!("resize {w}x{h} mouse={:?}", app.mouse_pos));
+                        // A resize invalidates the pointer's coordinates: they were
+                        // measured against the old layout, and a hover hint left on
+                        // screen would point at nothing.
+                        app.forget_pointer();
                         // A terminal resize is also the recovery path from a
                         // stale/corrupted alternate-screen frame: repaint the
                         // whole surface, exactly like the fullscreen toggle
                         // users already use to clear the glitch.
                         let _ = guard.terminal.clear();
+                        // Restoring a minimized window is exactly when mouse
+                        // reporting goes missing. Put it back, quietly.
+                        let _ = guard.ensure_mouse_capture();
                     }
 
                     // Bracketed paste: arrives as one event instead of a keystroke storm, which is
 // what makes multi-line pastes usable. Guarded so a paste can never dismiss the
 // approval or select modal.
 Event::FocusGained => {
-                            app.focused = true;
-                        }
-                        Event::FocusLost => {
-                            app.focused = false;
-                            app.clear_selection();
-                        }
-                        Event::Paste(text)
+    app.focused = true;
+    diag("focus gained");
+    let _ = guard.ensure_mouse_capture();
+}
+Event::FocusLost => {
+    app.focused = false;
+    diag("focus lost");
+    app.clear_selection();    // A tooltip is drawn from the pointer's last position.
+    // Left behind, it hangs over the chat forever once the
+    // window comes back — a hint attached to nothing.
+    app.forget_pointer();
+}                        Event::Paste(text)
                             if app.focused
                                 && app.active_approval.is_none()
                                 && app.active_select.is_none() =>
@@ -895,11 +1220,56 @@ Event::FocusGained => {
                         if key.kind == KeyEventKind::Release {
                             continue;
                         }
+                        // A wheel notch that arrives as Up/Down is the console telling us
+                        // it is not reporting the mouse: capture was dropped (a minimize
+                        // and restore does it). The pointer was forgotten on that same
+                        // event, so this is the exact moment to put the mode back.
+                        if app.mouse_pos.is_none()
+                            && matches!(key.code, KeyCode::Up | KeyCode::Down)
+                        {
+                            // The console is not reporting the mouse: the wheel is
+                            // arriving as keys. Say so, and put the mode back.
+                            diag(&format!("wheel-as-keys {:?} capture={}", key.code, app.mouse_capture_enabled));
+                            let _ = guard.ensure_mouse_capture();
+                        }
                         // Any key returns the prompt to the caret: a peek back at
                         // earlier lines is a look, and typing ends it.
                         app.input_scroll = 0;
                         // The window on a background task is a window: Esc closes it
                         // and the scroll keys move its own text, not the chat behind.
+                        if app.sub_view.is_some() {
+                            match key.code {
+                                KeyCode::Esc | KeyCode::Char('q') => {
+                                    app.close_sub_view();
+                                    continue;
+                                }
+                                KeyCode::PageUp => {
+                                    app.sub_view_page(true);
+                                    continue;
+                                }
+                                KeyCode::PageDown => {
+                                    app.sub_view_page(false);
+                                    continue;
+                                }
+                                KeyCode::Home => {
+                                    app.sub_view_scroll(-1000);
+                                    continue;
+                                }
+                                KeyCode::End => {
+                                    app.sub_view_scroll(1000);
+                                    continue;
+                                }
+                                KeyCode::Up => {
+                                    app.sub_view_scroll(-1);
+                                    continue;
+                                }
+                                KeyCode::Down => {
+                                    app.sub_view_scroll(1);
+                                    continue;
+                                }
+                                _ => {}
+                            }
+                        }
                         if app.bg_view.is_some() {
                             match key.code {
                                 KeyCode::Esc | KeyCode::Char('q') => {
@@ -934,9 +1304,29 @@ Event::FocusGained => {
                             }
                         }
                         // The full-screen picture is a look, not a mode: any key
-                        // closes it and nothing of it reaches the prompt.
+                        // closes it and nothing of it reaches the prompt. One key
+                        // is the exception — O hands the real file to the system
+                        // viewer, because a character grid cannot make a
+                        // 1920-pixel screenshot readable.
                         if app.image_view.is_some() {
+                            let opened_with = key.code;
+                            let path = app.image_view.as_ref().map(|p| p.path.clone()).unwrap_or_default();
                             app.image_view = None;
+                            if matches!(opened_with, KeyCode::Char('o') | KeyCode::Char('O')) {
+                                let answer = Python::with_gil(|py| {
+                                    bridge
+                                        .call_method1(py, "open_image", (path,))
+                                        .ok()
+                                        .and_then(|v| v.extract::<String>(py).ok())
+                                });
+                                match answer.as_deref() {
+                                    Some("") => app.messages.push(MessageItem::Notice(
+                                        "Изображение открыто в системном просмотрщике".to_string(),
+                                    )),
+                                    Some(msg) if !msg.is_empty() => app.messages.push(MessageItem::Notice(msg.to_string())),
+                                    _ => {}
+                                }
+                            }
                             continue;
                         }
                         // A Windows console does not deliver a paste as Event::Paste: the text
@@ -1026,6 +1416,11 @@ Event::FocusGained => {
                                 KeyCode::Enter => {
                                     if let Some(s) = app.active_select.take() {
                                         let chosen = s.selected_value().unwrap_or_default();
+                                        // Leaving a trace: without this the modal closed
+                                        // and the chat showed neither the question nor
+                                        // the answer, so a person could not check what
+                                        // they had picked.
+                                        app.note_answer(&chosen);
                                         Python::with_gil(|py| {
                                             let _ = bridge.call_method1(py, "reply_select", (&s.id, &chosen));
                                         });
@@ -1033,6 +1428,7 @@ Event::FocusGained => {
                                 }
                                 KeyCode::Esc => {
                                     if let Some(s) = app.active_select.take() {
+                                        app.note_answer("");
                                         Python::with_gil(|py| {
                                             let _ = bridge.call_method1(py, "reply_select", (&s.id, ""));
                                         });
@@ -1040,6 +1436,7 @@ Event::FocusGained => {
                                 }
                                 KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                                     if let Some(s) = app.active_select.take() {
+                                        app.note_answer("");
                                         Python::with_gil(|py| {
                                             let _ = bridge.call_method1(py, "reply_select", (&s.id, ""));
                                         });
@@ -1179,7 +1576,21 @@ Event::FocusGained => {
                             continue;
                         }
 
-                        match (key.modifiers, key.code) {
+                        // A Cyrillic layout sends the Russian letter for the same key
+                        // (Ctrl+C arrives as 'с'), so every shortcut silently stopped
+                        // working for anyone typing in Russian. Normalise ONLY when a
+                        // modifier is held: plain typing must still insert Cyrillic.
+                        let code = if key.modifiers.contains(KeyModifiers::CONTROL)
+                            || key.modifiers.contains(KeyModifiers::ALT)
+                        {
+                            match key.code {
+                                KeyCode::Char(ch) => KeyCode::Char(latin_of(ch)),
+                                other => other,
+                            }
+                        } else {
+                            key.code
+                        };
+                        match (key.modifiers, code) {
                             (KeyModifiers::CONTROL, KeyCode::Char('x')) if app.has_selection() => {
                                 if let Some(text) = app.selected_text() {
                                     if let Some(ref mut clip) = clipboard {

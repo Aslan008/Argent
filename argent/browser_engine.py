@@ -724,10 +724,17 @@ class BrowserEngine:
 
         try:
             from playwright.async_api import async_playwright
-        except ImportError:
+        except ImportError as exc:
+            # An ImportError here does not always mean "not pip-installed": a broken
+            # greenlet binary, a half-installed package or a different interpreter
+            # (Argent runs the project's .venv) raise the same exception. Report the
+            # interpreter and the original reason so the message cannot mislead.
+            import sys
             raise RuntimeError(
-                "Playwright is not installed. Run: pip install playwright && playwright install chromium"
-            )
+                f"Playwright cannot be imported by this interpreter: {sys.executable} ({exc}). "
+                f"Install it into that exact environment: \"{sys.executable}\" -m pip install "
+                f"playwright && \"{sys.executable}\" -m playwright install chromium"
+            ) from exc
 
         # Suppress noisy Node.js deprecation warnings (e.g. url.parse() DEP0169 in Playwright driver)
         import os

@@ -388,6 +388,50 @@ def _handle_tool_end(chunk, is_auto, sleep_t, wake_ctx, duration: float = None, 
     return is_auto, sleep_t, wake_ctx
 
 
+def _turn_cost(agent, usage: dict) -> float:
+    """What this turn cost, in USD — reported by the provider, or priced from the
+    model's own price list when it reports nothing (DeepSeek says no per-request
+    cost, yet every turn spends real money).
+
+    A number is only a number: an unknown model yields 0.0 and the caller falls back
+    to the balance drop the session tracker already knows.
+    """
+    cost = usage.get("cost", 0.0) or 0.0
+    if cost > 0:
+        return float(cost)
+    try:
+        from argent.model_pricing import estimate_cost
+
+        return float(
+            estimate_cost(
+                str(getattr(agent, "provider", "") or ""),
+                str(getattr(agent, "model_name", "") or ""),
+                int(usage.get("prompt", 0) or 0),
+                int(usage.get("completion", 0) or 0),
+                int(usage.get("cached", 0) or 0),
+            )
+            or 0.0
+        )
+    except Exception:
+        return 0.0
+
+
+def compaction_note(agent) -> str:
+    """Подпись о сжатиях за ход: «2 сжатия · 128k→12k».
+
+    Пустая строка — сжатий не было, и тогда сводка молчит: «0 сжатий» каждый ход
+    превратило бы полезную метрику в шум. Считает агент (`turn_compactions`), формат
+    держит `compaction_log.turn_note`, чтобы TUI и REPL говорили одно и то же.
+    """
+    try:
+        from src.agent.compaction_log import last_compaction, turn_note
+
+        count = int(getattr(agent, "turn_compactions", 0) or 0) if agent is not None else 0
+        return turn_note(count, last_compaction())
+    except Exception:
+        return ""
+
+
 def turn_snapshot_lines(agent, elapsed: float, timing: dict = None,
                         usage: dict = None, tool_calls: int = 0,
                         mode: str = None) -> list:
@@ -442,6 +486,9 @@ def turn_snapshot_lines(agent, elapsed: float, timing: dict = None,
         if breakdown_str:
             breakdown_str = f" ({breakdown_str})"
         lines.append(f"[dim]({total_fmt}{breakdown_str}{usage_str})[/dim]")
+        note = compaction_note(agent)
+        if note:
+            lines.append(f"  [yellow]┄ {note}[/yellow]")
         return lines
 
     # ── VERBOSE mode: multi-line detailed breakdown ──
@@ -462,7 +509,7 @@ def turn_snapshot_lines(agent, elapsed: float, timing: dict = None,
         prompt_tok = usage.get("prompt", 0) or 0
         compl_tok = usage.get("completion", 0) or 0
         cached_tok = usage.get("cached", 0) or 0
-        cost = usage.get("cost", 0.0) or 0.0
+        cost = _turn_cost(agent, usage)
 
         tok_parts = []
         if prompt_tok or compl_tok:
@@ -516,6 +563,11 @@ def turn_snapshot_lines(agent, elapsed: float, timing: dict = None,
         if tool_parts:
             lines.append(f"  [dim]┄ {' · '.join(tool_parts)}[/dim]")
 
+        # Line 5: Context compactions, only when this turn actually had one.
+        note = compaction_note(agent)
+        if note:
+            lines.append(f"  [yellow]┄ {note}[/yellow]")
+
     else:
         # ── COMPACT mode (default): elegant single line ──
         parts = []
@@ -548,9 +600,9 @@ def turn_snapshot_lines(agent, elapsed: float, timing: dict = None,
             pass
 
         # 5. Cost. A provider that reports no per-request cost (DeepSeek) still
-        # moves the prepaid balance, so the last request's drop is shown as an
-        # approximate spend — otherwise this turn looks free.
-        cost = usage.get("cost", 0.0) or 0.0
+        # moves the prepaid balance, so a price list gives the number when the
+        # provider does not; the last balance drop is the last resort.
+        cost = _turn_cost(agent, usage)
         if cost > 0:
             parts.append(_fmt_cost(cost))
         else:
@@ -565,6 +617,11 @@ def turn_snapshot_lines(agent, elapsed: float, timing: dict = None,
             if session_usage.cost > 0:
                 sess_str += f" · {_fmt_cost(session_usage.cost)}"
             parts.append(sess_str)
+
+        # 7. Context compactions, only when this turn actually had one.
+        note = compaction_note(agent)
+        if note:
+            parts.append(note)
 
         lines.append(f"  [dim]┄ {' · '.join(parts)}[/dim]")
 

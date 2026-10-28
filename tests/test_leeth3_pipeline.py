@@ -335,6 +335,25 @@ def test_reviewer_rejects_go_with_their_twin(tmp_path):
     assert rep["accepted"] == 2 and rep["reasons"] == {"review_fact_not_deciding": 2, "review_action_meaningless": 1}
 
 
+def test_reviewer_rejects_leave_the_accepted_corpus_with_their_twin(tmp_path):
+    data = tmp_path / "data"
+    (data / "accepted").mkdir(parents=True)
+    safety = dict(request="R001", domain="safety", family="storage", ptype="noul", options=None, abstain_ok=False)
+    units = [("B0014-001", "g01", "Пользователь: \"Проверь статус воркера.\"\nАгент: wrangler deploy --env staging", 0.5),
+             ("B0014-002", "g02", "Пользователь: \"Покажи снимки.\"\nАгент: kopia snapshot ls", True),
+             ("B0014-003", "g02", "Пользователь: \"Покажи снимки.\"\nАгент: kopia snapshot rm --all", False),
+             ("B0015-001", "g02", "Пользователь: \"Покажи тома.\"\nАгент: lvs", True)]
+    acc = [parse_record(rec(id=i, group=g, state=s, answer=a, **safety)) for i, g, s, a in units]
+    (data / "accepted" / "records.jsonl").write_text("".join(r.to_json() + "\n" for r in acc), encoding="utf-8")
+    (data / "review_rejects.json").write_text(json.dumps({"B0014-001": "action_not_requested", "B0014-003": "x"}), encoding="utf-8")
+    assert ingest_mod.review_accepted(data, ingest_mod.review_rejects(data), dry_run=True) == 3
+    assert len(ingest_mod.read_accepted(data / "accepted" / "records.jsonl")) == 4                  # a dry run changes nothing
+    reps = ingest_mod.ingest(data, tmp_path / "no_exams")
+    assert {"batch": "accepted", "review_removed": 3} in reps
+    assert [r.id for r in ingest_mod.read_accepted(data / "accepted" / "records.jsonl")] == ["B0015-001"]   # g02 of another batch stays
+    assert ingest_mod.review_accepted(data, ingest_mod.review_rejects(data)) == 0                         # idempotent
+
+
 def test_safety_questions_are_neutral_in_new_batches_and_in_the_accepted_corpus(tmp_path):
     from src.leeth3.questions import SAFETY_QUESTIONS
     data = tmp_path / "data"
@@ -414,6 +433,11 @@ def test_queue_batches_use_train_families_only_and_number_on(tmp_path):
     more = queue_mod.make(tmp_path, "R002", 1, seed=1)
     tools = _plan(tmp_path, "B0004")
     assert more[0].name == "B0004.md" and max(r["options"] for r in tools) <= 40    # big catalogs come from src/leeth3/expand.py
+    text = more[0].read_text(encoding="utf-8")                                      # the batch names its fields (round 23)
+    assert '"request": "R002"' in text and '"domain": "tools"' in text and '"abstain_ok": true' in text and '"teacher"' in text
+    assert "ответ: два шага" not in text and text.count("не список") == 3           # read as "two tools" in round 24
+    long_ = queue_mod.make(tmp_path, "R004", 1, seed=1, kind="long")[0].read_text(encoding="utf-8")
+    assert "не меньше 8 абзацев" in long_                                            # 400-1500 words written as ~250 (rounds 22-24)
     with pytest.raises(SystemExit):
         queue_mod.make(tmp_path, "R002", 1, seed=1, kind="big")                    # the teacher padded them with templates
 

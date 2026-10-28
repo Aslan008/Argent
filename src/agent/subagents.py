@@ -30,7 +30,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from argent.logger import get_logger
 from src.agent import governor, lanes, worktrees
@@ -42,6 +42,8 @@ MAX_RUNNING = 4
 MAX_KEPT = 50
 #: How much of a child's console output is kept for the "it died" case.
 LOG_TAIL_CHARS = 6000
+#: Сколько строк диалога воркера хранится для его окна в интерфейсе.
+LOG_LINES_KEPT = 200
 DEFAULT_WAIT_SECONDS = 1800
 
 #: A sub-agent never gets these, whatever the supervisor asks for: they need a person, spawn more
@@ -121,6 +123,10 @@ class Run:
     thinking: str = ""
     proc: Optional[subprocess.Popen] = None
     log_tail: str = ""
+    #: Каждая строка, которую воркер напечатал: своё окно в интерфейсе читает их
+    #: отсюда. Кольцевой буфер, потому что рой из четырёх агентов иначе держит
+    #: в памяти весь их разговор.
+    lines: List[str] = field(default_factory=list)
     done: threading.Event = field(default_factory=threading.Event)
 
     @property
@@ -254,6 +260,9 @@ class SubagentManager:
                     continue
                 lines.append(text)
                 run.log_tail = "\n".join(lines[-80:])[-LOG_TAIL_CHARS:]
+                run.lines.append(text)
+                if len(run.lines) > LOG_LINES_KEPT:
+                    del run.lines[:-LOG_LINES_KEPT]
                 hook = self.on_line
                 if hook is not None:
                     try:
@@ -327,6 +336,53 @@ class SubagentManager:
     def all(self) -> List[Run]:
         with self._lock:
             return sorted(self._runs.values(), key=lambda r: r.id)
+
+    def snapshot(self) -> List[Dict[str, Any]]:
+        """Краткое состояние всех запусков для списка в интерфейсе.
+
+        Без логов и диффов: это едет в опрос состояния раз в секунду. Полный
+        разговор агента отдаёт `detail()` — только когда его окно открыли.
+        Работающие сверху, затем новые сверху.
+        """
+        with self._lock:
+            runs = sorted(self._runs.values(), key=lambda r: (r.running is False, -r.id))
+        out: List[Dict[str, Any]] = []
+        for run in runs[:MAX_KEPT]:
+            last = run.lines[-1] if run.lines else ""
+            out.append({
+                "id": run.id,
+                "role": run.role,
+                "task": " ".join((run.task or "").split())[:120],
+                "status": run.status,
+                "elapsed": round(run.elapsed(), 1),
+                "model": run.model,
+                "files": len(run.files or []),
+                "last": last[:160],
+                "patch": bool(run.patch),
+            })
+        return out
+
+    def detail(self, run_id) -> Optional[Dict[str, Any]]:
+        """Один запуск целиком: лог, отчёт, файлы, патч — для его окна."""
+        run = self.get(run_id)
+        if run is None:
+            return None
+        return {
+            "id": run.id,
+            "role": run.role,
+            "task": run.task or "",
+            "status": run.status,
+            "elapsed": round(run.elapsed(), 1),
+            "model": run.model,
+            "provider": run.provider,
+            "thinking": run.thinking,
+            "isolation": run.isolation,
+            "files": list(run.files or []),
+            "patch": str(run.patch) if run.patch else "",
+            "report": (run.report or "")[:8000],
+            "error": (run.error or "")[:4000],
+            "lines": list(run.lines[-LOG_LINES_KEPT:]),
+        }
 
     def is_finished(self, run_id) -> bool:
         """For wait conditions: an id nobody knows counts as finished, or the wait would hang for ever."""

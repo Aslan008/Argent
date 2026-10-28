@@ -432,11 +432,35 @@ fn the_final_answer_header_carries_the_accent() {
 // ── changes and errors ───────────────────────────────────────────────────────
 
 #[test]
+fn a_long_diff_is_folded_until_it_is_opened() {
+    // A file edit is often longer than the card, and the hidden tail is exactly what
+    // a person reviews. Folded it says so; one click shows every line.
+    let mut app = premium_app();
+    let diff: String = (0..60).map(|i| format!("+line {i}\n")).collect();
+    app.messages.push(MessageItem::Diff { file: "big.py".into(), diff, expanded: false });
+
+    let folded = draw(&app, 100, 70);
+    let folded_text: String = (0..70).map(|y| row(&folded, y)).collect::<Vec<_>>().join("\n");
+    assert!(folded_text.contains("diff big.py"), "свёрнутая карточка — одна строка:\n{folded_text}");
+    assert!(folded_text.contains("клик — показать"), "видно, что карточка раскроется");
+    assert!(!folded_text.contains("line 0"), "свёрнутая ничего не показывает");
+    assert!(!folded_text.contains("ещё"), "никакого «ещё N строк»");
+
+    assert!(app.toggle_block_by_idx(0), "клик по карточке переключает её");
+
+    let opened = draw(&app, 100, 70);
+    let opened_text: String = (0..70).map(|y| row(&opened, y)).collect::<Vec<_>>().join("\n");
+    assert!(opened_text.contains("line 59"), "раскрытая карточка показывает всё:\n{opened_text}");
+    assert!(!opened_text.contains("ещё"), "и без обрезки: весь diff сразу");
+}
+
+#[test]
 fn a_diff_tints_added_and_removed_lines() {
     let mut app = premium_app();
     app.messages.push(MessageItem::Diff {
         file: "src/f.py".into(),
         diff: "--- a\n+++ b\n@@ -1 +1 @@\n-old\n+new\n ctx".into(),
+        expanded: true,
     });
     let buf = draw(&app, 80, 20);
     let head = find(&buf, "diff f.py");
@@ -547,7 +571,7 @@ fn nothing_panics_or_overflows_at_any_size() {
     app.messages.push(MessageItem::User("слово ".repeat(40)));
     app.messages.push(MessageItem::assistant("текст", "мысль"));
     app.messages.push(tool("run_command", &[("command", &"x".repeat(200))], &"Error: ".repeat(40)));
-    app.messages.push(MessageItem::Diff { file: "f".into(), diff: format!("+{}\n-{}", "y".repeat(300), "z".repeat(300)) });
+    app.messages.push(MessageItem::Diff { file: "f".into(), diff: format!("+{}\n-{}", "y".repeat(300), "z".repeat(300)), expanded: false });
     app.messages.push(MessageItem::Error { text: "e".repeat(300), hint: Some("h".repeat(300)) });
     for w in [8u16, 10, 16, 24, 40, 80, 160] {
         for h in [4u16, 6, 10, 24] {

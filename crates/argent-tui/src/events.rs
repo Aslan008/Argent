@@ -166,6 +166,10 @@ pub enum ArgentEvent {
         lines: Vec<String>,
         /// The `Context: …` meter printed under it.
         context_line: Option<String>,
+        /// `«2 сжатия · 128k→12k»` when the history had to be compacted during this turn,
+        /// formatted by the bridge. Absent when it did not: an ordinary turn adds
+        /// nothing to the folded row.
+        compaction: Option<String>,
     },
     SelectRequest {
         id: String,
@@ -395,6 +399,10 @@ pub fn parse_py_event(dict: &Bound<'_, PyDict>) -> PyResult<Option<ArgentEvent>>
                     .and_then(|v| v.extract::<Vec<String>>().ok())
                     .unwrap_or_default(),
                 context_line: dict.get_item("context_line")?.and_then(|v| v.extract::<String>().ok()),
+                compaction: dict
+                    .get_item("compaction")?
+                    .and_then(|v| v.extract::<String>().ok())
+                    .filter(|s| !s.trim().is_empty()),
             }))
         }
         "rethink" => {

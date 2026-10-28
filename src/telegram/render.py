@@ -98,13 +98,27 @@ def steps_word(n: int) -> str:
     return "шагов"
 
 
-def turn_footer(snap: Optional[Dict[str, Any]]) -> str:
-    """One quiet line under an answer: time, tool calls, tokens, context fill, cost."""
+def turn_footer(snap: Optional[Dict[str, Any]], compact: bool = False,
+                with_model: bool = True) -> str:
+    """One quiet line under an answer: time, tool calls, tokens, context fill, cost.
+
+    ``compact`` is for a group chat: there the numbers say nothing to the people reading
+    (nobody there cares how full a model's context is), so only the two facts that matter
+    are kept — which model answered and how long it took. ``with_model=False`` drops the
+    model too: in a group a message belongs to everyone, so a name that only the owner
+    should know cannot travel in it.
+    """
     if not snap:
         return ""
     bits: List[str] = []
+    if with_model and snap.get("model"):
+        # First, because it is the answer to "who am I talking to" — and it can change
+        # between turns when the fallback chain moves to another model.
+        bits.append(one_line(str(snap["model"]), 30))
     if snap.get("total_s") is not None:
         bits.append("⏱ " + fmt_duration(snap["total_s"]))
+    if compact:
+        return "<i>" + esc("  ·  ".join(bits)) + "</i>" if bits else ""
     if snap.get("tool_calls"):
         bits.append(f"🛠 {snap['tool_calls']}")
     pt, ct = snap.get("prompt_tokens"), snap.get("completion_tokens")
@@ -191,6 +205,7 @@ _TOOLS: Dict[str, Tuple[str, str, Any]] = {
     "wait_heartbeat": ("⏳", "Ожидание", lambda a: one_line(_a(a, "until", "condition_to_check"), 48)),
     "call_mcp_tool": ("🔌", "MCP", lambda a: one_line(f"{_a(a, 'server_name')}.{_a(a, 'tool_name')}".strip("."), 48)),
     "list_mcp_tools": ("🔌", "MCP: список инструментов", lambda a: _a(a, "server_name")),
+    "load_tools": ("🧩", "Группа инструментов", lambda a: _a(a, "group")),
     "manage_automations": ("🗓", "Автоматизации", lambda a: one_line(" ".join(x for x in (_a(a, "action"), _a(a, "name")) if x), 40)),
     "calculate": ("🧮", "Вычисление", lambda a: one_line(_a(a, "expression"), 48)),
     "create_artifact": ("🎨", "Артефакт", lambda a: short_path(_a(a, "filename"))),

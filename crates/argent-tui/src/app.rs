@@ -329,12 +329,20 @@ pub enum MessageItem {
     Diff {
         file: String,
         diff: String,
+        /// A long change is folded to its first rows; a click shows every line.
+        expanded: bool,
     },
     /// The REPL's own post-response snapshot, as Rich markup lines, plus the
     /// `Context: …` meter printed under it.
     Snapshot {
         lines: Vec<String>,
         context_line: Option<String>,
+        /// The folded row: time · tokens · context · tools · cost, computed from the
+        /// raw numbers of the event. `lines` can be four typed rows (verbose mode),
+        /// but between two answers the person needs one line, not a table.
+        summary: String,
+        /// False until the row is clicked: the full breakdown is one click away.
+        expanded: bool,
     },
     /// Live card shown while the model streams a tool call's raw arguments.
     ToolGenerating { name: String, bytes: usize, text: String },
@@ -419,6 +427,8 @@ pub struct AppStatus {
     /// The sub-agents' own checklists: delegated work has a plan too, and showing
     /// only the main one left the interesting part of an unattended run invisible.
     pub todos_sub: Vec<SubTodos>,
+    /// The sub-agents themselves: a swarm's members, each with status and time.
+    pub subagents: Vec<SubRun>,
     /// Commands still running in the background (`start_background_command`).
     pub background: Vec<BgTask>,
     /// How many have finished this session: the count on the panel's button.
@@ -813,6 +823,190 @@ pub fn parse_bg_view(raw: &str) -> Option<BgView> {
         scroll: 0,
     })
 }
+// ── sub-agents ───────────────────────────────────────────────────────────────
+
+/// Один субагент, как его отдаёт `state["subagents"]`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SubRun {
+    pub id: u64,
+    pub role: String,
+    pub task: String,
+    /// `running` | `done` | `failed` | `stopped`
+    pub status: String,
+    pub elapsed: u64,
+    pub model: String,
+    pub files: usize,
+    /// Последняя строка его диалога: панель отвечает «чем он занят» без клика.
+    pub last: String,
+    pub patch: bool,
+}
+
+impl SubRun {
+    pub fn running(&self) -> bool {
+        self.status == "running"
+    }
+
+    pub fn mark(&self) -> &'static str {
+        match self.status.as_str() {
+            "running" => "●",
+            "done" => "✓",
+            "failed" => "✗",
+            "stopped" => "■",
+            _ => "·",
+        }
+    }
+
+    /// `coder #3` — по этой строке агента узнают в списке и в окне.
+    pub fn label(&self) -> String {
+        format!("{} #{}", self.role, self.id)
+    }
+}
+
+/// `[{"id": .., "role": .., "status": .., "elapsed": .., "last": ..}, ..]`.
+/// Непонятное — пустой список: сломанная посылка не должна ломать экран.
+pub fn parse_subagents(raw: &str) -> Vec<SubRun> {
+    let Ok(items) = serde_json::from_str::<Vec<serde_json::Value>>(raw.trim()) else {
+        return Vec::new();
+    };
+    items
+        .into_iter()
+        .filter_map(|v| {
+            let id = v.get("id").and_then(|i| i.as_u64())?;
+            Some(SubRun {
+                id,
+                role: v.get("role").and_then(|r| r.as_str()).unwrap_or("worker").to_string(),
+                task: v.get("task").and_then(|t| t.as_str()).unwrap_or("").to_string(),
+                status: v.get("status").and_then(|s| s.as_str()).unwrap_or("unknown").to_string(),
+                elapsed: v.get("elapsed").and_then(|e| e.as_f64()).unwrap_or(0.0) as u64,
+                model: v.get("model").and_then(|m| m.as_str()).unwrap_or("").to_string(),
+                files: v.get("files").and_then(|f| f.as_u64()).unwrap_or(0) as usize,
+                last: v.get("last").and_then(|l| l.as_str()).unwrap_or("").to_string(),
+                patch: v.get("patch").and_then(|p| p.as_bool()).unwrap_or(false),
+            })
+        })
+        .collect()
+}
+
+/// Открытое окно одного субагента: задача, итог и его собственный диалог.
+///
+/// Строки воркеров больше не идут в чат: они копятся у запуска и показываются
+/// здесь — по одному агенту за раз, чтобы рой из четырёх не залил разговор.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SubView {
+    pub id: u64,
+    pub role: String,
+    pub task: String,
+    pub status: String,
+    pub elapsed: u64,
+    pub model: String,
+    pub isolation: String,
+    pub files: Vec<String>,
+    pub patch: String,
+    pub report: String,
+    pub error: String,
+    pub lines: Vec<String>,
+    /// Строк отступа от конца: 0 — окно следит за хвостом.
+    pub scroll: usize,
+}
+
+impl SubView {
+    pub fn running(&self) -> bool {
+        self.status == "running"
+    }
+
+    pub fn label(&self) -> String {
+        format!("{} #{}", self.role, self.id)
+    }
+
+    pub fn headline(&self) -> String {
+        let mark = match self.status.as_str() {
+            "running" => "▶",
+            "done" => "✓",
+            "failed" => "✗",
+            "stopped" => "■",
+            _ => "·",
+        };
+        let mut text = format!("{mark} {}", self.label());
+        match self.status.as_str() {
+            "running" => text.push_str(&format!(" · работает {}", clock(self.elapsed))),
+            "done" => text.push_str(&format!(" · готово · {}", clock(self.elapsed))),
+            "failed" => text.push_str(&format!(" · не получился · {}", clock(self.elapsed))),
+            "stopped" => text.push_str(" · остановлен"),
+            _ => {}
+        }
+        if !self.model.is_empty() {
+            text.push_str(&format!(" · {}", self.model));
+        }
+        text
+    }
+
+    /// Всё, что стоит над диалогом: задача, чем кончилось, файлы, патч, отчёт.
+    pub fn body(&self) -> String {
+        let mut out = String::new();
+        if !self.task.is_empty() {
+            out.push_str(&format!("Задача: {}\n\n", self.task));
+        }
+        if !self.error.is_empty() {
+            out.push_str(&format!("Ошибка: {}\n\n", self.error));
+        }
+        if !self.files.is_empty() {
+            out.push_str(&format!("Файлы ({}): {}\n\n", self.files.len(), self.files.join(", ")));
+        }
+        if !self.patch.is_empty() {
+            out.push_str(&format!("Патч: {}\n\n", self.patch));
+        }
+        if !self.report.is_empty() {
+            out.push_str(&format!("Отчёт:\n{}\n\n", self.report));
+        }
+        out.push_str("Диалог:\n");
+        out.push_str(&self.lines.join("\n"));
+        out
+    }
+
+    pub fn window(&self, width: usize, height: usize) -> Vec<String> {
+        let rows = wrap_output(&self.body(), width.max(1));
+        let total = rows.len();
+        let visible = height.max(1);
+        let back = self.scroll.min(total.saturating_sub(visible.min(total)));
+        let end = total.saturating_sub(back);
+        let start = end.saturating_sub(visible);
+        rows[start..end].to_vec()
+    }
+
+    pub fn max_scroll(&self, width: usize, height: usize) -> usize {
+        wrap_output(&self.body(), width.max(1)).len().saturating_sub(height.max(1))
+    }
+}
+
+/// `{"id": .., "role": .., "task": .., "status": .., "lines": [..], ..}`.
+pub fn parse_sub_view(raw: &str) -> Option<SubView> {
+    let v: serde_json::Value = serde_json::from_str(raw.trim()).ok()?;
+    if !v.is_object() {
+        return None;
+    }
+    let strings = |key: &str| -> Vec<String> {
+        v.get(key)
+            .and_then(|x| x.as_array())
+            .map(|a| a.iter().filter_map(|s| s.as_str().map(str::to_string)).collect())
+            .unwrap_or_default()
+    };
+    Some(SubView {
+        id: v.get("id").and_then(|i| i.as_u64()).unwrap_or(0),
+        role: v.get("role").and_then(|r| r.as_str()).unwrap_or("worker").to_string(),
+        task: v.get("task").and_then(|t| t.as_str()).unwrap_or("").to_string(),
+        status: v.get("status").and_then(|s| s.as_str()).unwrap_or("unknown").to_string(),
+        elapsed: v.get("elapsed").and_then(|e| e.as_f64()).unwrap_or(0.0) as u64,
+        model: v.get("model").and_then(|m| m.as_str()).unwrap_or("").to_string(),
+        isolation: v.get("isolation").and_then(|m| m.as_str()).unwrap_or("").to_string(),
+        files: strings("files"),
+        patch: v.get("patch").and_then(|p| p.as_str()).unwrap_or("").to_string(),
+        report: v.get("report").and_then(|r| r.as_str()).unwrap_or("").to_string(),
+        error: v.get("error").and_then(|r| r.as_str()).unwrap_or("").to_string(),
+        lines: strings("lines"),
+        scroll: 0,
+    })
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RgbGrid {
     pub cols: usize,
@@ -1002,6 +1196,7 @@ impl Default for AppStatus {
             background: Vec::new(),
             background_done: 0,
             bg_done: Vec::new(),
+            subagents: Vec::new(),
             start_time: Instant::now(),
         }
     }
@@ -1156,6 +1351,59 @@ fn format_time(secs: f64) -> String {
     }
 }
 
+/// The folded one-liner of a finished turn: время · токены · кеш · инструменты · контекст · цена.
+///
+/// Built from the raw numbers rather than from `lines`, so the folded row does not
+/// depend on which `turn_snapshot` mode the bridge used: `verbose` sends four typed
+/// rows, and between two answers the person still gets one line until they click.
+#[allow(clippy::too_many_arguments)]
+fn compact_snapshot_line(
+    total_s: f64,
+    prompt_tokens: Option<f64>,
+    completion_tokens: Option<f64>,
+    cached_tokens: Option<f64>,
+    cost: Option<f64>,
+    ctx_tokens: Option<f64>,
+    ctx_max: Option<f64>,
+    ctx_percent: Option<f64>,
+    tool_calls: usize,
+    compaction: Option<&str>,
+) -> String {
+    let mut parts: Vec<String> = vec![format_time(total_s)];
+    if let (Some(p), Some(c)) = (prompt_tokens, completion_tokens) {
+        let mut tok = format!("{}\u{2192}{} tok", short_tokens(p), short_tokens(c));
+        if let Some(cached) = cached_tokens {
+            if cached > 0.0 && p > 0.0 {
+                tok.push_str(&format!(
+                    " \u{b7} cached {} ({}%)",
+                    short_tokens(cached),
+                    (cached / p * 100.0) as i64
+                ));
+            }
+        }
+        parts.push(tok);
+    }
+    if tool_calls > 0 {
+        parts.push(format!("{tool_calls} tools"));
+    }
+    if let (Some(t), Some(m), Some(p)) = (ctx_tokens, ctx_max, ctx_percent) {
+        if m > 0.0 {
+            parts.push(format!("ctx {}/{} ({:.0}%)", short_tokens(t), short_tokens(m), p));
+        }
+    }
+    if let Some(c) = cost {
+        if c > 0.0 {
+            parts.push(if c < 0.1 { format!("${c:.4}") } else { format!("${c:.2}") });
+        }
+    }
+    // Only when the turn really compacted the history: an ordinary turn keeps the
+    // folded row to the numbers it already had.
+    if let Some(note) = compaction.map(str::trim).filter(|n| !n.is_empty()) {
+        parts.push(note.to_string());
+    }
+    parts.join(" \u{b7} ")
+}
+
 /// `1234` -> `1.2k`, `1500000` -> `1.5M` (matches `usage_tracker._short`).
 fn short_tokens(n: f64) -> String {
     let n = n.max(0.0);
@@ -1210,6 +1458,16 @@ pub enum ClickAction {
     StopBackground(String),
     /// A thumbnail under an image-tool card: opens it for the whole screen.
     ShowImage(usize),
+    /// Hand the picture to the system viewer — the only way to see real pixels.
+    OpenImageExternally(usize),
+    /// The turn summary under an answer: the folded one-liner and its breakdown.
+    ToggleSnapshot(usize), // message index
+    /// Fold / unfold the sub-agent list above the prompt.
+    ToggleSubagents,
+    /// One sub-agent's row: opens its window — task, files and its own dialogue.
+    OpenSubagent(u64),
+    /// The ⏹ on a running sub-agent. Takes two clicks, like stopping a process.
+    StopSubagent(u64),
     /// A queued message: click takes it into the draft for editing.
     EditQueue(usize),
     /// The ✕ on the right of a queued row.
@@ -1252,6 +1510,11 @@ impl ClickAction {
             Self::ShowAttachment(_) => Some("Клик — открыть на весь экран"),
             Self::DropAttachment(_) => Some("Клик — убрать вложение"),
             Self::ShowImage(_) => Some("Клик — открыть изображение на весь экран · Esc закроет"),
+            Self::OpenImageExternally(_) => Some("Клик — открыть в просмотрщике Windows"),
+            Self::ToggleSnapshot(_) => Some("Клик — подробности хода: время, токены, контекст"),
+            Self::ToggleSubagents => Some("Клик — свернуть/развернуть список субагентов"),
+            Self::OpenSubagent(_) => Some("Клик — окно субагента: задача и его диалог"),
+            Self::StopSubagent(_) => Some("Клик — остановить · второй клик подтвердит"),
         }
     }
 }
@@ -1402,6 +1665,16 @@ pub struct App {
     pub bg_view_bounds: std::cell::Cell<(usize, usize)>,
     /// When the window may ask the bridge for fresh output (`None` = right now).
     pub bg_view_refresh: std::cell::Cell<Option<Instant>>,
+    /// The sub-agent list starts folded: a swarm is a glance, not the screen.
+    pub sub_folded: bool,
+    /// An open window on one sub-agent (see `SubView`), or none.
+    pub sub_view: Option<SubView>,
+    /// The sub-agent whose ⏹ was clicked once: the second click stops it.
+    pub pending_sub_stop: Option<u64>,
+    /// The sub-agent window's inner size, as of the last frame (wheel and PgUp).
+    pub sub_view_bounds: std::cell::Cell<(usize, usize)>,
+    /// When the sub-agent window may ask the bridge for its log (`None` = now).
+    pub sub_view_refresh: std::cell::Cell<Option<Instant>>,
     /// The folded process of each finished turn, keyed by the index of its first row.
     pub fold_groups: std::collections::BTreeMap<usize, FoldGroup>,
     /// Which of those the person opened again (a click on the summary line).
@@ -1621,6 +1894,11 @@ impl App {
         pending_stop: None,
             bg_view_bounds: std::cell::Cell::new((80, 20)),
             bg_view_refresh: std::cell::Cell::new(None),
+            sub_folded: true,
+            sub_view: None,
+            pending_sub_stop: None,
+            sub_view_bounds: std::cell::Cell::new((80, 20)),
+            sub_view_refresh: std::cell::Cell::new(None),
             fold_groups: std::collections::BTreeMap::new(),
             fold_open: std::collections::HashSet::new(),
             compact_view: true,
@@ -1705,6 +1983,46 @@ impl App {
         }
     }
 
+    /// An input event arrived, which is itself proof that this window has focus.
+    ///
+    /// Keys and clicks cannot reach this process while another window owns the
+    /// keyboard, so a lost `FocusGained` (a minimize, a window switch, a terminal that
+    /// never sends the event) must not be able to leave `focused` false forever: that
+    /// state dropped every keystroke and made the whole interface look frozen.
+    pub fn note_input(&mut self) {
+        if !self.focused {
+            self.focused = true;
+            self.dirty.set(true);
+        }
+    }
+
+    /// Forget where the pointer was.
+    ///
+    /// After the window loses focus or changes size, the last known position refers to
+    /// a layout that no longer exists (or to a pointer that is no longer reported). The
+    /// hover hint is drawn from it, and a stale one hangs over the chat forever — the
+    /// symptom a person describes as "the tooltip got stuck".
+    pub fn forget_pointer(&mut self) {
+        if self.mouse_pos.take().is_some() {
+            self.dirty.set(true);
+        }
+    }
+
+    /// Leave the answer to a question in the transcript.
+    ///
+    /// The modal is the only place the question and the answer ever appeared: closing
+    /// it left nothing behind, so there was no way to look back and see what had been
+    /// picked.
+    pub fn note_answer(&mut self, chosen: &str) {
+        let text = if chosen.trim().is_empty() {
+            "Ответ: (без выбора)".to_string()
+        } else {
+            format!("Ответ: {chosen}")
+        };
+        self.push_static(MessageItem::Notice(text));
+        self.dirty.set(true);
+    }
+
     pub fn clear_clickables(&self) {
         self.clickable_regions.borrow_mut().clear();
     }
@@ -1740,10 +2058,24 @@ impl App {
                 self.focus_pinned = true;
                 true
             }
+            // A file change is often longer than 25 rows, and the tail is exactly
+            // what a person wants when reviewing. Folded it is a glance; a click
+            // shows every line.
+            MessageItem::Diff { expanded, .. } => {
+                *expanded = !*expanded;
+                self.focus_idx = Some(idx);
+                self.focus_pinned = true;
+                true
+            }
             MessageItem::Rethink { expanded, text, .. } if !text.is_empty() => {
                 *expanded = !*expanded;
                 self.focus_idx = Some(idx);
                 self.focus_pinned = true;
+                true
+            }
+            // The turn summary: one folded row that opens into the REPL's breakdown.
+            MessageItem::Snapshot { expanded, .. } => {
+                *expanded = !*expanded;
                 true
             }
             _ => false,
@@ -1800,6 +2132,13 @@ impl App {
             let tasks = parse_background(raw);
             if tasks != self.status.background {
                 self.status.background = tasks;
+            }
+        }
+        if let Some(raw) = state.get("subagents") {
+            let runs = parse_subagents(raw);
+            if runs != self.status.subagents {
+                self.status.subagents = runs;
+                self.dirty.set(true);
             }
         }
         if let Some(n) = state.get("background_done") {
@@ -2463,7 +2802,7 @@ impl App {
             ArgentEvent::Rewound { text, detail } => self.apply_rewind(&text, &detail),
             ArgentEvent::History { items, replace } => self.apply_history(items, replace),
             ArgentEvent::Diff { file, diff } => {
-                self.push_static(MessageItem::Diff { file, diff });
+                self.push_static(MessageItem::Diff { file, diff, expanded: false });
             }
             ArgentEvent::ToolGenerating { name, bytes, delta } => {
                 // Update the existing card in place so the counter does not emit a
@@ -2544,56 +2883,47 @@ impl App {
                 ctx_percent,
                 lines,
                 context_line,
+                compaction,
                 ..
             } => {
+                let summary = compact_snapshot_line(
+                    total_s,
+                    prompt_tokens,
+                    completion_tokens,
+                    cached_tokens,
+                    cost,
+                    ctx_tokens,
+                    ctx_max,
+                    ctx_percent,
+                    tool_calls,
+                    compaction.as_deref(),
+                );
                 if self.status.snapshot_mode == "off" && lines.is_empty() {
                     // Nothing to show and no bridge text to defer to.
                 } else if !lines.is_empty() {
-                    self.messages.push(MessageItem::Snapshot { lines, context_line });
+                    self.messages.push(MessageItem::Snapshot {
+                        lines,
+                        context_line,
+                        summary,
+                        expanded: false,
+                    });
                 } else {
-                    // No bridge-built text (an older bridge): format the compact
-                    // line the REPL would, from the raw numbers.
-                    let mut parts: Vec<String> = vec![format_time(total_s)];
-                    if let (Some(p), Some(c)) = (prompt_tokens, completion_tokens) {
-                        let mut tok = format!("{}\u{2192}{} tok", short_tokens(p), short_tokens(c));
-                        if let Some(cached) = cached_tokens {
-                            if cached > 0.0 && p > 0.0 {
-                                tok.push_str(&format!(
-                                    " \u{b7} cached {} ({}%)",
-                                    short_tokens(cached),
-                                    (cached / p * 100.0) as i64
-                                ));
-                            }
-                        }
-                        parts.push(tok);
-                    }
-                    if tool_calls > 0 {
-                        parts.push(format!("{tool_calls} tools"));
-                    }
-                    if let (Some(t), Some(m), Some(p)) = (ctx_tokens, ctx_max, ctx_percent) {
-                        if m > 0.0 {
-                            parts.push(format!(
-                                "ctx {}/{} ({:.0}%)",
-                                short_tokens(t),
-                                short_tokens(m),
-                                p
-                            ));
-                        }
-                    }
-                    if let Some(c) = cost {
-                        if c > 0.0 {
-                            parts.push(if c < 0.1 { format!("${c:.4}") } else { format!("${c:.2}") });
-                        }
-                    }
-                    let mut out = vec![format!("  [dim]\u{2504} {}[/dim]", parts.join(" \u{b7} "))];
+                    // No bridge-built text (an older bridge): the same compact line,
+                    // in the REPL's markup.
+                    let mut out = vec![format!("  [dim]┄ {summary}[/dim]")];
                     if let Some(p) = ctx_percent {
                         if p > 85.0 {
                             out.push(format!(
-                                "  [bold yellow]\u{25b2} Контекст заполнен на {p:.0}% \u{2014} рекомендуется /clear или /compact[/bold yellow]"
+                                "  [bold yellow]▲ Контекст заполнен на {p:.0}% — рекомендуется /clear или /compact[/bold yellow]"
                             ));
                         }
                     }
-                    self.messages.push(MessageItem::Snapshot { lines: out, context_line });
+                    self.messages.push(MessageItem::Snapshot {
+                        lines: out,
+                        context_line,
+                        summary,
+                        expanded: false,
+                    });
                 }
             }
             ArgentEvent::Exit => {
@@ -4236,6 +4566,66 @@ impl App {
         self.bg_view_scroll(if up { -step } else { step });
     }
 
+    // ── the sub-agent window ─────────────────────────────────────────────────
+
+    /// Open the window on one sub-agent. The list row is one line; a worker's
+    /// dialogue is hundreds, and it belongs to that worker, not to the chat.
+    pub fn open_sub_view(&mut self, id: u64) {
+        let mut view = SubView { id, status: "opening".into(), ..Default::default() };
+        if let Some(run) = self.status.subagents.iter().find(|r| r.id == id) {
+            view.role = run.role.clone();
+            view.task = run.task.clone();
+            view.status = run.status.clone();
+            view.elapsed = run.elapsed;
+            view.model = run.model.clone();
+        }
+        self.sub_view = Some(view);
+        self.sub_view_refresh.set(None);        // ask the bridge at once
+        self.dirty.set(true);
+    }
+
+    pub fn close_sub_view(&mut self) {
+        if self.sub_view.is_some() {
+            self.sub_view = None;
+            self.dirty.set(true);
+        }
+    }
+
+    /// Fresh payload for the open window. Where the person scrolled to is kept: a
+    /// window that jumped back to the tail every second could not be read.
+    pub fn apply_sub_view(&mut self, raw: &str) {
+        let Some(fresh) = parse_sub_view(raw) else { return };
+        if let Some(view) = self.sub_view.as_mut() {
+            if fresh.id != 0 && view.id != 0 && fresh.id != view.id {
+                return;                        // an answer for another window
+            }
+            let keep = view.scroll;
+            *view = fresh;
+            view.scroll = keep;
+            self.dirty.set(true);
+        }
+    }
+
+    /// Rows back from the newest line (negative = further back).
+    pub fn sub_view_scroll(&mut self, delta: i32) {
+        let (width, height) = self.sub_view_bounds.get();
+        let Some(view) = self.sub_view.as_mut() else { return };
+        let max = view.max_scroll(width, height);
+        let next = if delta < 0 {
+            view.scroll.saturating_add(delta.unsigned_abs() as usize)
+        } else {
+            view.scroll.saturating_sub(delta as usize)
+        };
+        view.scroll = next.min(max);
+        self.dirty.set(true);
+    }
+
+    pub fn sub_view_page(&mut self, up: bool) {
+        let (_, height) = self.sub_view_bounds.get();
+        let step = height.saturating_sub(2).max(1) as i32;
+        self.sub_view_scroll(if up { -step } else { step });
+    }
+
     /// True when the pointer (as last seen) is inside the rectangle.
     fn pointer_in(&self, x: u16, y: u16, w: u16, h: u16) -> bool {
         match self.mouse_pos {
@@ -4313,7 +4703,10 @@ impl App {
     /// The fragments are removed only when they really are the result (whitespace aside):
     /// a truncated live tail is information, not a duplicate.
     fn absorb_streamed_output(&mut self, name: &str, result: &str) {
-        let want = squash(result);
+        // Compare what the person SEES. The live rows still carry the colours the REPL
+        // wrote (`\x1b[2m …`), while the result arrives cleaned by Python — the raw
+        // bytes never match, and the same text looked different to the two sides.
+        let want = squash(&crate::ansi::strip_ansi(result));
         if want.is_empty() {
             return;
         }
@@ -4332,16 +4725,28 @@ impl App {
         if start == card {
             return;
         }
-        let streamed: String = self.messages[start..card]
-            .iter()
-            .filter_map(|m| match m {
-                MessageItem::Output(text) => Some(text.as_str()),
-                _ => None,
-            })
-            .collect();
-        if squash(&streamed) == want {
-            // Nothing before `start` moves, so the grids of earlier turns stay valid.
-            self.messages.drain(start..card);
+        // Take the block apart from its END, one row at a time. The items above the
+        // running card are not all the command's output: the approval line (“✓
+        // Авто-одобрено …”, “Чекпоинт хода позволит откатить”) lands there too, and
+        // comparing the whole block with the result could never match — the output
+        // stayed on the screen twice because of one line in front of it.
+        //
+        // Each row the result already carries is a duplicate of the card; the first
+        // row it does not carry is the boundary, and everything from there up is left
+        // alone. `run_command` wraps the child's bytes in “Exit code: N / OUTPUT:”, so
+        // containment, not equality, is what “the card carries this row” means.
+        let mut from = card;
+        while from > start {
+            let Some(MessageItem::Output(text)) = self.messages.get(from - 1) else { break };
+            let piece = squash(&crate::ansi::strip_ansi(text));
+            if !piece.is_empty() && !want.contains(&piece) {
+                break;
+            }
+            from -= 1;
+        }
+        if from < card {
+            // Nothing before `from` moves, so the grids of earlier turns stay valid.
+            self.messages.drain(from..card);
             self.dirty.set(true);
         }
     }

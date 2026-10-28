@@ -41,7 +41,12 @@ def test_an_unanswered_approval_is_denied_instead_of_waited_on_forever(monkeypat
 
 
 def test_an_unanswered_select_cancels_instead_of_hanging(monkeypatch):
-    monkeypatch.setenv("ARGENT_ANSWER_TIMEOUT", "1")
+    # A select waits on QUESTION timeout, not ANSWER: the two were split on purpose
+    # (an approval blocks a turn, a question may be somebody thinking). This test used
+    # to set ARGENT_ANSWER_TIMEOUT and therefore waited the 3600 s default — hanging the
+    # whole run until pytest-timeout killed it.
+    monkeypatch.delenv("ARGENT_ANSWER_TIMEOUT", raising=False)
+    monkeypatch.setenv("ARGENT_QUESTION_TIMEOUT", "1")
     session = AgentSession()
 
     started = time.monotonic()

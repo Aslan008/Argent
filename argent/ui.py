@@ -200,6 +200,10 @@ def print_committed_markdown(md: str, out=None):
     md = md.strip("\n")
     if not md:
         return
+    # Formulas are not Markdown: `$\frac{a}{b}$` must not reach Rich as written.
+    from src.bridge.latex_unicode import render_math
+
+    md = render_math(md)
     for el in _render_code_blocks(md):
         safe_print(el, **_kw(out))
     safe_print("", **_kw(out))

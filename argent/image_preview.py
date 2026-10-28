@@ -21,7 +21,7 @@ log = get_logger("image_preview")
 THUMB_COLS = 26
 #: Кадр, который едет в опросе состояния: достаточен для раскрытой карточки и дешёв
 #: (сетка 320 знакомест — это ~200 КБ base64 каждые пару секунд, в опрос не годится).
-FRAME_COLS = 96
+FRAME_COLS = 160
 #: Сетка, которую строят, когда человек действительно открыл картинку.
 SCREEN_COLS = 320
 
@@ -79,6 +79,12 @@ def full_snapshot(path: Optional[str] = None, cols: int = SCREEN_COLS) -> str:
     target = path or _last.get("path")
     if not target:
         return ""
+    # Asked for a picture other than the newest one (an older card was clicked): the
+    # caption and the small frame belong to THAT file, not to whatever was published
+    # last. Rebuilding them costs one file read, and a wrong caption is worse.
+    same = not path or str(path) == str(_last.get("path") or "")
+    caption = _last.get("caption", "") if same else ""
+    thumb = _last.get("thumb") if same else None
     try:
         from PIL import Image
 
@@ -87,10 +93,12 @@ def full_snapshot(path: Optional[str] = None, cols: int = SCREEN_COLS) -> str:
         big = grid(img, cols)
         if not big:
             return ""
+        if not thumb:
+            thumb = grid(img, THUMB_COLS) or big
         payload = {
             "path": str(target),
-            "caption": _last.get("caption", ""),
-            "thumb": _last.get("thumb") or big,
+            "caption": caption,
+            "thumb": thumb,
             "full": big,
             "seq": _last.get("seq", 0),
         }

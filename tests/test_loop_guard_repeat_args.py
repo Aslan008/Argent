@@ -72,3 +72,29 @@ def test_reset_clears_the_streak(guard):
 def test_an_excluded_tool_never_counts(guard):
     for i in range(10):
         assert guard.record("wait_heartbeat", {}, f"wake {i}") is None
+
+
+def test_answering_a_wizard_with_the_same_letter_is_not_a_loop(guard):
+    """Five prompts, five times "y": the input repeats because the QUESTIONS do.
+
+    Seen live: a setup wizard asked about prod, dev and test urls; the model answered
+    "y", then "Y", then "yes" — not because the questions differed, but because it
+    expected the guard to call an identical input a loop. It was optimizing for the
+    guard instead of doing the task.
+    """
+    levels = [
+        guard.record("send_background_command", {"pid": "1", "input_string": "y\n"},
+                     f"Sent input to PID 1.\n? update {name} urls? (Y/n)")
+        for name in ("prod", "dev", "test", "staging", "docs")
+    ]
+    assert levels == [None] * 5, f"законный повтор ввода принят за цикл: {levels}"
+
+
+def test_the_same_answer_meeting_the_same_complaint_is_still_caught(guard):
+    """The exemption must not disable the guard: a stuck answer is still a loop."""
+    levels = [
+        guard.record("send_background_command", {"pid": "1", "input_string": "y\n"},
+                     "Sent input to PID 1.\n? Please answer yes or no (y/n)")
+        for _ in range(3)
+    ]
+    assert any(level is not None for level in levels), f"застрявший ввод не замечен: {levels}"

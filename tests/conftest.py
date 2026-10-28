@@ -108,6 +108,21 @@ def _fresh_user_settings():
 
 
 @pytest.fixture(autouse=True)
+def _full_prompt_by_default(monkeypatch, request):
+    """Tests exercise the FULL prompt document.
+
+    The default for people is the short one; the long document is what the section
+    tests are about (plans, plugins, browser, protocol), so they must see it. A test
+    that cares about the short prompt opts out with @pytest.mark.minimal_prompt.
+    """
+    if request.node.get_closest_marker("minimal_prompt"):
+        return
+    import argent.config as config
+
+    monkeypatch.setattr(config, "get_system_prompt_style", lambda: "full")
+
+
+@pytest.fixture(autouse=True)
 def _restore_working_directory():
     """Restoring a session changes directory to where it was saved
     (src/startup.restore_session), and a test that does that without monkeypatch

@@ -7,6 +7,7 @@
 import base64
 import io
 import json
+from pathlib import Path
 
 import pytest
 from PIL import Image
@@ -50,6 +51,23 @@ def test_the_full_view_of_an_attachment_is_a_preview_payload():
     assert payload["thumb"]["cols"] == vision.STRIP_COLS
     assert payload["full"]["cols"] > payload["thumb"]["cols"], "крупная сетка крупнее миниатюры"
     assert "seq" in payload
+    # The overlay can hand the picture to the system viewer; that needs a real
+    # file even when the frame came from a clipboard and never was one.
+    assert Path(payload["path"]).is_file(), payload["path"]
+
+
+def test_the_original_file_is_what_gets_opened(tmp_path):
+    # `encode_image` downscales what goes to the model; the file on disk does not
+    # need to be downscaled, and it is the whole point of opening it elsewhere.
+    pytest.importorskip("PIL")
+    from PIL import Image
+
+    original = tmp_path / "full.png"
+    Image.new("RGB", (1920, 1080), (10, 20, 30)).save(original)
+    payload, media, _ = vision.encode_image(str(original))
+    vision.queue_image(payload, media, "скриншот", path=str(original))
+
+    assert json.loads(vision.image_full(0))["path"] == str(original)
 
 
 def test_dropping_takes_only_that_picture_off_the_message():

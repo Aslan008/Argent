@@ -118,7 +118,11 @@ class _Rule(HorizontalRule):
 
 
 class _Table(TableElement):
-    """A table with rounded corners; the header takes the accent."""
+    """A table with rounded corners; the header takes the accent.
+
+    A column of numbers is flush right whether the source said so with `--:` or not:
+    a price list read as centred prose is harder to compare than to read.
+    """
 
     def __rich_console__(self, console: Console, options: ConsoleOptions) -> RenderResult:
         table = Table(
@@ -128,15 +132,40 @@ class _Table(TableElement):
             show_edge=True,
             collapse_padding=False,
         )
+        rows = [[element.content for element in row.cells] for row in (self.body.rows if self.body else [])]
+        headings: List[object] = []
         if self.header is not None and self.header.row is not None:
             for column in self.header.row.cells:
                 heading = column.content.copy()
                 heading.stylize("markdown.table.header")
-                table.add_column(heading)
+                headings.append(heading)
+        for i, heading in enumerate(headings):
+            table.add_column(heading, justify="right" if _numeric_column(rows, i) else "left")
         if self.body is not None:
             for row in self.body.rows:
                 table.add_row(*[element.content for element in row.cells])
         yield table
+
+
+def _numeric_column(rows: List[List[object]], index: int) -> bool:
+    """True when every cell in the column is a number, a duration or a percent."""
+    values = []
+    for row in rows:
+        if index >= len(row):
+            return False
+        text = str(row[index]).strip()
+        if not text:
+            continue
+        if not any(ch.isdigit() for ch in text):
+            return False
+        if not _NUMBERISH.fullmatch(text):
+            return False
+        values.append(text)
+    return bool(values)
+
+
+#: `188.3k`, `17m 40s`, `16%`, `-2`, `1/3`, `$0.0100` — a digit, then units only.
+_NUMBERISH = re.compile(r"[+\-\u2212$]?\d[\w\s.,:%/\u00b0]*", re.UNICODE)
 
 
 class PremiumMarkdown(Markdown):
@@ -190,6 +219,11 @@ def _task_boxes(text: str) -> str:
 def renderables(md: str) -> List[object]:
     """What to print for one committed chunk of an answer: prose, and a card per fence."""
     md = md.strip("\n")
+    # Formulas first: `$…$` is not Markdown, and Rich would print the LaTeX as written
+    # (and eat `\f` in `\frac` as a control character). Code fences are left alone.
+    from src.bridge.latex_unicode import render_math
+
+    md = render_math(md)
     out: List[object] = []
     last = 0
     for match in _FENCE.finditer(md):

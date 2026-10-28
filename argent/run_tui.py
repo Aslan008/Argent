@@ -109,6 +109,11 @@ except ImportError as e:
     _report_missing_extension(e)
     sys.exit(1)
 
+# The frontend has its own window for a sub-agent's dialogue, so the workflow must not
+# paste the same lines into the chat. The flag is set before the bridge starts, because
+# the stream hook is looked at while a run is in progress.
+os.environ["ARGENT_TUI"] = "1"
+
 try:
     from src.bridge.repl_bridge import ReplBridge
 except Exception:

@@ -38,8 +38,14 @@ EXCLUDED_TOOLS = {"wait_heartbeat"}
 REPEAT_ARGS_WARN = 3
 REPEAT_ARGS_STOP = 5
 # Asking the same thing again is how you wait rather than how you spin.
+# `send_background_command` belongs here for the same reason as the two reads: the
+# INPUT is often identical on purpose — a wizard asks five questions and every one of
+# them is answered "y". The state advances between the calls, so the result differs;
+# a genuine stuck loop (same input, same complaint back) is still caught by the
+# result-based signature, which is what this exemption leaves in place.
 REPEAT_ARGS_EXEMPT = {
-    "wait_heartbeat", "list_background_commands", "read_background_command", "subagents",
+    "wait_heartbeat", "list_background_commands", "read_background_command",
+    "send_background_command", "subagents",
 }
 
 # A model that keeps issuing a *slightly different* shell one-liner (a new

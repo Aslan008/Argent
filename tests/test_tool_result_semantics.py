@@ -85,10 +85,19 @@ class TestQuestionStatus:
         assert "SKIPPED (dismissed" in out
 
     def test_empty_answer_is_not_the_same_as_a_skip(self, monkeypatch):
+        """An empty Enter is an answer, just an empty one.
+
+        The wording is pinned too: it used to say "no preference given" and then store
+        that as the person's preference in long-term memory. It is neither a preference
+        nor a skip, and the model must not read it as a choice.
+        """
+        facts = []
+        monkeypatch.setattr(mt.memory, "add_fact", lambda text: facts.append(text))
         monkeypatch.setattr(mt, "_ask_text", lambda prompt, default=None: "   ")
         out = mt.ask_user_questions([{"type": "text", "question": "Name?"}])
         assert out.splitlines()[0].startswith("ANSWERED")
-        assert "no preference given" in out
+        assert "do not treat as a choice" in out
+        assert facts == [], f"пустой ответ не должен становиться предпочтением: {facts}"
 
     def test_partly_answered_says_so(self, monkeypatch):
         calls = {"n": 0}

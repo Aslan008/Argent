@@ -70,7 +70,7 @@ class FakeSession:
         self.replies = []
         self.cancelled = False
 
-    def start(self, text):
+    def start(self, text, allowed_tools=None):
         self.busy = True
         self.started.append(text)
 
@@ -460,11 +460,11 @@ class TestQueue:
         b = make_bridge(s)
         s.busy = True
         b._run_prompt_turn("111222", "вторая задача", message_id=5)
-        assert len(b._queue) == 1 and not s.started
+        assert len(b._queue_of("111222")) == 1 and not s.started
         assert "В очереди №1" in b.client.send_message.call_args.args[1]
         s.busy = False
         b._drain_queue()
-        assert s.started == ["вторая задача"] and not b._queue
+        assert s.started == ["вторая задача"] and not b._queue_of("111222")
 
     def test_queue_is_bounded(self):
         s = FakeSession()
@@ -472,7 +472,7 @@ class TestQueue:
         b = make_bridge(s)
         for i in range(MAX_QUEUE + 2):
             b._run_prompt_turn("111222", f"m{i}")
-        assert len(b._queue) == MAX_QUEUE
+        assert len(b._queue_of("111222")) == MAX_QUEUE
         assert "очередь заполнена" in b.client.send_message.call_args.args[1]
 
     def test_queue_buttons(self):
@@ -482,16 +482,16 @@ class TestQueue:
         b._run_prompt_turn("111222", "a")
         b._run_prompt_turn("111222", "b")
         b._handle_callback_query({"id": "q", "from": {"id": 111222}, "message": {"chat": {"id": 111222}, "message_id": 1}, "data": "q:del:0"})
-        assert [i["text"] for i in b._queue] == ["b"]
+        assert [i["text"] for i in b._queue_of("111222")] == ["b"]
         b._handle_callback_query({"id": "q", "from": {"id": 111222}, "message": {"chat": {"id": 111222}, "message_id": 1}, "data": "q:clear"})
-        assert not b._queue
+        assert not b._queue_of("111222")
 
     def test_a_pc_task_in_progress_also_queues_phone_messages(self):
         s = FakeSession()
         b = make_bridge(s)
         b.notify_terminal_turn_started("задача на ПК")
         b._run_prompt_turn("111222", "с телефона")
-        assert not s.started and len(b._queue) == 1
+        assert not s.started and len(b._queue_of("111222")) == 1
         b.notify_terminal_turn_completed("задача на ПК", "готово")
         assert s.started == ["с телефона"]
 

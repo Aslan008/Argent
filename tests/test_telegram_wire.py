@@ -638,7 +638,7 @@ class ScriptedSession:
         self.script = list(events or [])
         self._answered = threading.Event()
 
-    def start(self, text):
+    def start(self, text, allowed_tools=None):
         self.busy = True
         self.started.append(text)
 

@@ -25,8 +25,8 @@ class TestArgentEnhancements(unittest.TestCase):
         prompt = agent.build_system_prompt()
 
         # Check standard sections
-        self.assertIn("CRITICAL: LANGUAGE RULE", prompt)
-        self.assertIn("ROLE: Argent Coder", prompt)
+        self.assertNotIn("LANGUAGE RULE", prompt)
+        self.assertNotIn("ROLE: Argent Coder", prompt)
         self.assertIn("## 4. PLANNING MODE & ARTIFACTS", prompt)
 
     @patch('argent.agent.get_current_model')
@@ -39,8 +39,8 @@ class TestArgentEnhancements(unittest.TestCase):
         agent = ArgentAgent()
         prompt = agent.build_system_prompt()
 
-        self.assertIn("CRITICAL: LANGUAGE RULE", prompt)
-        self.assertIn("ROLE: Argent Coder", prompt)
+        self.assertNotIn("LANGUAGE RULE", prompt)
+        self.assertNotIn("ROLE: Argent Coder", prompt)
         # Tiny model should NOT have Project Brain Mode instructions
         self.assertNotIn("PROJECT BRAIN MODE", prompt)
         # Tiny model should have a shorter/simplified operational protocol

@@ -52,6 +52,42 @@ def test_compact_snapshot_line_matches_the_repl_format():
     ]
 
 
+def test_a_compacted_turn_says_so_in_its_snapshot():
+    """Сжатие контекста — часть итога хода, а не только строка в момент события."""
+    from src.agent import compaction_log
+
+    compaction_log.reset_compaction_history()
+    compaction_log.record_compaction("auto", 1, 128450, 12000, "m")
+
+    class CompactedAgent(FakeAgent):
+        turn_compactions = 2
+
+    compact = cli_ui.turn_snapshot_lines(
+        CompactedAgent(), 8.2, timing={"first": 0.3, "tools": 1.0}, usage=USAGE,
+        tool_calls=3, mode="compact")
+    assert "2 сжатия · 128.4k→12k" in compact[0]
+
+    verbose = cli_ui.turn_snapshot_lines(
+        CompactedAgent(), 8.2, timing={"first": 0.3, "tools": 1.0}, usage=USAGE,
+        tool_calls=3, mode="verbose")
+    assert any("2 сжатия · 128.4k→12k" in line and "[yellow]" in line for line in verbose), verbose
+
+    compaction_log.reset_compaction_history()
+
+
+def test_a_turn_without_compactions_does_not_mention_them():
+    from src.agent import compaction_log
+
+    compaction_log.reset_compaction_history()
+    compaction_log.record_compaction("auto", 1, 9000, 8000, "m")  # чужое, прошлое сжатие
+
+    class IdleAgent(FakeAgent):
+        turn_compactions = 0
+
+    lines = cli_ui.turn_snapshot_lines(IdleAgent(), 8.2, usage=USAGE, tool_calls=3, mode="compact")
+    assert "сжати" not in lines[0], lines[0]
+
+
 def test_snapshot_lines_are_pure():
     session_usage.reset()
     cli_ui.turn_snapshot_lines(FakeAgent(), 1.0, usage=USAGE, mode="compact")

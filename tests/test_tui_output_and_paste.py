@@ -62,8 +62,11 @@ class TestClipboardImage:
         from argent import vision
 
         queued = []
+        # `path` rides along so the chat can also offer "open at full size" in the
+        # system viewer; the stub takes it rather than pinning the production signature.
         monkeypatch.setattr(
-            vision, "queue_image", lambda payload, media, label: queued.append((payload, media, label))
+            vision, "queue_image",
+            lambda payload, media, label, path="": queued.append((payload, media, label)),
         )
         return queued
 

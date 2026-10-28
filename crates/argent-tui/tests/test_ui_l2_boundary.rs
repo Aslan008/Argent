@@ -62,6 +62,7 @@ fn test_ui_render_all_message_types() {
     app.messages.push(MessageItem::Diff {
         file: "src/main.rs".to_string(),
         diff: "+ fn new() {}\n- fn old() {}".to_string(),
+        expanded: false,
     });
     app.messages.push(MessageItem::Notice("Info notification".to_string()));
     app.messages.push(MessageItem::Error { text: "Fatal error encountered".to_string(), hint: None });

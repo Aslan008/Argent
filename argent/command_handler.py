@@ -800,7 +800,9 @@ def _handle_telegram_command(command: str) -> None:
         get_telegram_token, set_telegram_token,
         get_telegram_chat_id, set_telegram_chat_id,
         get_telegram_enabled, set_telegram_enabled,
-        get_telegram_mode, set_telegram_mode
+        get_telegram_mode, set_telegram_mode,
+        get_telegram_model, set_telegram_model,
+        get_telegram_provider, set_telegram_provider,
     )
     from src.telegram.bot import TelegramClient, telegram_bridge
 
@@ -820,6 +822,10 @@ def _handle_telegram_command(command: str) -> None:
         bot_line = ""
         if is_running and telegram_bridge._bot_info:
             bot_line = f"  • Бот: [bold]@{telegram_bridge._bot_info.get('username', '?')}[/bold]\n"
+        bot_model = get_telegram_model()
+        bot_provider = get_telegram_provider()
+        bot_model_line = ((f"[bold]{bot_model}[/bold]" + (f" ({bot_provider})" if bot_provider else ""))
+                          if bot_model else "[dim]как в терминале[/dim]")
         print_system(
             f"[bold cyan]Telegram Bridge:[/bold cyan]\n"
             f"  • Статус: {status_text}\n"
@@ -827,10 +833,12 @@ def _handle_telegram_command(command: str) -> None:
             f"  • Режим: [bold #58a6ff]{mode}[/bold #58a6ff] ({mode_label})\n"
             f"  • Токен бота: [dim]{masked_tok}[/dim]\n"
             f"  • Chat ID: {chat_id or '[dim]НЕ привязан[/dim]'}\n"
+            f"  • Модель бота: {bot_model_line}\n"
             f"\nКоманды управления:\n"
             f"  • `/telegram setup` — пошаговый мастер настройки и привязки\n"
             f"  • `/telegram test` — отправить на телефон проверочное сообщение\n"
             f"  • `/telegram mode [shared|isolated]` — переключить режим работы\n"
+            f"  • `/telegram model [<модель>|free|off]` — модель, на которой отвечает бот\n"
             f"  • `/telegram start` — запустить Telegram-мост\n"
             f"  • `/telegram stop` — остановить Telegram-мост\n"
             f"  • `/telegram unlink` — отвязать чат (бот перестанет слушаться)"
@@ -890,6 +898,45 @@ def _handle_telegram_command(command: str) -> None:
                 set_telegram_mode(new_mode)
                 print_system(f"Режим Telegram изменён на: [bold #58a6ff]{new_mode}[/bold #58a6ff]")
             return
+
+    if sub == "model":
+        if len(parts) > 2:
+            target = parts[2].strip()
+            low = target.lower()
+            if low in ("off", "none", "inherit", "same"):
+                set_telegram_model("")
+                set_telegram_provider("")
+                print_system("Бот снова работает на модели терминала.")
+                return
+            if low == "free":
+                from argent.providers import create_provider
+                try:
+                    free = create_provider("openrouter").list_free_models()
+                except Exception as e:
+                    print_error(f"Список бесплатных моделей OpenRouter недоступен: {e}")
+                    return
+                if not free:
+                    print_error("OpenRouter не вернул бесплатных моделей. Нужен ключ: /provider openrouter")
+                    return
+                set_telegram_provider("openrouter")
+                set_telegram_model(free[0])
+                print_system(f"Бот: [bold]{free[0]}[/bold] (OpenRouter, бесплатная). "
+                             f"Всего бесплатных: {len(free)} — цепочка /fallback возьмёт следующие.")
+                return
+            provider = parts[3].strip().lower() if len(parts) > 3 else ""
+            set_telegram_model(target)
+            if provider:
+                set_telegram_provider(provider)
+            print_system(f"Модель бота: [bold]{target}[/bold]" + (f" ({provider})" if provider else "")
+                         + ". Терминал свою не меняет.")
+            return
+        current = get_telegram_model()
+        prov = get_telegram_provider()
+        print_system(
+            (f"Модель бота: [bold]{current}[/bold]" + (f" ({prov})" if prov else ""))
+            if current else "Бот использует модель терминала.")
+        print_system("Настройка: /telegram model <модель> [провайдер] · /telegram model free · /telegram model off")
+        return
 
     if sub == "start":
         if telegram_bridge.is_running:

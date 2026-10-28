@@ -29,7 +29,7 @@ _BY_NAME = {
     "web": {"search_web", "read_webpage", "browser_open", "browser_action", "browser_inspect", "browser_close",
             "run_deep_research", "filter_new_items"},
     "leeth": {"delegate_to_leeth", "leeth_map", "leeth_scan_page", "leeth_click_many", "leeth_fill_form"},
-    "extend": {"call_mcp_tool", "list_mcp_tools", "list_skills", "read_skill"},
+    "extend": {"call_mcp_tool", "list_mcp_tools", "list_skills", "read_skill", "load_tools"},
     "agents": {"run_subagent", "subagents", "ultracode", "rooms", "memory", "todo_write", "manage_automations",
                "ask_user_questions", "request_user_approval", "exit_plan_mode", "create_artifact"},
     "desktop": {"list_desktop_windows", "capture_desktop_window", "capture_desktop_screen", "get_clipboard_image",

@@ -136,8 +136,72 @@ def build_agents_memory(limit: int) -> List[str]:
 
 _ACTIVE_SUBAGENTS: set = set()
 
+#: The short prompt: the rules that earn their place on every turn. The full document
+#: (plans, plugins, browser protocol, verify ladder) is one `/prompt full` away.
+_MINIMAL_PROMPT = """## HOW TO WORK
+- Do the work yourself with tools. Never ask the person to run code or paste its output.
+- Verify by running the thing (tests, build, the command) and quote the real output. "Exit code: 0" or "Requirement already satisfied" is not proof: if the problem persists, the tool lied.
+- Edit big files with replace_in_file; do not re-read a file you already have in context unless it may have changed.
+- Independent reads → several tool calls in one response. Do not stop after one step.
+- Ambiguous request → ask_user_questions with options, or state your assumption in one line.
+- Windows: PowerShell, `;` instead of `&&`, forward slashes in paths.
+## STYLE
+- Refer to code as `path/file.py:42`.
+- No emoji unless asked. Be concise; do not recap work the person just watched.
+- If you were wrong, say in one sentence what went wrong and fix it.
+## CHECKLIST
+- 3+ steps → todo_write first, exactly one in_progress."""
+
 
 class ArgentAgent:
+    def _build_chat_prompt(self) -> str:
+        """The prompt for a group chat: a person in the chat, not an engineer at a keyboard.
+
+        A group has its own conversation, and a coding agent's prompt is simply wrong there:
+        it offers to run commands it does not have, mentions files nobody in the chat can
+        see, and reads like a corporate assistant. Everything below is the small set of facts
+        a participant needs — the persona, if the owner set one, is added on top.
+        """
+        persona = str(getattr(self, "persona", "") or "").strip()
+        parts = [
+            "# CRITICAL: LANGUAGE RULE\n"
+            "- Answer in the exact language the people in the chat write in. Highest priority: "
+            "a Russian message gets a Russian answer, and your reasoning is in that language too.\n",
+            "# WHO YOU ARE HERE\n"
+            "Ты — Argent, участник группового чата в Telegram. Здесь ты не программист-агент и не\n"
+            "ассистент по проекту: ты обычный собеседник, такой же участник, как остальные.\n\n"
+            "- У тебя нет инструментов, нет доступа к файлам и к этой машине. Не обещай «сейчас\n"
+            "  выполню», не ссылайся на рабочую папку, репозиторий, конфиги, MCP или скилы — в\n"
+            "  этом чате их не существует.\n"
+            "- Не веди себя как корпоративный ассистент: без «чем ещё могу помочь», без списков\n"
+            "  с галочками и без дисклеймеров, если об этом не просят.\n"
+            "- Отвечай как человек в чате: коротко, по делу, живым языком. Можно шутить,\n"
+            "  спорить и иметь своё мнение.\n"
+            "- Сообщения приходят с подписью автора (`Иван: ...`). Обращайся по имени, не путай,\n"
+            "  кто что сказал, и отвечай тому, кто к тебе обратился.\n"
+            "- Просьбу показать код, команду или разобрать ошибку можешь выполнить текстом в\n"
+            "  ответе. Выполнять что-либо на машине — не можешь: для этого есть личка с ботом.\n",
+            "# REACTION (OPTIONAL)\n"
+            "Решив ответить, подумай, уместна ли реакция на сообщение собеседника. Если да —\n"
+            "поставь её последней строкой в виде `[[react:🔥]]` с ОДНИМ эмодзи. Если реакции нет —\n"
+            "не ставь ничего: это нормальный выбор, а не пропущенный шаг.\n"
+            "Не ставь реакцию на каждый вопрос — только когда она что-то говорит сама по себе.\n"
+            "Строка с тегом служебная: больше ничего в ней не пиши, и в тексте ответа тег не упоминай.\n",
+            "# ИГРА (РЕДКО)\n"
+            "Иногда уместно поиграть с чатом: задай короткий вопрос и 2–6 вариантов, а в конце ответа\n"
+            "поставь строку вида\n"
+            "`[[quiz:{\"q\":\"вопрос\",\"o\":[\"вариант\",\"вариант\"],\"a\":0,\"t\":30}]]`\n"
+            "где `a` — индекс правильного варианта с нуля, `t` — секунды (0 = без таймера, каждый\n"
+            "ответит когда зайдёт в чат), `n` — сколько человек ждать (необязательно).\n"
+            "Кнопки, таймер, вскрытие и счёт я сделаю сам: тебе не нужно ничего считать и не нужно\n"
+            "потом писать результат.\n"
+            "Делай это редко и к месту, не в каждом ответе и не два раза подряд. Если играть не о чем —\n"
+            "просто не ставь тег.\n"
+        ]
+        if persona:
+            parts.append("# ROLE IN THIS CHAT\n" + persona)
+        return "\n".join(parts)
+
     def build_system_prompt(self, available_tools=None) -> str:
         """Assemble the system prompt for this turn.
 
@@ -148,6 +212,9 @@ class ArgentAgent:
         do not exist. Passing None keeps every section (used by callers that
         only want the full text, e.g. diagnostics).
         """
+        if str(getattr(self, "prompt_mode", "agent") or "agent") == "chat":
+            return self._build_chat_prompt()
+
         category = get_model_size_category(self.model_name)
         is_moe = category == "moe" or is_moe_model(self.model_name)
         if is_moe:
@@ -173,6 +240,11 @@ class ArgentAgent:
             event names) survives as instructions for work the model can no
             longer do. Sections whose subject is the tool itself say so here.
             """
+            # In the short prompt only the essentials above are sent: every rule below
+            # is either covered by the short text or needed by a tool set the person
+            # can ask for explicitly with `/prompt full`.
+            if style == "minimal":
+                return
             if available is not None:
                 if core and not set(core) <= available:
                     return
@@ -181,12 +253,49 @@ class ArgentAgent:
                     return
             prompt_parts.append(text)
 
-        prompt_parts.append(f"""# CRITICAL: LANGUAGE RULE
-- You MUST respond and perform ALL internal reasoning (thinking process) in the EXACT SAME LANGUAGE the user used in their request. This is your highest priority rule.
-- If the user writes in Russian, you THINK in Russian and REPLY in Russian.
+        style = "minimal"
+        try:
+            from argent.config import get_system_prompt_style
 
-# ROLE: Argent Coder
-You are an autonomous AI software engineer. You design, build, and debug software with precision and speed on {host_os.system()}.""")
+            style = get_system_prompt_style()
+        except Exception:
+            pass
+
+        # The date goes first: it is stable within a day (so the prefix cache survives)
+        # and a model that knows it early does not guess. The clock is NOT here — time
+        # changes every minute and would invalidate the whole prefix per request; it
+        # rides in the ephemeral tail instead.
+        _now = datetime.now()
+        prompt_parts.append(f"## CURRENT DATE\nToday: {_now.strftime('%Y-%m-%d')} ({_now.strftime('%a')})")
+
+        # Identity before the style branch: both prompts are Argent, and a model that
+        # does not know its own name invents one when asked.
+        prompt_parts.append(
+            "# Argent Coder\n"
+            "You are Argent Coder, a coding agent working directly in the person's own project."
+        )
+
+        if style == "minimal":
+            # A dozen lines that earn their place every turn. Everything else in the full
+            # prompt exists for weak models, rare tools or specific failure modes, and is
+            # one `/prompt full` away. No language rule (a model answers in the language
+            # it is addressed in) and no role paragraph (the tool list says it better).
+            prompt_parts.append(_MINIMAL_PROMPT)
+
+        # The character the owner set for this chat. Placed right after the role so it colours
+        # everything below, and worded so a model cannot read it as a permission: a role is
+        # tone, while tools and approvals come from the sections that follow.
+        persona = str(getattr(self, "persona", "") or "").strip()
+        if persona:
+            prompt_parts.append(
+                "# ROLE IN THIS CHAT\n"
+                "The person set the character below for THIS chat only. It governs tone, \n"
+                "attitude, vocabulary and how you address the people here. Follow it even when \n"
+                "it conflicts with the default reply style.\n\n"
+                "It does NOT grant, remove or relax any permission: available tools and the \n"
+                "approval rules are decided elsewhere and the character cannot override them.\n\n"
+                f"{persona}"
+            )
 
         # NOTE: volatile, per-turn facts (repository map, background processes)
         # deliberately do NOT live here — they change between turns, and the
@@ -340,7 +449,11 @@ When solving non-trivial problems, formulating plans, or taking actions:
             from src.memory import hub
             note = hub.prompt_section({"tiny": 900, "small": 1800}.get(category, 3500))
             if note:
-                add(note, core=("memory",))
+                if style == "minimal":
+                    # The index is data, not a rule: keep it even in the short prompt.
+                    prompt_parts.append(note)
+                else:
+                    add(note, core=("memory",))
         except Exception as e:
             log.debug("memory index not added: %s", e)
 
@@ -375,12 +488,6 @@ When solving non-trivial problems, formulating plans, or taking actions:
         except Exception:
             pass
 
-        # Current date — stable within a day, so it lives in the system prompt
-        # (cache-friendly: invalidates once at midnight, not per-turn). Gives every
-        # tier, including tiny models, day/month/year/weekday awareness for ~6 tokens.
-        _now = datetime.now()
-        add(f"## CURRENT DATE\nToday: {_now.strftime('%Y-%m-%d')} ({_now.strftime('%a')})")
-
         full_prompt = "\n\n".join(prompt_parts)
         # Pass the tier resolved above: building for one tier and compressing
         # for another would strip sections the prompt was written to include.
@@ -399,7 +506,9 @@ When solving non-trivial problems, formulating plans, or taking actions:
         from argent.tool_profiles import slim_tools_for_category
 
         names = [t["function"]["name"]
-                 for t in get_tool_schemas(include_hidden=(allowed_tools is not None))]
+                 for t in get_tool_schemas(include_hidden=(allowed_tools is not None),
+                                           category=None if allowed_tools is not None
+                                           else get_model_size_category(self.model_name))]
         if allowed_tools is not None:
             # A hand-picked list is exempt from tier slimming — see the same
             # decision where the request is assembled.
@@ -459,6 +568,10 @@ When solving non-trivial problems, formulating plans, or taking actions:
         stored in history): the repository map and live background processes.
         Tail position keeps the request prefix stable for the KV cache — and is
         where small models attend best anyway."""
+        if str(getattr(self, "prompt_mode", "agent") or "agent") == "chat":
+            # A group chat has no business knowing this machine's directory tree or which
+            # background processes are running: it is a conversation, not a work session.
+            return None
         parts = []
         # Precise time for large/cloud models only — small models get the date
         # from the system prompt and don't need per-turn time polluting their
@@ -596,6 +709,18 @@ When solving non-trivial problems, formulating plans, or taking actions:
         self.model_name = get_current_model()
         self.provider = get_provider()
         self.refresh_tier()
+        #: Character set for THIS chat (Telegram group or isolated private chat). Style only —
+        #: it is appended to the system prompt and never consulted by permissions or tools.
+        self.persona = ""
+        #: Model this agent is pinned to, when it must differ from the saved one (the bot's
+        #: model). Empty = follow config. `model_chain.restore()` reads it, so a bot chat goes
+        #: back to ITS model after a cooldown, not to the terminal's.
+        self.preferred_model = ""
+        self.preferred_provider = ""
+        #: "agent" (the coding agent) or "chat" (a participant in a group conversation).
+        #: A group gets "chat": the coder prompt there invents tools and talks about files the
+        #: chat cannot see. Set per turn by the transport, read by `build_system_prompt`.
+        self.prompt_mode = "agent"
 
         if max_history_messages is not None:
             self.max_history_messages = max_history_messages
@@ -624,10 +749,35 @@ When solving non-trivial problems, formulating plans, or taking actions:
         self._stop_requested = False
         self._turn_tool_calls = 0
         self._turn_local_agent_calls = 0
+        self._turn_compaction_seq = 0
         self._tools_since_progress = 0
+        # Prices for models whose provider reports none: the table is fetched once in
+        # the background (weekly at most), so a turn never waits on the network.
+        try:
+            from argent.model_pricing import ensure_prices_async
+
+            ensure_prices_async()
+        except Exception:
+            pass
         self.messages: List[Dict[str, Any]] = [
             {"role": "system", "content": self.build_system_prompt()}
         ]
+
+    @property
+    def turn_compactions(self) -> int:
+        """How many times the history was compacted during THIS turn.
+
+        Counted from a monotonic mark taken when the turn began, not from the length
+        of the metrics list (that one is capped at 20). Zero is the common answer and
+        it means "say nothing": the summary adds a compaction note only when one
+        really happened.
+        """
+        try:
+            from src.agent.compaction_log import count_since
+
+            return count_since(getattr(self, "_turn_compaction_seq", 0))
+        except Exception:
+            return 0
 
     def request_stop(self) -> None:
         """Request the active turn/tool execution to abort gracefully (like Ctrl+C)."""
@@ -683,6 +833,31 @@ When solving non-trivial problems, formulating plans, or taking actions:
         self.provider = provider_name
         self.model_name = get_current_model(provider_name)
         self.refresh_tier()
+
+    def _rotate_model(self, exc: BaseException, tried: set) -> Optional[str]:
+        """Hand this refusal to the next model, when the chain has one.
+
+        Returns the line to show the person, or None to leave the failure alone (the
+        caller then treats it exactly as before: wait, or report).
+        """
+        from argent import model_chain
+        try:
+            rotated = model_chain.next_model(self, exc, tried)
+        except Exception as e:                 # a broken config must not hide the real error
+            log.debug("model fallback failed: %s", e)
+            return None
+        if rotated is None:
+            return None
+        model, notice = rotated
+        tried.add(str(self.model_name))
+        try:
+            self.set_model(model)
+        except Exception as e:
+            log.warning("could not switch to %s: %s", model, e)
+            return None
+        tried.add(model)
+        log.info("model fallback: %s", notice)
+        return notice
 
     def _read_dedup_note(self, filtered_args: dict) -> str | None:
         """Short-circuit a re-read of an UNCHANGED whole file still in history.
@@ -999,7 +1174,13 @@ When solving non-trivial problems, formulating plans, or taking actions:
     def _request_tools(self, allowed_tools=None):
         """(tool schemas this model is sent, its size category) - the one place that decides it, so the
         request, the context meter and the history budget all count the same tools."""
-        active_tools = get_tool_schemas(include_hidden=(allowed_tools is not None))
+        # Late groups (browser, desktop, web, agents, integrations) are not sent: their
+        # schemas arrive through `load_tools` when a turn needs them. Tier slimming
+        # below is the separate question of what a weak model may choose.
+        active_tools = get_tool_schemas(
+            include_hidden=(allowed_tools is not None),
+            category=None if allowed_tools is not None else get_model_size_category(self.model_name),
+        )
         if allowed_tools is not None:
             active_tools = [t for t in active_tools if t["function"]["name"] in allowed_tools]
 
@@ -1375,6 +1556,14 @@ When solving non-trivial problems, formulating plans, or taking actions:
         Supports streaming generation.
         """
         self._begin_turn_record(user_text)
+        # A model may still be parked from an earlier turn (a free model out of its daily
+        # quota). Go back to the one the person chose as soon as it works again, so this turn
+        # differs from the last only because reality changed — not because a switch stuck.
+        try:
+            from argent import model_chain
+            model_chain.restore(self)
+        except Exception:
+            pass
         from src.agent.todos import TODOS
         TODOS.begin_turn()
         # What the list looked like when the turn began. The end-of-turn warning
@@ -1403,7 +1592,7 @@ When solving non-trivial problems, formulating plans, or taking actions:
             self.messages.append({"role": "user", "content": user_text})
         
         self._current_turn_msg_index = max(0, len(self.messages) - 1)
-        if not user_text.startswith("/"):
+        if not user_text.startswith("/") and str(getattr(self, "prompt_mode", "agent") or "agent") != "chat":
             self._maybe_auto_retrieve(user_text)
 
         window_note = self._sync_server_context()
@@ -1423,6 +1612,14 @@ When solving non-trivial problems, formulating plans, or taking actions:
         self._turn_started = time.monotonic()
         self._turn_tool_calls = 0
         self._turn_local_agent_calls = 0
+        # Where the conversation stood when the turn began: the summary reports how
+        # many compactions happened during it (`turn_compactions`), and none at all
+        # must be said out loud every turn.
+        try:
+            from src.agent.compaction_log import compaction_seq
+            self._turn_compaction_seq = compaction_seq()
+        except Exception:
+            self._turn_compaction_seq = 0
         self._tools_since_progress = 0
 
         # Phase 4: one trajectory per turn — links every Leeth decision and
@@ -1717,6 +1914,9 @@ When solving non-trivial problems, formulating plans, or taking actions:
         from src.agent import netstate
         net_streak = netstate.Streak()
         resume_prefix = ""
+        # Models this turn has already abandoned. Counts the budget and stops a chain from
+        # cycling back to the model that just said no.
+        switched_models: set = set()
 
         while True:
             if self._stop_requested:
@@ -2065,6 +2265,18 @@ When solving non-trivial problems, formulating plans, or taking actions:
                         f"and retrying (window ~{self.max_context_tokens} tokens, "
                         f"{extra} more held back)...]"
                     )}
+                    continue
+                elif isinstance(e, ProviderError) and (notice := self._rotate_model(e, switched_models)):
+                    # Out of quota, retired or gone: another model answers this turn instead of
+                    # the person reading an error. Nothing ran yet (tools run only after a whole
+                    # stream), so the request is simply sent again; what was already shown is
+                    # continued rather than repeated.
+                    yield {"type": "error", "content": notice}
+                    net_streak.reset()
+                    can_continue = bool(
+                        full_content.strip() and not tool_calls_accumulator and not is_building_raw_tool
+                        and not reasoning_tag_active and not rethink_tag_active and constrained_extractor is None)
+                    resume_prefix = full_content if can_continue else ""
                     continue
                 elif self._wait_plan(e) is not None and netstate.patience_seconds() > 0:
                     # Connection lost, provider busy or rate-limited: wait it out, then send the same request

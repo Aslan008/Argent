@@ -183,9 +183,11 @@ class SessionUsage:
             return ""
         symbol = "$" if self.last_spent_currency == "USD" else f"{self.last_spent_currency} "
         mark = "~" if self.last_spent_approx else ""
-        if self.last_spent < 0.1:
-            return f"last{mark} {symbol}{self.last_spent:.4f}"
-        return f"last{mark} {symbol}{self.last_spent:.2f}"
+        # Precision follows the AMOUNT, not the provenance: a few cents printed as
+        # "$0.03" hides what the turn actually cost, while "$0.2500" claims digits a
+        # cent-quoted balance never had. Below a dime keep four places either way.
+        places = 4 if self.last_spent < 0.1 else 2
+        return f"last{mark} {symbol}{self.last_spent:.{places}f}"
 
     @staticmethod
     def format_last(usage: dict) -> str:

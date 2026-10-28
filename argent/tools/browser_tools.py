@@ -167,7 +167,7 @@ def browser_screenshot(path: str = None, full_page: bool = False, session: str =
             if supports is not False:
                 payload, media_type, note = encode_image(saved_path)
                 if payload:
-                    queue_image(payload, media_type, saved_path)
+                    queue_image(payload, media_type, saved_path, path=saved_path)
                     res += (
                         "\n\n[VISION ATTACHED]: The browser screenshot has been attached to the conversation. "
                         "You will SEE it in your very next message — continue and analyze the page."

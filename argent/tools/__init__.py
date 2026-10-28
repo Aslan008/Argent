@@ -72,6 +72,9 @@ TOOL_GROUPS: dict[str, frozenset] = {
     "integrations": frozenset({
         "list_mcp_tools", "call_mcp_tool", "manage_automations", "filter_new_items",
         "wait_heartbeat", "calculate",
+        # Opens the late groups (browser, desktop, web, agents) on demand: the
+        # gateway itself lives with the integrations it unlocks.
+        "load_tools",
     }),
 }
 

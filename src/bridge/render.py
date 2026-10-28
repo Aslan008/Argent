@@ -93,7 +93,10 @@ def _tool_end(out: Console, d: Dict[str, Any]) -> None:
 
 
 def _diff(out: Console, d: Dict[str, Any]) -> None:
-    ui.print_inline_diff(str(d.get("file", "")), str(d.get("diff", "")), out=out)
+    # The classic look has no fold/unfold, so it prints the change to the end: a
+    # truncated diff with "… ещё N строк" is exactly what people complained about.
+    file = str(d.get("file", ""))
+    ui.print_inline_diff(file, str(d.get("diff", "")), max_lines=100_000, out=out)
 
 
 def _error(out: Console, d: Dict[str, Any]) -> None:

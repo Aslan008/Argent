@@ -228,7 +228,9 @@ class TestAgentTurnAndTelegramBotReception:
         dummy_jpg = tmp_path / "tg_download.jpg"
         Image.new("RGB", (200, 200), (0, 0, 255)).save(dummy_jpg, "JPEG")
 
-        bridge = TelegramBridge.__new__(TelegramBridge)
+        # Constructed normally: bypassing __init__ left the object without the fields every
+        # handler reads (bot info, per-chat sessions), which a real bridge always has.
+        bridge = TelegramBridge()
         bridge.client = MagicMock(spec=TelegramClient)
         bridge._is_authorized = MagicMock(return_value=True)
         bridge._run_prompt_turn = MagicMock()

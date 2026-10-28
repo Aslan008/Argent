@@ -356,15 +356,31 @@ def ask_user_questions(questions: list) -> str:
     
     # The verdict goes first: a caller must not have to read three lines to find out
     # whether the person answered at all, and "Skipped" and "No answer" are different
-    # facts — one means the prompt was dismissed, the other that they deliberately left
-    # it blank.
+    # facts — one means the prompt was dismissed, the other that nothing was entered.
+    return _summarize_answers(questions, responses, malformed)
+
+
+def _summarize_answers(questions: list, responses: dict, malformed: list = None) -> str:
+    """What to tell the model, and what to remember.
+
+    An empty answer is a fact about the prompt, not a preference. Recording it as
+    "User preference on X: No answer" put an invented preference into long-term memory,
+    where it would quietly shape later sessions.
+    """
     answered = {k: v for k, v in responses.items() if v != "Skipped"}
     asked = len(questions)
-    if not answered:
+    dismissed = [k for k, v in responses.items() if v == "Skipped"]
+    if not responses:
+        head = f"NO ANSWER: none of {asked} question(s) was reached."
+    elif not answered and dismissed and len(dismissed) == len(responses):
         head = f"SKIPPED: none of {asked} question(s) was answered (the prompt was dismissed)."
+    elif not answered:
+        head = f"NO ANSWER: none of {asked} question(s) got an answer (nothing was entered)."
     elif len(answered) < asked:
         head = f"PARTLY ANSWERED: {len(answered)} of {asked}."
     else:
+        # An empty answer still counts as an answer: the prompt was shown and accepted.
+        # It is only reported as empty, never as a choice — see the line below.
         head = f"ANSWERED: all {asked}."
 
     summary_lines = []
@@ -372,9 +388,8 @@ def ask_user_questions(questions: list) -> str:
         if v == "Skipped":
             summary_lines.append(f"- {k}: SKIPPED (dismissed without an answer)")
             continue
-        if v == "No answer":
-            summary_lines.append(f"- {k}: (empty — no preference given)")
-            memory.add_fact(f"User preference on '{k}': {v}")
+        if v in ("No answer", "") or v is None:
+            summary_lines.append(f"- {k}: (empty — nothing was entered; do not treat as a choice)")
             continue
         summary_lines.append(f"- {k}: {v}")
         memory.add_fact(f"User preference on '{k}': {v}")
@@ -893,7 +908,7 @@ def view_image(path: str = "", question: str = "", crop: Any = None) -> str:
 
     from argent.tools._helpers import _resolve_path
     label = str(_resolve_path(path))
-    queue_image(payload, media_type, label)
+    queue_image(payload, media_type, label, path=label)
 
     detail = f" ({note})" if note else ""
     unsure = ("\nNote: this model's vision support could not be verified — if the "

@@ -485,7 +485,8 @@ def _rehydrate_files(messages: List[Dict], max_files: int = 3,
 
 from src.agent.compaction_log import (  
     THRASH_ADVICE, THRASH_MIN_SAVING, THRASH_RUNS, THRASH_WINDOW_SECONDS, _COMPACTIONS,
-    describe_compaction, is_thrashing, last_compaction, record_compaction, reset_compaction_history,
+    compaction_seq, count_since, describe_compaction, is_thrashing, last_compaction,
+    record_compaction, reset_compaction_history, turn_note,
 )
 
 
@@ -500,9 +501,11 @@ def _count_tokens(messages: List[Dict], model_name: str) -> int:
 def _announce_compaction(entry: Dict[str, Any], thrashing: bool) -> None:
     try:
         from argent.ui import print_system
-        print_system(f"[dim]{describe_compaction(entry)}[/dim]")
+        # Not dim: this line is the only trace that the model was called to rewrite the
+        # history, and on a dark theme dim sinks it into the background.
+        print_system(f"[yellow]{describe_compaction(entry)}[/yellow]")
         if thrashing:
-            print_system(f"[yellow]{THRASH_ADVICE}[/yellow]")
+            print_system(f"[bold yellow]{THRASH_ADVICE}[/bold yellow]")
     except Exception:
         pass
 
@@ -516,7 +519,14 @@ def _write_compact_boundary(messages_before: List[Dict],
                             pre_tokens: Optional[int] = None):
     """Write a marker to .argent/compact_log.jsonl for future /rewind, with the token counts."""
     pre = pre_tokens if pre_tokens is not None else _count_tokens(messages_before, model_name)
-    post = _count_tokens(messages_after, model_name)
+    # Both numbers must cover the SAME thing. `pre_tokens` arrives as the history
+    # without the system prompt, so counting the system message in `post` made every
+    # compaction look a few thousand tokens worse than it was — a second, near-free
+    # pass reported "-3% экономии" instead of "+0%".
+    after = messages_after
+    if after and str(after[0].get("role")) == "system":
+        after = after[1:]
+    post = _count_tokens(after, model_name)
     metrics = record_compaction(kind, compression_id, pre, post, model_name)
     try:
         from datetime import datetime
@@ -1051,6 +1061,13 @@ def soft_trim_with_summarization(
 
     # ── Step 4: Find a prior distillate (incremental update) ──
     existing_distillate = _latest_distillate(msgs_to_compress)
+    if (force and existing_distillate and len(msgs_to_compress) == 1
+            and "CONTEXT DISTILLATE" in str(msgs_to_compress[0].get("content", ""))):
+        # Nothing but the previous distillate is out of the active window: there is no
+        # new material to distil, and compressing the summary of a summary gains nothing
+        # (it grew the history by 5k the last time). Say so and keep the history as is.
+        log.info("Nothing new to distil: the compression zone is the existing distillate")
+        return messages
     compression_id = _get_compression_count(messages) + 1
 
     # ── Step 5: Create the distillate ──

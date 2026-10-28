@@ -4,9 +4,9 @@
      Regenerate: .venv\Scripts\python.exe scripts/gen_tools_doc.py
      Source: argent/tools/schemas.py + argent/tools/TOOL_GROUPS. -->
 
-59 tools in 10 groups. The model is given one line per tool; the long form — `ops` for rooms, the checks `wait_heartbeat` accepts, the operators `search_web` understands — lives in `skills/argent-tools-reference/SKILL.md` and is read with `read_skill`.
+60 tools in 10 groups. The model is given one line per tool; the long form — `ops` for rooms, the checks `wait_heartbeat` accepts, the operators `search_web` understands — lives in `skills/argent-tools-reference/SKILL.md` and is read with `read_skill`.
 
-Total description budget: **16810 characters** (paid in every request; `tests/test_tool_contracts.py` keeps it from growing).
+Total description budget: **16766 characters** (paid in every request; `tests/test_tool_contracts.py` keeps it from growing).
 
 ## files (10)
 
@@ -41,7 +41,7 @@ Total description budget: **16810 characters** (paid in every request; `tests/te
 | `read_background_command` | Reads newer output (stdout/stderr) from a currently running background process by PID. | `pid` |
 | `read_git_diff` | Read the current unstaged and staged Git differences in the project. | — |
 | `run_command` | Runs a CLI shell command on the user's system and returns the stdout and stderr. | `command` |
-| `send_background_command` | Sends string input to the stdin of a running background process. | `pid`, `input_string` |
+| `send_background_command` | Sends input to a background process; its reply arrives in the same result, so send+read is one call. | `pid`, `input_string` |
 | `start_background_command` | Starts a command in the background (e.g. | `command` |
 | `stop_background_command` | Terminates a background process. | `pid` |
 
@@ -83,7 +83,7 @@ Total description budget: **16810 characters** (paid in every request; `tests/te
 |---|---|---|
 | `read_webpage` | Reads and extracts the main text content from a specific webpage URL. | `url` |
 | `run_deep_research` | Starts an autonomous Deep Research Sub-Agent that deeply researches an objective using search engines, reads top web… | `objective` |
-| `search_web` | Searches several engines at once (DuckDuckGo, Wikipedia, StackOverflow, GitHub issues, and Brave when configured) and… | `query` |
+| `search_web` | Universal search and semantic code navigation. | `query` |
 
 ## browser (4)
 
@@ -100,13 +100,13 @@ Total description budget: **16810 characters** (paid in every request; `tests/te
 |---|---|---|
 | `capture_desktop_screen` | Screenshot of the whole screen (primary or all monitors). | — |
 | `capture_desktop_window` | Screenshot of ONE window by title substring or HWND. | `target` |
-| `desktop_act` | Act in another program's window: click, type, set a field's value, press keys, scroll, drag, bring a window to the… | `action`, `window` |
+| `desktop_act` | Act in another program's window: click, type, set a value, press keys, scroll, drag, bring a window forward. | `action`, `window` |
 | `desktop_inspect` | See another program's window as text (Windows UI Automation): its buttons, fields and labels, each with an id like e3. | `action` |
 | `get_clipboard_image` | Retrieve an image or screenshot currently stored in the system clipboard (e.g. | — |
 | `list_desktop_windows` | List visible top-level windows (HWND, PID, title, geometry); use it to find the target for capture_desktop_window. | — |
 | `view_image` | LOOK at an image file — a screenshot, a mockup, a diagram, a photo the user pointed at. | `path` |
 
-## integrations (6)
+## integrations (7)
 
 | tool | what it does | required |
 |---|---|---|
@@ -114,7 +114,8 @@ Total description budget: **16810 characters** (paid in every request; `tests/te
 | `call_mcp_tool` | Call a tool on an external MCP server (Unity, GitHub, Slack…), listed in MCP SERVERS below. | `server_name`, `tool_name` |
 | `filter_new_items` | Filter a list of items (URLs, IDs, or titles) to return only those not previously reported by this automated or… | `items` |
 | `list_mcp_tools` | Look up what an MCP server can do. | — |
-| `manage_automations` | Work that happens on a schedule while the person is away: monitoring, a digest, a recurring check, a reminder. | `action` |
+| `load_tools` | Load a tool group whose schemas are not in context yet (browser, desktop, web, agents, integrations), then use it… | `group` |
+| `manage_automations` | Scheduled work while the person is away: monitoring, a digest, a recurring check, a reminder. | `action` |
 | `wait_heartbeat` | Pause while something finishes (a build, a server starting, a background job). | — |
 
 ---

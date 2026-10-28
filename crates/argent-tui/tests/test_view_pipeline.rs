@@ -88,7 +88,7 @@ fn a_block_is_rendered_once_per_width() {
     app.messages.push(MessageItem::User("hi".into()));
     app.messages.push(MessageItem::assistant("answer\n\n", "reasoning text"));
     app.messages.push(tool("read_file", "a\nb"));
-    app.messages.push(MessageItem::Diff { file: "f.py".into(), diff: "+x".into() });
+    app.messages.push(MessageItem::Diff { file: "f.py".into(), diff: "+x".into(), expanded: false });
 
     draw(&app, 100, 50);
     let first = calls.load(Ordering::SeqCst);
@@ -159,7 +159,7 @@ fn stale_cache_entries_are_pruned() {
 fn a_render_failure_degrades_one_block_and_is_reported_once() {
     let mut app = App::new();
     app.renderer = Box::new(Broken);
-    app.messages.push(MessageItem::Diff { file: "f.py".into(), diff: "+KEEP_ME".into() });
+    app.messages.push(MessageItem::Diff { file: "f.py".into(), diff: "+KEEP_ME".into(), expanded: false });
     app.messages.push(tool("read_file", "TOOL_RESULT_SURVIVES"));
 
     let f = frame(&app, 100, 30);

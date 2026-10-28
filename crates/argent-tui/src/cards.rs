@@ -58,6 +58,9 @@ const RESULT_ROWS: usize = 15;
 const ROOM_RESULT_ROWS: usize = 40;
 /// Rows of a diff a card shows.
 const DIFF_ROWS: usize = 25;
+/// Cap for an OPENED diff: every line up to this, then a note. It only exists so a
+/// rewrite of one enormous file cannot make the renderer chew for seconds.
+const MAX_DIFF_ROWS: usize = 2000;
 
 const RAIL: &str = "▍";
 const DOTS: &str = "┊";
@@ -317,14 +320,29 @@ pub(crate) fn item_view(app: &App, idx: usize, width: u16) -> ItemView {
                     });
                     blocks.add_cols(rows, Cols::from(CARD_PRE));
                     blocks.click_last(ClickAction::ShowImage(idx));
+                    // A terminal draws a picture as blocks of colour; the system
+                    // viewer draws it as pixels. For a screenshot of text that is the
+                    // difference between readable and not, so it gets its own row.
+                    let p = &app.ui.palette;
+                    let mut spans = card_prefix(p.tool, p.code);
+                    spans.push(Span::styled(
+                        "⧉ открыть в Windows  ·  настоящее разрешение".to_string(),
+                        Style::default().fg(p.accent).bg(p.code).add_modifier(Modifier::BOLD),
+                    ));
+                    blocks.add_cols(
+                        rows_of(vec![panel_row(Line::from(spans), width as usize, p.code)]),
+                        Cols::from(CARD_PRE),
+                    );
+                    blocks.click_last(ClickAction::OpenImageExternally(idx));
                 }
             }
         }
 
-        MessageItem::Diff { file, diff } => {
-            let rows = diff_card(&app.ui.palette, file, diff, width);
+        MessageItem::Diff { file, diff, expanded } => {
+            let rows = diff_card(&app.ui.palette, file, diff, *expanded, width);
             if !rows.is_empty() {
                 blocks.add_cols(rows_of(rows), Cols::from(CARD_PRE));
+                blocks.click_last(ClickAction::ToggleTool(idx));
             }
         }
 
@@ -366,29 +384,28 @@ pub(crate) fn item_view(app: &App, idx: usize, width: u16) -> ItemView {
             gutter_block(app, idx, 0, "checkpoint", json!({"sha": sha}), text_fp(sha), width, &mut blocks);
         }
 
-        MessageItem::Snapshot { lines, context_line } => {
-            let fp = hash_of((lines.iter().map(|l| text_fp(l)).collect::<Vec<_>>(), context_line.as_deref().map(text_fp)));
-            gutter_block(
-                app,
-                idx,
-                0,
-                "markup",
-                json!({"lines": lines, "blank_after": true}),
-                fp,
-                width,
-                &mut blocks,
-            );
-            if let Some(ctx) = context_line {
-                gutter_block(
-                    app,
-                    idx,
-                    1,
-                    "markup",
-                    json!({"lines": [ctx], "blank_after": false}),
-                    text_fp(ctx),
-                    width,
-                    &mut blocks,
-                );
+        MessageItem::Snapshot { lines, context_line, summary, expanded } => {
+            // One line and no context meter (modes `compact`/`off`): there is nothing
+            // to open, so the REPL's text is drawn as it is — a button that opens onto
+            // itself would be a lie about what a click does.
+            let foldable = lines.len() > 1 || context_line.is_some();
+            let fp = hash_of((
+                summary.as_str(),
+                *expanded,
+                foldable,
+                lines.iter().map(|l| text_fp(l)).collect::<Vec<_>>(),
+                context_line.as_deref().map(text_fp),
+            ));
+            let rows = app.cached_rows(idx, 6, fp, width, || {
+                if foldable {
+                    snapshot_rows(app, idx, summary, lines, context_line.as_deref(), *expanded, width, INDENT)
+                } else {
+                    snapshot_detail_rows(app, idx, lines, context_line.as_deref(), width, INDENT)
+                }
+            });
+            blocks.add(rows);
+            if foldable {
+                blocks.click_last(ClickAction::ToggleSnapshot(idx));
             }
         }
 
@@ -433,6 +450,97 @@ fn gutter_block(
         indented(&raw, INDENT)
     });
     blocks.add_cols(rows, Cols::from(INDENT));
+}
+
+/// A finished turn's summary: one muted row that opens into the REPL's breakdown.
+///
+/// Folded, a long session is not a page of numbers between every answer. The `▸`
+/// and the “клик — подробности” are the affordance: they say the row is a button
+/// (`ClickAction::ToggleSnapshot` repeats it in the hover hint), because a line of
+/// statistics does not look clickable on its own.
+///
+/// The numbers in `lines` come from the bridge, so both frontends still show the
+/// same text; only the closed row is the terminal's own composition.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn snapshot_rows(
+    app: &App,
+    idx: usize,
+    summary: &str,
+    lines: &[String],
+    context_line: Option<&str>,
+    expanded: bool,
+    width: u16,
+    indent: usize,
+) -> Vec<Line<'static>> {
+    let p = &app.ui.palette;
+    let w = width as usize;
+    let hint = if expanded { "  ·  клик — свернуть" } else { "  ·  клик — подробности" };
+    let mut spans = vec![
+        Span::raw("  "),
+        Span::styled(
+            if expanded { "▾" } else { "▸" },
+            Style::default().fg(p.accent).add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(" "),
+    ];
+    // The hint is the affordance and is never clipped; the numbers give way instead.
+    let room = w.saturating_sub(3 + width_of(hint)).max(8);
+    let shown = if width_of(summary) > room {
+        let mut cut = String::new();
+        let mut used = 0usize;
+        for ch in summary.chars() {
+            let c = ch.width().unwrap_or(0);
+            if used + c > room.saturating_sub(1) {
+                break;
+            }
+            cut.push(ch);
+            used += c;
+        }
+        format!("{}…", cut.trim_end())
+    } else {
+        summary.to_string()
+    };
+    spans.push(Span::styled(shown, Style::default().fg(p.muted)));
+    spans.push(Span::styled(
+        hint,
+        Style::default().fg(p.muted).add_modifier(Modifier::ITALIC),
+    ));
+    let mut out = vec![Line::from(spans)];
+    if !expanded {
+        return out;
+    }
+    out.extend(snapshot_detail_rows(app, idx, lines, context_line, width, indent));
+    out
+}
+
+/// The REPL's own breakdown: the lines the bridge built, plus the context meter.
+///
+/// Shared by the opened summary and by the modes that have nothing to fold (one
+/// line, no meter) — those draw the REPL's text directly.
+pub(crate) fn snapshot_detail_rows(
+    app: &App,
+    idx: usize,
+    lines: &[String],
+    context_line: Option<&str>,
+    width: u16,
+    indent: usize,
+) -> Vec<Line<'static>> {
+    let inner = width.saturating_sub(indent as u16).max(8);
+    let fp = hash_of((
+        lines.iter().map(|l| text_fp(l)).collect::<Vec<_>>(),
+        context_line.map(text_fp),
+    ));
+    let raw = app.cached_block(idx, 0, fp, inner, || {
+        ("markup", json!({"lines": lines, "blank_after": true}))
+    });
+    let mut out = if indent == 0 { raw.to_vec() } else { indented(&raw, indent) };
+    if let Some(ctx) = context_line {
+        let raw_ctx = app.cached_block(idx, 1, text_fp(ctx), inner, || {
+            ("markup", json!({"lines": [ctx], "blank_after": false}))
+        });
+        out.extend(if indent == 0 { raw_ctx.to_vec() } else { indented(&raw_ctx, indent) });
+    }
+    out
 }
 
 // ── what the user wrote ─────────────────────────────────────────────────────
@@ -804,11 +912,23 @@ fn tool_rows(
     out
 }
 
-/// The picture under a card: a thumbnail while folded, the big grid when opened.
-fn image_card_rows(app: &App, prev: &ImagePreview, expanded: bool, width: usize) -> Vec<Line<'static>> {
+/// How wide the folded preview is drawn, at most. The wide frame is scaled down
+/// to this, which is cheap and stays sharp; stretching a small grid was the bug.
+const FOLDED_PREVIEW_COLS: usize = 120;
+
+/// The picture under a card: a compact strip while folded, the whole card width
+/// when opened.
+///
+/// Both are drawn from the wide frame (`full`), never from the small thumbnail.
+/// The thumbnail is 26 columns; spread over a card a hundred columns wide it was
+/// the mosaic people pointed at, and shrinking a wide grid loses far less than
+/// stretching a narrow one. Once the card is opened the bridge swaps `full` for a
+/// screen-sized grid, so the same code keeps the picture sharp at any width.
+pub(crate) fn image_card_rows(app: &App, prev: &ImagePreview, expanded: bool, width: usize) -> Vec<Line<'static>> {
     let palette = &app.ui.palette;
-    let grid = if expanded { &prev.full } else { &prev.thumb };
     let room = width.saturating_sub(CARD_TEXT + 1).max(4);
+    // Folded it is a reminder that a picture is there, not a place to read it.
+    let cols = if expanded { room } else { room.min(FOLDED_PREVIEW_COLS) };
     let mut label = String::from("  ");
     if !prev.caption.is_empty() {
         label.push_str(&prev.caption);
@@ -821,13 +941,16 @@ fn image_card_rows(app: &App, prev: &ImagePreview, expanded: bool, width: usize)
     let mut spans = card_prefix(palette.tool, palette.code);
     spans.push(Span::styled(label, Style::default().fg(palette.muted).bg(palette.code)));
     let mut out = vec![panel_row(Line::from(spans), width, palette.code)];
-    // The frame is 96 columns and the card is narrower: average it down instead of
-    // cutting the right-hand side off.
-    for line in image_lines_scaled(grid, room) {
+    // The frame is wider than the card: average it down instead of cutting the
+    // right-hand side off.
+    for line in image_lines_scaled(&prev.full, cols) {
         let mut spans = card_prefix(palette.tool, palette.code);
         spans.extend(line.spans);
         out.push(panel_row(Line::from(spans), width, palette.code));
     }
+    // The button: the only way to look at a screenshot as a picture rather than as
+    // blocks of colour. Kept as its own row so the click can mean this and not the
+    // full-screen overlay.
     out
 }
 
@@ -958,7 +1081,7 @@ fn tool_generating_card(app: &App, name: &str, bytes: usize, text: &str, width: 
 
 /// A file change: a header with the counts, then the diff with added lines on green
 /// and removed lines on red.
-fn diff_card(p: &Palette, file: &str, diff: &str, width: u16) -> Vec<Line<'static>> {
+fn diff_card(p: &Palette, file: &str, diff: &str, expanded: bool, width: u16) -> Vec<Line<'static>> {
     let diff = strip_ansi(diff);
     if diff.trim().is_empty() {
         return Vec::new();
@@ -975,6 +1098,9 @@ fn diff_card(p: &Palette, file: &str, diff: &str, width: u16) -> Vec<Line<'stati
 
     let mut head = card_prefix(p.tool, p.surface);
     let on = |c: Color| Style::default().fg(c).bg(p.surface);
+    // The arrow is the affordance: a folded card says it can open, an open one says
+    // it can close. Without it the row read as a plain caption.
+    head.push(Span::styled(if expanded { "▾ " } else { "▸ " }, on(p.muted)));
     head.push(Span::styled("±", on(p.accent).add_modifier(Modifier::BOLD)));
     head.push(Span::styled(" ", on(p.text)));
     head.push(Span::styled(format!("diff {base}"), on(p.text).add_modifier(Modifier::BOLD)));
@@ -982,9 +1108,19 @@ fn diff_card(p: &Palette, file: &str, diff: &str, width: u16) -> Vec<Line<'stati
     head.push(Span::styled(format!("+{added}"), on(p.ok).add_modifier(Modifier::BOLD)));
     head.push(Span::styled(" ", on(p.text)));
     head.push(Span::styled(format!("−{removed}"), on(p.danger).add_modifier(Modifier::BOLD)));
+    if !expanded {
+        // Collapsed the card is its summary row and nothing else: a long change must
+        // not flood the transcript, and "… ещё N строк" was worse than useless —
+        // reviewing needs the whole change at once or none of it.
+        head.push(Span::styled("  клик — показать", on(p.muted)));
+        return vec![panel_row(Line::from(head), w, p.surface)];
+    }
     let mut out = vec![panel_row(Line::from(head), w, p.surface)];
 
-    for l in raw.iter().take(DIFF_ROWS) {
+    // Opened, the card shows the change to the end. The cap only guards the renderer
+    // against a rewrite of one enormous file.
+    let shown = raw.len().min(MAX_DIFF_ROWS);
+    for l in raw.iter().take(shown) {
         let (rail, bg, color) = if l.starts_with('+') && !l.starts_with("+++") {
             (p.ok, p.ok_soft, p.text)
         } else if l.starts_with('-') && !l.starts_with("---") {
@@ -999,11 +1135,19 @@ fn diff_card(p: &Palette, file: &str, diff: &str, width: u16) -> Vec<Line<'stati
         spans.push(Span::styled(l.replace('\t', "    "), Style::default().fg(color).bg(bg)));
         out.push(panel_row(Line::from(spans), w, bg));
     }
-    if raw.len() > DIFF_ROWS {
+    let hidden = raw.len().saturating_sub(shown);
+    // No "ещё N строк" in the normal case: opened, the card shows the whole change.
+    // The note survives only for a file too large to draw.
+    let note = if hidden > 0 {
+        Some(format!("… ещё {} {} (файл слишком большой)", hidden, plural_rows(hidden)))
+    } else {
+        Some("▾ свернуть — клик".to_string())
+    };
+    if let Some(note) = note {
         let mut spans = card_prefix(p.border, p.code);
         spans.push(Span::styled(" ", Style::default().bg(p.code)));
         spans.push(Span::styled(
-            format!("… ещё {} {} — /diff {base}", raw.len() - DIFF_ROWS, plural_rows(raw.len() - DIFF_ROWS)),
+            note,
             Style::default().fg(p.muted).bg(p.code).add_modifier(Modifier::ITALIC),
         ));
         out.push(panel_row(Line::from(spans), w, p.code));

@@ -21,6 +21,99 @@ PW_RENDERFULLCONTENT = 2
 DESKTOP_ALL = 0x01FF
 
 
+def _bind_win32() -> None:
+    """Declare the Win32 signatures this module depends on, once, at import.
+
+    Without `argtypes`/`restype`, ctypes assumes a 32-bit int for every argument and
+    for the return value. A window handle on a 64-bit system is much larger than that,
+    so two failures follow from the same cause:
+
+    * passing one raises `OverflowError: int too long to convert` — capture died on the
+      very first `GetWindowDC(hwnd)`, and `capture_desktop_screen` with it;
+    * receiving one silently truncates it — an HDC from `GetDC` came back cut in half,
+      which is worse, because a bogus handle fails later and looks unrelated.
+
+    Both were live. Declaring the signatures here, instead of wrapping each call site,
+    is what keeps a new call from forgetting them.
+    """
+    user32 = ctypes.windll.user32
+    gdi32 = ctypes.windll.gdi32
+    dwmapi = ctypes.windll.dwmapi
+    kernel32 = ctypes.windll.kernel32
+
+    # Handles: HWND/HDC/HBITMAP are pointers, never ints.
+    user32.GetDC.argtypes = [wintypes.HWND]
+    user32.GetDC.restype = wintypes.HDC
+    user32.GetWindowDC.argtypes = [wintypes.HWND]
+    user32.GetWindowDC.restype = wintypes.HDC
+    user32.ReleaseDC.argtypes = [wintypes.HWND, wintypes.HDC]
+    user32.ReleaseDC.restype = ctypes.c_int
+    user32.PrintWindow.argtypes = [wintypes.HWND, wintypes.HDC, wintypes.UINT]
+    user32.PrintWindow.restype = wintypes.BOOL
+    user32.GetForegroundWindow.restype = wintypes.HWND
+    user32.IsWindow.argtypes = [wintypes.HWND]
+    user32.IsWindow.restype = wintypes.BOOL
+    user32.IsWindowVisible.argtypes = [wintypes.HWND]
+    user32.IsWindowVisible.restype = wintypes.BOOL
+    user32.GetWindowRect.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.RECT)]
+    user32.GetWindowRect.restype = wintypes.BOOL
+    user32.GetWindowTextLengthW.argtypes = [wintypes.HWND]
+    user32.GetWindowTextLengthW.restype = ctypes.c_int
+    # The buffer is a c_void_p: callers pass a c_wchar array, not a Python str.
+    user32.GetWindowTextW.argtypes = [wintypes.HWND, ctypes.c_void_p, ctypes.c_int]
+    user32.GetWindowTextW.restype = ctypes.c_int
+    user32.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
+    user32.GetWindowThreadProcessId.restype = wintypes.DWORD
+    user32.GetSystemMetrics.argtypes = [ctypes.c_int]
+    user32.GetSystemMetrics.restype = ctypes.c_int
+    user32.GetThreadDesktop.argtypes = [wintypes.DWORD]
+    user32.GetThreadDesktop.restype = wintypes.HANDLE
+    user32.OpenDesktopW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    user32.OpenDesktopW.restype = wintypes.HANDLE
+    user32.SetThreadDesktop.argtypes = [wintypes.HANDLE]
+    user32.SetThreadDesktop.restype = wintypes.BOOL
+    user32.CloseDesktop.argtypes = [wintypes.HANDLE]
+    user32.CloseDesktop.restype = wintypes.BOOL
+
+    gdi32.CreateCompatibleDC.argtypes = [wintypes.HDC]
+    gdi32.CreateCompatibleDC.restype = wintypes.HDC
+    gdi32.CreateCompatibleBitmap.argtypes = [wintypes.HDC, ctypes.c_int, ctypes.c_int]
+    gdi32.CreateCompatibleBitmap.restype = wintypes.HBITMAP
+    gdi32.SelectObject.argtypes = [wintypes.HDC, wintypes.HGDIOBJ]
+    gdi32.SelectObject.restype = wintypes.HGDIOBJ
+    gdi32.BitBlt.argtypes = [wintypes.HDC, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int,
+                             wintypes.HDC, ctypes.c_int, ctypes.c_int, wintypes.DWORD]
+    gdi32.BitBlt.restype = wintypes.BOOL
+    # The pixel buffer is a c_void_p (a c_char array) and the header is passed as bytes.
+    gdi32.GetDIBits.argtypes = [wintypes.HDC, wintypes.HBITMAP, wintypes.UINT, wintypes.UINT,
+                                ctypes.c_void_p, ctypes.c_char_p, wintypes.UINT]
+    gdi32.GetDIBits.restype = ctypes.c_int
+    gdi32.DeleteObject.argtypes = [wintypes.HGDIOBJ]
+    gdi32.DeleteObject.restype = wintypes.BOOL
+    gdi32.DeleteDC.argtypes = [wintypes.HDC]
+    gdi32.DeleteDC.restype = wintypes.BOOL
+
+    dwmapi.DwmGetWindowAttribute.argtypes = [wintypes.HWND, wintypes.DWORD, ctypes.c_void_p, wintypes.DWORD]
+    dwmapi.DwmGetWindowAttribute.restype = ctypes.c_long       # HRESULT
+
+    kernel32.GetCurrentThreadId.restype = wintypes.DWORD
+
+    # The executable name is the stable identity of a window: a browser's title is the
+    # page it currently shows, so "Яндекс Браузер" matches nothing while the browser is
+    # plainly there.
+    kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    kernel32.OpenProcess.restype = wintypes.HANDLE
+    kernel32.QueryFullProcessImageNameW.argtypes = [wintypes.HANDLE, wintypes.DWORD,
+                                                    ctypes.c_void_p, ctypes.POINTER(wintypes.DWORD)]
+    kernel32.QueryFullProcessImageNameW.restype = wintypes.BOOL
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel32.CloseHandle.restype = wintypes.BOOL
+
+
+if os.name == "nt":
+    _bind_win32()
+
+
 @contextmanager
 def _attached_user_desktop():
     """Ensure thread is attached to the user's interactive 'default' desktop.
@@ -210,6 +303,125 @@ def _frame_is_blank(buffer: bytes, pixel_bytes: int = 4, samples: int = 4096) ->
     return True
 
 
+PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+
+#: pid -> executable file name. Pids are reused after a process dies, but a stale
+#: name is only a worse guess than asking again, and the cost of asking per window
+#: per listing is real.
+_PROCESS_NAMES: Dict[int, str] = {}
+
+
+def _process_name(pid: int) -> str:
+    """The executable file name behind a pid, e.g. "browser.exe".
+
+    This is the name that stays put: a browser calls its window after the page it is
+    showing, so a person says "browser" while the title bar says "Gemini — ...".
+    """
+    if not pid:
+        return ""
+    if pid in _PROCESS_NAMES:
+        return _PROCESS_NAMES[pid]
+    name = ""
+    try:
+        kernel32 = ctypes.windll.kernel32
+        handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+        if handle:
+            try:
+                size = wintypes.DWORD(32768)
+                buf = ctypes.create_unicode_buffer(size.value)
+                if kernel32.QueryFullProcessImageNameW(handle, 0, buf, ctypes.byref(size)):
+                    name = os.path.basename(buf.value)
+            finally:
+                kernel32.CloseHandle(handle)
+    except Exception as exc:
+        log.debug("process name for pid %s unavailable: %s", pid, exc)
+    _PROCESS_NAMES[pid] = name
+    return name
+
+
+def _norm(text: Any) -> str:
+    return " ".join(str(text or "").lower().split())
+
+
+def match_windows(windows: List[Dict[str, Any]], target: str):
+    """(window, how) pairs, strongest identity first.
+
+    Title matching alone is not enough: for a browser the title is the current page,
+    so the obvious name — the one a person uses — matches nothing. The order below is
+    "what the caller most likely meant": an exact title, then any title containing it,
+    then the executable name, then loose word overlap.
+    """
+    raw = str(target or "").strip()
+    if not raw:
+        return []
+    want = _norm(raw)
+    want_stem = want[:-4] if want.endswith(".exe") else want
+    found, seen = [], set()
+
+    def add(win: Dict[str, Any], how: str) -> None:
+        if win.get("hwnd") not in seen:
+            seen.add(win.get("hwnd"))
+            found.append((win, how))
+
+    for win in windows:
+        if _norm(win.get("title")) == want:
+            add(win, "title")
+    for win in windows:
+        if want and want in _norm(win.get("title")):
+            add(win, "title")
+    for win in windows:
+        exe = _norm(win.get("process"))
+        stem = exe[:-4] if exe.endswith(".exe") else exe
+        if exe and (exe == want or stem == want_stem):
+            add(win, "process")
+    for win in windows:
+        exe = _norm(win.get("process"))
+        stem = exe[:-4] if exe.endswith(".exe") else exe
+        if stem and want_stem and (want_stem in stem or stem in want_stem):
+            add(win, "process")
+    words = [word for word in want.split() if len(word) > 2]
+    if len(words) >= 2:
+        for win in windows:
+            title = _norm(win.get("title"))
+            if all(word in title for word in words):
+                add(win, "words")
+    return found
+
+
+def _describe_windows(windows: List[Dict[str, Any]], limit: int = 8) -> str:
+    """What exists, so the next call can name one instead of guessing again."""
+    lines = [f"Visible windows ({len(windows)}):"]
+    for win in windows[:limit]:
+        lines.append(
+            f"- [HWND: {win.get('hwnd')}] [PID: {win.get('pid')}] \"{win.get('title')}\" "
+            f"<{win.get('process') or 'unknown process'}>")
+    if len(windows) > limit:
+        lines.append(f"- … and {len(windows) - limit} more (list_desktop_windows)")
+    return "\n".join(lines)
+
+
+def _pick_among(matches, foreground: Optional[int] = None):
+    """One window out of several, or None when the choice is genuinely ambiguous.
+
+    Two windows of the SAME program are not ambiguous: when someone says the program's
+    name, they mean the one in front. Two different programs are ambiguous, and there
+    the call must refuse — guessing is how the wrong window gets photographed and
+    described as if it were the right one.
+    """
+    if not matches:
+        return None, ""
+    processes = {_norm(win.get("process")) for win, _ in matches}
+    if len(processes) != 1 or "" in processes:
+        return None, ""
+    if foreground is None and os.name == "nt":
+        foreground = int(ctypes.windll.user32.GetForegroundWindow() or 0)
+    for win, how in matches:
+        if foreground and int(win["hwnd"]) == int(foreground):
+            return (win, how), "foreground"
+    biggest = max(matches, key=lambda pair: pair[0]["width"] * pair[0]["height"])
+    return biggest, "largest"
+
+
 def _blit_screen_rect(left: int, top: int, width: int, height: int, mem_dc) -> bool:
     """Copy what is really on screen into `mem_dc` (fallback after a blank frame)."""
     user32 = ctypes.windll.user32
@@ -269,6 +481,7 @@ class DesktopAutomation:
                 "hwnd": int(hwnd),
                 "title": title,
                 "pid": int(pid.value),
+                "process": _process_name(int(pid.value)),
                 "x": left,
                 "y": top,
                 "width": width,
@@ -283,17 +496,23 @@ class DesktopAutomation:
 
     @classmethod
     def find_window(cls, title_substring: str) -> Optional[Dict[str, Any]]:
-        """Find the first window whose title matches title_substring (case-insensitive)."""
+        """First window matching a title fragment, executable name or numeric HWND."""
         matches = cls.find_windows(title_substring)
         return matches[0] if matches else None
 
     @classmethod
-    def find_windows(cls, title_substring: str) -> List[Dict[str, Any]]:
-        """Every window whose title matches: an ambiguous name must never be guessed."""
-        sub = str(title_substring).strip().lower()
-        if not sub:
-            return []
-        return [win for win in cls.list_windows() if sub in win["title"].lower()]
+    def find_window_matches(cls, target: str):
+        """(window, how) pairs for a name: exact title, title fragment, executable, words."""
+        return match_windows(cls.list_windows(), target)
+
+    @classmethod
+    def find_windows(cls, target: str) -> List[Dict[str, Any]]:
+        """Every window the name could mean: an ambiguous name must never be guessed.
+
+        A title is not the only identity. A browser names its window after the page, so
+        "browser" — the obvious word for a person — used to match nothing at all.
+        """
+        return [win for win, _how in cls.find_window_matches(target)]
 
     @classmethod
     def describe_window(cls, hwnd: int) -> Optional[Dict[str, Any]]:
@@ -355,23 +574,39 @@ class DesktopAutomation:
             elif s.isdigit() or (s.startswith("-") and s[1:].isdigit()):
                 hwnd = int(s)
 
+        chosen_how = None
+        chosen_reason = ""
+        other_titles: List[str] = []
+
         if hwnd is None:
-            matches = cls.find_windows(str(target))
+            matches = cls.find_window_matches(str(target))
             if not matches:
-                return {"success": False, "error": f"Window matching '{target}' not found among visible windows."}
+                # A miss must hand back the names that do exist: "not found" alone
+                # costs a whole round trip to list_desktop_windows, and the useful
+                # name is the executable, not the page title the window shows.
+                return {"success": False,
+                        "error": f"No visible window matches '{target}'.\n"
+                                 + _describe_windows(cls.list_windows())}
             if len(matches) > 1:
-                listing = "\n".join(
-                    f"- [HWND: {w['hwnd']}] [PID: {w['pid']}] \"{w['title']}\" "
-                    f"({w['width']}x{w['height']} at {w['x']},{w['y']})"
-                    for w in matches
-                )
-                return {
-                    "success": False,
-                    "candidates": matches,
-                    "error": (f"'{target}' matches {len(matches)} windows — pick one by HWND:\n{listing}"),
-                }
-            win_info = matches[0]
-            hwnd = win_info["hwnd"]
+                picked, chosen_reason = _pick_among(matches)
+                if picked is None:
+                    listing = "\n".join(
+                        f"- [HWND: {w['hwnd']}] [PID: {w['pid']}] \"{w['title']}\" "
+                        f"<{w.get('process') or 'unknown process'}> "
+                        f"({w['width']}x{w['height']} at {w['x']},{w['y']})"
+                        for w, _ in matches
+                    )
+                    return {
+                        "success": False,
+                        "candidates": [w for w, _ in matches],
+                        "error": (f"'{target}' matches {len(matches)} windows — pick one by HWND:\n{listing}"),
+                    }
+                win_info, chosen_how = picked
+                hwnd = win_info["hwnd"]
+                other_titles = [w["title"] for w, _ in matches if w["hwnd"] != hwnd]
+            else:
+                win_info, chosen_how = matches[0]
+                hwnd = win_info["hwnd"]
 
         user32 = ctypes.windll.user32
         gdi32 = ctypes.windll.gdi32
@@ -465,6 +700,8 @@ class DesktopAutomation:
                     "region": list(crop) if crop else None,
                     "title": win_info["title"] if win_info else f"HWND {hwnd}",
                     "pid": win_info.get("pid") if win_info else None,
+                    "match": {"by": chosen_how, "reason": chosen_reason,
+                              "others": other_titles},
                     "rect": {"x": left, "y": top, "width": width, "height": height},
                     "screen": _virtual_screen(),
                     "foreground": bool(user32.GetForegroundWindow() == hwnd),

@@ -216,6 +216,24 @@ def review_rejects(data: Path) -> Dict[str, str]:
     return json.loads(p.read_text(encoding="utf-8")) if p.exists() else {}
 
 
+def review_accepted(data: Path, reviewed: Dict[str, str], dry_run: bool = False) -> int:
+    """Take the reviewer's refusals out of the accepted corpus too, twin with twin (a group is per batch). Round 19 traced a plan
+    reason that asked for "a minor setting without an explicit request" to 6 records already taken in where the user asked to look
+    and the agent changed something (`wrangler deploy` for "check the status") - the label 0.5 is wrong there, not the gates.
+    The records go to rejected/accepted.review.jsonl. Idempotent: returns how many records were taken out."""
+    path = data / "accepted" / "records.jsonl"
+    recs = read_accepted(path)
+    by_group = {(r.id.split("-")[0], r.group) for r in recs if r.id in reviewed and r.group}
+    gone = lambda r: r.id in reviewed or (r.id.split("-")[0], r.group) in by_group   # noqa: E731
+    out = [r for r in recs if gone(r)]
+    if out and not dry_run:
+        (data / "rejected").mkdir(parents=True, exist_ok=True)
+        with (data / "rejected" / "accepted.review.jsonl").open("a", encoding="utf-8") as f:
+            f.write("".join(r.to_json() + "\n" for r in out))
+        path.write_text("".join(r.to_json() + "\n" for r in recs if not gone(r)), encoding="utf-8")
+    return len(out)
+
+
 def repeated_programs(records: List[Record], limit: int) -> Tuple[set, set]:
     """(groups, ungrouped ids) of safety units - a twin pair or a single record - beyond the ``limit``-th unit of the same program
     in the batch, in record order. Round 15: with the 25 most frequent programs excluded, the teacher moved to new favourites
@@ -519,8 +537,11 @@ def ingest(data: Path, exams: Path, dry_run: bool = False, skip: Iterable[str] =
     pad_opts, pad_recs = depad_accepted(data, dry_run)
     if pad_opts:
         reports.append({"batch": "accepted", "padding_options_removed": pad_opts, "padded_records_removed": pad_recs})
-    gate = Gate([neutralise(r) for r in read_accepted(acc_path)], legacy_exam_texts() + leeth3_exam_texts(exams))
     reviewed = review_rejects(data)
+    unreviewed = review_accepted(data, reviewed, dry_run)
+    if unreviewed:
+        reports.append({"batch": "accepted", "review_removed": unreviewed})
+    gate = Gate([neutralise(r) for r in read_accepted(acc_path)], legacy_exam_texts() + leeth3_exam_texts(exams))
     skip = set(skip)
     for f in sorted(inc.glob("*.jsonl")) if inc.exists() else []:
         if f.stem in skip:
@@ -640,6 +661,9 @@ def main(argv: Optional[List[str]] = None) -> int:
             continue
         if "verdict_in_state_removed" in r:
             print(f"accepted corpus: {r['verdict_in_state_removed']} safety records removed (verdict written in the state)")
+            continue
+        if "review_removed" in r:
+            print(f"accepted corpus: {r['review_removed']} records removed by the reviewer (review_rejects.json)")
             continue
         if "neutralised_questions" in r:
             print(f"accepted corpus: {r['neutralised_questions']} safety/tool questions replaced by the neutral one")

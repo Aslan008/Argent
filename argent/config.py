@@ -82,6 +82,11 @@ def load_config() -> dict:
                 loaded = json.load(f)
         except (json.JSONDecodeError, UnicodeDecodeError) as e:
             quarantine_config(str(e))
+        except FileNotFoundError:
+            # Removed between the existence check and the open: another process saving, a
+            # test cleaning up, a profile directory vanishing. That is "no config", not a
+            # crash — and this runs on worker threads, where a raise loses a whole answer.
+            pass
         else:
             if isinstance(loaded, dict):
                 _CONFIG_CACHE = loaded
@@ -156,7 +161,11 @@ def _get(key: str, default=None):
         for owner, layer in reversed(list(_GENERATION_STACK)):
             if key in layer and run_scope.visible(owner):
                 return layer[key]
-    return load_config().get(key, default)
+    # `or {}`: a config file that could not be read must degrade to defaults, not raise.
+    # This is called from worker threads (the Telegram bridge reads settings per turn), where
+    # an exception would kill the consumer and lose the answer instead of using a default.
+    config = load_config()
+    return (config if isinstance(config, dict) else {}).get(key, default)
 
 
 class generation_overrides:
@@ -800,6 +809,37 @@ def get_compress_on_failure() -> str:
 
 def set_compress_on_failure(mode: str):
     _set("compress_on_failure", "ask" if str(mode).strip().lower() == "ask" else "auto")
+
+
+def get_model_fallback_enabled() -> bool:
+    """Move to the next model by itself when the conversation model is out of quota or gone."""
+    return bool(_get("model_fallback_enabled", True))
+
+
+def set_model_fallback_enabled(enabled: bool):
+    _set("model_fallback_enabled", bool(enabled))
+
+
+def get_model_fallback_chain() -> list:
+    """Models to try, in this order, when the current one refuses to answer.
+
+    Empty means "any free model the provider offers right now" — the live list from
+    the provider, which is what a free OpenRouter account usually wants.
+    """
+    value = _get("model_fallback_chain", [])
+    return [str(m).strip() for m in value if str(m).strip()] if isinstance(value, list) else []
+
+
+def set_model_fallback_chain(models: list | None):
+    _set("model_fallback_chain", [str(m).strip() for m in (models or []) if str(m).strip()])
+
+
+def get_model_fallback_switch_limit() -> int:
+    """How many model changes one turn may make before it gives up and reports the error."""
+    try:
+        return max(1, min(10, int(_get("model_fallback_switch_limit", 5))))
+    except (TypeError, ValueError):
+        return 5
 
 
 def get_compress_retries() -> int:
@@ -1710,6 +1750,136 @@ def set_telegram_mode(mode: str):
     _set("telegram_mode", mode)
 
 
+def get_telegram_groups() -> list:
+    """Group chats the bot may talk in. Empty means "no group" — a stranger cannot add it."""
+    value = _get("telegram_groups", [])
+    return [str(g).strip() for g in value if str(g).strip()] if isinstance(value, list) else []
+
+
+def add_telegram_group(chat_id: str | int) -> list:
+    groups = get_telegram_groups()
+    cid = str(chat_id).strip()
+    if cid and cid not in groups:
+        groups.append(cid)
+        _set("telegram_groups", groups)
+    return get_telegram_groups()
+
+
+def remove_telegram_group(chat_id: str | int) -> list:
+    cid = str(chat_id).strip()
+    groups = [g for g in get_telegram_groups() if g != cid]
+    _set("telegram_groups", groups)
+    # The tools switch belongs to the group; it must not linger and be re-used if
+    # the same chat is allowed again later.
+    set_telegram_group_agent(cid, False)
+    return get_telegram_groups()
+
+
+def is_telegram_group_allowed(chat_id: str | int) -> bool:
+    return str(chat_id).strip() in get_telegram_groups()
+
+
+def get_telegram_group_agent(chat_id: str | int) -> bool:
+    """Whether the owner switched tools on for this group with /agent."""
+    value = _get("telegram_group_agent", [])
+    if not isinstance(value, list):
+        return False
+    return str(chat_id).strip() in [str(g).strip() for g in value]
+
+
+def set_telegram_group_agent(chat_id: str | int, enabled: bool):
+    cid = str(chat_id).strip()
+    if not cid:
+        return
+    current = [str(g).strip() for g in (_get("telegram_group_agent", []) or []) if str(g).strip()]
+    if enabled and cid not in current:
+        current.append(cid)
+    elif not enabled:
+        current = [g for g in current if g != cid]
+    _set("telegram_group_agent", current)
+
+
+def get_chat_personas() -> dict:
+    """Characters set per chat: ``{chat id: text}``.
+
+    Text, not flags: a role is whatever the owner wrote. It only ever changes tone —
+    the prompt says so explicitly, and the permission layer (`src/bridge/policy.py`)
+    never reads this.
+    """
+    value = _get("telegram_personas", {})
+    if not isinstance(value, dict):
+        return {}
+    return {str(k).strip(): str(v).strip() for k, v in value.items() if str(v).strip()}
+
+
+def get_chat_persona(chat_id: str | int) -> str:
+    return get_chat_personas().get(str(chat_id).strip(), "")
+
+
+def set_chat_persona(chat_id: str | int, text: str | None):
+    """Set or clear the character of one chat. None / empty clears it."""
+    key = str(chat_id).strip()
+    if not key:
+        return
+    personas = get_chat_personas()
+    text = (text or "").strip()
+    if text:
+        personas[key] = text
+    else:
+        personas.pop(key, None)
+    _set("telegram_personas", personas)
+
+
+def get_telegram_model() -> str:
+    """The model the bot answers with. Empty: the same model as the terminal."""
+    return str(_get("telegram_model", "") or "").strip()
+
+
+def set_telegram_model(model: str | None):
+    _set("telegram_model", str(model).strip() if model else "")
+
+
+def get_telegram_provider() -> str:
+    """Provider for the bot's model. Empty: the terminal's provider."""
+    return str(_get("telegram_provider", "") or "").strip()
+
+
+def set_telegram_provider(provider: str | None):
+    _set("telegram_provider", str(provider).strip() if provider else "")
+
+
+def get_telegram_reactions() -> str:
+    """Whether the bot may react to messages: ``auto`` (the model decides) or ``off``.
+
+    A reaction is never obligatory: in ``auto`` the model ends a reply with a tag when it
+    wants one, and says nothing when it does not.
+    """
+    value = str(_get("telegram_reactions", "auto") or "auto").strip().lower()
+    return "off" if value in ("off", "none", "no", "выкл") else "auto"
+
+
+def set_telegram_reactions(mode: str):
+    off = str(mode).strip().lower() in ("off", "none", "no", "выкл")
+    _set("telegram_reactions", "off" if off else "auto")
+
+
+def get_telegram_games() -> bool:
+    """Whether the bot may run a quiz in a group (the model writes the question)."""
+    return bool(_get("telegram_games", True))
+
+
+def set_telegram_games(enabled: bool):
+    _set("telegram_games", bool(enabled))
+
+
+def get_telegram_game_time() -> int:
+    """Seconds a quiz round lasts when the model does not say otherwise."""
+    try:
+        return max(5, min(300, int(_get("telegram_game_time", 30))))
+    except (TypeError, ValueError):
+        return 30
+
+
 def get_sound_notification() -> bool:
     """Whether sound notifications are enabled after turn completion or error."""
     val = _get("sound_notification", True)
@@ -1793,6 +1963,27 @@ def set_turn_snapshot_mode(mode: str):
             f"Invalid snapshot mode: '{mode}'. Must be 'compact', 'verbose', or 'off'."
         )
     _set("turn_snapshot_mode", norm)
+
+
+def get_system_prompt_style() -> str:
+    """Which built-in instructions go into the system prompt: 'minimal' or 'full'.
+
+    Minimal (the default) is a dozen lines that earn their place every turn. Full is
+    the original document with plans, plugins, browser and protocol sections. The
+    person's own AGENTS.md is added either way — that is their text, not ours.
+    """
+    val = _get("system_prompt_style", "minimal")
+    if not isinstance(val, str) or val.strip().lower() not in ("minimal", "full"):
+        return "minimal"
+    return val.strip().lower()
+
+
+def set_system_prompt_style(style: str) -> None:
+    """Set the prompt style: 'minimal' or 'full'."""
+    norm = str(style or "").strip().lower()
+    if norm not in ("minimal", "full"):
+        raise ValueError(f"Invalid prompt style: '{style}'. Must be 'minimal' or 'full'.")
+    _set("system_prompt_style", norm)
 
 
 def is_secret_redaction_enabled() -> bool:

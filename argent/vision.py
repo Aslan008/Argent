@@ -294,8 +294,15 @@ def build_image_message(payloads: list, text: str) -> dict:
 _pending: list = []
 
 
-def queue_image(payload: str, media_type: str, label: str) -> None:
-    _pending.append({"data": payload, "media_type": media_type, "label": label})
+def queue_image(payload: str, media_type: str, label: str, path: str = "") -> None:
+    """Queue a picture for the next message.
+
+    ``label`` is what the person reads; ``path`` is the file the picture came from,
+    when there is one. The path is kept because a terminal can never show a
+    1920-pixel screenshot sharply: the overlay offers to hand the original file to
+    the system viewer, and a file has to be named for that.
+    """
+    _pending.append({"data": payload, "media_type": media_type, "label": label, "path": path or ""})
     # The person sees the picture too: the frontend draws a thumbnail next to the
     # tool card, from a grid prepared here. Passing a real image path is all it
     # takes; anything that is not a file is simply not previewed.
@@ -364,6 +371,37 @@ def pending_snapshot() -> str:
     return json.dumps(items, ensure_ascii=False)
 
 
+def _open_path(entry: dict) -> str:
+    """A real file for this queued frame, so the system viewer has something to open.
+
+    The original file is preferred: `encode_image` downscales what goes to the model,
+    and the point of opening it elsewhere is the pixels that were dropped. When the
+    picture never was a file (a clipboard capture or a test payload), it is written
+    to a temporary one — the bytes are already in the entry.
+    """
+    path = str(entry.get("path") or "")
+    if path and Path(path).is_file():
+        return path
+    cached = entry.get("_open_path")
+    if cached and Path(cached).is_file():
+        return cached
+    try:
+        raw = base64.b64decode(entry.get("data") or "")
+        if not raw:
+            return ""
+        import tempfile
+        import time
+
+        suffix = ".png" if str(entry.get("media_type") or "").endswith("png") else ".jpg"
+        out = Path(tempfile.gettempdir()) / f"argent-image-{int(time.time() * 1000)}-{id(entry)}{suffix}"
+        out.write_bytes(raw)
+        entry["_open_path"] = str(out)
+        return str(out)
+    except Exception as e:
+        log.debug("could not materialise %r: %s", entry.get("label"), e)
+        return ""
+
+
 def image_full(index: int) -> str:
     """Один кадр для просмотра на весь экран — в том же виде, что и превью карточки."""
     if not (0 <= index < len(_pending)):
@@ -374,7 +412,7 @@ def image_full(index: int) -> str:
         return ""
     return json.dumps({
         "seq": 0,
-        "path": "",
+        "path": _open_path(entry),
         "caption": entry.get("label") or "",
         "thumb": preview["thumb"],
         "full": preview["full"],
