@@ -4,8 +4,8 @@ import asyncio
 
 import pytest
 
-import browser_engine
-from browser_engine import _blocked_url_reason
+import argent.browser_engine as browser_engine
+from argent.browser_engine import _blocked_url_reason
 
 
 class TestSchemeGuard:

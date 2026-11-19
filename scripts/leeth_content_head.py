@@ -29,7 +29,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-import numpy as np  # noqa: E402
+import numpy as np
 
 T_OLD_DEFAULT = None  # read from the model's leeth2_config.json (temp_noul)
 

@@ -35,7 +35,7 @@ from src.cli.cli_ui import (
     _format_time_human,
     _HeartbeatWaitDisplay,
 )
-from tools.misc_tools import wait_heartbeat
+from argent.tools.misc_tools import wait_heartbeat
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -172,7 +172,7 @@ class TestSignalParsingAndDelimiterInvariants:
 
 class TestProcessPredicatesAndTargetPidExtraction:
     def test_process_finished_running_cycle(self, monkeypatch):
-        import tools
+        import argent.tools as tools
 
         class _MockProc:
             def __init__(self, code=None):
@@ -191,7 +191,7 @@ class TestProcessPredicatesAndTargetPidExtraction:
         assert _process_finished("42") is True
 
     def test_process_finished_with_int_and_float_pid(self, monkeypatch):
-        import tools
+        import argent.tools as tools
 
         class _MockProc:
             def poll(self):
@@ -203,7 +203,7 @@ class TestProcessPredicatesAndTargetPidExtraction:
         assert _process_finished("10") is True
 
     def test_missing_pid_is_treated_as_finished_to_avoid_hanging(self, monkeypatch):
-        import tools
+        import argent.tools as tools
         monkeypatch.setattr(tools, "ACTIVE_PROCESSES", {})
         assert _process_finished("9999") is True
         assert _process_running("9999") is False
@@ -262,8 +262,8 @@ class TestDisplayRenderingAndFormatting:
         assert "done.txt" in rendered_text
 
     def test_heartbeat_wait_display_process_status_sorting(self, monkeypatch):
-        import tools
-        from tools.command_ops import ACTIVE_PROCESSES_LOCK
+        import argent.tools as tools
+        from argent.tools.command_ops import ACTIVE_PROCESSES_LOCK
 
         class _Proc:
             def __init__(self, code):
@@ -315,7 +315,7 @@ class TestEventSleeperAndQueueHandling:
 
                         # Filter out stale events for processes that were already completed and handled
                         try:
-                            from tools.command_ops import COMPLETED_PROCESSES, ACTIVE_PROCESSES_LOCK
+                            from argent.tools.command_ops import COMPLETED_PROCESSES, ACTIVE_PROCESSES_LOCK
                             with ACTIVE_PROCESSES_LOCK:
                                 if pid in COMPLETED_PROCESSES:
                                     continue
@@ -346,8 +346,8 @@ class TestEventSleeperAndQueueHandling:
     def test_stale_event_in_completed_processes_does_not_abort_timer(self, monkeypatch):
         """Blind spot 2: Stale events for already handled processes must NOT wake timer early."""
         from src.agent.events import EVENT_QUEUE
-        import tools
-        from tools.command_ops import COMPLETED_PROCESSES
+        import argent.tools as tools
+        from argent.tools.command_ops import COMPLETED_PROCESSES
 
         # Drain any residual events
         while not EVENT_QUEUE.empty():
@@ -450,7 +450,7 @@ class TestEndToEndAndInvariants:
     def test_wait_for_condition_with_event_interrupt(self):
         """Simulate wait_for meeting condition via process completion event."""
         from src.agent.events import EVENT_QUEUE
-        import tools
+        import argent.tools as tools
 
         while not EVENT_QUEUE.empty():
             try:

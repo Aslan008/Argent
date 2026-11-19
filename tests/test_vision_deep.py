@@ -18,7 +18,7 @@ from unittest.mock import MagicMock, patch
 from PIL import Image
 import pytest
 
-from vision import (
+from argent.vision import (
     SUPPORTED_SUFFIXES,
     encode_image,
     drain_images,
@@ -27,12 +27,12 @@ from vision import (
     _parse_crop_box,
 )
 from src.automation.desktop import DesktopAutomation
-from tools.desktop_tools import (
+from argent.tools.desktop_tools import (
     capture_desktop_screen,
     capture_desktop_window,
     get_clipboard_image,
 )
-from tools.browser_tools import browser_screenshot
+from argent.tools.browser_tools import browser_screenshot
 
 
 class TestVisionAlphaAndCrop:
@@ -126,8 +126,8 @@ class TestAutoAttachAndDesktopTools:
         }
         with patch.object(DesktopAutomation, "is_available", return_value=True):
             with patch.object(DesktopAutomation, "capture_window", return_value=fake_result):
-                with patch("config.get_current_model", return_value="gpt-4o"):
-                    with patch("config.get_provider", return_value="openai"):
+                with patch("argent.config.get_current_model", return_value="gpt-4o"):
+                    with patch("argent.config.get_provider", return_value="openai"):
                         res = capture_desktop_window("Test Window")
                         assert "VISION ATTACHED" in res
                         queued = drain_images()
@@ -147,8 +147,8 @@ class TestAutoAttachAndDesktopTools:
         }
         with patch.object(DesktopAutomation, "is_available", return_value=True):
             with patch.object(DesktopAutomation, "capture_screen", return_value=fake_result):
-                with patch("config.get_current_model", return_value="gpt-4o"):
-                    with patch("config.get_provider", return_value="openai"):
+                with patch("argent.config.get_current_model", return_value="gpt-4o"):
+                    with patch("argent.config.get_provider", return_value="openai"):
                         res = capture_desktop_screen("primary")
                         assert "VISION ATTACHED" in res
                         queued = drain_images()
@@ -167,8 +167,8 @@ class TestAutoAttachAndDesktopTools:
             "media_type": "image/jpeg",
         }
         with patch.object(DesktopAutomation, "get_clipboard_image", return_value=fake_result):
-            with patch("config.get_current_model", return_value="gpt-4o"):
-                with patch("config.get_provider", return_value="openai"):
+            with patch("argent.config.get_current_model", return_value="gpt-4o"):
+                with patch("argent.config.get_provider", return_value="openai"):
                     res = get_clipboard_image()
                     assert "VISION ATTACHED" in res
                     queued = drain_images()
@@ -180,9 +180,9 @@ class TestAutoAttachAndDesktopTools:
         dummy_img = tmp_path / "browser_shot.png"
         Image.new("RGB", (100, 100), (0, 128, 0)).save(dummy_img, "PNG")
 
-        with patch("browser_engine.browser_engine.run", return_value=f"Screenshot saved to: {dummy_img}"):
-            with patch("config.get_current_model", return_value="gpt-4o"):
-                with patch("config.get_provider", return_value="openai"):
+        with patch("argent.browser_engine.browser_engine.run", return_value=f"Screenshot saved to: {dummy_img}"):
+            with patch("argent.config.get_current_model", return_value="gpt-4o"):
+                with patch("argent.config.get_provider", return_value="openai"):
                     res = browser_screenshot()
                     assert "VISION ATTACHED" in res
                     queued = drain_images()
@@ -195,7 +195,7 @@ class TestAgentTurnAndTelegramBotReception:
 
     def test_l5_agent_run_turn_attaches_queued_images_at_start(self):
         """L5: Pre-queued images must become part of initial user message in agent._run_turn."""
-        from agent import ArgentAgent
+        from argent.agent import ArgentAgent
 
         drain_images()
         queue_image("init_payload_123", "image/jpeg", "PreAttached.png")
@@ -228,7 +228,9 @@ class TestAgentTurnAndTelegramBotReception:
         dummy_jpg = tmp_path / "tg_download.jpg"
         Image.new("RGB", (200, 200), (0, 0, 255)).save(dummy_jpg, "JPEG")
 
-        bridge = TelegramBridge.__new__(TelegramBridge)
+        # Constructed normally: bypassing __init__ left the object without the fields every
+        # handler reads (bot info, per-chat sessions), which a real bridge always has.
+        bridge = TelegramBridge()
         bridge.client = MagicMock(spec=TelegramClient)
         bridge._is_authorized = MagicMock(return_value=True)
         bridge._run_prompt_turn = MagicMock()
@@ -266,8 +268,8 @@ class TestAgentTurnAndTelegramBotReception:
 
     def test_l7_agent_recovers_from_unsupported_image_provider_error(self):
         """L7: If provider rejects image input (e.g. KoboldCPP without mmproj), strip images and retry."""
-        from agent import ArgentAgent
-        from providers import ProviderError
+        from argent.agent import ArgentAgent
+        from argent.providers import ProviderError
 
         drain_images()
         queue_image("init_payload_123", "image/jpeg", "PreAttached.png")
@@ -313,7 +315,7 @@ class TestAgentTurnAndTelegramBotReception:
 
         mock_provider.stream_chat.side_effect = fake_stream
 
-        with patch("agent.create_provider", return_value=mock_provider):
+        with patch("argent.agent.create_provider", return_value=mock_provider):
             chunks = list(a._run_turn("Analyze this image"))
 
         # Verify agent yielded notice and continued to get content

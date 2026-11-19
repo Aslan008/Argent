@@ -192,7 +192,7 @@ def test_a_failed_update_falls_back_to_the_ready_summary(monkeypatch, asked):
 
 
 def test_disabled_by_the_setting(monkeypatch, asked):
-    monkeypatch.setattr("config.is_summary_precompute_enabled", lambda: False)
+    monkeypatch.setattr("argent.config.is_summary_precompute_enabled", lambda: False)
     assert trimmer.precompute_summary(_history(), "mock", BUDGET) is False
     assert asked == []
 

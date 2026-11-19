@@ -2,9 +2,9 @@ import os
 from itertools import islice
 from unittest.mock import MagicMock
 
-import agent as agent_module
-import config
-from agent import ArgentAgent, MAX_SALVAGE_CONTINUES
+import argent.agent as agent_module
+import argent.config as config
+from argent.agent import ArgentAgent, MAX_SALVAGE_CONTINUES
 from src.agent.salvage import (
     extract_partial_write, trim_to_last_line, last_lines, SALVAGEABLE_TOOLS,
     verify_salvaged_file,

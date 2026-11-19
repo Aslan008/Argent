@@ -88,7 +88,7 @@ fn a_block_is_rendered_once_per_width() {
     app.messages.push(MessageItem::User("hi".into()));
     app.messages.push(MessageItem::assistant("answer\n\n", "reasoning text"));
     app.messages.push(tool("read_file", "a\nb"));
-    app.messages.push(MessageItem::Diff { file: "f.py".into(), diff: "+x".into() });
+    app.messages.push(MessageItem::Diff { file: "f.py".into(), diff: "+x".into(), expanded: false });
 
     draw(&app, 100, 50);
     let first = calls.load(Ordering::SeqCst);
@@ -159,7 +159,7 @@ fn stale_cache_entries_are_pruned() {
 fn a_render_failure_degrades_one_block_and_is_reported_once() {
     let mut app = App::new();
     app.renderer = Box::new(Broken);
-    app.messages.push(MessageItem::Diff { file: "f.py".into(), diff: "+KEEP_ME".into() });
+    app.messages.push(MessageItem::Diff { file: "f.py".into(), diff: "+KEEP_ME".into(), expanded: false });
     app.messages.push(tool("read_file", "TOOL_RESULT_SURVIVES"));
 
     let f = frame(&app, 100, 30);
@@ -457,6 +457,7 @@ fn kinds(app: &App) -> Vec<&'static str> {
             MessageItem::ToolGenerating { .. } => "toolgen",
             MessageItem::Notice(_) => "notice",
             MessageItem::System(_) => "system",
+            MessageItem::Output(_) => "output",
             MessageItem::Banner(_) => "banner",
             MessageItem::Error { .. } => "error",
             MessageItem::Checkpoint { .. } => "checkpoint",
@@ -521,16 +522,28 @@ fn a_rethink_is_a_block_of_its_own() {
 }
 
 #[test]
-fn full_thinking_mode_opens_new_reasoning_by_default() {
+fn a_finished_thought_folds_even_in_full_mode() {
+    // `thinking_mode: full` used to mean "не сворачивай": the transcript stayed
+    // buried under reasoning nobody was reading. A finished thought is history, so
+    // it folds; opening it is one click, which is the person's decision, not a config's.
     let mut app = App::new();
     app.ui.thinking_mode = "full".into();
     app.handle_event(ArgentEvent::Thinking("deep thoughts".into()));
     app.handle_event(ArgentEvent::Done);
+
     match &app.messages[0] {
-        MessageItem::Assistant { thinking_expanded, .. } => assert!(*thinking_expanded),
+        MessageItem::Assistant { thinking_expanded, .. } => {
+            assert!(!*thinking_expanded, "a finished thought starts folded")
+        }
         _ => unreachable!(),
     }
-    assert!(frame(&app, 100, 30).contains("└── "), "the full reasoning tree is not drawn");
+
+    // Opened by hand, the whole reasoning tree is drawn.
+    app.toggle_all_reasoning(true);
+    assert!(
+        frame(&app, 100, 30).contains("deep thoughts"),
+        "the opened block must show the reasoning itself"
+    );
 }
 
 #[test]

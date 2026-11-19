@@ -3,7 +3,7 @@
 from src.cli.commands.base import CommandContext, CommandResult
 from src.cli.commands.registry import registry
 from src.cli.input_queue import get_input_queue
-from ui import console, print_system, print_error
+from argent.ui import console, print_system, print_error
 from rich.markup import escape
 from rich.panel import Panel
 from rich.text import Text

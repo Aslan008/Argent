@@ -4,7 +4,7 @@ import time
 import pytest
 from unittest.mock import patch
 
-from tools.command_ops import run_command, FAST_INTERACTIVE_SILENCE_LIMIT, INTERACTIVE_PROMPT_PATTERNS
+from argent.tools.command_ops import run_command, FAST_INTERACTIVE_SILENCE_LIMIT, INTERACTIVE_PROMPT_PATTERNS
 
 
 class TestInteractivePromptDetector:
@@ -24,7 +24,7 @@ class TestInteractivePromptDetector:
 
     def test_fast_interactive_timeout_terminates_in_seconds(self, monkeypatch):
         # Auto-approve command for test
-        monkeypatch.setattr("tools.command_ops.request_approval", lambda *args, **kwargs: True)
+        monkeypatch.setattr("argent.tools.command_ops.request_approval", lambda *args, **kwargs: True)
 
         cmd = 'python -c "print(\'Do you want to proceed? [y/N] \', flush=True); import time; time.sleep(30)"'
         start = time.time()

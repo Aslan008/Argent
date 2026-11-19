@@ -11,8 +11,8 @@ import re
 import pytest
 from rich.console import Console
 
-import config
-import ui
+import argent.config as config
+import argent.ui as ui
 from src.bridge import premium_markdown, render
 
 ANSI = re.compile(r"\x1b\[[0-9;:]*m|\x1b\]8;[^\x1b]*\x1b\\")

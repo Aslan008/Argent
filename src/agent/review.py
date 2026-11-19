@@ -22,7 +22,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable, List, Optional
 
-from logger import get_logger
+from argent.logger import get_logger
 
 log = get_logger("review")
 
@@ -271,8 +271,8 @@ class ReviewResult:
 
 def default_runner(task: str) -> str:
     """Run the reviewer sub-agent (the critic's model when one is configured)."""
-    from agent import ArgentSubAgent
-    from config import get_critic_model, get_critic_provider
+    from argent.agent import ArgentSubAgent
+    from argent.config import get_critic_model, get_critic_provider
 
     model, provider = get_critic_model() or None, get_critic_provider() or None
     try:

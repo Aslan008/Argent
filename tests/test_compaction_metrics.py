@@ -11,7 +11,7 @@ from src.agent import trimmer
 @pytest.fixture(autouse=True)
 def _fresh(tmp_path, monkeypatch):
     trimmer.reset_compaction_history()
-    monkeypatch.setattr("project_paths.project_root_or_cwd", lambda *a, **k: tmp_path)
+    monkeypatch.setattr("argent.project_paths.project_root_or_cwd", lambda *a, **k: tmp_path)
     yield
     trimmer.reset_compaction_history()
 
@@ -84,10 +84,66 @@ def test_while_thrashing_the_summariser_is_not_called():
 def test_a_normal_compaction_records_its_metrics_and_announces_them(capsys):
     said = []
     with patch("src.agent.trimmer._summarize_with_llm", return_value="## Done\n- old turns"), \
-         patch("ui.print_system", side_effect=lambda t, *a, **k: said.append(t)):
+         patch("argent.ui.print_system", side_effect=lambda t, *a, **k: said.append(t)):
         out = trimmer.soft_trim_with_summarization(_long_history(), "mock", max_history_messages=10,
                                                    max_context_tokens=30000)
     assert len(out) < 53
     rec = trimmer.last_compaction()
     assert rec is not None and rec["kind"] == "auto" and rec["pre_tokens"] > rec["post_tokens"]
     assert any("Контекст сжат" in s for s in said)
+
+
+def test_the_turn_counter_counts_only_new_compactions():
+    """Метка берётся на старте хода; старое в этот ход не попадает.
+
+    Длина списка для этого не годится: он обрезается до двадцати записей, и
+    долгий ход с двумя десятками сжатий иначе показывал бы ноль.
+    """
+    mark = trimmer.compaction_seq()
+    assert trimmer.count_since(mark) == 0
+
+    _record(0.5, at=1000.0, n=2)
+    assert trimmer.count_since(mark) == 2
+
+    fresh = trimmer.compaction_seq()
+    assert trimmer.count_since(fresh) == 0, "новый ход считается с новой метки"
+
+
+def test_the_counter_survives_more_compactions_than_the_list_keeps():
+    from src.agent import compaction_log as clog
+
+    keep = clog._COMPACTIONS_KEEP
+    mark = trimmer.compaction_seq()
+    _record(0.5, at=1000.0, n=keep + 5)
+
+    assert len(clog._COMPACTIONS) == keep, "список обрезан"
+    assert trimmer.count_since(mark) == keep + 5, "счётчик не обрезан"
+
+
+def test_the_agent_reports_the_compactions_of_its_own_turn():
+    """Свойство агента, с которого читают оба фронтенда."""
+    from argent.agent import ArgentAgent
+
+    agent = ArgentAgent.__new__(ArgentAgent)          # без __init__: нужно одно поле
+    agent._turn_compaction_seq = trimmer.compaction_seq()
+    assert agent.turn_compactions == 0
+
+    _record(0.5, at=1000.0, n=2)
+    assert agent.turn_compactions == 2
+
+
+def test_the_turn_note_is_silent_without_compactions():
+    assert trimmer.turn_note(0) == ""
+    assert trimmer.turn_note(0, {"pre_tokens": 1, "post_tokens": 1}) == ""
+
+
+def test_the_turn_note_names_the_count_and_the_last_saving():
+    entry = trimmer.record_compaction("auto", 7, 128450, 12000, "m")
+
+    assert trimmer.turn_note(1, entry) == "1 сжатие · 128.4k→12k"
+    assert trimmer.turn_note(2, entry) == "2 сжатия · 128.4k→12k"
+    assert trimmer.turn_note(5, entry) == "5 сжатий · 128.4k→12k"
+    assert trimmer.turn_note(11, entry).startswith("11 сжатий")
+    assert trimmer.turn_note(21, entry).startswith("21 сжатие")
+    # Без записи — только число, но строка всё равно правдива.
+    assert trimmer.turn_note(2) == "2 сжатия"

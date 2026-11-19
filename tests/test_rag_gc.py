@@ -3,7 +3,7 @@ searchable, or the model gets snippets of code that isn't there any more."""
 
 import pytest
 
-import rag_engine
+import argent.rag_engine as rag_engine
 
 
 class FakeCollection:
@@ -66,7 +66,7 @@ class TestUpdateFileIndex:
         col = FakeCollection()
         monkeypatch.setattr(rag_engine, "_RAG_ENABLED", True)
         monkeypatch.setattr(rag_engine, "_COLLECTION", col)
-        monkeypatch.setattr("project_paths.find_project_root", lambda start=None: None)
+        monkeypatch.setattr("argent.project_paths.find_project_root", lambda start=None: None)
         rag_engine.update_file_index(str(tmp_path / "x.py"))
         assert col.deleted == []
 
@@ -88,10 +88,10 @@ class TestRemoveFileIndex:
 
     def test_delete_file_tool_drops_the_index(self, rag, monkeypatch):
         root, col = rag
-        import tools.file_ops as file_ops
+        import argent.tools.file_ops as file_ops
         monkeypatch.setattr(file_ops, "snapshot", lambda *a, **k: True)
         monkeypatch.setattr(file_ops, "memory", type("M", (), {"add_completed": staticmethod(lambda *a: None)})())
-        monkeypatch.setattr("approval.request_approval", lambda *a, **k: True)
+        monkeypatch.setattr("argent.approval.request_approval", lambda *a, **k: True)
 
         f = root / "doomed.py"
         f.write_text("x = 1\n", encoding="utf-8")

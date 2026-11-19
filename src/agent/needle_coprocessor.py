@@ -12,7 +12,7 @@ import re
 import time
 from dataclasses import dataclass
 from typing import Any, Dict, Optional
-from logger import get_logger
+from argent.logger import get_logger
 
 logger = get_logger("needle_coprocessor")
 
@@ -236,8 +236,8 @@ class NeedleCoprocessor:
                 if name in ("read_file", "grep_search", "run_command") or name in _NEEDLE_GIT_STUBS:
                     # Normalize argument keys for Argent tools
                     if name == "read_file":
-                        fpath = args.get("file_path") or args.pop("path", "")
-                        args["file_path"] = fpath
+                        fpath = args.get("path") or args.pop("file_path", "")
+                        args["path"] = fpath
                         # Ground-truth check: target file MUST exist on disk
                         if not fpath or not os.path.exists(fpath):
                             logger.debug(f"Needle read_file rejected: path '{fpath}' does not exist on disk")
@@ -296,7 +296,7 @@ class NeedleCoprocessor:
                     if path and not path.startswith("read_file") and os.path.exists(path):
                         return FastDispatchResult(
                             tool_name="read_file",
-                            arguments={"file_path": path},
+                            arguments={"path": path},
                             confidence=confidence or 0.85,
                             elapsed_ms=elapsed_ms,
                             raw_query=user_query,

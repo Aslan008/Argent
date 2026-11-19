@@ -14,11 +14,11 @@ from types import SimpleNamespace
 
 import pytest
 
-sht = pytest.importorskip("tools.stagehand_tools")
+sht = pytest.importorskip("argent.tools.stagehand_tools")
 if not sht.STAGEHAND_AVAILABLE:
     pytest.skip("stagehand is not installed", allow_module_level=True)
 
-import providers
+import argent.providers as providers
 
 
 class _Provider:
@@ -41,7 +41,7 @@ class _Provider:
 def bridge(monkeypatch):
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    monkeypatch.setattr("config.get_current_model", lambda *a, **k: "test-model")
+    monkeypatch.setattr("argent.config.get_current_model", lambda *a, **k: "test-model")
 
     def install(provider):
         monkeypatch.setattr(providers, "create_provider", lambda *a, **k: provider)

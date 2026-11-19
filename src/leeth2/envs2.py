@@ -870,7 +870,7 @@ class HanoiEnv(_Game):
 
 
 # ------------------------------------------------------------------------------------------------ cheapest way over terrain
-import heapq  # noqa: E402
+import heapq
 
 TERRAIN = {".": 1, ",": 2, "~": 4}
 

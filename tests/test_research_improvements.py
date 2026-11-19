@@ -1,7 +1,7 @@
 """Tests for the deep_research improvements: dedup, smart_truncate, extended signature."""
 
 from src.research.synthesis import dedup_chunks, _word_set
-from deep_research import _smart_truncate, run_deep_research
+from argent.deep_research import _smart_truncate, run_deep_research
 import inspect
 
 

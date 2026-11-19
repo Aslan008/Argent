@@ -16,10 +16,10 @@ from unittest.mock import MagicMock
 
 import pytest
 
-import agent as agent_module
-import config
-from agent import ArgentAgent
-from tools.schemas import AVAILABLE_TOOLS, TOOL_SCHEMAS
+import argent.agent as agent_module
+import argent.config as config
+from argent.agent import ArgentAgent
+from argent.tools.schemas import AVAILABLE_TOOLS, TOOL_SCHEMAS
 
 # Names that existed once and are not tools any more. The model must not be sent
 # to any of them.

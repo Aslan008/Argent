@@ -34,7 +34,7 @@ from src.leeth.dataset_generator import LeethSample
 from src.leeth.model import LeethConfig, LeethModel, config_from_checkpoint
 from src.leeth.tokenizer import LeethTokenizer
 from src.leeth.train import LeethTorchDataset, collate_leeth_batch, compute_calibrated_loss
-from logger import get_logger
+from argent.logger import get_logger
 
 logger = get_logger("leeth_finetune")
 

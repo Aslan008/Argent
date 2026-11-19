@@ -1,0 +1,20 @@
+id: smoke-write-file
+task: >
+  Create a file named bench_smoke.txt in the current directory.
+  It must contain exactly one line: argent-bench-ok
+  Then stop; do not modify any other file.
+start: HEAD
+limits:
+  timeout_s: 180
+allowed_tools:
+  - write_file
+  - read_file
+  - list_directory
+checks:
+  - cmd: 'findstr /C:"argent-bench-ok" bench_smoke.txt'
+    expect_exit: 0
+    timeout_s: 30
+  - cmd: 'python -c "from pathlib import Path; t=Path(\"bench_smoke.txt\").read_text(encoding=\"utf-8\").strip(); assert t == \"argent-bench-ok\", t"'
+    expect_exit: 0
+    timeout_s: 30
+tags: [smoke, write]

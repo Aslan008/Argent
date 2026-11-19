@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
-from logger import get_logger
+from argent.logger import get_logger
 
 logger = get_logger("semantic_registry")
 

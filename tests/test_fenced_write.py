@@ -8,13 +8,13 @@ def test_verbatim_roundtrip_with_backslashes_and_quotes():
     text = f"```write_file C:/proj/Foo.cs\n{body}\n```"
     r = parse_fenced_write(text)
     assert r["parsed"]["name"] == "write_file"
-    assert r["parsed"]["arguments"]["file_path"] == "C:/proj/Foo.cs"
+    assert r["parsed"]["arguments"]["path"] == "C:/proj/Foo.cs"
     assert r["parsed"]["arguments"]["content"] == body   # taken verbatim, no unescaping
 
 
 def test_windows_backslash_path_preserved():
     r = parse_fenced_write("```write_file C:\\Users\\a\\b.cs\nx\n```")
-    assert r["parsed"]["arguments"]["file_path"] == "C:\\Users\\a\\b.cs"
+    assert r["parsed"]["arguments"]["path"] == "C:\\Users\\a\\b.cs"
 
 
 def test_routes_through_raw_parser():
@@ -37,7 +37,7 @@ def test_markdown_file_with_inner_code_fence_is_captured_whole():
     text = f"```write_file notes.md\n{body}\n```"
     r = parse_fenced_write(text)
     assert r is not None
-    assert r["parsed"]["arguments"]["file_path"] == "notes.md"
+    assert r["parsed"]["arguments"]["path"] == "notes.md"
     assert r["parsed"]["arguments"]["content"] == body
 
 

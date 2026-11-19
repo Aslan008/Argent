@@ -21,6 +21,7 @@ def _batch(tok):
 
 
 def _with_content(base: Leeth2Model, tiny_cfg) -> Leeth2Model:
+    pytest.importorskip("transformers", reason="Leeth tests build a real ModernBERT backbone — pip install transformers")
     from transformers import ModernBertConfig, ModernBertModel
 
     bc = ModernBertConfig(**tiny_cfg, attn_implementation="eager")

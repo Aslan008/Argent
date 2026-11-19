@@ -11,6 +11,7 @@ pytestmark = pytest.mark.skipif(not (TOK_DIR / "tokenizer.json").exists(), reaso
 
 @pytest.fixture(scope="module")
 def tiny_model(tmp_path_factory):
+    pytest.importorskip("transformers", reason="Leeth tests build a real ModernBERT backbone — pip install transformers")
     import torch
     from transformers import ModernBertConfig
 

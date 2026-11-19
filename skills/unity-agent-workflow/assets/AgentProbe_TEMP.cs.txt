@@ -1,0 +1,60 @@
+// ВРЕМЕННЫЙ editor-тест агента. Положить в любую папку Editor (или сборку с UNITY_EDITOR),
+// переименовать класс/файл под задачу (суффикс _TEMP — чтобы не забыть удалить),
+// запустить:  python unity_batch.py --method AgentProbe_TEMP.Run --grep AGENT_PROBE
+// и УДАЛИТЬ вместе с .meta после проверки.
+using System.Collections.Generic;
+using UnityEditor;
+using UnityEditor.SceneManagement;
+using UnityEngine;
+
+public static class AgentProbe_TEMP
+{
+    const string Tag = "AGENT_PROBE";
+    static int _fail, _errors;
+    static readonly List<string> _errorTexts = new List<string>();
+
+    static void Log(string s) => Debug.Log($"{Tag} {s}");
+    static void Check(bool ok, string what)
+    {
+        if (!ok) _fail++;
+        Log((ok ? "OK   " : "FAIL ") + what);
+    }
+
+    public static void Run()
+    {
+        // Ловим ВСЕ ошибки/исключения, которые код пишет в консоль во время теста
+        Application.logMessageReceived += (msg, st, type) =>
+        {
+            if (type == LogType.Log || type == LogType.Warning || msg.StartsWith(Tag)) return;
+            _errors++;
+            if (_errorTexts.Count < 30) _errorTexts.Add($"{type}: {msg} | {(st.Length > 300 ? st.Substring(0, 300) : st)}");
+        };
+        try
+        {
+            // Пустая сцена в памяти: настоящие сцены проекта не трогаем и не сохраняем
+            EditorSceneManager.NewScene(NewSceneSetup.EmptyScene, NewSceneMode.Single);
+
+            // ---- тело теста ----------------------------------------------------
+            // Совет: GameObject создавать ВЫКЛЮЧЕННЫМ (go.SetActive(false)), если компонент
+            // в OnEnable лезет в GPU/сеть/синглтоны, а проверяется логика.
+            var go = new GameObject("Probe");
+            Check(go != null, "сцена создаётся");
+
+            // Отмена: Undo в batchmode работает, но группы нужно разделять вручную
+            // Undo.IncrementCurrentGroup(); ...действие...; Undo.IncrementCurrentGroup(); Undo.PerformUndo();
+
+            // Приватное поле/метод — через рефлексию:
+            // var f = typeof(MyComp).GetField("_x", BindingFlags.NonPublic | BindingFlags.Instance);
+            // -------------------------------------------------------------------
+        }
+        catch (System.Exception e)
+        {
+            _fail++;
+            Log("EXCEPTION " + e);
+        }
+        foreach (var e in _errorTexts) Log("ERR " + e);
+        Log($"SUMMARY fail={_fail} errors={_errors}");
+        // Код выхода виден агенту: 0 — всё прошло
+        EditorApplication.Exit(_fail == 0 && _errors == 0 ? 0 : 1);
+    }
+}

@@ -31,7 +31,7 @@ import urllib.parse
 import urllib.request
 from typing import Any
 
-from logger import get_logger
+from argent.logger import get_logger
 
 log = get_logger("lsp")
 
@@ -132,7 +132,7 @@ class LSPManager:
         """True if multilspy is importable."""
         if not self._multilspy_checked:
             try:
-                import multilspy  # noqa: F401
+                import multilspy
                 self._multilspy_ok = True
             except ImportError:
                 self._multilspy_ok = False

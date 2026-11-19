@@ -19,7 +19,7 @@ import random
 import socket
 import urllib.parse
 
-from logger import get_logger
+from argent.logger import get_logger
 from src.agent.netstate import retry_transient
 from src.research.cache import get_cached, set_cached
 

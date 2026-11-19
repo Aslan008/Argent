@@ -11,7 +11,7 @@ import sys
 from pathlib import Path
 
 # --- Critical mocking: stub dependencies before importing the tools ---
-import memory_manager
+import argent.memory_manager as memory_manager
 
 
 class FakeMemory:
@@ -22,10 +22,10 @@ class FakeMemory:
         pass
 
 
-import file_tracker
+import argent.file_tracker as file_tracker
 
-import config
-from tools import file_ops
+import argent.config as config
+from argent.tools import file_ops
 
 
 @pytest.fixture(autouse=True)
@@ -65,7 +65,7 @@ class TestReadFileLineNumbers:
         content = "alpha\nbeta\ngamma\ndelta\nepsilon\n"
         (tmp_path / "exact.txt").write_text(content, encoding="utf-8")
         out = file_ops.read_file("exact.txt")
-        from tools._helpers import _strip_read_line_numbers
+        from argent.tools._helpers import _strip_read_line_numbers
         plain = _strip_read_line_numbers(out)
         assert plain == content, f"Content corrupted: expected {content!r}, got {plain!r}"
 
@@ -167,7 +167,7 @@ class TestReadFileUTF8:
         content = "Привет мир\n你好世界\n😀 emoji here\n"
         (tmp_path / "utf8.txt").write_text(content, encoding="utf-8")
         out = file_ops.read_file("utf8.txt")
-        from tools._helpers import _strip_read_line_numbers
+        from argent.tools._helpers import _strip_read_line_numbers
         plain = _strip_read_line_numbers(out)
         assert plain == content, f"UTF-8 content corrupted; got: {plain!r}"
         assert "Привет мир" in out

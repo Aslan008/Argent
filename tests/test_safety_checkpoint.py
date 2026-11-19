@@ -1,8 +1,8 @@
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
-import main as main_module
-import tools.misc_tools as misc_tools
+import argent.main as main_module
+import argent.tools.misc_tools as misc_tools
 
 
 def fake_git(is_repo=True, dirty=True):

@@ -3,9 +3,9 @@
 import pytest
 from unittest.mock import MagicMock
 
-import config
-from providers import _parse_openai_usage
-from usage_tracker import SessionUsage
+import argent.config as config
+from argent.providers import _parse_openai_usage
+from argent.usage_tracker import SessionUsage
 from src.cli.cli_ui import _print_turn_snapshot
 from src.cli.commands.base import CommandContext
 from src.cli.commands.config_commands import handle_snapshot

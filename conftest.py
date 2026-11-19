@@ -73,6 +73,12 @@ _isolate_user_home()
 # project it runs in is the developer's own: its schedule must never fire here.
 os.environ.setdefault("ARGENT_DISABLE_AUTOMATIONS", "1")
 
+# API keys go to the OS credential store (src.agent.secret_store). A test run
+# must never write into the developer's real vault — or depend on one being
+# present — so the store is switched off and the config-file path is used.
+# The tests of the store itself inject a fake backend.
+os.environ.setdefault("ARGENT_DISABLE_KEYRING", "1")
+
 # A bridge attached by a test has no TUI to answer "С чего начать?"; waiting for
 # one would hang the test. The start-up tests clear this and answer for themselves.
 os.environ.setdefault("ARGENT_NO_STARTUP_PROMPTS", "1")
@@ -98,9 +104,10 @@ _ROOT = str(Path(__file__).parent.resolve())
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-# Pre-import the local logger so it is cached in sys.modules before any
-# test module triggers the import.
-import logger  # noqa: E402,F401
+# Pre-import the package's logger so it is cached in sys.modules before any test
+# module triggers the import (a third-party `logger` can no longer shadow it —
+# the module now lives inside the `argent` package, not at the top level).
+import argent.logger as logger
 
 
 @pytest.fixture(autouse=True)

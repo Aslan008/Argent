@@ -14,11 +14,13 @@ None of that fails at install time. It fails later, as a feature doing less
 than it says.
 """
 
+import importlib
 import re
 import tomllib
 from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parents[1]
+_ARGENT = _ROOT / "argent"
 
 
 def _pyproject() -> dict:
@@ -70,25 +72,42 @@ class TestTheOnesThatWereMissing:
         assert "chromadb" in rag and "sentence-transformers" in rag
 
 
-# Root-level files that are deliberately not part of the installed package.
-# conftest is test plumbing; the rest is the self-contained "Leeth plays Snake"
-# demo (a game, its Qt front end and a benchmark), which nothing in Argent
-# imports. Anything else new at the root has to be packaged or named here.
+# Root-level files that are deliberately not part of the installed package:
+# test plumbing and the self-contained "Leeth plays Snake" demo (a game, its Qt
+# front end and a benchmark), which nothing in Argent imports.
 _NOT_SHIPPED = {"conftest", "leeth_player", "run_snake", "snake_benchmark",
                 "snake_engine", "snake_ui_qt"}
 
 
 class TestPackagedModules:
-    def test_every_packaged_module_exists(self):
-        listed = _pyproject()["tool"]["setuptools"]["py-modules"]
-        missing = [m for m in listed if not (_ROOT / f"{m}.py").exists()]
-        assert not missing, f"py-modules перечисляет несуществующие модули: {missing}"
+    """The install is one package; a module missing from it breaks only the CLI.
 
-    def test_every_root_module_is_packaged(self):
-        """A module left out of py-modules is absent from an installed copy and
-        fails on import only for people who installed rather than cloned."""
-        listed = set(_pyproject()["tool"]["setuptools"]["py-modules"])
+    This is the test that would have caught `host_os`: the file existed, `python
+    main.py` worked from the source tree, and the installed `argent` command
+    died with ModuleNotFoundError because the flat `py-modules` list did not
+    name it. Moving everything under `argent/` removes the list entirely — and
+    these assertions keep the next module from being left behind at the root.
+    """
+
+    def test_the_entry_point_module_exists(self):
+        assert (_ARGENT / "__init__.py").is_file()
+        assert (_ARGENT / "main.py").is_file()
+        assert _pyproject()["project"]["scripts"]["argent"] == "argent.main:main"
+
+    def test_every_module_in_the_package_imports(self):
+        failed = {}
+        for path in _ARGENT.glob("*.py"):
+            if path.stem == "__init__":
+                continue
+            try:
+                importlib.import_module(f"argent.{path.stem}")
+            except Exception as e:  # noqa: BLE001 - report every broken module
+                failed[path.stem] = f"{type(e).__name__}: {e}"
+        assert failed == {}
+
+    def test_nothing_packaged_is_left_at_the_root(self):
         on_disk = {p.stem for p in _ROOT.glob("*.py")
                    if not p.stem.startswith("test_")
                    and p.stem not in _NOT_SHIPPED}
-        assert not (on_disk - listed), f"не попадут в установку: {sorted(on_disk - listed)}"
+        assert on_disk == set(), (
+            f"these modules are at the root and would not be installed: {sorted(on_disk)}")

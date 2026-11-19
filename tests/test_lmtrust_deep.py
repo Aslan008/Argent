@@ -30,7 +30,7 @@ from src.agent.semantic_loop_guard import (
     build_semantic_loop_note,
 )
 from src.agent.command_diagnostics import diagnose_command_error
-from tools.command_ops import INTERACTIVE_PROMPT_PATTERNS
+from argent.tools.command_ops import INTERACTIVE_PROMPT_PATTERNS
 from src.automation.desktop import DesktopAutomation
 
 

@@ -109,7 +109,7 @@ def build_critique_task(target: str, goal: str = None, what: str = "plan / idea"
     )
 
 
-_KNOWN_PROVIDERS = ("ollama", "zai", "koboldcpp", "openrouter", "claude", "anthropic", "deepseek", "xkiro", "wormsoft")
+_KNOWN_PROVIDERS = ("ollama", "zai", "koboldcpp", "openrouter", "claude", "anthropic", "deepseek", "gemini", "xkiro", "wormsoft", "openaicompat")
 
 
 def parse_critic_model(spec: str) -> Tuple[str, str]:

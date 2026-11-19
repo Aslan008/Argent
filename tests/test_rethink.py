@@ -12,7 +12,7 @@ Tests cover:
 import pytest
 from unittest.mock import MagicMock, patch
 
-import config
+import argent.config as config
 from src.agent.trimmer import clean_messages_for_llm
 from src.bridge.events import to_event
 
@@ -62,9 +62,9 @@ class TestRethinkSystemPrompt:
     def teardown_method(self):
         config.set_thinking_rethink(self.orig_rethink)
 
-    @patch("agent.ArgentAgent.__init__", return_value=None)
+    @patch("argent.agent.ArgentAgent.__init__", return_value=None)
     def test_prompt_omitted_when_disabled(self, mock_init):
-        from agent import ArgentAgent
+        from argent.agent import ArgentAgent
 
         agent = ArgentAgent()
         agent.strategy = MagicMock()
@@ -80,9 +80,9 @@ class TestRethinkSystemPrompt:
         assert "DELIBERATE RETHINK PROTOCOL" not in prompt
         assert "<rethink>" not in prompt
 
-    @patch("agent.ArgentAgent.__init__", return_value=None)
+    @patch("argent.agent.ArgentAgent.__init__", return_value=None)
     def test_prompt_injected_when_enabled(self, mock_init):
-        from agent import ArgentAgent
+        from argent.agent import ArgentAgent
 
         agent = ArgentAgent()
         agent.strategy = MagicMock()
@@ -101,9 +101,9 @@ class TestRethinkSystemPrompt:
         assert "Stress-test" in prompt
         assert "Self-correct" in prompt
 
-    @patch("agent.ArgentAgent.__init__", return_value=None)
+    @patch("argent.agent.ArgentAgent.__init__", return_value=None)
     def test_prompt_is_universal_and_not_code_bound(self, mock_init):
-        from agent import ArgentAgent
+        from argent.agent import ArgentAgent
 
         agent = ArgentAgent()
         agent.strategy = MagicMock()
@@ -176,7 +176,7 @@ class TestRethinkCommands:
         config.set_thinking_rethink(self.orig_rethink)
 
     def test_rethink_command_toggle(self):
-        from command_handler import handle_slash_command
+        from argent.command_handler import handle_slash_command
 
         mock_agent = MagicMock()
 
@@ -189,7 +189,7 @@ class TestRethinkCommands:
         assert config.get_thinking_rethink() is False
 
     def test_think_rethink_subcommand(self):
-        from command_handler import handle_slash_command
+        from argent.command_handler import handle_slash_command
 
         mock_agent = MagicMock()
 
@@ -208,9 +208,9 @@ class TestRethinkCommands:
 
 
 class TestRethinkStreamingParser:
-    @patch("agent.ArgentAgent.__init__", return_value=None)
+    @patch("argent.agent.ArgentAgent.__init__", return_value=None)
     def test_streaming_rethink_separation(self, mock_init):
-        from agent import ArgentAgent
+        from argent.agent import ArgentAgent
 
         agent = ArgentAgent()
         agent.model_name = "test_model"
@@ -258,9 +258,9 @@ class TestRethinkStreamingParser:
             {"content": chunk} for chunk in chunks
         )
 
-        with patch("agent.create_provider", return_value=mock_provider), \
-             patch("agent.get_available_tools", return_value={}), \
-             patch("agent.get_tool_schemas", return_value=[]):
+        with patch("argent.agent.create_provider", return_value=mock_provider), \
+             patch("argent.agent.get_available_tools", return_value={}), \
+             patch("argent.agent.get_tool_schemas", return_value=[]):
 
             events = list(agent.process_user_input("Explain gravity"))
 
@@ -284,9 +284,9 @@ class TestRethinkStreamingParser:
             assert "Thinking through the physics" in assistant_msg["thinking"]
             assert "Checking for counter-theories" in assistant_msg.get("rethink", "")
 
-    @patch("agent.ArgentAgent.__init__", return_value=None)
+    @patch("argent.agent.ArgentAgent.__init__", return_value=None)
     def test_nested_rethink_without_closing_think_does_not_swallow_content(self, mock_init):
-        from agent import ArgentAgent
+        from argent.agent import ArgentAgent
 
         agent = ArgentAgent()
         agent.model_name = "test_model"
@@ -332,9 +332,9 @@ class TestRethinkStreamingParser:
             {"content": chunk} for chunk in chunks
         )
 
-        with patch("agent.create_provider", return_value=mock_provider), \
-             patch("agent.get_available_tools", return_value={}), \
-             patch("agent.get_tool_schemas", return_value=[]):
+        with patch("argent.agent.create_provider", return_value=mock_provider), \
+             patch("argent.agent.get_available_tools", return_value={}), \
+             patch("argent.agent.get_tool_schemas", return_value=[]):
 
             events = list(agent.process_user_input("Solve puzzle"))
 
@@ -355,9 +355,9 @@ class TestRethinkStreamingParser:
             assert "Here is the final verified answer." in assistant_msg["content"]
             assert "Wait, let me verify step 2 edge case." in assistant_msg["rethink"]
 
-    @patch("agent.ArgentAgent.__init__", return_value=None)
+    @patch("argent.agent.ArgentAgent.__init__", return_value=None)
     def test_rethink_token_splitting_across_chunks(self, mock_init):
-        from agent import ArgentAgent
+        from argent.agent import ArgentAgent
 
         agent = ArgentAgent()
         agent.model_name = "test_model"
@@ -403,9 +403,9 @@ class TestRethinkStreamingParser:
             {"content": chunk} for chunk in chunks
         )
 
-        with patch("agent.create_provider", return_value=mock_provider), \
-             patch("agent.get_available_tools", return_value={}), \
-             patch("agent.get_tool_schemas", return_value=[]):
+        with patch("argent.agent.create_provider", return_value=mock_provider), \
+             patch("argent.agent.get_available_tools", return_value={}), \
+             patch("argent.agent.get_tool_schemas", return_value=[]):
 
             events = list(agent.process_user_input("Test split"))
 
@@ -419,9 +419,9 @@ class TestRethinkStreamingParser:
             assert "<reth" not in content_text
             assert content_text == "Final answer is ready."
 
-    @patch("agent.ArgentAgent.__init__", return_value=None)
+    @patch("argent.agent.ArgentAgent.__init__", return_value=None)
     def test_multi_tag_single_chunk_chronology(self, mock_init):
-        from agent import ArgentAgent
+        from argent.agent import ArgentAgent
 
         agent = ArgentAgent()
         agent.model_name = "test_model"
@@ -462,9 +462,9 @@ class TestRethinkStreamingParser:
             {"content": chunk} for chunk in chunks
         )
 
-        with patch("agent.create_provider", return_value=mock_provider), \
-             patch("agent.get_available_tools", return_value={}), \
-             patch("agent.get_tool_schemas", return_value=[]):
+        with patch("argent.agent.create_provider", return_value=mock_provider), \
+             patch("argent.agent.get_available_tools", return_value={}), \
+             patch("argent.agent.get_tool_schemas", return_value=[]):
 
             events = list(agent.process_user_input("Single chunk"))
 
@@ -477,9 +477,9 @@ class TestRethinkStreamingParser:
             assert "<think>" not in content_text
             assert content_text == "Public answer."
 
-    @patch("agent.ArgentAgent.__init__", return_value=None)
+    @patch("argent.agent.ArgentAgent.__init__", return_value=None)
     def test_math_less_than_preserved_by_lookahead_buffer(self, mock_init):
-        from agent import ArgentAgent
+        from argent.agent import ArgentAgent
 
         agent = ArgentAgent()
         agent.model_name = "test_model"
@@ -520,9 +520,9 @@ class TestRethinkStreamingParser:
             {"content": chunk} for chunk in chunks
         )
 
-        with patch("agent.create_provider", return_value=mock_provider), \
-             patch("agent.get_available_tools", return_value={}), \
-             patch("agent.get_tool_schemas", return_value=[]):
+        with patch("argent.agent.create_provider", return_value=mock_provider), \
+             patch("argent.agent.get_available_tools", return_value={}), \
+             patch("argent.agent.get_tool_schemas", return_value=[]):
 
             events = list(agent.process_user_input("Math test"))
             content_text = "".join(e["content"] for e in events if e.get("type") == "content_stream")

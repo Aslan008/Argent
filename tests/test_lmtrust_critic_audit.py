@@ -16,9 +16,9 @@ from src.agent.critic import (
     CRITIC_SYSTEM, build_critique_task, parse_critic_model,
     parse_critic_verdict, CriticVerdict, sanitize_and_truncate_diff,
 )
-from agent import ArgentAgent, ArgentSubAgent, run_plan_critique
-from tools.misc_tools import run_subagent
-import config
+from argent.agent import ArgentAgent, ArgentSubAgent, run_plan_critique
+from argent.tools.misc_tools import run_subagent
+import argent.config as config
 
 
 class TestCriticContractAndLogicAudit:
@@ -94,7 +94,7 @@ class TestCriticContractAndLogicAudit:
         monkeypatch.setattr(config, "get_critic_provider", lambda: "openrouter")
         
         printed = []
-        import ui
+        import argent.ui as ui
         monkeypatch.setattr(ui.console, "print", lambda msg: printed.append(str(msg)))
         
         calls = []
@@ -115,7 +115,7 @@ class TestCriticContractAndLogicAudit:
         """L6 x D7: tools/schemas.py run_subagent description lists 'Critic'
         allowing the model to invoke Critic sub-agents.
         """
-        from tools.schemas import TOOL_SCHEMAS
+        from argent.tools.schemas import TOOL_SCHEMAS
         subagent_tool = next(t for t in TOOL_SCHEMAS if t["function"]["name"] == "run_subagent")
         role_desc = subagent_tool["function"]["parameters"]["properties"]["role"]["description"]
         assert "Critic" in role_desc
@@ -128,11 +128,13 @@ class TestCriticContractAndLogicAudit:
         monkeypatch.setattr(config, "get_critic_provider", lambda: "openrouter")
 
         sub_args = {}
-        def fake_init(self, role, task, tools_override=None, model_override=None, provider_override=None):
+        def fake_init(self, role, task, tools_override=None, model_override=None,
+                      provider_override=None, thinking=""):
             sub_args["role"] = role
             sub_args["tools"] = tools_override
             sub_args["model"] = model_override
             sub_args["provider"] = provider_override
+            sub_args["thinking"] = thinking
             self.execute = lambda: "Critic review completed"
 
         with patch.object(ArgentSubAgent, "__init__", fake_init):

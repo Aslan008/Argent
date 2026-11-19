@@ -5,7 +5,7 @@ import sys
 from unittest.mock import patch, MagicMock
 import pytest
 
-from config import get_sound_notification, set_sound_notification
+from argent.config import get_sound_notification, set_sound_notification
 from src.cli.sound import play_sound, _play_worker
 
 
@@ -15,8 +15,8 @@ class TestSoundNotifications:
     def test_sound_config_toggle(self, monkeypatch):
         """get_sound_notification and set_sound_notification persist flag correctly."""
         cache = {}
-        monkeypatch.setattr("config._CONFIG_CACHE", cache)
-        monkeypatch.setattr("config.save_config", lambda c: None)
+        monkeypatch.setattr("argent.config._CONFIG_CACHE", cache)
+        monkeypatch.setattr("argent.config.save_config", lambda c: None)
 
         set_sound_notification(True)
         assert get_sound_notification() is True
@@ -26,7 +26,7 @@ class TestSoundNotifications:
 
     def test_play_sound_respects_config_disabled(self, monkeypatch):
         """When disabled in config and not forced, no sound is dispatched."""
-        monkeypatch.setattr("config.get_sound_notification", lambda: False)
+        monkeypatch.setattr("argent.config.get_sound_notification", lambda: False)
         worker_mock = MagicMock()
         monkeypatch.setattr("src.cli.sound._play_worker", worker_mock)
 
@@ -35,7 +35,7 @@ class TestSoundNotifications:
 
     def test_play_sound_force_plays_even_if_disabled(self, monkeypatch):
         """force=True plays sound regardless of config setting (e.g. for /sound test)."""
-        monkeypatch.setattr("config.get_sound_notification", lambda: False)
+        monkeypatch.setattr("argent.config.get_sound_notification", lambda: False)
         worker_mock = MagicMock()
         monkeypatch.setattr("src.cli.sound._play_worker", worker_mock)
 
@@ -100,7 +100,7 @@ class TestSoundNotifications:
 
     def test_play_sound_debounce_suppresses_rapid_successive_calls(self, monkeypatch):
         """Rapid successive sound calls within MIN_SOUND_INTERVAL are debounced unless force=True."""
-        monkeypatch.setattr("config.get_sound_notification", lambda: True)
+        monkeypatch.setattr("argent.config.get_sound_notification", lambda: True)
         worker_mock = MagicMock()
         monkeypatch.setattr("src.cli.sound._play_worker", worker_mock)
 
@@ -131,7 +131,7 @@ class TestSoundNotifications:
 
     def test_request_approval_triggers_prompt_sound(self, monkeypatch):
         """When an interactive approval prompt is presented, play_sound('prompt') is triggered."""
-        from approval import _raw_terminal_prompt
+        from argent.approval import _raw_terminal_prompt
         import questionary
 
         sound_mock = MagicMock()
@@ -144,7 +144,7 @@ class TestSoundNotifications:
 
     def test_ask_user_questions_triggers_prompt_sound(self, monkeypatch):
         """When asking user questions, play_sound('prompt') is triggered."""
-        from tools.misc_tools import ask_user_questions
+        from argent.tools.misc_tools import ask_user_questions
 
         sound_mock = MagicMock()
         monkeypatch.setattr("src.cli.sound.play_sound", sound_mock)
@@ -155,10 +155,10 @@ class TestSoundNotifications:
 
     def test_sound_events_config_and_setters(self, monkeypatch):
         """get_sound_event and set_sound_event manage per-event routing."""
-        from config import get_sound_events_config, get_sound_event, set_sound_event
+        from argent.config import get_sound_events_config, get_sound_event, set_sound_event
         cache = {}
-        monkeypatch.setattr("config._CONFIG_CACHE", cache)
-        monkeypatch.setattr("config.save_config", lambda c: None)
+        monkeypatch.setattr("argent.config._CONFIG_CACHE", cache)
+        monkeypatch.setattr("argent.config.save_config", lambda c: None)
 
         assert get_sound_event("done") == "system"
         assert get_sound_event("prompt") == "system"
@@ -176,7 +176,7 @@ class TestSoundNotifications:
     def test_play_sound_preset_synth(self, monkeypatch):
         """When synth preset is active on Windows, Beep is called with electronic tick frequencies."""
         monkeypatch.setattr(os, "name", "nt")
-        monkeypatch.setattr("config.get_sound_event", lambda ev: "synth")
+        monkeypatch.setattr("argent.config.get_sound_event", lambda ev: "synth")
         fake_winsound = MagicMock()
 
         with patch.dict(sys.modules, {"winsound": fake_winsound}):
@@ -189,7 +189,7 @@ class TestSoundNotifications:
     def test_play_sound_preset_chord(self, monkeypatch):
         """When chord preset is active on Windows, two-tone Beep sequences are played."""
         monkeypatch.setattr(os, "name", "nt")
-        monkeypatch.setattr("config.get_sound_event", lambda ev: "chord")
+        monkeypatch.setattr("argent.config.get_sound_event", lambda ev: "chord")
         fake_winsound = MagicMock()
 
         with patch.dict(sys.modules, {"winsound": fake_winsound}):
@@ -201,7 +201,7 @@ class TestSoundNotifications:
     def test_play_sound_preset_mute_does_not_play(self, monkeypatch):
         """When event is set to mute/none, no audio calls are made."""
         monkeypatch.setattr(os, "name", "nt")
-        monkeypatch.setattr("config.get_sound_event", lambda ev: "mute")
+        monkeypatch.setattr("argent.config.get_sound_event", lambda ev: "mute")
         fake_winsound = MagicMock()
 
         with patch.dict(sys.modules, {"winsound": fake_winsound}):
@@ -214,7 +214,7 @@ class TestSoundNotifications:
         """When event points to an existing WAV file, PlaySound is invoked with SND_FILENAME | SND_NODEFAULT."""
         monkeypatch.setattr(os, "name", "nt")
         fake_path = r"C:\Sounds\alert.wav"
-        monkeypatch.setattr("config.get_sound_event", lambda ev: fake_path)
+        monkeypatch.setattr("argent.config.get_sound_event", lambda ev: fake_path)
         monkeypatch.setattr(os.path, "isfile", lambda p: os.path.abspath(p) == os.path.abspath(fake_path))
 
         fake_winsound = MagicMock()
@@ -231,11 +231,11 @@ class TestSoundNotifications:
     def test_handle_sound_command_set_preset_and_quoted_path(self, monkeypatch):
         """handle_sound_command parses presets, quoted paths, and reports errors cleanly."""
         from src.cli.sound import handle_sound_command
-        from config import get_sound_event
+        from argent.config import get_sound_event
 
         cache = {}
-        monkeypatch.setattr("config._CONFIG_CACHE", cache)
-        monkeypatch.setattr("config.save_config", lambda c: None)
+        monkeypatch.setattr("argent.config._CONFIG_CACHE", cache)
+        monkeypatch.setattr("argent.config.save_config", lambda c: None)
         monkeypatch.setattr("src.cli.sound.play_sound", lambda *a, **k: None)
 
         # Set preset
@@ -263,9 +263,9 @@ class TestSoundNotifications:
 
     def test_sound_config_string_booleans(self, monkeypatch):
         """String booleans ('false', '0', 'off') in config are correctly evaluated as False."""
-        from config import get_sound_notification
+        from argent.config import get_sound_notification
         cache = {}
-        monkeypatch.setattr("config._CONFIG_CACHE", cache)
+        monkeypatch.setattr("argent.config._CONFIG_CACHE", cache)
 
         for false_val in ("false", "0", "off", "no", "disable"):
             cache["sound_notification"] = false_val
@@ -277,14 +277,14 @@ class TestSoundNotifications:
 
     def test_set_sound_event_rejects_unknown_event(self):
         """set_sound_event raises ValueError for invalid event names."""
-        from config import set_sound_event
+        from argent.config import set_sound_event
         with pytest.raises(ValueError, match="Unknown sound event"):
             set_sound_event("invalid_event", "synth")
 
     def test_play_sound_muted_event_skips_thread_creation(self, monkeypatch):
         """play_sound returns early without spawning threads if event is muted."""
-        monkeypatch.setattr("config.get_sound_notification", lambda: True)
-        monkeypatch.setattr("config.get_sound_event", lambda ev: "mute")
+        monkeypatch.setattr("argent.config.get_sound_notification", lambda: True)
+        monkeypatch.setattr("argent.config.get_sound_event", lambda ev: "mute")
         worker_mock = MagicMock()
         monkeypatch.setattr("src.cli.sound._play_worker", worker_mock)
 

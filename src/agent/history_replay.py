@@ -166,7 +166,7 @@ def show(messages: List[dict], replace: bool = False, saved_at: str = "") -> boo
     if not items:
         return False
     header = f"[dim]── восстановленный диалог{(' · ' + saved_at) if saved_at else ''} ──[/dim]"
-    items = [{"role": "note", "text": header}] + items + [{"role": "note", "text": "[dim]── продолжение ──[/dim]"}]
+    items = [{"role": "note", "text": header}] + items + [{"role": "note", "text": "[dim]── конец восстановленной истории ──[/dim]"}]
     with _LOCK:
         sink = _SINK
     if sink is not None:
@@ -178,7 +178,7 @@ def show(messages: List[dict], replace: bool = False, saved_at: str = "") -> boo
 def _print_to_console(items: List[dict], last: int = 12) -> bool:
     """The terminal REPL: its scrollback is the transcript, so only the tail is repeated."""
     try:
-        from ui import console
+        from argent.ui import console
         shown = items[-last:]
         for item in shown:
             role = item["role"]

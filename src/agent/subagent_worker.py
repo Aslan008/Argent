@@ -28,7 +28,7 @@ _ARGENT_ROOT = Path(__file__).resolve().parents[2]
 if __name__ == "__main__":
     sys.path.insert(0, str(_ARGENT_ROOT))
 
-from src.automation.runner import UnattendedGate  # noqa: E402
+from src.automation.runner import UnattendedGate  
 
 RESULT_MARKER = "ARGENT_SUBAGENT_RESULT "
 
@@ -46,7 +46,7 @@ class ChildGate(UnattendedGate):
     have stopped to ask; the child has nobody to ask, so it must not take the broader grant."""
 
     def __call__(self, action, destructive, grant_key):
-        from approval import command_from_action
+        from argent.approval import command_from_action
         from src.agent import permissions
         command = command_from_action(action)
         if command is not None and permissions.PERMISSIONS.command_rule("ask", command) is not None:
@@ -56,8 +56,37 @@ class ChildGate(UnattendedGate):
         return super().__call__(action, destructive, grant_key)
 
 
+def load_history(path: str, system_message: dict) -> list:
+    """The previous attempt's conversation, without its system prompt.
+
+    The role's own prompt is kept, not the saved one: a worker's role is its job, and the
+    job does not change between two attempts at the same step.
+    """
+    if not path:
+        return [system_message]
+    try:
+        saved = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return [system_message]                  # nothing to resume from: a fresh start is honest
+    if not isinstance(saved, list):
+        return [system_message]
+    kept = [m for m in saved if isinstance(m, dict) and m.get("role") != "system"]
+    return [system_message] + kept
+
+
+def save_history(path: str, messages: list) -> None:
+    """Keep this attempt's conversation for the one that may follow it."""
+    if not path:
+        return
+    try:
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
+        Path(path).write_text(json.dumps(messages, ensure_ascii=False), encoding="utf-8")
+    except (OSError, TypeError):
+        pass
+
+
 def run(spec: dict) -> dict:
-    import approval
+    import argent.approval as approval
     from src.agent import permissions, todos
     from src.agent.permissions import Permissions, parse_rule
     from src.agent.plan_mode import PLAN
@@ -79,12 +108,24 @@ def run(spec: dict) -> dict:
     if spec.get("plan_mode"):
         PLAN.enter()
 
-    from agent import ArgentSubAgent
+    from argent.agent import ArgentSubAgent
     agent = ArgentSubAgent(
         spec["role"], spec["task"], tools_override=spec.get("tools"),
-        model_override=spec.get("model") or None, provider_override=spec.get("provider") or None)
-    with todos.use_scope("worker"):
-        report = agent.execute()
+        model_override=spec.get("model") or None, provider_override=spec.get("provider") or None,
+        thinking=spec.get("thinking") or "")
+
+    # A retry of the same step continues this worker instead of hiring a new one: its
+    # own memory (what it read, what it changed, why it stopped) is loaded back, with
+    # the role's system prompt kept — the role is not history, it is the job.
+    resume_path = spec.get("resume_from") or ""
+    if resume_path:
+        agent.messages = load_history(resume_path, agent.messages[0])
+
+    try:
+        with todos.use_scope("worker"):
+            report = agent.execute()
+    finally:
+        save_history(resume_path, agent.messages)
     return {"status": "ok", "report": report, "denied": gate.denied, "ran": gate.ran}
 
 

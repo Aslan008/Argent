@@ -85,6 +85,12 @@ pub enum ArgentEvent {
     System(String),
     /// The start-screen rule; carries the version string.
     Banner(String),
+    /// Toolbar numbers, pulled by the background poller.
+    ///
+    /// State arrives as an event so the drawing thread never calls into Python: taking
+    /// the GIL there meant waiting for the agent's worker, and while it held the GIL
+    /// the whole interface stopped — no typing, no scrolling, nothing — until it let go.
+    State(HashMap<String, String>),
     ToolStart {
         name: String,
         args: HashMap<String, serde_json::Value>,
@@ -123,6 +129,9 @@ pub enum ArgentEvent {
         diff: String,
     },
     Notice(String),
+    /// Live console output captured from the REPL (stdout/stderr). Fragments belong
+    /// to one line until a fragment ends it, so `App::push_output` joins them.
+    Output(String),
     /// The model is still streaming a tool call's raw JSON arguments.
     ToolGenerating { name: String, bytes: usize, delta: String },
     Error {
@@ -157,6 +166,10 @@ pub enum ArgentEvent {
         lines: Vec<String>,
         /// The `Context: …` meter printed under it.
         context_line: Option<String>,
+        /// `«2 сжатия · 128k→12k»` when the history had to be compacted during this turn,
+        /// formatted by the bridge. Absent when it did not: an ordinary turn adds
+        /// nothing to the folded row.
+        compaction: Option<String>,
     },
     SelectRequest {
         id: String,
@@ -183,19 +196,33 @@ pub fn parse_py_event(dict: &Bound<'_, PyDict>) -> PyResult<Option<ArgentEvent>>
         Some(val) => val,
         None => return Ok(None),
     };
-    let event_type: String = event_type_obj.extract()?;
+    let event_type: String = event_type_obj.extract().unwrap_or_default();
+
+    let extract_str = |key: &str| -> String {
+        dict.get_item(key)
+            .ok()
+            .flatten()
+            .and_then(|v| {
+                if v.is_none() {
+                    None
+                } else {
+                    v.extract::<String>().ok().or_else(|| Some(v.to_string()))
+                }
+            })
+            .unwrap_or_default()
+    };
 
     match event_type.as_str() {
         "content" => {
-            let text: String = dict.get_item("text")?.map(|v| v.extract()).unwrap_or(Ok(String::new()))?;
+            let text = extract_str("text");
             Ok(Some(ArgentEvent::Content(text)))
         }
         "content_replace" => {
-            let text: String = dict.get_item("text")?.map(|v| v.extract()).unwrap_or(Ok(String::new()))?;
+            let text = extract_str("text");
             Ok(Some(ArgentEvent::ContentReplace(text)))
         }
         "thinking" => {
-            let text: String = dict.get_item("text")?.map(|v| v.extract()).unwrap_or(Ok(String::new()))?;
+            let text = extract_str("text");
             let rethink = dict
                 .get_item("rethink")?
                 .and_then(|v| v.extract::<bool>().ok())
@@ -207,7 +234,7 @@ pub fn parse_py_event(dict: &Bound<'_, PyDict>) -> PyResult<Option<ArgentEvent>>
             }))
         }
         "tool_start" => {
-            let name: String = dict.get_item("name")?.map(|v| v.extract()).unwrap_or(Ok(String::new()))?;
+            let name = extract_str("name");
             let mut args = HashMap::new();
             if let Some(args_dict) = dict.get_item("args")? {
                 if let Ok(d) = args_dict.downcast::<PyDict>() {
@@ -220,8 +247,8 @@ pub fn parse_py_event(dict: &Bound<'_, PyDict>) -> PyResult<Option<ArgentEvent>>
             Ok(Some(ArgentEvent::ToolStart { name, args }))
         }
         "tool_end" => {
-            let name: String = dict.get_item("name")?.map(|v| v.extract()).unwrap_or(Ok(String::new()))?;
-            let result: String = dict.get_item("result")?.map(|v| v.extract()).unwrap_or(Ok(String::new()))?;
+            let name = extract_str("name");
+            let result = extract_str("result");
             let duration_secs: Option<f64> = dict.get_item("duration_secs")?.and_then(|v| v.extract().ok());
             Ok(Some(ArgentEvent::ToolEnd {
                 name,
@@ -230,9 +257,9 @@ pub fn parse_py_event(dict: &Bound<'_, PyDict>) -> PyResult<Option<ArgentEvent>>
             }))
         }
         "approval_request" => {
-            let id: usize = dict.get_item("id")?.map(|v| v.extract()).unwrap_or(Ok(0))?;
-            let action: String = dict.get_item("action")?.map(|v| v.extract()).unwrap_or(Ok(String::new()))?;
-            let destructive: bool = dict.get_item("destructive")?.map(|v| v.extract()).unwrap_or(Ok(false))?;
+            let id: usize = dict.get_item("id")?.and_then(|v| v.extract().ok()).unwrap_or(0);
+            let action = extract_str("action");
+            let destructive: bool = dict.get_item("destructive")?.and_then(|v| v.extract().ok()).unwrap_or(false);
             let grant_key: Option<String> = dict.get_item("grant_key")?.and_then(|v| v.extract().ok());
             let choices: Vec<String> = dict
                 .get_item("choices")?
@@ -268,8 +295,8 @@ pub fn parse_py_event(dict: &Bound<'_, PyDict>) -> PyResult<Option<ArgentEvent>>
             }))
         }
         "checkpoint" => {
-            let sha: String = dict.get_item("sha")?.map(|v| v.extract()).unwrap_or(Ok(String::new()))?;
-            let label: String = dict.get_item("label")?.map(|v| v.extract()).unwrap_or(Ok(String::new()))?;
+            let sha = extract_str("sha");
+            let label = extract_str("label");
             Ok(Some(ArgentEvent::Checkpoint { sha, label }))
         }
         "history" => {
@@ -321,21 +348,25 @@ pub fn parse_py_event(dict: &Bound<'_, PyDict>) -> PyResult<Option<ArgentEvent>>
             Ok(Some(ArgentEvent::History { items, replace }))
         }
         "rewound" => {
-            let text: String = dict.get_item("text")?.map(|v| v.extract()).unwrap_or(Ok(String::new()))?;
-            let detail: String = dict.get_item("detail")?.map(|v| v.extract()).unwrap_or(Ok(String::new()))?;
+            let text = extract_str("text");
+            let detail = extract_str("detail");
             Ok(Some(ArgentEvent::Rewound { text, detail }))
         }
         "diff" => {
-            let file: String = dict.get_item("file")?.map(|v| v.extract()).unwrap_or(Ok(String::new()))?;
-            let diff: String = dict.get_item("diff")?.map(|v| v.extract()).unwrap_or(Ok(String::new()))?;
+            let file = extract_str("file");
+            let diff = extract_str("diff");
             Ok(Some(ArgentEvent::Diff { file, diff }))
         }
         "notice" => {
-            let text: String = dict.get_item("text")?.map(|v| v.extract()).unwrap_or(Ok(String::new()))?;
+            let text = extract_str("text");
             Ok(Some(ArgentEvent::Notice(text)))
         }
+        "output" => {
+            let text = extract_str("text");
+            Ok(Some(ArgentEvent::Output(text)))
+        }
         "error" => {
-            let text: String = dict.get_item("text")?.map(|v| v.extract()).unwrap_or(Ok(String::new()))?;
+            let text = extract_str("text");
             let hint: Option<String> = dict.get_item("hint")?.and_then(|v| v.extract().ok());
             Ok(Some(ArgentEvent::Error { text, hint }))
         }
@@ -382,23 +413,27 @@ pub fn parse_py_event(dict: &Bound<'_, PyDict>) -> PyResult<Option<ArgentEvent>>
                     .and_then(|v| v.extract::<Vec<String>>().ok())
                     .unwrap_or_default(),
                 context_line: dict.get_item("context_line")?.and_then(|v| v.extract::<String>().ok()),
+                compaction: dict
+                    .get_item("compaction")?
+                    .and_then(|v| v.extract::<String>().ok())
+                    .filter(|s| !s.trim().is_empty()),
             }))
         }
         "rethink" => {
-            let text: String = dict.get_item("text")?.map(|v| v.extract()).unwrap_or(Ok(String::new()))?;
+            let text = extract_str("text");
             Ok(Some(ArgentEvent::Rethink(text)))
         }
         "system" => {
-            let text: String = dict.get_item("text")?.map(|v| v.extract()).unwrap_or(Ok(String::new()))?;
+            let text = extract_str("text");
             Ok(Some(ArgentEvent::System(text)))
         }
         "banner" => {
-            let version: String = dict.get_item("version")?.map(|v| v.extract()).unwrap_or(Ok(String::new()))?;
+            let version = extract_str("version");
             Ok(Some(ArgentEvent::Banner(version)))
         }
         "select_request" => {
-            let id: String = dict.get_item("id")?.map(|v| v.extract()).unwrap_or(Ok(String::new()))?;
-            let title: String = dict.get_item("title")?.map(|v| v.extract()).unwrap_or(Ok(String::new()))?;
+            let id = extract_str("id");
+            let title = extract_str("title");
             let mut options = Vec::new();
             if let Some(opts_obj) = dict.get_item("options")? {
                 if let Ok(list) = opts_obj.extract::<Vec<String>>() {
@@ -418,19 +453,16 @@ pub fn parse_py_event(dict: &Bound<'_, PyDict>) -> PyResult<Option<ArgentEvent>>
             }))
         }
         "tool_generating" => {
-            let name: String = dict.get_item("name")?.map(|v| v.extract()).unwrap_or(Ok(String::new()))?;
+            let name = extract_str("name");
             let bytes: usize = dict.get_item("bytes")?.and_then(|v| v.extract().ok()).unwrap_or(0);
-            let delta: String = dict
-                .get_item("delta")?
-                .and_then(|v| v.extract().ok())
-                .unwrap_or_default();
+            let delta = extract_str("delta");
             Ok(Some(ArgentEvent::ToolGenerating { name, bytes, delta }))
         }
         "done" => Ok(Some(ArgentEvent::Done)),
         "cancelling" => Ok(Some(ArgentEvent::Cancelling)),
         "exit" => Ok(Some(ArgentEvent::Exit)),
         "ui_style" => {
-            let style: String = dict.get_item("style")?.map(|v| v.extract()).unwrap_or(Ok(String::new()))?;
+            let style = extract_str("style");
             Ok(Some(ArgentEvent::UiStyle(style)))
         }
         _ => Ok(None),

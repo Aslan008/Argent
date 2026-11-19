@@ -1,6 +1,6 @@
 import pytest
 
-from tool_profiles import slim_tools_for_category, is_slim_category, CORE_CHAT_TOOLS
+from argent.tool_profiles import slim_tools_for_category, is_slim_category, CORE_CHAT_TOOLS
 
 
 ALL = [
@@ -18,7 +18,7 @@ def no_mcp_servers(monkeypatch):
     on — these tests used to read the developer's live config by accident.
     Conditional membership is covered in test_mcp_prompt.py.
     """
-    monkeypatch.setattr("config.get_mcp_servers", lambda: [])
+    monkeypatch.setattr("argent.config.get_mcp_servers", lambda: [])
 
 
 class TestSlim:
@@ -68,8 +68,8 @@ class TestCoreSet:
 
 class TestModeTools:
     def test_wait_heartbeat_available_in_chat_tools_for_small(self):
-        from tool_profiles import get_mode_tools
-        from tools.schemas import AVAILABLE_TOOLS
+        from argent.tool_profiles import get_mode_tools
+        from argent.tools.schemas import AVAILABLE_TOOLS
         assert "end_auto_mode" not in AVAILABLE_TOOLS
 
         tools = get_mode_tools("chat", "small")
@@ -78,7 +78,7 @@ class TestModeTools:
         assert "end_auto_mode" not in tools
 
     def test_slim_tools_includes_wait_heartbeat(self):
-        from tool_profiles import slim_tools_for_category
+        from argent.tool_profiles import slim_tools_for_category
         all_candidates = ["read_file", "wait_heartbeat", "browser_open"]
         slim_chat = slim_tools_for_category(all_candidates, "small")
         assert "read_file" in slim_chat
@@ -88,7 +88,7 @@ class TestModeTools:
 
 class TestSchemaMinification:
     def test_minify_tool_schema_preserves_structure(self):
-        from tool_profiles import minify_tool_schema
+        from argent.tool_profiles import minify_tool_schema
         full_schema = {
             "type": "function",
             "function": {
@@ -124,7 +124,7 @@ class TestSchemaMinification:
         assert minified["function"]["description"] == "Replaces a specific block of text in a file with new content."
 
     def test_minify_tool_schemas_list(self):
-        from tool_profiles import minify_tool_schemas
+        from argent.tool_profiles import minify_tool_schemas
         schemas = [
             {"type": "function", "function": {"name": "test1", "description": "Desc 1. Extra info.", "parameters": {"type": "object", "properties": {}}}},
             {"type": "function", "function": {"name": "test2", "description": "Desc 2. Extra info.", "parameters": {"type": "object", "properties": {}}}}

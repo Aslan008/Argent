@@ -13,7 +13,7 @@ read-only one-liners that must keep running without a question.
 
 import pytest
 
-from approval import assess_command_risk
+from argent.approval import assess_command_risk
 
 
 def _level(cmd: str) -> str:
@@ -142,20 +142,34 @@ class TestProgramsFedThroughStdin:
         assert _level(cmd) == "safe", cmd
 
 
-class TestVibeModeRefusesWhatItCannotVet:
-    """What "warn" means in POLICY_AUTO: refused without a prompt, never run."""
+class TestVibeModeAnswersByItself:
+    """What "warn" means in POLICY_AUTO: the mode decides, and says why.
 
-    def test_an_unvetted_snippet_is_auto_denied(self, monkeypatch):
-        import approval
+    It used to refuse everything it could not vet, which refused almost every
+    command the agent runs (`python -c "print(1)"` among them). The question is
+    now what the command can destroy: one with a deletion inside is refused, one
+    that merely cannot be read runs — the turn is checkpointed, /back undoes it.
+    """
+
+    def test_a_snippet_with_a_deletion_is_refused(self, monkeypatch):
+        import argent.approval as approval
 
         monkeypatch.setattr(approval, "_policy", approval.POLICY_AUTO)
-        cmd = "python -c \"import subprocess; subprocess.run(['x'])\""
+        cmd = "python -c \"import os; os.remove('x')\""
         destructive = approval.is_destructive_command(cmd)
         assert destructive
         assert approval.request_approval(f"run {cmd}", destructive=destructive) is False
 
+    def test_an_unreadable_snippet_runs_and_says_so(self, monkeypatch):
+        import argent.approval as approval
+
+        monkeypatch.setattr(approval, "_policy", approval.POLICY_AUTO)
+        cmd = "python -c \"import subprocess; subprocess.run(['x'])\""
+        assert not approval.is_destructive_command(cmd)
+        assert approval.request_approval(f"run {cmd}", destructive=False) is True
+
     def test_a_read_only_snippet_runs_unprompted(self, monkeypatch):
-        import approval
+        import argent.approval as approval
 
         monkeypatch.setattr(approval, "_policy", approval.POLICY_AUTO)
         cmd = 'python -c "import sys; print(sys.version)"'

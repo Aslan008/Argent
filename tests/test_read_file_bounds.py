@@ -14,7 +14,7 @@ through repeated salvage continuations got one at every seam.
 
 import pytest
 
-from tools import file_ops
+from argent.tools import file_ops
 
 
 @pytest.fixture(autouse=True)
@@ -52,7 +52,7 @@ class TestOrdinaryReadsAreUnchanged:
 
     @staticmethod
     def _plain(out):
-        from tools._helpers import _strip_read_line_numbers
+        from argent.tools._helpers import _strip_read_line_numbers
         return _strip_read_line_numbers(out)
 
     def test_a_small_file_comes_back_whole(self, tmp_path):
@@ -60,7 +60,7 @@ class TestOrdinaryReadsAreUnchanged:
         assert self._plain(file_ops.read_file("a.py")) == "def f():\n    return 1\n"
 
     def test_the_line_cap_still_reports_the_true_total(self, tmp_path, monkeypatch):
-        monkeypatch.setattr("config.get_model_size_category", lambda m: "tiny")
+        monkeypatch.setattr("argent.config.get_model_size_category", lambda m: "tiny")
         _write(tmp_path, "long.py", "".join(f"line {i}\n" for i in range(1, 801)))
         out = file_ops.read_file("long.py")
         assert "800 total" in out

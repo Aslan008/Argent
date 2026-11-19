@@ -12,20 +12,20 @@ from pathlib import Path
 # ---------------------------------------------------------------------------
 @pytest.fixture(autouse=True)
 def _stub_deps(monkeypatch):
-    import memory_manager
+    import argent.memory_manager as memory_manager
     class FakeMemory:
         def add_completed(self, *a, **k): pass
         def add_file_modified(self, *a, **k): pass
     monkeypatch.setattr(memory_manager, 'memory', FakeMemory())
-    import file_tracker
+    import argent.file_tracker as file_tracker
     monkeypatch.setattr(file_tracker, 'snapshot', lambda *a, **k: None)
-    import tools._helpers as helpers
+    import argent.tools._helpers as helpers
     monkeypatch.setattr(helpers, '_validate_code_syntax', lambda fp: None)
     monkeypatch.setattr(helpers, '_print_diff', lambda *a, **k: None)
     yield
 
 
-from tools.file_ops import replace_python_function, get_file_outline
+from argent.tools.file_ops import replace_python_function, get_file_outline
 
 
 # ---------------------------------------------------------------------------
@@ -326,7 +326,7 @@ class TestReplacePythonFunction:
     # --- L1: syntax validation fails → edit rejected, file reverted -------
     def test_syntax_validation_fails_reverted(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
-        import tools.file_ops as file_ops_mod
+        import argent.tools.file_ops as file_ops_mod
         original = "def foo():\n    return 1\n"
         f = _write(tmp_path, "mod.py", original)
 

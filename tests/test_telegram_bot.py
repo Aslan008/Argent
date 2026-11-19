@@ -3,7 +3,7 @@ import time
 from unittest.mock import MagicMock, patch
 import pytest
 
-from config import (
+from argent.config import (
     get_telegram_token,
     set_telegram_token,
     get_telegram_chat_id,
@@ -61,7 +61,7 @@ class FakeSession:
 @pytest.fixture(autouse=True)
 def isolate_config(tmp_path, monkeypatch):
     """Isolate config file so tests never touch ~/.argent_coder_config.json."""
-    import config
+    import argent.config as config
     test_cfg_file = tmp_path / "test_config.json"
     monkeypatch.setattr(config, "CONFIG_FILE", test_cfg_file)
     monkeypatch.setattr(config, "_CONFIG_CACHE", None)
@@ -270,7 +270,7 @@ def test_telegram_event_consumer():
 
 def test_telegram_mode_config():
     """Test get/set telegram mode."""
-    from config import get_telegram_mode, set_telegram_mode
+    from argent.config import get_telegram_mode, set_telegram_mode
     set_telegram_mode("shared")
     assert get_telegram_mode() == "shared"
 
@@ -283,7 +283,7 @@ def test_telegram_mode_config():
 
 def test_telegram_mode_switch_command():
     """Test switching modes via Telegram slash command."""
-    from config import get_telegram_mode, set_telegram_mode
+    from argent.config import get_telegram_mode, set_telegram_mode
     set_telegram_chat_id("111222")
     set_telegram_mode("isolated")
 
@@ -306,7 +306,7 @@ def test_telegram_mode_switch_command():
 
 def test_telegram_shared_vs_isolated_session():
     """Test attaching terminal agent and verifying session routing."""
-    from config import set_telegram_mode
+    from argent.config import set_telegram_mode
 
     terminal_agent = MagicMock()
     terminal_agent.messages = [{"role": "system", "content": "term"}]

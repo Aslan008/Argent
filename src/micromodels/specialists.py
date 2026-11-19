@@ -101,7 +101,7 @@ class ReadFileSpecialist(BaseSpecialist):
         # Normalize Windows / POSIX slashes
         norm_path = raw_path.replace("\\", "/")
 
-        args: Dict[str, Any] = {"file_path": norm_path}
+        args: Dict[str, Any] = {"path": norm_path}
         if start_line is not None:
             args["start_line"] = start_line
         if line_count is not None:
@@ -384,7 +384,7 @@ class DeleteFileSpecialist(BaseSpecialist):
         path = text.strip().strip("'\"")
         if not path:
             return None
-        return {"file_path": path.replace("\\", "/")}
+        return {"path": path.replace("\\", "/")}
 
 
 class CreateDirectorySpecialist(BaseSpecialist):
@@ -486,7 +486,6 @@ SPECIALISTS: Dict[str, BaseSpecialist] = {
     "grep_search": GrepSearchSpecialist(),
     "search_files": SearchFilesSpecialist(),
     "run_command": RunCommandSpecialist(),
-    "run_admin_command": RunCommandSpecialist(),
     "list_directory": ListDirectorySpecialist(),
     "calculate": CalculateSpecialist(),
     "search_web": SearchWebSpecialist(),

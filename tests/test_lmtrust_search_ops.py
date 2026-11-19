@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from tools.search_ops import search_files, grep_search, _python_grep_search
+from argent.tools.search_ops import search_files, grep_search, _python_grep_search
 
 
 # ---------------------------------------------------------------------------

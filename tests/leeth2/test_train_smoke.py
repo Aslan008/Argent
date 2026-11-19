@@ -11,6 +11,8 @@ from pathlib import Path
 
 import pytest
 
+pytest.importorskip("transformers", reason="Leeth tests build a real ModernBERT backbone — pip install transformers")
+
 TOK_DIR = Path(".argent/models/mmbert-argent")
 pytestmark = pytest.mark.skipif(not (TOK_DIR / "tokenizer.json").exists(), reason="mmBERT tokenizer not on disk")
 

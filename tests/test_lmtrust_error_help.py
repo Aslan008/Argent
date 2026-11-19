@@ -8,7 +8,7 @@ changes the test must change too, which is the point.
 
 import pytest
 
-from error_help import explain_error
+from argent.error_help import explain_error
 
 
 # ── Exact explanation strings (copied from error_help._EXPLANATIONS) ──────────

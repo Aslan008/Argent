@@ -449,7 +449,7 @@ def api(monkeypatch, tmp_path):
 
 @pytest.fixture(autouse=True)
 def isolated_config(tmp_path, monkeypatch):
-    import config
+    import argent.config as config
     monkeypatch.setattr(config, "CONFIG_FILE", tmp_path / "cfg.json")
     monkeypatch.setattr(config, "_CONFIG_CACHE", None)
     config.set_telegram_chat_id(str(CHAT))
@@ -638,7 +638,7 @@ class ScriptedSession:
         self.script = list(events or [])
         self._answered = threading.Event()
 
-    def start(self, text):
+    def start(self, text, allowed_tools=None):
         self.busy = True
         self.started.append(text)
 

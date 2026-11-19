@@ -37,7 +37,7 @@ from src.leeth.primitives import (
     ScoreResult,
 )
 from src.leeth.tokenizer import LeethTokenizer
-from logger import get_logger
+from argent.logger import get_logger
 
 logger = get_logger("leeth_runtime")
 
@@ -76,6 +76,30 @@ MMBERT_DEPT_QUESTION = "В какой отдел нужно направить �
 MMBERT_URGENCY_QUESTION = "Насколько срочно нужно решить проблему клиента?"
 MMBERT_DEPT_CLASSES = ("billing", "technical", "sales", "account", "other")
 MMBERT_URGENCY_LEVELS = 3
+
+
+def _install_shortlist(rt: Any) -> None:
+    """Cut long option lists before the model reads them (variant A: the system around the model).
+
+    Why: the encoder gives each option ~48 tokens at 8-32 options and ~15 at 128-255, so a big catalogue is read with half-erased
+    descriptions — 0.57-0.62 accuracy against 0.77-0.82 at 8. Measured on the frozen exams 2026-11-04: with the right option among
+    96 candidates the same model answers 0.762 at 128-option lists against 0.569 in one pass; a hybrid of embeddings and word
+    overlap is best at 255 (0.651 against 0.619). The embedder loads on the first long list, not at start-up, and a failure here
+    must never take the backend down with it — Leeth simply answers big lists the old way.
+
+    LEETH2_SHORTLIST=0 turns it off; LEETH2_RETRIEVER_MODEL points at another embedder directory.
+    """
+    try:
+        if os.environ.get("LEETH2_SHORTLIST", "1").strip() in ("0", "false", "no"):
+            return
+        from src.leeth2.retrieval import install_shortlist
+
+        root = Path(__file__).resolve().parents[2]
+        model_dir = os.environ.get("LEETH2_RETRIEVER_MODEL", str(root / ".argent" / "models" / "mmbert-base"))
+        install_shortlist(rt, model_dir, getattr(rt, "device", None), above=64, k=96)
+        logger.info("Leeth 2: lists longer than %d options are cut to %d by relevance first.", 64, 96)
+    except Exception as e:                          # a missing embedder is not a reason to lose Leeth 2 entirely
+        logger.warning("Leeth 2: the two-stage chooser is off (%s).", e)
 
 
 class LeethRuntime:
@@ -138,7 +162,7 @@ class LeethRuntime:
     def _use_v2(self) -> Any:
         """The Leeth 2 runtime when the backend is selected and its weights load, else None (legacy path)."""
         try:
-            import config as _cfg
+            import argent.config as _cfg
 
             if _cfg.get_leeth_backend() != "leeth2":
                 return None
@@ -150,6 +174,7 @@ class LeethRuntime:
 
                 self._v2 = Leeth2Runtime.load(self.v2_dir)
                 logger.info("Leeth 2 backend active (%s, %s).", self.v2_dir, self._v2.device)
+                _install_shortlist(self._v2)
             except Exception as e:
                 logger.warning("Leeth 2 backend requested but unavailable (%s); using the legacy stack.", e)
                 self._v2 = False
@@ -210,7 +235,7 @@ class LeethRuntime:
             preferred = os.environ.get("LEETH_DEVICE", "auto").strip().lower()
             if preferred == "auto":
                 try:
-                    import config as _cfg
+                    import argent.config as _cfg
                     preferred = (_cfg.get_leeth_device() or "auto").lower()
                 except Exception:
                     pass

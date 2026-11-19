@@ -27,7 +27,7 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 import numpy as np
-from logger import get_logger
+from argent.logger import get_logger
 
 logger = get_logger("leeth_dopt_solver")
 

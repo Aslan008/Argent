@@ -7,15 +7,15 @@ from unittest.mock import patch, MagicMock
 # Ensure project root is in sys.path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from agent import ArgentAgent
+from argent.agent import ArgentAgent
 from src.agent.trimmer import estimate_tokens, clean_messages_for_llm, sliding_window_trim
-from tools._helpers import _validate_code_syntax
+from argent.tools._helpers import _validate_code_syntax
 
 
 class TestArgentEnhancements(unittest.TestCase):
 
-    @patch('agent.get_current_model')
-    @patch('agent.get_model_size_category')
+    @patch('argent.agent.get_current_model')
+    @patch('argent.agent.get_model_size_category')
     def test_dynamic_prompt_compilation_cloud(self, mock_category, mock_model):
         # Setup mock behavior for large cloud model
         mock_model.return_value = "gpt-4"
@@ -25,12 +25,12 @@ class TestArgentEnhancements(unittest.TestCase):
         prompt = agent.build_system_prompt()
 
         # Check standard sections
-        self.assertIn("CRITICAL: LANGUAGE RULE", prompt)
-        self.assertIn("ROLE: Argent Coder", prompt)
+        self.assertNotIn("LANGUAGE RULE", prompt)
+        self.assertNotIn("ROLE: Argent Coder", prompt)
         self.assertIn("## 4. PLANNING MODE & ARTIFACTS", prompt)
 
-    @patch('agent.get_current_model')
-    @patch('agent.get_model_size_category')
+    @patch('argent.agent.get_current_model')
+    @patch('argent.agent.get_model_size_category')
     def test_dynamic_prompt_compilation_tiny(self, mock_category, mock_model):
         # Setup mock behavior for tiny local model
         mock_model.return_value = "qwen2.5:1.5b"
@@ -39,8 +39,8 @@ class TestArgentEnhancements(unittest.TestCase):
         agent = ArgentAgent()
         prompt = agent.build_system_prompt()
 
-        self.assertIn("CRITICAL: LANGUAGE RULE", prompt)
-        self.assertIn("ROLE: Argent Coder", prompt)
+        self.assertNotIn("LANGUAGE RULE", prompt)
+        self.assertNotIn("ROLE: Argent Coder", prompt)
         # Tiny model should NOT have Project Brain Mode instructions
         self.assertNotIn("PROJECT BRAIN MODE", prompt)
         # Tiny model should have a shorter/simplified operational protocol
@@ -58,7 +58,7 @@ class TestArgentEnhancements(unittest.TestCase):
         tokens_ru = estimate_tokens(ru_text, "qwen2.5:7b", "ollama")
         self.assertGreater(tokens_ru, 0)
 
-    @patch('tools._helpers.py_compile.compile')
+    @patch('argent.tools._helpers.py_compile.compile')
     def test_python_syntax_validation(self, mock_compile):
         # Valid Python
         mock_compile.return_value = True
@@ -71,6 +71,8 @@ class TestArgentEnhancements(unittest.TestCase):
         err = _validate_code_syntax("test_file.py")
         self.assertIsNotNone(err)
         self.assertIn("SyntaxError in your Python code", err)
+        # Diagnosis only: the caller decides the next step (the file may already be reverted or deleted).
+        self.assertNotIn("replace_in_file", err)
 
     def test_json_syntax_validation(self):
         # Setup a temp valid json file
@@ -92,6 +94,7 @@ class TestArgentEnhancements(unittest.TestCase):
             err_invalid = _validate_code_syntax(invalid_json_path)
             self.assertIsNotNone(err_invalid)
             self.assertIn("JSON Syntax Error", err_invalid)
+            self.assertNotIn("replace_in_file", err_invalid)
         finally:
             # Cleanup temp files
             if os.path.exists(valid_json_path):
@@ -102,7 +105,7 @@ class TestArgentEnhancements(unittest.TestCase):
     # Patched at run_text, not subprocess.run: run_text now drives Popen itself
     # so it can kill a whole process tree on timeout, and a patch one layer too
     # low silently stopped intercepting — the real `node --check` ran.
-    @patch('tools._helpers.run_text')
+    @patch('argent.tools._helpers.run_text')
     def test_javascript_syntax_validation(self, mock_run):
         # Valid JS (returncode 0)
         mock_run.return_value = MagicMock(returncode=0)
@@ -168,7 +171,7 @@ class TestArgentEnhancements(unittest.TestCase):
         self.assertTrue(len(trimmed) < len(msgs))
 
     def test_temperature_configuration(self):
-        from config import get_temperature, set_temperature
+        from argent.config import get_temperature, set_temperature
         original = get_temperature()
         try:
             set_temperature(0.45)
@@ -177,7 +180,7 @@ class TestArgentEnhancements(unittest.TestCase):
             set_temperature(original)
 
     def test_ollama_provider_temperature(self):
-        from providers import OllamaProvider
+        from argent.providers import OllamaProvider
         provider = OllamaProvider()
         mock_ollama = MagicMock()
         provider._ollama = mock_ollama
@@ -192,7 +195,7 @@ class TestArgentEnhancements(unittest.TestCase):
         self.assertEqual(called_kwargs["options"].get("temperature"), 0.6)
 
     def test_openai_compatible_provider_temperature(self):
-        from providers import ZAIProvider
+        from argent.providers import ZAIProvider
         provider = ZAIProvider(api_key="mock_key", base_url="http://mock_url")
         
         mock_client = MagicMock()

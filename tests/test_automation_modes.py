@@ -7,7 +7,7 @@ from datetime import datetime
 
 import pytest
 
-import approval
+import argent.approval as approval
 from src.automation import notify, runner, store
 from src.automation.runner import (
     SILENT_MARKER, UnattendedGate, build_prompt, command_allowed, run_and_record,
@@ -18,7 +18,7 @@ from src.automation.store import Automation
 
 @pytest.fixture
 def project(tmp_path, monkeypatch):
-    monkeypatch.setattr("project_paths.project_root_or_cwd", lambda *a, **k: tmp_path)
+    monkeypatch.setattr("argent.project_paths.project_root_or_cwd", lambda *a, **k: tmp_path)
     return tmp_path
 
 
@@ -110,7 +110,7 @@ class TestGate:
     def test_through_the_real_run_command_tool(self, tmp_path):
         """The coupling that matters: the text run_command asks approval with is
         the text the gate reads the command back out of."""
-        from tools.command_ops import run_command
+        from argent.tools.command_ops import run_command
         gate = UnattendedGate(["echo argent_allowed*"])
         approval.set_approval_backend(gate)
         try:
@@ -205,7 +205,7 @@ class TestAgentRun:
         assert result["silent"] is True and "slow provider" in result["summary"]
 
     def test_new_items_beat_the_marker(self, project):
-        from tools.misc_tools import filter_new_items
+        from argent.tools.misc_tools import filter_new_items
 
         class Both:
             def process_user_input(self, text, allowed_tools=None):
@@ -283,7 +283,7 @@ class TestCommandMode:
         assert result["status"] == "error"
 
     def test_no_model_is_involved(self, project, monkeypatch):
-        monkeypatch.setattr("agent.ArgentAgent", lambda *a, **k: pytest.fail("no agent for a command"))
+        monkeypatch.setattr("argent.agent.ArgentAgent", lambda *a, **k: pytest.fail("no agent for a command"))
         run_automation(_a(mode="command", task=_script(project, "print(1)")))
 
     def test_output_in_the_oem_code_page_is_still_readable(self):
@@ -292,7 +292,7 @@ class TestCommandMode:
 
 class TestRemindMode:
     def test_the_message_is_the_report(self, project, monkeypatch):
-        monkeypatch.setattr("agent.ArgentAgent", lambda *a, **k: pytest.fail("no agent for a reminder"))
+        monkeypatch.setattr("argent.agent.ArgentAgent", lambda *a, **k: pytest.fail("no agent for a reminder"))
         result = run_automation(_a(mode="remind", task="Call Anna"))
         assert result["status"] == "ok" and result["summary"] == "Call Anna"
 
@@ -437,8 +437,8 @@ class TestReportFile:
 class TestTelegram:
     @pytest.fixture
     def configured(self, monkeypatch):
-        monkeypatch.setattr("config.get_telegram_token", lambda: "123:SECRET")
-        monkeypatch.setattr("config.get_telegram_chat_id", lambda: "42")
+        monkeypatch.setattr("argent.config.get_telegram_token", lambda: "123:SECRET")
+        monkeypatch.setattr("argent.config.get_telegram_chat_id", lambda: "42")
 
     def test_posts_to_the_bot_api(self, configured, monkeypatch):
         import json
@@ -459,8 +459,8 @@ class TestTelegram:
         assert seen["body"]["chat_id"] == "42" and "Title" in seen["body"]["text"]
 
     def test_unconfigured_is_a_quiet_false(self, monkeypatch):
-        monkeypatch.setattr("config.get_telegram_token", lambda: None)
-        monkeypatch.setattr("config.get_telegram_chat_id", lambda: None)
+        monkeypatch.setattr("argent.config.get_telegram_token", lambda: None)
+        monkeypatch.setattr("argent.config.get_telegram_chat_id", lambda: None)
         monkeypatch.setattr(notify.urllib.request, "urlopen",
                             lambda *a, **k: pytest.fail("nothing to send to"))
         assert notify.telegram_notify("t", "b") is False

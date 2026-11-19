@@ -10,7 +10,7 @@ from src.rooms.models import Room
 from src.rooms.patch import MAX_OPS, apply_ops, coerce_ops
 from src.rooms.tool import rooms_action
 from tests.test_rooms_builder import GOOD
-from tests.test_rooms_cli_tool import lib, starter_lib  # noqa: F401  (fixtures)
+from tests.test_rooms_cli_tool import lib, starter_lib  
 
 
 def base() -> Room:
@@ -304,8 +304,8 @@ class TestWiring:
             PLAN.leave()
 
     def test_the_tool_function_and_schema_carry_the_new_arguments(self):
-        from tools.rooms_tools import rooms
-        from tools.schemas import TOOL_SCHEMAS
+        from argent.tools.rooms_tools import rooms
+        from argent.tools.schemas import TOOL_SCHEMAS
         params = inspect.signature(rooms).parameters
         assert "ops" in params and "save_as" in params
         entry = next(t for t in TOOL_SCHEMAS if t["function"]["name"] == "rooms")

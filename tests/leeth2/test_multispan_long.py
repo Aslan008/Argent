@@ -282,6 +282,7 @@ def test_long_option_lists_use_their_own_temperature_when_one_was_fitted(tok, ti
 
 
 def test_fit_temperatures_separates_long_lists_when_there_are_enough_of_them():
+    pytest.importorskip("scipy", reason="temperature fitting uses scipy.optimize — pip install scipy")
     import numpy as np
 
     from src.leeth2 import calibrate

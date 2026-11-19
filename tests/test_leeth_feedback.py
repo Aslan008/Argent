@@ -50,6 +50,7 @@ def _leeth_cpu():
     if not (leeth.device == "onnx-cpu" and leeth.ort_session is not None and leeth.mmbert_active):
         leeth.reload(force_device="onnx")
         leeth._test_reload_done = True
+    pytest.importorskip("transformers", reason="Leeth tests build a real ModernBERT backbone — pip install transformers")
     assert leeth.mmbert_active, "feedback dispatcher tests need the mmBERT router"
     yield
     if old_router is None:

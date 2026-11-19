@@ -1,8 +1,8 @@
 import pytest
 
-import config
-import providers
-from providers import OllamaProvider, OpenRouterProvider
+import argent.config as config
+import argent.providers as providers
+from argent.providers import OllamaProvider, OpenRouterProvider
 
 
 @pytest.fixture(autouse=True)

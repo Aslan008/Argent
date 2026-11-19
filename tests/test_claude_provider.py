@@ -2,9 +2,9 @@ import json
 import pytest
 from unittest.mock import patch, MagicMock
 
-import config
-import providers
-from providers import ClaudeProvider
+import argent.config as config
+import argent.providers as providers
+from argent.providers import ClaudeProvider
 from src.agent.strategy import get_model_strategy, CloudStrategy
 from src.agent.critic import parse_critic_model
 
@@ -201,6 +201,66 @@ class TestClaudeMessageConversion:
         assert system_param[0]["type"] == "text"
         assert system_param[0]["cache_control"] == {"type": "ephemeral"}
 
+    def test_volatile_tail_stays_outside_the_cached_prefix(self):
+        """The per-turn tail must not sit inside the cached block.
+
+        Anthropic matches the cached prefix byte-for-byte up to the marker, so a
+        tail merged into that block (the clock changes every second) turned every
+        request into a cache miss and re-billed the whole prompt.
+        """
+        p = ClaudeProvider(api_key="sk-test")
+        messages = [
+            {"role": "system", "content": "RULES " * 400},
+            {"role": "system", "content": "## CURRENT TIME\n22:11:05 UTC+03:00", "volatile": True},
+            {"role": "user", "content": "Hi"},
+        ]
+        system_param, _ = p._convert_messages(messages)
+        assert isinstance(system_param, list)
+        assert len(system_param) == 2
+        assert system_param[0]["cache_control"] == {"type": "ephemeral"}
+        assert "CURRENT TIME" not in system_param[0]["text"]
+        assert system_param[1]["text"].startswith("## CURRENT TIME")
+        assert "cache_control" not in system_param[1]
+
+    def test_cached_block_is_byte_identical_across_turns(self):
+        p = ClaudeProvider(api_key="sk-test")
+
+        def system_at(clock):
+            msgs = [
+                {"role": "system", "content": "RULES " * 400},
+                {"role": "system", "content": f"## CURRENT TIME\n{clock}", "volatile": True},
+                {"role": "user", "content": "Hi"},
+            ]
+            return p._convert_messages(msgs)[0]
+
+        first, second = system_at("10:00:00"), system_at("10:00:01")
+        # Exactly what the cache compares: nothing before the marker moved.
+        assert first[0] == second[0]
+        assert first[1]["text"] != second[1]["text"]
+
+    def test_volatile_tail_with_a_short_prompt_keeps_two_blocks(self):
+        p = ClaudeProvider(api_key="sk-test")
+        messages = [
+            {"role": "system", "content": "Short."},
+            {"role": "system", "content": "## CURRENT TIME\n10:00:00", "volatile": True},
+            {"role": "user", "content": "Hi"},
+        ]
+        system_param, _ = p._convert_messages(messages)
+        assert system_param[0] == {"type": "text", "text": "Short."}
+        assert system_param[1]["text"].startswith("## CURRENT TIME")
+
+    def test_tool_schemas_get_one_cache_breakpoint_on_the_last(self):
+        """Tools precede `system` in the request: without a marker of their own
+        ~13k tokens of schemas were re-processed on every step."""
+        tools = [
+            {"function": {"name": "a", "description": "A", "parameters": {"type": "object", "properties": {}}}},
+            {"function": {"name": "b", "description": "B", "parameters": {"type": "object", "properties": {}}}},
+        ]
+        conv = ClaudeProvider._convert_tools(tools)
+        assert conv is not None
+        assert "cache_control" not in conv[0]
+        assert conv[-1]["cache_control"] == {"type": "ephemeral"}
+
     def test_alternating_roles_with_multiple_tool_results(self):
         p = ClaudeProvider(api_key="sk-test")
         messages = [
@@ -355,7 +415,7 @@ class TestClaudeStreaming:
  
     def test_stream_chat_claude_5_5_thinking(self):
         p = ClaudeProvider(api_key="sk-test")
-        import config
+        import argent.config as config
         config.set_thinking_mode("auto")
         config.set_thinking_budget(4096)
 

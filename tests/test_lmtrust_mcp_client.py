@@ -9,8 +9,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-import mcp_client
-from mcp_client import (
+import argent.mcp_client as mcp_client
+from argent.mcp_client import (
     _signature,
     _closest_names,
     _ARGUMENT_ERROR_CUES,
@@ -395,7 +395,7 @@ class TestMCPServerCallTool:
     @pytest.fixture(autouse=True)
     def _mock_timeout(self, monkeypatch):
         """call_tool() imports config.get_mcp_call_timeout at call time."""
-        monkeypatch.setattr("config.get_mcp_call_timeout", lambda: 30)
+        monkeypatch.setattr("argent.config.get_mcp_call_timeout", lambda: 30)
 
     def _server_with_mock_transport(self, send_request_return, tools=None):
         srv = _make_server(tools or [
@@ -528,7 +528,7 @@ class TestMCPClient:
     def test_register_rest_adds_server(self, monkeypatch):
         """register_rest creates and starts a REST server."""
         client = MCPClient()
-        monkeypatch.setattr("mcp_client.requests.get", MagicMock(return_value=_mock_rest_response()))
+        monkeypatch.setattr("argent.mcp_client.requests.get", MagicMock(return_value=_mock_rest_response()))
         result = client.register_rest("my_server", "http://localhost:8080", "standard")
         assert "Started" in result
         assert "my_server" in client.servers
@@ -537,7 +537,7 @@ class TestMCPClient:
         """register_rest reports the number of tools loaded."""
         client = MCPClient()
         monkeypatch.setattr(
-            "mcp_client.requests.get",
+            "argent.mcp_client.requests.get",
             MagicMock(return_value=_mock_rest_response([{"name": "a"}, {"name": "b"}])),
         )
         result = client.register_rest("srv", "http://localhost:8080", "standard")
@@ -546,7 +546,7 @@ class TestMCPClient:
     def test_unregister_server_removes_it(self, monkeypatch):
         """unregister_server stops and removes the server."""
         client = MCPClient()
-        monkeypatch.setattr("mcp_client.requests.get", MagicMock(return_value=_mock_rest_response()))
+        monkeypatch.setattr("argent.mcp_client.requests.get", MagicMock(return_value=_mock_rest_response()))
         client.register_rest("my_server", "http://localhost:8080", "standard")
         result = client.unregister_server("my_server")
         assert "Stopped" in result
@@ -561,7 +561,7 @@ class TestMCPClient:
     def test_get_servers_returns_list(self, monkeypatch):
         """get_servers returns a list of server info dicts."""
         client = MCPClient()
-        monkeypatch.setattr("mcp_client.requests.get", MagicMock(return_value=_mock_rest_response()))
+        monkeypatch.setattr("argent.mcp_client.requests.get", MagicMock(return_value=_mock_rest_response()))
         client.register_rest("srv1", "http://localhost:8080", "standard")
         client.register_rest("srv2", "http://localhost:8081", "standard")
         servers = client.get_servers()
@@ -578,7 +578,7 @@ class TestMCPClient:
     def test_stop_all_stops_every_server(self, monkeypatch):
         """stop_all clears the servers dict."""
         client = MCPClient()
-        monkeypatch.setattr("mcp_client.requests.get", MagicMock(return_value=_mock_rest_response()))
+        monkeypatch.setattr("argent.mcp_client.requests.get", MagicMock(return_value=_mock_rest_response()))
         client.register_rest("srv1", "http://localhost:8080", "standard")
         client.register_rest("srv2", "http://localhost:8081", "standard")
         client.stop_all()
@@ -588,7 +588,7 @@ class TestMCPClient:
         """list_tools(name) returns that server's tools."""
         client = MCPClient()
         monkeypatch.setattr(
-            "mcp_client.requests.get",
+            "argent.mcp_client.requests.get",
             MagicMock(return_value=_mock_rest_response([{"name": "tool_a"}, {"name": "tool_b"}])),
         )
         client.register_rest("srv1", "http://localhost:8080", "standard")
@@ -601,12 +601,12 @@ class TestMCPClient:
         """Tools from all registered servers are accessible via list_tools."""
         client = MCPClient()
         monkeypatch.setattr(
-            "mcp_client.requests.get",
+            "argent.mcp_client.requests.get",
             MagicMock(return_value=_mock_rest_response([{"name": "tool_a"}])),
         )
         client.register_rest("srv1", "http://localhost:8080", "standard")
         monkeypatch.setattr(
-            "mcp_client.requests.get",
+            "argent.mcp_client.requests.get",
             MagicMock(return_value=_mock_rest_response([{"name": "tool_b"}])),
         )
         client.register_rest("srv2", "http://localhost:8081", "standard")
@@ -625,7 +625,7 @@ class TestMCPClient:
     def test_call_tool_routes_to_correct_server(self, monkeypatch):
         """call_tool dispatches to the named server's call_tool."""
         client = MCPClient()
-        monkeypatch.setattr("mcp_client.requests.get", MagicMock(return_value=_mock_rest_response()))
+        monkeypatch.setattr("argent.mcp_client.requests.get", MagicMock(return_value=_mock_rest_response()))
         client.register_rest("srv1", "http://localhost:8080", "standard")
         # Mock the server's call_tool to verify routing
         client.servers["srv1"].call_tool = MagicMock(return_value="result from srv1")
@@ -642,7 +642,7 @@ class TestMCPClient:
     def test_register_rest_replaces_existing(self, monkeypatch):
         """Re-registering the same name stops the old server first."""
         client = MCPClient()
-        monkeypatch.setattr("mcp_client.requests.get", MagicMock(return_value=_mock_rest_response()))
+        monkeypatch.setattr("argent.mcp_client.requests.get", MagicMock(return_value=_mock_rest_response()))
         client.register_rest("srv", "http://localhost:8080", "standard")
         old_server = client.servers["srv"]
         old_server.stop = MagicMock()
@@ -652,7 +652,7 @@ class TestMCPClient:
     def test_get_servers_includes_type_and_endpoint(self, monkeypatch):
         """get_servers entries include type and endpoint fields."""
         client = MCPClient()
-        monkeypatch.setattr("mcp_client.requests.get", MagicMock(return_value=_mock_rest_response()))
+        monkeypatch.setattr("argent.mcp_client.requests.get", MagicMock(return_value=_mock_rest_response()))
         client.register_rest("srv1", "http://localhost:9000", "standard")
         info = client.get_servers()[0]
         assert info["type"] == "standard"
@@ -701,7 +701,7 @@ class TestStdioTransportStart:
 class TestStdioTransportStop:
     def test_stop_closes_stdin_and_sweeps_the_tree(self, monkeypatch):
         swept = []
-        monkeypatch.setattr("mcp_client.kill_process_tree",
+        monkeypatch.setattr("argent.mcp_client.kill_process_tree",
                             lambda proc, descendants=(): swept.append(proc))
         transport = StdioTransport("fake_cmd")
         mock_proc = MagicMock()
@@ -716,7 +716,7 @@ class TestStdioTransportStop:
 
     def test_stop_terminates_then_kills_the_tree_when_the_server_will_not_exit(self, monkeypatch):
         swept = []
-        monkeypatch.setattr("mcp_client.kill_process_tree",
+        monkeypatch.setattr("argent.mcp_client.kill_process_tree",
                             lambda proc, descendants=(): swept.append(proc))
         transport = StdioTransport("fake_cmd")
         mock_proc = MagicMock()
@@ -763,7 +763,7 @@ class TestStdioTransportSendRequest:
             "put": lambda self, item: None,
             "get": lambda self, timeout=None: fake_response,
         })
-        monkeypatch.setattr("mcp_client.queue.Queue", _fake_q)
+        monkeypatch.setattr("argent.mcp_client.queue.Queue", _fake_q)
 
         result = transport.send_request("tools/list", timeout=5)
         assert result == fake_response
@@ -782,7 +782,7 @@ class TestStdioTransportSendRequest:
             "put": lambda self, item: None,
             "get": lambda self, timeout=None: {},
         })
-        monkeypatch.setattr("mcp_client.queue.Queue", _fake_q)
+        monkeypatch.setattr("argent.mcp_client.queue.Queue", _fake_q)
 
         result = transport.send_request("tools/list")
         assert "error" in result
@@ -866,7 +866,7 @@ class TestRESTTransportSendRequest:
         transport = RESTTransport("http://localhost:8080", MCPTransportType.STANDARD)
         mock_resp = _mock_rest_response([{"name": "t1"}])
         mock_get = MagicMock(return_value=mock_resp)
-        monkeypatch.setattr("mcp_client.requests.get", mock_get)
+        monkeypatch.setattr("argent.mcp_client.requests.get", mock_get)
 
         result = transport.send_request("tools/list")
         assert "result" in result
@@ -879,7 +879,7 @@ class TestRESTTransportSendRequest:
         transport = RESTTransport("http://localhost:8080", MCPTransportType.UNITY_BRIDGE)
         mock_resp = _mock_rest_response([{"name": "unity_t"}])
         mock_get = MagicMock(return_value=mock_resp)
-        monkeypatch.setattr("mcp_client.requests.get", mock_get)
+        monkeypatch.setattr("argent.mcp_client.requests.get", mock_get)
 
         result = transport.send_request("tools/list")
         assert result["result"]["tools"] == [{"name": "unity_t"}]
@@ -893,7 +893,7 @@ class TestRESTTransportSendRequest:
         mock_resp.json.return_value = {"content": "result", "isError": False}
         mock_resp.raise_for_status = MagicMock()
         mock_post = MagicMock(return_value=mock_resp)
-        monkeypatch.setattr("mcp_client.requests.post", mock_post)
+        monkeypatch.setattr("argent.mcp_client.requests.post", mock_post)
 
         result = transport.send_request("tools/call", {"name": "my_tool", "arguments": {"x": 1}})
         assert "result" in result
@@ -911,7 +911,7 @@ class TestRESTTransportSendRequest:
         mock_resp.json.return_value = {"success": True, "data": {"key": "val"}}
         mock_resp.raise_for_status = MagicMock()
         mock_post = MagicMock(return_value=mock_resp)
-        monkeypatch.setattr("mcp_client.requests.post", mock_post)
+        monkeypatch.setattr("argent.mcp_client.requests.post", mock_post)
 
         result = transport.send_request("tools/call", {"name": "my_tool", "arguments": {"x": 1}})
         assert "result" in result
@@ -927,7 +927,7 @@ class TestRESTTransportSendRequest:
         mock_resp = MagicMock()
         mock_resp.json.return_value = {"success": False, "error": "bad request"}
         mock_resp.raise_for_status = MagicMock()
-        monkeypatch.setattr("mcp_client.requests.post", MagicMock(return_value=mock_resp))
+        monkeypatch.setattr("argent.mcp_client.requests.post", MagicMock(return_value=mock_resp))
 
         result = transport.send_request("tools/call", {"name": "t", "arguments": {}})
         assert result["result"]["isError"] is True
@@ -939,7 +939,7 @@ class TestRESTTransportSendRequest:
         mock_resp = MagicMock()
         mock_resp.json.return_value = {"isError": True, "content": "failure"}
         mock_resp.raise_for_status = MagicMock()
-        monkeypatch.setattr("mcp_client.requests.post", MagicMock(return_value=mock_resp))
+        monkeypatch.setattr("argent.mcp_client.requests.post", MagicMock(return_value=mock_resp))
 
         result = transport.send_request("tools/call", {"name": "t", "arguments": {}})
         assert result["result"]["isError"] is True
@@ -950,7 +950,7 @@ class TestRESTTransportSendRequest:
         mock_resp = MagicMock()
         mock_resp.json.return_value = {"success": True, "data": {"key": "val"}}
         mock_resp.raise_for_status = MagicMock()
-        monkeypatch.setattr("mcp_client.requests.post", MagicMock(return_value=mock_resp))
+        monkeypatch.setattr("argent.mcp_client.requests.post", MagicMock(return_value=mock_resp))
 
         result = transport.send_request("tools/call", {"name": "t", "arguments": {}})
         text = result["result"]["content"][0]["text"]
@@ -962,7 +962,7 @@ class TestRESTTransportSendRequest:
         mock_resp = MagicMock()
         mock_resp.json.return_value = {"success": True, "data": "hello"}
         mock_resp.raise_for_status = MagicMock()
-        monkeypatch.setattr("mcp_client.requests.post", MagicMock(return_value=mock_resp))
+        monkeypatch.setattr("argent.mcp_client.requests.post", MagicMock(return_value=mock_resp))
 
         result = transport.send_request("tools/call", {"name": "t", "arguments": {}})
         assert result["result"]["content"][0]["text"] == "hello"
@@ -977,7 +977,7 @@ class TestRESTTransportSendRequest:
     def test_request_exception_returns_error(self, monkeypatch):
         """requests exception → error dict."""
         transport = RESTTransport("http://localhost:8080", MCPTransportType.STANDARD)
-        monkeypatch.setattr("mcp_client.requests.get", MagicMock(side_effect=ConnectionError("refused")))
+        monkeypatch.setattr("argent.mcp_client.requests.get", MagicMock(side_effect=ConnectionError("refused")))
         result = transport.send_request("tools/list")
         assert "error" in result
 
@@ -990,7 +990,7 @@ class TestRESTTransportSendRequest:
         transport = RESTTransport("http://localhost:8080/", MCPTransportType.STANDARD)
         mock_resp = _mock_rest_response()
         mock_get = MagicMock(return_value=mock_resp)
-        monkeypatch.setattr("mcp_client.requests.get", mock_get)
+        monkeypatch.setattr("argent.mcp_client.requests.get", mock_get)
         transport.send_request("tools/list")
         url_called = mock_get.call_args[0][0]
         assert url_called == "http://localhost:8080/tools"

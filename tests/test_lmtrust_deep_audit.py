@@ -63,7 +63,10 @@ class TestSmoke:
     def test_l0_runtime_singleton(self):
         rt = MicroModelRuntime.get_instance()
         assert rt is not None
-        assert rt.total_intents == len(ALL_INTENTS)
+        # The loaded catalog may know MORE intents than the code (a model trained on a
+        # later schema). What must never happen is the code knowing an intent the model
+        # does not — that one would come back as an unknown intent at run time.
+        assert rt.total_intents >= len(ALL_INTENTS)
 
 
 # ============================================================================
@@ -363,7 +366,7 @@ class TestIntegration:
         res = disp.try_fast_dispatch("прочитай файл src/micromodels/runtime.py")
         assert res is not None
         assert res.tool_name == "read_file"
-        assert "src/micromodels/runtime.py" in res.arguments.get("file_path", "")
+        assert "src/micromodels/runtime.py" in res.arguments.get("path", "")
         assert res.elapsed_ms < 50.0
 
         args_with_lines = extract_specialist_args("read_file", "прочитай файл src/micromodels/runtime.py строки 10-30")

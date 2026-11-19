@@ -137,7 +137,7 @@ class TestL5StateAndConcurrency:
             def busy(self):
                 return self._busy
 
-            def start(self, text):
+            def start(self, text, allowed_tools=None):
                 self.start_calls += 1
                 time.sleep(0.05)
                 self._busy = True

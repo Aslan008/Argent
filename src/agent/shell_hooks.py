@@ -46,7 +46,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional, Tuple
 
-from logger import get_logger
+from argent.logger import get_logger
 
 log = get_logger("hooks")
 
@@ -103,9 +103,52 @@ def _clip(text: str, limit: int = MAX_OUTPUT_CHARS) -> str:
 
 def subject(args: dict) -> Tuple[str, str]:
     """(file, command) a tool call is about."""
-    file = next((str(args[k]) for k in _FILE_KEYS if isinstance(args.get(k), str)), "")
+    paths = subject_paths(args)
+    file = paths[0] if paths else ""
     command = next((str(args[k]) for k in _COMMAND_KEYS if isinstance(args.get(k), str)), "")
     return file, command
+
+
+def subject_paths(args: dict) -> List[str]:
+    """EVERY file a call touches, not just the first one it names.
+
+    `replace_in_file` can leave its top-level path empty and name the file in each
+    `changes` entry instead. Looking only at the top level made a `deny` rule on a
+    folder miss such a call entirely — the rule was simply bypassed by using the batch
+    form. The list keeps the top-level path first, then every change's own path.
+    """
+    args = args or {}
+    out: List[str] = []
+    for key in _FILE_KEYS:
+        value = args.get(key)
+        if isinstance(value, str) and value:
+            out.append(value)
+    raw = args.get("changes")
+    if raw is None:
+        raw = args.get("changes_json")
+    if isinstance(raw, str):
+        try:
+            import json
+            raw = json.loads(raw)
+        except Exception:
+            raw = None
+    if isinstance(raw, dict):
+        raw = [raw]
+    if isinstance(raw, list):
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+            for key in ("path", "file_path"):
+                value = item.get(key)
+                if isinstance(value, str) and value:
+                    out.append(value)
+                    break
+    seen, unique = set(), []
+    for value in out:
+        if value not in seen:
+            seen.add(value)
+            unique.append(value)
+    return unique
 
 
 def glob_match(value: str, pattern: str) -> bool:
@@ -118,7 +161,7 @@ def command_parts(command: str) -> List[str]:
     """The whole line and each of its chained commands (so `cd x && git push` is a `git push`)."""
     parts = [command.strip()]
     try:
-        from approval import _split_unquoted_chain_commands
+        from argent.approval import _split_unquoted_chain_commands
         parts += [p.strip() for p in _split_unquoted_chain_commands(command)]
     except Exception:
         pass
@@ -142,7 +185,7 @@ def file_digest(path: Path) -> str:
 
 def _trusted() -> dict:
     try:
-        import config
+        import argent.config as config
         return dict(config.get_trusted_files() or {})
     except Exception:
         return {}
@@ -150,7 +193,7 @@ def _trusted() -> dict:
 
 def trust_file(path: Path) -> str:
     """Remember the file's current content as trusted; returns its digest."""
-    import config
+    import argent.config as config
     digest = file_digest(path)
     trusted = _trusted()
     trusted[str(path.resolve())] = digest
@@ -217,7 +260,7 @@ class ShellHooks:
     def project_root(self) -> Path:
         if self._project_dir:
             return self._project_dir
-        from project_paths import project_root_or_cwd
+        from argent.project_paths import project_root_or_cwd
         return project_root_or_cwd()
 
     def files(self) -> List[Tuple[str, Path]]:

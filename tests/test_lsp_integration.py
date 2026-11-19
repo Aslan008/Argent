@@ -23,7 +23,7 @@ import pytest
 
 pytest.importorskip("multilspy")
 
-from src.lsp.manager import lsp_manager  # noqa: E402
+from src.lsp.manager import lsp_manager  
 
 # ── Known sample file ────────────────────────────────────────────────────────
 # Line numbers are 1-indexed throughout. Column numbers are 0-indexed.
@@ -111,7 +111,7 @@ class TestFindDefinition:
         fp = _sample_path(lsp_project_dir)
         results = lsp_manager.find_definition(fp, SYM_CLASS_DEF[0], SYM_CLASS_DEF[1])
         assert results, "Expected at least one definition result"
-        assert any("sample.py" in r["file_path"] for r in results)
+        assert any("sample.py" in r["path"] for r in results)
 
     def test_line_indexing_on_usage(self, lsp_project_dir):
         """THE regression test: probing line 10 (1-indexed) — a usage of
@@ -122,7 +122,7 @@ class TestFindDefinition:
         results = lsp_manager.find_definition(fp, SYM_CLASS_USE[0], SYM_CLASS_USE[1])
         assert results, "Expected definition results for MyClass usage on line 10"
         # The definition of MyClass is on line 3
-        found_lines = [r["line"] for r in results if "sample.py" in r["file_path"]]
+        found_lines = [r["line"] for r in results if "sample.py" in r["path"]]
         assert 3 in found_lines, (
             f"Expected definition on line 3, got lines {found_lines}. "
             f"This indicates a 1-indexed/0-indexed mismatch."
@@ -134,7 +134,7 @@ class TestFindDefinition:
         fp = _sample_path(lsp_project_dir)
         results = lsp_manager.find_definition(fp, SYM_METHOD_USE[0], SYM_METHOD_USE[1])
         assert results, "Expected definition results for method_one call"
-        found_lines = [r["line"] for r in results if "sample.py" in r["file_path"]]
+        found_lines = [r["line"] for r in results if "sample.py" in r["path"]]
         assert 4 in found_lines, (
             f"Expected method_one definition on line 4, got lines {found_lines}"
         )
@@ -169,7 +169,7 @@ class TestFindReferences:
         fp = _sample_path(lsp_project_dir)
         results = lsp_manager.find_references(fp, SYM_CLASS_DEF[0], SYM_CLASS_DEF[1])
         assert results, "Expected reference results"
-        ref_lines = [r["line"] for r in results if "sample.py" in r["file_path"]]
+        ref_lines = [r["line"] for r in results if "sample.py" in r["path"]]
         # Definition on line 3, usage on line 10
         assert 3 in ref_lines, f"Definition (line 3) not found in references: {ref_lines}"
         assert 10 in ref_lines, f"Usage (line 10) not found in references: {ref_lines}"
@@ -180,7 +180,7 @@ class TestFindReferences:
         instead of 3 and 10."""
         fp = _sample_path(lsp_project_dir)
         results = lsp_manager.find_references(fp, SYM_CLASS_DEF[0], SYM_CLASS_DEF[1])
-        ref_lines = [r["line"] for r in results if "sample.py" in r["file_path"]]
+        ref_lines = [r["line"] for r in results if "sample.py" in r["path"]]
         assert 3 in ref_lines, (
             f"Line 3 expected (1-indexed output). Got {ref_lines}. "
             f"If lines are 2 and 9, the +1 conversion in find_references is missing."

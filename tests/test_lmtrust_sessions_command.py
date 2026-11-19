@@ -14,7 +14,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-import session as session_mod
+import argent.session as session_mod
 from src.cli.commands.base import CommandContext
 from src.cli.commands.session_commands import handle_sessions, handle_load
 import src.cli.commands.session_commands as sc_module

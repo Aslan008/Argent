@@ -20,7 +20,7 @@ from collections import deque
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
-from logger import get_logger
+from argent.logger import get_logger
 
 log = get_logger("semantic_loop_guard")
 

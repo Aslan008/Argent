@@ -27,12 +27,12 @@ from typing import Any, Dict, List
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from src.leeth.dispatcher import ALLOWED_FAST_TOOLS  # noqa: E402
-from src.leeth.primitives import ChoiceQuestion, NoulQuestion  # noqa: E402
-from src.leeth2.data.argent import TOOL_QUESTION  # noqa: E402
-from src.leeth2.data.synth import argent_context as CX  # noqa: E402
-from src.leeth2.data.synth.argent_router import NEED_TOOL_QUESTION  # noqa: E402
-from src.leeth2.runtime import Leeth2Runtime  # noqa: E402
+from src.leeth.dispatcher import ALLOWED_FAST_TOOLS  
+from src.leeth.primitives import ChoiceQuestion, NoulQuestion  
+from src.leeth2.data.argent import TOOL_QUESTION  
+from src.leeth2.data.synth import argent_context as CX  
+from src.leeth2.data.synth.argent_router import NEED_TOOL_QUESTION  
+from src.leeth2.runtime import Leeth2Runtime  
 
 THRESHOLD = 0.65          # dispatcher.confidence_threshold
 EXEC_THRESHOLD = 0.80
@@ -43,7 +43,7 @@ DELEGATE = {"NO_TOOL", "UNFAMILIAR"}
 # conservative reading and it stays the headline number.  But some unlabelled requests ARE one clean tool call, and the fast path
 # taking them is not a mistake.  The rules below are deliberately narrow and mechanical (no judgement per query), and the adjusted rate
 # is reported NEXT to the headline one, for every model alike.
-import re  # noqa: E402
+import re
 
 _ARITH = re.compile(r"^\s*(?:!fast\s*)?(?:сколько будет|посчитай|вычисли|calculate|what is|чему равно)?\s*[-+*/().,^%×÷=?\s]*\d[-+*/().,^%×÷=?\s\d]*[-+*/^%×÷][-+*/().,^%×÷=?\s\d]*\d[-+*/().,^%×÷=?\s\d]*$", re.I)
 _GIT = re.compile(r"^\s*(?:покажи|выведи|что в|show|give me)?\s*(?:статус\s+(?:git|гита?|гит)|git status)\s*\??\s*$", re.I)
@@ -81,7 +81,7 @@ def production_path(rt: Leeth2Runtime, queries: List[str]) -> List[Dict[str, Any
     import types
 
     try:
-        import config as cfg
+        import argent.config as cfg
     except Exception:                                    # the slice of the project on Kaggle has no config.py
         cfg = types.ModuleType("config")
         sys.modules["config"] = cfg

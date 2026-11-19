@@ -4,14 +4,14 @@ import json
 from unittest.mock import MagicMock, patch
 import pytest
 
-import config
-from local_inference import (
+import argent.config as config
+from argent.local_inference import (
     SystemResourceAuditor,
     delegate_local,
     DELEGATE_LOCAL_SCHEMA,
     _run_cloud_tier,
 )
-from tools.schemas import get_tool_schemas, get_available_tools
+from argent.tools.schemas import get_tool_schemas, get_available_tools
 from src.cli.commands.base import CommandContext
 from src.cli.commands.config_commands import handle_local_model
 
@@ -65,7 +65,7 @@ class TestCloudTierAndFallback:
         mock_provider = MagicMock()
         mock_provider.sync_chat.return_value = "Result from cloud model"
 
-        monkeypatch.setattr("providers.create_provider", lambda prov: mock_provider)
+        monkeypatch.setattr("argent.providers.create_provider", lambda prov: mock_provider)
         monkeypatch.setattr(config, "get_local_agent_cloud_provider", lambda: "openrouter")
         monkeypatch.setattr(config, "get_local_agent_cloud_model", lambda: "google/gemini-2.0-flash-exp:free")
 
@@ -74,15 +74,15 @@ class TestCloudTierAndFallback:
         assert mock_provider.sync_chat.called
 
     def test_delegate_local_tier_0_invokes_cloud(self, monkeypatch):
-        monkeypatch.setattr("local_inference._run_cloud_tier", lambda t, c, timeout: "Cloud answer")
+        monkeypatch.setattr("argent.local_inference._run_cloud_tier", lambda t, c, timeout: "Cloud answer")
         res = delegate_local(task="Summarize text", tier=0)
         assert res == "Cloud answer"
 
     def test_delegate_local_auto_fallback_when_offline(self, monkeypatch):
         monkeypatch.setattr(SystemResourceAuditor, "available_tier", lambda t: 1)
-        monkeypatch.setattr("local_inference._is_ollama_online", lambda: False)
+        monkeypatch.setattr("argent.local_inference._is_ollama_online", lambda: False)
         monkeypatch.setattr(config, "is_local_agent_cloud_fallback", lambda: True)
-        monkeypatch.setattr("local_inference._run_cloud_tier", lambda t, c, timeout: "Fallback result")
+        monkeypatch.setattr("argent.local_inference._run_cloud_tier", lambda t, c, timeout: "Fallback result")
 
         res = delegate_local(task="Write test")
         assert "[Auto-Cloud Fallback" in res
@@ -90,7 +90,7 @@ class TestCloudTierAndFallback:
 
     def test_delegate_local_no_fallback_when_offline(self, monkeypatch):
         monkeypatch.setattr(SystemResourceAuditor, "available_tier", lambda t: 1)
-        monkeypatch.setattr("local_inference._is_ollama_online", lambda: False)
+        monkeypatch.setattr("argent.local_inference._is_ollama_online", lambda: False)
         monkeypatch.setattr(config, "is_local_agent_cloud_fallback", lambda: False)
 
         res = delegate_local(task="Write test")

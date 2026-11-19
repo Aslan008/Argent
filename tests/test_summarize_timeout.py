@@ -3,7 +3,7 @@ and returns None (not a wedged thread) when the call overruns."""
 
 import time
 
-import providers
+import argent.providers as providers
 import src.agent.service_llm as service_llm
 import src.agent.trimmer as trimmer
 

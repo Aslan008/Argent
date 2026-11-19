@@ -18,6 +18,7 @@ from src.cli.commands import review_commands
 from src.cli.commands import subagent_commands
 from src.cli.commands import memory_commands
 from src.cli.commands import desktop_commands
+from src.cli.commands import leeth_commands
 
 
 def get_registry() -> CommandRegistry:

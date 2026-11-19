@@ -82,7 +82,7 @@ def default_notify(node, state) -> bool:
         if node.channel == "telegram":
             from src.automation.notify import telegram_notify
             return bool(telegram_notify(title, message))
-        from ui import print_system
+        from argent.ui import print_system
         print_system(f"[bold]{title}[/bold]: {message}")
         return True
     except Exception:

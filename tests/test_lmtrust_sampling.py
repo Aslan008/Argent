@@ -11,8 +11,8 @@ Tests layers:
 
 import pytest
 from unittest.mock import MagicMock, patch
-import config
-from providers import (
+import argent.config as config
+from argent.providers import (
     _is_openai_reasoning_model,
     _is_claude_model,
     OllamaProvider,

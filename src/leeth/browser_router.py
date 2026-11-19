@@ -17,12 +17,13 @@ from typing import Any, Dict, List, Optional
 
 import torch
 import torch.nn.functional as F
-from logger import get_logger
+from argent.logger import get_logger
 
 logger = get_logger("leeth_browser_router")
 
 RANKING_WEIGHTS = Path("src/leeth/data/ranking_head.pt")
 BASE_DIR = Path(".argent/models/mmbert-argent")
+LEETH2_DIR = Path(".argent/models/leeth2/final")
 DEFAULT_THRESHOLD = 0.20
 
 # Опасные действия в браузере: клик по ним никогда не идёт автоматически.
@@ -51,6 +52,19 @@ class BrowserRoute:
     reason: Optional[str] = None
 
 
+def is_dangerous_text(text: str) -> bool:
+    """Проверяет текст (интент или надпись на кнопке) на наличие опасных/деструктивных действий."""
+    if not text:
+        return False
+    if any(p.search(text) for p in DANGEROUS_PATTERNS):
+        return True
+    try:
+        from src.leeth.dispatcher import DENY_PATTERNS
+        return any(p.search(text) for p in DENY_PATTERNS)
+    except Exception:
+        return False
+
+
 def requires_confirmation_check(element: Dict) -> bool:
     """Процедурный гейт опасных кнопок — не зависит от модели.
 
@@ -62,14 +76,7 @@ def requires_confirmation_check(element: Dict) -> bool:
         + " "
         + (element.get("role") or element.get("tag") or "")
     )
-    if any(p.search(text) for p in DANGEROUS_PATTERNS):
-        return True
-    try:
-        from src.leeth.dispatcher import DENY_PATTERNS  # deferred: avoids import cycle
-        raw_txt = element.get("text") or element.get("label") or element.get("name") or ""
-        return any(p.search(raw_txt) for p in DENY_PATTERNS)
-    except Exception:
-        return False
+    return is_dangerous_text(text)
 
 
 class BrowserRouter:
@@ -93,8 +100,22 @@ class BrowserRouter:
         self.i_w: Optional[torch.Tensor] = None
         self.i_b: Optional[torch.Tensor] = None
         self._backbone: Optional[Any] = None
+        self._leeth2: Optional[Any] = None
 
         self._init_engine()
+
+    def _get_leeth2(self) -> Optional[Any]:
+        """Ленивая загрузка полной модели Leeth2 для глубокого выбора из вариантов."""
+        if self.weights_path != RANKING_WEIGHTS and not self.weights_path.exists():
+            return None
+        if self._leeth2 is None and LEETH2_DIR.exists() and (LEETH2_DIR / "model.safetensors").exists():
+            try:
+                from src.leeth2.runtime import Leeth2Runtime
+                device = "cuda" if torch.cuda.is_available() else "cpu"
+                self._leeth2 = Leeth2Runtime.load(str(LEETH2_DIR), device=device)
+            except Exception as e:
+                logger.debug("Leeth2 load for BrowserRouter skipped: %s", e)
+        return self._leeth2
 
     def _init_engine(self) -> None:
         """Инициализирует ModernBERT bi-encoder если веса доступны."""
@@ -128,10 +149,13 @@ class BrowserRouter:
 
     @property
     def is_ready(self) -> bool:
+        if self.weights_path != RANKING_WEIGHTS and not self.weights_path.exists():
+            return False
+        has_leeth2 = LEETH2_DIR.exists() and (LEETH2_DIR / "model.safetensors").exists()
         has_projections = self.q_w is not None and self.i_w is not None and self._backbone is not None
         has_custom_ranking = self.ranking is not None and self.tokenizer is not None
         has_dopt = Path(".argent/models/dopt/dopt_v2.onnx").exists() or Path(".argent/models/mmbert_dynamic_opt_v2.pt").exists()
-        return has_projections or has_custom_ranking or has_dopt
+        return has_leeth2 or has_projections or has_custom_ranking or has_dopt
 
     def _item_text(self, element: Dict) -> str:
         """Единый текст элемента для кодирования с поддержкой A11y и DOM: 'role: text (aria/placeholder)'."""
@@ -154,58 +178,57 @@ class BrowserRouter:
 
         item_texts = [self._item_text(el) for el in elements]
 
-        # Path A: Universal Task Solver (DoPT zero-shot dynamic option selection)
-        try:
-            from src.leeth.dopt_solver import DoptSolver
-            if not hasattr(self, "_dopt_solver") or self._dopt_solver is None:
-                self._dopt_solver = DoptSolver()
+        # Path 0: Leeth2 Multiple-Choice (Deep 22-layer ModernBERT attention over DOM options)
+        leeth2 = self._get_leeth2()
+        if leeth2 is not None:
+            try:
+                cand_indices = list(range(len(elements)))
+                # If there are many elements (> 16), pre-filter with bi-encoder top-16 if projections exist
+                if len(elements) > 16 and self.q_w is not None and self.i_w is not None and self._backbone is not None and self.tokenizer is not None:
+                    try:
+                        with torch.no_grad():
+                            q_enc = self.tokenizer(goal, return_tensors="pt", max_length=64, truncation=True)
+                            q_out = self._backbone(**q_enc)
+                            q_mask = q_enc["attention_mask"].unsqueeze(-1)
+                            q_pooled = (q_out.last_hidden_state * q_mask).sum(1) / q_mask.sum(1).clamp(min=1e-9)
+                            q_proj = F.normalize(F.linear(q_pooled, self.q_w, self.q_b), dim=-1)
 
-            candidate_indices = list(range(len(elements)))
-            
-            # Если элементов много (> 8), используем bi-encoder для быстрого top-8 отбора
-            if len(elements) > 8 and self.q_w is not None and self.i_w is not None and self._backbone is not None and self.tokenizer is not None:
-                try:
-                    with torch.no_grad():
-                        q_enc = self.tokenizer(goal, return_tensors="pt", max_length=64, truncation=True)
-                        q_out = self._backbone(**q_enc)
-                        q_mask = q_enc["attention_mask"].unsqueeze(-1)
-                        q_pooled = (q_out.last_hidden_state * q_mask).sum(1) / q_mask.sum(1).clamp(min=1e-9)
-                        q_proj = F.normalize(F.linear(q_pooled, self.q_w, self.q_b), dim=-1)
+                            i_enc = self.tokenizer(item_texts, padding=True, return_tensors="pt", max_length=64, truncation=True)
+                            i_out = self._backbone(**i_enc)
+                            i_mask = i_enc["attention_mask"].unsqueeze(-1)
+                            i_pooled = (i_out.last_hidden_state * i_mask).sum(1) / i_mask.sum(1).clamp(min=1e-9)
+                            i_proj = F.normalize(F.linear(i_pooled, self.i_w, self.i_b), dim=-1)
 
-                        i_enc = self.tokenizer(item_texts, padding=True, return_tensors="pt", max_length=64, truncation=True)
-                        i_out = self._backbone(**i_enc)
-                        i_mask = i_enc["attention_mask"].unsqueeze(-1)
-                        i_pooled = (i_out.last_hidden_state * i_mask).sum(1) / i_mask.sum(1).clamp(min=1e-9)
-                        i_proj = F.normalize(F.linear(i_pooled, self.i_w, self.i_b), dim=-1)
+                            sims = (q_proj * i_proj).sum(dim=-1).squeeze(0)
+                            cand_indices = torch.argsort(sims, descending=True)[:16].tolist()
+                    except Exception:
+                        cand_indices = list(range(min(len(elements), 16)))
 
-                        sims = (q_proj * i_proj).sum(dim=-1).squeeze(0)
-                        candidate_indices = torch.argsort(sims, descending=True)[:8].tolist()
-                except Exception as be_filter_err:
-                    logger.debug("Bi-encoder candidate filtering failed: %s", be_filter_err)
-                    candidate_indices = list(range(min(len(elements), 8)))
+                cand_options = [f"[{i}] {item_texts[i]}" for i in cand_indices]
+                state = f"Page elements on screen:\nGoal: {goal}"
+                question = "С каким элементом нужно взаимодействовать дальше?"
+                res = leeth2.choose(state, question, cand_options)
+                if res and res.choice in cand_options:
+                    sub_idx = cand_options.index(res.choice)
+                    best_idx = cand_indices[sub_idx]
+                    probs = list(res.probabilities.values())
+                    probs_sorted = sorted(probs, reverse=True)
+                    margin = (probs_sorted[0] - probs_sorted[1]) if len(probs_sorted) > 1 else 0.0
+                    conf = float(res.confidence)
+                    if conf >= 0.50 or (conf >= 0.35 and margin >= 0.10):
+                        element = elements[best_idx]
+                        requires = requires_confirmation_check(element) or is_dangerous_text(goal)
+                        return BrowserRoute(
+                            index=best_idx,
+                            score=conf,
+                            margin_to_second=float(margin),
+                            requires_confirmation=requires,
+                            reason="dangerous_action" if requires else None,
+                        )
+            except Exception as e:
+                logger.debug("Leeth2 DOM routing fallback: %s", e)
 
-            opts = [item_texts[i] for i in candidate_indices]
-            dopt_res = self._dopt_solver.decide(state_text="", question=goal, options=opts)
-            if dopt_res and dopt_res.choice in opts:
-                c_idx = opts.index(dopt_res.choice)
-                best_idx = candidate_indices[c_idx]
-                element = elements[best_idx]
-                requires = requires_confirmation_check(element)
-                probs = list(dopt_res.probabilities.values())
-                probs_sorted = sorted(probs, reverse=True)
-                margin = (probs_sorted[0] - probs_sorted[1]) if len(probs_sorted) > 1 else 0.0
-                if dopt_res.confidence >= self.threshold:
-                    return BrowserRoute(
-                        index=best_idx,
-                        score=float(dopt_res.confidence),
-                        margin_to_second=float(margin),
-                        requires_confirmation=requires,
-                        reason="dangerous_action" if requires else None,
-                    )
-        except Exception as dopt_err:
-            logger.debug("DoPT routing failed (%s), proceeding to fallback bi-encoder.", dopt_err)
-
-        # Path B: Fast Native Bi-Encoder (ModernBERT + 256 projection)
+        # Path A: Fast Native Bi-Encoder (ModernBERT + 256 projection) — основной движок DOM
         if self.q_w is not None and self.i_w is not None and self._backbone is not None and self.tokenizer is not None:
             try:
                 with torch.no_grad():
@@ -231,9 +254,12 @@ class BrowserRouter:
                     second_score = float(scores[order[1].item()]) if len(order) > 1 else -1.0
                     margin = best_score - second_score
 
-                if best_score >= self.threshold:
+                # Калиброванный динамический порог: уверенный скор (>= 0.45) ЛИБО выраженный top-1 с отрывом (>= 0.30 и margin >= 0.08)
+                passes_threshold = (best_score >= 0.45) or (best_score >= max(self.threshold, 0.30) and margin >= 0.08)
+
+                if passes_threshold:
                     element = elements[best_idx]
-                    requires = requires_confirmation_check(element)
+                    requires = requires_confirmation_check(element) or is_dangerous_text(goal)
                     return BrowserRoute(
                         index=best_idx,
                         score=best_score,
@@ -242,7 +268,35 @@ class BrowserRouter:
                         reason="dangerous_action" if requires else None,
                     )
             except Exception as e:
-                logger.warning("Bi-encoder routing failed (%s), trying custom ranking fallback.", e)
+                logger.warning("Bi-encoder routing failed (%s), trying fallbacks.", e)
+
+        # Path B: Universal Task Solver (DoPT zero-shot dynamic option selection) — фолбэк при отсутствии bi-encoder весов
+        try:
+            from src.leeth.dopt_solver import DoptSolver
+            if not hasattr(self, "_dopt_solver") or self._dopt_solver is None:
+                self._dopt_solver = DoptSolver()
+
+            opts = item_texts[:8]
+            dopt_res = self._dopt_solver.decide(state_text="", question=goal, options=opts)
+            if dopt_res and dopt_res.choice in opts:
+                best_idx = opts.index(dopt_res.choice)
+                element = elements[best_idx]
+                requires = requires_confirmation_check(element) or is_dangerous_text(goal)
+                probs = list(dopt_res.probabilities.values())
+                probs_sorted = sorted(probs, reverse=True)
+                margin = (probs_sorted[0] - probs_sorted[1]) if len(probs_sorted) > 1 else 0.0
+                # DoPT как эвристический фолбэк требует высокой уверенности (>= 0.65 и выраженный margin),
+                # иначе передаём управление LLM (browser_act), чтобы не кликать случайно
+                if dopt_res.confidence >= 0.65 and margin >= 0.15:
+                    return BrowserRoute(
+                        index=best_idx,
+                        score=float(dopt_res.confidence),
+                        margin_to_second=float(margin),
+                        requires_confirmation=requires,
+                        reason="dangerous_action" if requires else None,
+                    )
+        except Exception as dopt_err:
+            logger.debug("DoPT routing failed (%s), proceeding to custom ranking fallback.", dopt_err)
 
         # Path C: LeethRankingModel fallback
         if self.ranking is not None and self.tokenizer is not None:

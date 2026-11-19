@@ -71,15 +71,15 @@ def previous(monkeypatch, tmp_path):
     monkeypatch.setattr(startup, "get_last_session", lambda: meta)
     monkeypatch.setattr(startup, "load_session", lambda sid: payload)
     monkeypatch.setattr(startup, "carried_over_memory", lambda: [])
-    monkeypatch.setattr("config.CONFIG_FILE", tmp_path / "exists.json")      # not a first run
+    monkeypatch.setattr("argent.config.CONFIG_FILE", tmp_path / "exists.json")      # not a first run
     (tmp_path / "exists.json").write_text("{}", encoding="utf-8")
     return payload
 
 
 def _spy_services(monkeypatch):
     order = []
-    monkeypatch.setattr("config.get_mcp_servers", lambda: [{"name": "srv", "command": "x"}])
-    from mcp_client import mcp_client
+    monkeypatch.setattr("argent.config.get_mcp_servers", lambda: [{"name": "srv", "command": "x"}])
+    from argent.mcp_client import mcp_client
     monkeypatch.setattr(mcp_client, "register_and_start",
                         lambda name, cfg: order.append("mcp") or f"Started {name}")
     return order
@@ -168,7 +168,7 @@ class TestTheAnswers:
     def test_a_clean_start_restores_nothing_and_clears_the_memory(self, with_prompts, previous, monkeypatch):
         _spy_services(monkeypatch)
         cleared = []
-        monkeypatch.setattr("memory_manager.memory.clear", lambda: cleared.append(True))
+        monkeypatch.setattr("argent.memory_manager.memory.clear", lambda: cleared.append(True))
         monkeypatch.setattr(startup, "carried_over_memory", lambda: ["1 фактов"])
         bridge = ReplBridge()
         before = list(bridge.agent.messages)
@@ -196,7 +196,7 @@ class TestNothingToOffer:
         monkeypatch.setattr(startup, "get_last_session", lambda: None)
         monkeypatch.setattr(startup, "carried_over_memory", lambda: [])
         (tmp_path / "exists.json").write_text("{}", encoding="utf-8")
-        monkeypatch.setattr("config.CONFIG_FILE", tmp_path / "exists.json")
+        monkeypatch.setattr("argent.config.CONFIG_FILE", tmp_path / "exists.json")
         bridge = ReplBridge()
         tui = Recorder(bridge, [])
         bridge.set_event_sink(tui)
@@ -220,7 +220,7 @@ class TestFirstRun:
         _spy_services(monkeypatch)
         monkeypatch.setattr(startup, "get_last_session", lambda: None)
         monkeypatch.setattr(startup, "carried_over_memory", lambda: [])
-        monkeypatch.setattr("config.CONFIG_FILE", tmp_path / "never_written.json")
+        monkeypatch.setattr("argent.config.CONFIG_FILE", tmp_path / "never_written.json")
         bridge = ReplBridge()
         tui = Recorder(bridge, [""])               # decline
         bridge.set_event_sink(tui)

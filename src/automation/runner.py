@@ -42,7 +42,7 @@ if __name__ == "__main__" and __package__ in (None, ""):
     # Started by path (the OS scheduler does that), not with `python -m`.
     sys.path.insert(0, str(_ARGENT_ROOT))
 
-from logger import get_logger  # noqa: E402
+from argent.logger import get_logger  
 
 log = get_logger("automation")
 
@@ -50,9 +50,13 @@ log = get_logger("automation")
 # These either need a human (they ask questions), hand control to something
 # that outlives the run (background processes, sub-agents with their own loops),
 # or would let a run rewrite its own schedule and permissions.
+#
+# Elevation is not listed: it is a flag on `run_command` now, and a name list cannot
+# see a flag. It is refused instead by the approval gate it must pass — an unattended
+# run has no one to answer the UAC prompt, so `run_command(admin=true)` comes back
+# "NOT run" (see `argent/approval.py::_nobody_is_watching`).
 UNATTENDED_TOOL_DENYLIST = {
     "ask_user_questions", "request_user_approval",
-    "run_admin_command",
     "wait_heartbeat",
     "manage_automations",
 }
@@ -119,7 +123,7 @@ class UnattendedGate:
 
     def __call__(self, action: str, destructive: bool, grant_key) -> str:
         if not destructive and self._allowed_commands:
-            from approval import command_from_action
+            from argent.approval import command_from_action
             command = command_from_action(action)
             if command is not None and command_allowed(command, self._allowed_commands):
                 self.ran.append(command.strip())
@@ -298,7 +302,7 @@ def run_automation(automation, agent=None, now=None) -> dict:
     'denied' means the task could not do its job without an action that requires
     a human.
     """
-    import approval
+    import argent.approval as approval
     from src.automation import memory
     from src.automation.store import load_runs
 
@@ -330,7 +334,7 @@ def run_automation(automation, agent=None, now=None) -> dict:
     new_items = 0
 
     if agent is None:
-        from agent import ArgentAgent
+        from argent.agent import ArgentAgent
         agent = ArgentAgent()
         agent.autosave_enabled = False      # a scheduled run must not become "the last session" offered at startup
 
@@ -509,7 +513,7 @@ class SubprocessRunner:
         return minutes * 60 if minutes > 0 else self._timeout
 
     def __call__(self, automation, trigger: str = "schedule") -> dict:
-        from project_paths import project_root_or_cwd
+        from argent.project_paths import project_root_or_cwd
         from src.agent.shell import kill_process_tree
 
         started = datetime.now()

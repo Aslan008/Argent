@@ -1,66 +1,59 @@
 import json
 import re
-from tools import get_available_tools
+from argent.tools import get_available_tools
 
-# Parameter name aliases for known tools
+# Parameter name aliases for known tools.
+#
+# The canonical name for "the file or directory this tool works on" is `path`. These
+# tables exist because models reach for `filename`, `file`, `dir`, `directory` or the
+# old `file_path`; what they normalise TO is the schema's own name, which is `path`
+# everywhere. If the target were still `file_path`, a call that arrived as `filename`
+# would be translated into a parameter the tools no longer declare.
+_PATH_ALIASES = {
+    "filename": "path",
+    "file_path": "path",
+    "filepath": "path",
+    "file": "path",
+    "dir_path": "path",
+    "dirpath": "path",
+    "directory": "path",
+    "directory_path": "path",
+    "dir": "path",
+}
+
 _PARAM_ALIASES = {
-    "write_file": {
-        "filename": "file_path",
-        "path": "file_path",
-        "file": "file_path",
-        "filepath": "file_path",
-    },
-    "read_file": {
-        "filename": "file_path",
-        "path": "file_path",
-        "file": "file_path",
-        "filepath": "file_path",
-    },
-    "delete_file": {
-        "filename": "file_path",
-        "path": "file_path",
-        "file": "file_path",
-        "filepath": "file_path",
-    },
-    "replace_in_file": {
-        "filename": "file_path",
-        "path": "file_path",
-        "file": "file_path",
-        "filepath": "file_path",
-    },
+    "write_file": dict(_PATH_ALIASES),
+    "read_file": dict(_PATH_ALIASES),
+    "delete_file": dict(_PATH_ALIASES),
+    "replace_in_file": dict(_PATH_ALIASES),
+    "replace_python_function": dict(_PATH_ALIASES),
     "multi_replace_in_file": {
         "changes": "changes_json",
         "replacements": "changes_json",
         "edits": "changes_json",
     },
-    "replace_python_function": {
-        "filename": "file_path",
-        "path": "file_path",
-        "file": "file_path",
-        "filepath": "file_path",
-    },
-    "create_directory": {
-        "path": "dir_path",
-        "directory": "dir_path",
-        "dir": "dir_path",
-        "directory_path": "dir_path",
-    },
-    "list_directory": {
-        "path": "dir_path",
-        "directory": "dir_path",
-        "dir": "dir_path",
-        "directory_path": "dir_path",
-    },
+    "create_directory": dict(_PATH_ALIASES),
+    "list_directory": dict(_PATH_ALIASES),
+    "get_file_outline": dict(_PATH_ALIASES),
+    "view_image": dict(_PATH_ALIASES),
+    "analyze_project": dict(_PATH_ALIASES),
+    "run_deep_linter": dict(_PATH_ALIASES),
     "grep_search": {
-        "dir": "directory",
-        "path": "directory",
-        "directory_path": "directory",
-        "search_path": "directory",
-        "searchpath": "directory",
+        **_PATH_ALIASES,
+        "search_path": "path",
+        "searchpath": "path",
         "query": "pattern",
         "regex": "pattern",
         "search_query": "pattern",
+        # grep / ripgrep flag names a model may reach for
+        "whole_words": "whole_word",
+        "word_regexp": "whole_word",
+        "match_whole_word": "whole_word",
+        "fixed_strings": "literal",
+        "fixed_string": "literal",
+        "match_case": "case_sensitive",
     },
+    "search_files": dict(_PATH_ALIASES),
     "move_file": {
         "src": "source",
         "source_path": "source",
@@ -181,7 +174,7 @@ def decode_json_escapes(s: str) -> str:
     # chunk, a malformed low escape) becomes a lone surrogate here, and a lone
     # surrogate cannot be encoded as UTF-8. Left in, it poisons the history and
     # every LATER request dies on encoding — for a character nobody sees.
-    from text_safety import repair_surrogates
+    from argent.text_safety import repair_surrogates
     return repair_surrogates(''.join(out))
 
 # The body is GREEDY and the closing fence must be a line that is exactly ```
@@ -217,9 +210,69 @@ def parse_fenced_write(content: str) -> dict | None:
         return None
     return {
         "parsed": {"name": "write_file",
-                   "arguments": {"file_path": path, "content": m.group("body")}},
+                   "arguments": {"path": path, "content": m.group("body")}},
         "match_str": m.group(0),
     }
+
+
+# --- FORMAT 0: a tool call written as XML-ish tags -------------------------------
+# `<create_artifact><parameter name="filename">x</parameter></create_artifact>` is the
+# shape a model falls back to when it misses the tool-call channel. Rendered as text,
+# it was taken for a final answer: the turn ended and the work was never done.
+_XML_PARAM_RE = re.compile(
+    r'<\s*parameter\s+name\s*=\s*"([^"]+)"\s*>(.*?)<\s*/\s*parameter\s*>',
+    re.DOTALL | re.IGNORECASE)
+_XML_ATTR_RE = re.compile(r'([A-Za-z_][\w\-.]*)\s*=\s*"([^"]*)"', re.DOTALL)
+
+
+def _xml_attrs(text: str) -> dict:
+    return {m.group(1): m.group(2) for m in _XML_ATTR_RE.finditer(text or "")}
+
+
+def parse_xml_tool_call(content: str, tool_names=None) -> dict | None:
+    """A call written as `<tool>…</tool>` or `<tool a="1"/>`, read back into a call.
+
+    Only tags whose name is a real tool are considered, so ordinary markup in an
+    answer (`<div>`, `<b>`) is never mistaken for one.
+    """
+    if not content or "<" not in content:
+        return None
+    names = sorted(get_available_tools() if tool_names is None else tool_names,
+                   key=len, reverse=True)
+    for name in names:
+        tag = re.escape(name)
+        block = re.search(r'<\s*' + tag + r'\b([^>]*)>(.*?)<\s*/\s*' + tag + r'\s*>',
+                          content, re.DOTALL | re.IGNORECASE)
+        if block:
+            args = {m.group(1): m.group(2).strip() for m in _XML_PARAM_RE.finditer(block.group(2))}
+            if not args:
+                args = _xml_attrs(block.group(1))
+            if args:
+                return {"parsed": {"name": name, "arguments": args}, "match_str": block.group(0)}
+            continue
+        empty = re.search(r'<\s*' + tag + r'\b([^>]*)/>', content, re.DOTALL | re.IGNORECASE)
+        if empty:
+            args = _xml_attrs(empty.group(1))
+            if args:
+                return {"parsed": {"name": name, "arguments": args}, "match_str": empty.group(0)}
+    return None
+
+
+def looks_like_tool_call_text(content: str, tool_names=None) -> bool:
+    """Whether this text is a tool call the model wrote instead of making one.
+
+    Used where a turn decides it has its final answer: such text is not an answer,
+    and accepting it ends the run with nothing done.
+    """
+    if not content or "<" not in content:
+        return False
+    names = get_available_tools() if tool_names is None else tool_names
+    lowered = content.lower()
+    for name in names:
+        tag = name.lower()
+        if f"<{tag}" in lowered or f"< {tag}" in lowered:
+            return True
+    return False
 
 
 def parse_raw_tool_call(content: str) -> dict | None:
@@ -229,6 +282,12 @@ def parse_raw_tool_call(content: str) -> dict | None:
     fenced = parse_fenced_write(content)
     if fenced:
         return fenced
+
+    # XML-ish tool tags: unambiguous too, and the shape a model reaches for when the
+    # native channel fails. Checked before JSON, which is easy to fake in prose.
+    xml_call = parse_xml_tool_call(content)
+    if xml_call:
+        return xml_call
 
     clean = content.strip()
     
@@ -397,7 +456,7 @@ def try_recover_malformed_tool(content: str, tool_name: str) -> dict | None:
     parsed = {
         "name": tool_name,
         "arguments": {
-            "file_path": fp_match.group(1),
+            "path": fp_match.group(1),
             "content": recovered
         }
     }

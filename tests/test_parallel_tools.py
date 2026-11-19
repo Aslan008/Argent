@@ -10,16 +10,16 @@ def _call(name, **args):
     return {"function": {"name": name, "arguments": args}}
 
 
-def _slow_read(file_path):
+def _slow_read(path):
     time.sleep(0.08)
-    return f"content of {file_path}"
+    return f"content of {path}"
 
 
 def _tools(**extra):
     base = {
         "read_file": _slow_read,
-        "grep_search": lambda directory, pattern: f"matches in {directory} for {pattern}",
-        "list_directory": lambda dir_path: f"listing {dir_path}",
+        "grep_search": lambda path, pattern: f"matches in {path} for {pattern}",
+        "list_directory": lambda path: f"listing {path}",
     }
     base.update(extra)
     return base
@@ -27,8 +27,8 @@ def _tools(**extra):
 
 def test_batch_runs_concurrently_and_keeps_indexes():
     # Warm up thread pool
-    precompute_readonly_parallel([_call("read_file", file_path="w0.py"), _call("read_file", file_path="w1.py")], _tools(read_file=lambda file_path: ""))
-    calls = [_call("read_file", file_path=f"f{i}.py") for i in range(3)]
+    precompute_readonly_parallel([_call("read_file", path="w0.py"), _call("read_file", path="w1.py")], _tools(read_file=lambda path: ""))
+    calls = [_call("read_file", path=f"f{i}.py") for i in range(3)]
     start = time.time()
     results = precompute_readonly_parallel(calls, _tools())
     wall = time.time() - start
@@ -37,37 +37,37 @@ def test_batch_runs_concurrently_and_keeps_indexes():
 
 
 def test_mixed_batch_with_write_falls_back():
-    calls = [_call("read_file", file_path="a.py"),
-             _call("write_file", file_path="b.py", content="x")]
+    calls = [_call("read_file", path="a.py"),
+             _call("write_file", path="b.py", content="x")]
     assert precompute_readonly_parallel(calls, _tools(write_file=lambda **k: "ok")) is None
 
 
 def test_single_call_not_parallelized():
-    assert precompute_readonly_parallel([_call("read_file", file_path="a.py")], _tools()) is None
+    assert precompute_readonly_parallel([_call("read_file", path="a.py")], _tools()) is None
 
 
 def test_missing_required_arg_falls_back():
-    calls = [_call("read_file", file_path="a.py"), _call("grep_search", pattern="x")]
-    assert precompute_readonly_parallel(calls, _tools()) is None   # grep lacks directory
+    calls = [_call("read_file", path="a.py"), _call("grep_search", pattern="x")]
+    assert precompute_readonly_parallel(calls, _tools()) is None   # grep lacks path
 
 
 def test_unknown_tool_falls_back():
-    calls = [_call("read_file", file_path="a.py"), _call("nonexistent", x=1)]
+    calls = [_call("read_file", path="a.py"), _call("nonexistent", x=1)]
     assert precompute_readonly_parallel(calls, _tools()) is None
 
 
 def test_dedup_note_short_circuits_disk():
     executed = []
 
-    def tracked_read(file_path):
-        executed.append(file_path)
+    def tracked_read(path):
+        executed.append(path)
         return "real read"
 
-    calls = [_call("read_file", file_path="cached.py"),
-             _call("read_file", file_path="fresh.py")]
+    calls = [_call("read_file", path="cached.py"),
+             _call("read_file", path="fresh.py")]
     results = precompute_readonly_parallel(
         calls, _tools(read_file=tracked_read),
-        dedup=lambda args: "[read_file] unchanged" if args["file_path"] == "cached.py" else None,
+        dedup=lambda args: "[read_file] unchanged" if args["path"] == "cached.py" else None,
     )
     assert results[0] == "[read_file] unchanged"
     assert results[1] == "real read"
@@ -75,10 +75,10 @@ def test_dedup_note_short_circuits_disk():
 
 
 def test_exception_becomes_error_result():
-    def boom(file_path):
+    def boom(path):
         raise RuntimeError("disk on fire")
 
-    calls = [_call("read_file", file_path="a.py"), _call("list_directory", dir_path="d")]
+    calls = [_call("read_file", path="a.py"), _call("list_directory", path="d")]
     results = precompute_readonly_parallel(calls, _tools(read_file=boom))
     assert results[0].startswith("Error executing tool read_file")
     assert "disk on fire" in results[0]

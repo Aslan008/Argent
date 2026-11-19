@@ -11,7 +11,7 @@ import re
 from collections import Counter
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
-from logger import get_logger
+from argent.logger import get_logger
 
 logger = get_logger("bpe_tokenizer")
 

@@ -20,7 +20,7 @@ import subprocess
 import sys
 import urllib.request
 
-from logger import get_logger
+from argent.logger import get_logger
 
 log = get_logger("automation")
 
@@ -85,7 +85,7 @@ def _linux_toast(title: str, message: str) -> bool:
 
 def desktop_notify(title: str, message: str) -> bool:
     """Show a desktop notification. False means it did not get through."""
-    from config import get_desktop_notifications
+    from argent.config import get_desktop_notifications
     if not get_desktop_notifications():
         return False
     title, message = _clean(title, MAX_TITLE), _clean(message, MAX_BODY)
@@ -108,7 +108,7 @@ def telegram_notify(title: str, message: str) -> bool:
     still reach a phone. The token never reaches a log line.
     """
     try:
-        from config import get_telegram_chat_id, get_telegram_token
+        from argent.config import get_telegram_chat_id, get_telegram_token
         token, chat_id = get_telegram_token(), get_telegram_chat_id()
         if not token or not chat_id:
             return False

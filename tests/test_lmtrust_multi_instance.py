@@ -13,11 +13,11 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-import config
-import file_tracker
-import session
-from memory_manager import MemoryManager
-from session import save_session, list_sessions, get_last_session, _sync_index
+import argent.config as config
+import argent.file_tracker as file_tracker
+import argent.session as session
+from argent.memory_manager import MemoryManager
+from argent.session import save_session, list_sessions, get_last_session, _sync_index
 
 
 @pytest.fixture
@@ -201,12 +201,12 @@ class TestMemoryManagerIsolation:
         root_2.mkdir()
 
         # Instance 1 in ProjectAlpha
-        monkeypatch.setattr("project_paths.project_root_or_cwd", lambda: root_1)
+        monkeypatch.setattr("argent.project_paths.project_root_or_cwd", lambda: root_1)
         mem1 = MemoryManager()
         mem1.set_objective("Build 3D game engine")
 
         # Instance 2 in ProjectBeta
-        monkeypatch.setattr("project_paths.project_root_or_cwd", lambda: root_2)
+        monkeypatch.setattr("argent.project_paths.project_root_or_cwd", lambda: root_2)
         mem2 = MemoryManager()
         mem2.set_objective("Create REST API backend")
 
@@ -224,8 +224,8 @@ class TestBrowserPortFallbackBlindSpot:
     @pytest.mark.asyncio
     async def test_fallback_to_isolated_when_browser_already_running(self):
         """When user browser is already open without CDP, engine must fallback to isolated mode."""
-        from browser_engine import BrowserEngine
-        from browser_detect import BrowserInfo
+        from argent.browser_engine import BrowserEngine
+        from argent.browser_detect import BrowserInfo
 
         engine = BrowserEngine()
         fake_info = BrowserInfo(
@@ -237,8 +237,8 @@ class TestBrowserPortFallbackBlindSpot:
 
         with patch.object(engine, "_is_browser_running", return_value=True), \
              patch.object(engine, "_launch_isolated") as mock_isolated, \
-             patch("browser_detect.get_default_browser", return_value=fake_info), \
-             patch("config.get_browser_name", return_value="auto"), \
+             patch("argent.browser_detect.get_default_browser", return_value=fake_info), \
+             patch("argent.config.get_browser_name", return_value="auto"), \
              patch.object(engine, "_browser", None):
 
             # Simulate attempting to launch user browser while it's running

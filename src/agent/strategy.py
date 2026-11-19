@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
 from typing import List, Dict, Any
-import config
-from config import get_model_size_category, is_moe_model, get_model_category_override
+import argent.config as config
+from argent.config import get_model_size_category, is_moe_model, get_model_category_override
 from src.agent.parser import parse_raw_tool_call
 from src.agent.trimmer import hard_reset_with_memory, soft_trim_with_summarization, sliding_window_trim
 
@@ -290,6 +290,26 @@ class CloudStrategy(ModelStrategy):
         return False
 
 
+def is_remote_compatible(provider: str, model_name: str = "") -> bool:
+    """Whether an OpenAI Compatible provider points at a machine that is not this one.
+
+    The provider carries no knowledge of its own: the address is the person's, and it
+    may be LM Studio on this PC or a hosted gateway across the network. That address,
+    not the model's name, decides whether the request costs this machine anything — a
+    "llama-3.3-70b-instruct" served by somebody's API is a cloud model, and reading its
+    size out of the name would hand it the local 7-13B prompt and history budget.
+    """
+    if (provider or "").strip().lower() != "openaicompat":
+        return False
+    try:
+        from src.agent.local_backend import classify
+        return not classify(provider, model_name or "").local
+    except Exception:
+        # Unknown locality must not silently become "local": a wrong cloud verdict only
+        # trims less history, a wrong local verdict sends cloud-sized requests.
+        return True
+
+
 def get_model_strategy(model_name: str, provider: str) -> ModelStrategy:
     """Factory to retrieve the appropriate strategy for the active model and provider.
 
@@ -309,8 +329,8 @@ def get_model_strategy(model_name: str, provider: str) -> ModelStrategy:
         else:
             return StandardLocalStrategy()
 
-    category = config.get_model_size_category(model_name)
-    if provider in ("zai", "openrouter", "claude", "anthropic", "deepseek", "xkiro", "wormsoft") or category == "cloud":
+    category = "cloud" if is_remote_compatible(provider, model_name) else config.get_model_size_category(model_name)
+    if provider in ("zai", "openrouter", "claude", "anthropic", "deepseek", "gemini", "xkiro", "wormsoft") or category == "cloud":
         return CloudStrategy()
     elif category == "moe" or config.is_moe_model(model_name):
         return MoELocalStrategy()

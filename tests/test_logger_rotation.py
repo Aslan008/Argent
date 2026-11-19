@@ -11,7 +11,7 @@ import os
 
 import pytest
 
-import logger as logger_mod
+import argent.logger as logger_mod
 
 
 @pytest.fixture

@@ -12,12 +12,12 @@ Covers:
 import pytest
 from unittest.mock import MagicMock
 
-import config
+import argent.config as config
 from src.agent.strategy import (
     get_model_strategy, MoELocalStrategy, StandardLocalStrategy,
     TinyLocalStrategy, CloudStrategy
 )
-import prompt_compressor
+import argent.prompt_compressor as prompt_compressor
 
 
 class TestL1FactualAnchorContract:
@@ -25,8 +25,8 @@ class TestL1FactualAnchorContract:
         """Verify FIX for BUG 1: wants_factual_anchor_only is strictly honored.
         MoELocalStrategy omits COMPLETED and RECENT ERRORS, keeping only factual working context.
         """
-        import agent as agent_module
-        from memory_manager import memory
+        import argent.agent as agent_module
+        from argent.memory_manager import memory
 
         memory.clear()
         memory.add_completed("Created payment gateway")
@@ -50,8 +50,8 @@ class TestL1FactualAnchorContract:
 
     def test_moe_factual_anchor_returns_none_when_no_files_touched(self, monkeypatch):
         """When no files were touched, factual-only anchor must be completely omitted (None)."""
-        import agent as agent_module
-        from memory_manager import memory
+        import argent.agent as agent_module
+        from argent.memory_manager import memory
 
         memory.clear()
         memory.add_completed("Read architecture docs")
@@ -112,7 +112,7 @@ class TestL6ToolPreservationAndProtocol:
         """Verify FIX for INC 1: Auto-detected MoE models keep all available tools
         and receive the complete operational protocol.
         """
-        import agent as agent_module
+        import argent.agent as agent_module
 
         monkeypatch.setattr(agent_module, "get_mcp_servers", lambda: [])
         monkeypatch.setattr(agent_module, "create_provider", lambda *a, **k: MagicMock())

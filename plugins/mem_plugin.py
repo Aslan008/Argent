@@ -1,5 +1,5 @@
 import psutil
-from ui import console
+from argent.ui import console
 from rich.panel import Panel
 
 def command_mem(*args):

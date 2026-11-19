@@ -16,7 +16,7 @@ import json
 
 import pytest
 
-from tools import file_ops
+from argent.tools import file_ops
 
 
 @pytest.fixture(autouse=True)
@@ -75,7 +75,7 @@ class TestReadFileEdgeCases:
         """Windows CRLF should be split into correct lines."""
         (tmp_path / "crlf.py").write_bytes(b"line1\r\nline2\r\nline3\r\n")
         out = file_ops.read_file("crlf.py")
-        from tools._helpers import _strip_read_line_numbers
+        from argent.tools._helpers import _strip_read_line_numbers
         plain = _strip_read_line_numbers(out)
         # Universal newlines should convert \r\n to \n
         assert "line1" in plain
@@ -87,7 +87,7 @@ class TestReadFileEdgeCases:
         """Mixed \n and \r\n should be handled consistently."""
         (tmp_path / "mixed.py").write_bytes(b"line1\nline2\r\nline3\n")
         out = file_ops.read_file("mixed.py")
-        from tools._helpers import _strip_read_line_numbers
+        from argent.tools._helpers import _strip_read_line_numbers
         plain = _strip_read_line_numbers(out)
         assert "line1" in plain
         assert "line2" in plain
@@ -199,7 +199,7 @@ class TestWriteReadRoundtrip:
         content = "def hello():\n    return 'world'\n"
         file_ops.write_file("roundtrip.py", content)
         out = file_ops.read_file("roundtrip.py")
-        from tools._helpers import _strip_read_line_numbers
+        from argent.tools._helpers import _strip_read_line_numbers
         plain = _strip_read_line_numbers(out)
         assert plain == content, (
             f"Roundtrip corrupted content.\nExpected: {content!r}\nGot: {plain!r}"
@@ -210,7 +210,7 @@ class TestWriteReadRoundtrip:
         content = "# Комментарий\nx = 'привет 🌍'\n"
         file_ops.write_file("unicode.py", content)
         out = file_ops.read_file("unicode.py")
-        from tools._helpers import _strip_read_line_numbers
+        from argent.tools._helpers import _strip_read_line_numbers
         plain = _strip_read_line_numbers(out)
         assert "привет" in plain
         assert "🌍" in plain

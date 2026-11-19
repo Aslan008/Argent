@@ -408,7 +408,7 @@ fn diff_rows(data: &Value, w: usize) -> Vec<Line<'static>> {
     let raw: Vec<&str> = diff.trim().lines().collect();
     let added = raw.iter().filter(|l| l.starts_with('+') && !l.starts_with("+++")).count();
     let removed = raw.iter().filter(|l| l.starts_with('-') && !l.starts_with("---")).count();
-    let max = 25usize;
+    let max = 100_000usize;
     let mut body: Vec<Line<'static>> = raw
         .iter()
         .take(max)

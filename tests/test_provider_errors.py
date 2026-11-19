@@ -2,7 +2,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from providers import (
+from argent.providers import (
     _friendly_api_error, _parse_openai_usage,
     _is_transient_stream_error, _friendly_stream_error,
     ProviderError, OpenRouterProvider,

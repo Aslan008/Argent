@@ -1,9 +1,9 @@
 """Tests for direct browser tools integration for the primary agent."""
 
 import pytest
-from tools.schemas import AVAILABLE_TOOLS, TOOL_SCHEMAS, get_available_tools, get_tool_schemas
-from main import chat_allowed_tools
-from tool_profiles import slim_tools_for_category, CORE_CHAT_TOOLS
+from argent.tools.schemas import AVAILABLE_TOOLS, TOOL_SCHEMAS, get_available_tools, get_tool_schemas
+from argent.main import chat_allowed_tools
+from argent.tool_profiles import slim_tools_for_category, CORE_CHAT_TOOLS
 
 BROWSER_TOOLS = [
     "browser_open",

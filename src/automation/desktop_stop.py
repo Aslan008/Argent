@@ -13,7 +13,7 @@ import threading
 import time
 from typing import Callable, Optional
 
-from logger import get_logger
+from argent.logger import get_logger
 
 log = get_logger("desktop_stop")
 
@@ -26,7 +26,7 @@ _lock = threading.Lock()
 
 def _announce() -> None:
     try:
-        from ui import console
+        from argent.ui import console
         console.print("\n[bold red]Управление рабочим столом остановлено (аварийная клавиша). "
                       "Включить снова: /desktop on[/bold red]")
     except Exception:

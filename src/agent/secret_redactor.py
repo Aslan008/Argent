@@ -117,7 +117,7 @@ class _Known:
     def _collect() -> Set[str]:
         values: Set[str] = set()
         try:
-            import config
+            import argent.config as config
             for key, value in (config.load_config() or {}).items():
                 if isinstance(value, str) and len(value) >= 8 and _SECRET_NAME.search(str(key)):
                     values.add(value)
@@ -167,7 +167,7 @@ def enabled() -> bool:
     if now - at < 5.0:
         return value
     try:
-        import config
+        import argent.config as config
         value = bool(config.is_secret_redaction_enabled())
     except Exception:
         value = True

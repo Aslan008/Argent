@@ -14,7 +14,7 @@ _ROOT = Path(__file__).resolve().parent.parent
 
 def test_startup_does_not_import_heavy_ml_stack():
     code = (
-        "import sys, main\n"
+        "import sys, argent.main\n"      # the entry point lives in the package now
         "heavy = [m for m in ('sentence_transformers', 'torch', 'transformers') "
         "if m in sys.modules]\n"
         "print('HEAVY:' + ','.join(heavy))\n"

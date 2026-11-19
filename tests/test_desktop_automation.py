@@ -2,7 +2,7 @@
 
 import pytest
 from src.automation.desktop import DesktopAutomation
-from tools.desktop_tools import list_desktop_windows, capture_desktop_window
+from argent.tools.desktop_tools import list_desktop_windows, capture_desktop_window
 
 
 class TestDesktopAutomation:

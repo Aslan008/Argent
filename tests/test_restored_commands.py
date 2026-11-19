@@ -10,7 +10,7 @@ from types import SimpleNamespace
 
 import pytest
 
-import config
+import argent.config as config
 from src.cli.commands import CommandContext, dispatch_command
 
 

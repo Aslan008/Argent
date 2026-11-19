@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 import pytest
 
-from atomic_io import atomic_write_text
+from argent.atomic_io import atomic_write_text
 
 
 def test_writes_content(tmp_path):
@@ -34,7 +34,7 @@ def test_crash_mid_write_leaves_original_intact(tmp_path):
     target = tmp_path / "state.json"
     target.write_text("original", encoding="utf-8")
 
-    with patch("atomic_io.os.replace", side_effect=OSError("disk full")):
+    with patch("argent.atomic_io.os.replace", side_effect=OSError("disk full")):
         with pytest.raises(OSError):
             atomic_write_text(target, "new data that never lands")
 
@@ -51,7 +51,7 @@ def test_no_temp_files_left_after_success(tmp_path):
 
 class TestConfigUsesAtomicWrite:
     def test_save_config_is_atomic(self, tmp_path, monkeypatch):
-        import config
+        import argent.config as config
         cfg_file = tmp_path / ".argent_coder_config.json"
         monkeypatch.setattr(config, "CONFIG_FILE", cfg_file)
         monkeypatch.setattr(config, "_CONFIG_CACHE", None)

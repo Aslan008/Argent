@@ -23,7 +23,7 @@ _NOT_RECOGNIZED = (
     "не является внутренней либо внешней",
     "the term",  # PowerShell: "The term 'x' is not recognized..."
 )
-_ACCESS_DENIED = ("access is denied", "отказано в доступе", "permission denied")
+_ACCESS_DENIED = ("access is denied", "is denied", "отказано в доступе", "permission denied")
 _PATH_NOT_FOUND = (
     "no such file or directory", "cannot find path", "could not find",
     "не удается найти", "не удалось найти", "не найден путь", "system cannot find",
@@ -97,7 +97,13 @@ def diagnose_command_error(command: str, output: str, exit_code: int) -> str | N
         return nt_crashes[-1073740791]
 
     # 2. C / C++ Compiler include errors
-    if "cannot open include file" in low or ("no such file or directory" in low and ("fatal error" in low or "#include" in low or "error:" in low)):
+    if "cannot open include file" in low or (
+        "no such file or directory" in low
+        and (
+            "#include" in low
+            or ("fatal error" in low and any(ext in low for ext in (".h", ".hpp", ".hxx", "include")))
+        )
+    ):
         return (
             "C/C++ Include Not Found: The compiler cannot find a header file. "
             "Check the include path and add the directory to target_include_directories in CMakeLists.txt."
@@ -130,7 +136,7 @@ def diagnose_command_error(command: str, output: str, exit_code: int) -> str | N
             return (
                 f"The command failed because '{m.group(0)}' is a PowerShell cmdlet but the "
                 f"command was run in cmd.exe. Either drop the PowerShell pipeline, or rewrite "
-                f"the command in pure PowerShell. The C# code / project is NOT the problem here."
+                f"the command in pure PowerShell. The project code is NOT the problem here — the command syntax is."
             )
         return (
             "A program or command was not found (see the named token in the error). "
@@ -138,19 +144,76 @@ def diagnose_command_error(command: str, output: str, exit_code: int) -> str | N
             "This is a COMMAND problem, not a code problem."
         )
 
-    # Needs elevation.
-    if _contains(low, _ACCESS_DENIED):
+    # A taskkill that found nothing is the answer to "is a process holding the
+    # lock?": no. Re-running the build or killing again cannot help.
+    if command.strip().lower().startswith("taskkill") and ("not found" in low or "не найден" in low):
+        if "cargo" in command.lower() or "rustc" in command.lower():
+            return (
+                "No cargo/rustc process was found, so a live build is not holding the lock. "
+                "The `.cargo-lock`/target entry is most likely high-integrity or ACL-owned by an "
+                "earlier elevated build (a normal process can have FullControl and still be denied), "
+                "or held by another tool. Do not retry the build and do not launch another elevated "
+                "delete blindly: inspect ownership/ACL, or remove `target` once from an elevated "
+                "shell, then build normally."
+            )
         return (
-            "Access was denied — this action needs elevated privileges. Use "
-            "`run_admin_command` for it, or choose a path/operation that doesn't require admin."
+            "No matching process was found running, so it is not active or has already terminated. "
+            "Do not keep retrying taskkill."
         )
 
-    # Path/file not found.
-    if _contains(low, _PATH_NOT_FOUND):
+    # Needs elevation — but only say so when the operation itself is an admin one.
+    # A project file locked by an elevated build, or Argent's own .argent folder
+    # owned by another account, is NOT a reason to elevate: that creates
+    # Administrator-owned artifacts and makes the next normal command fail too.
+    if _contains(low, _ACCESS_DENIED):
+        if re.search(r"(?i)\b(remove-item|rmdir|\brd\b|\bdel\b)", command):
+            return (
+                "The path cannot be removed: it is locked by another process, or it was created "
+                "by an elevated process and has a high integrity level/ACL that a normal process "
+                "cannot override even with FullControl. Do not retry this delete. Check the owner "
+                "and `icacls`; remove this directory once from an elevated shell, waiting for it "
+                "to finish, then continue without elevation."
+            )
+        if "cargo-lock" in low or ".cargo-lock" in low:
+            return (
+                "Cargo could not take its build lock. If Task Manager shows no cargo/rustc, the "
+                "lock is not a live build: `target` was probably created by an elevated build and "
+                "its files are high-integrity/Administrator-owned, so the normal user cannot modify "
+                "them. Do not run cargo as administrator and do not keep retrying the build; check "
+                "ownership/`icacls`, or remove `target` once from an elevated shell, then build "
+                "normally."
+            )
+        if ".argent" in low or "memory.json" in low:
+            return (
+                "Argent could not write its own state in the project's .argent folder "
+                "(permission denied). This is NOT the command's failure — its output is still "
+                "valid. Check who owns that folder (icacls) and give your account write access; "
+                "do not elevate the build for this. Memory will fall back to ~/.argent until fixed."
+            )
+        adminish = re.search(
+            r"(?i)\b(net\s+(stop|start|pause|continue)|sc\s+(stop|start|config|delete)|"
+            r"reg\s+(add|delete|import)|bcdedit|schtasks|services\.msc|"
+            r"program files|system32|hklm|hkey_local_machine|winsxs)\b",
+            command,
+        )
+        if adminish:
+            return (
+                "Access was denied for an operation that normally requires administrator "
+                "rights. Re-run this one as `run_command(command=..., admin=true)`, and "
+                "expect the files it creates to be owned by Administrator."
+            )
         return (
-            "A file or directory in the command was not found. Verify the path exists "
-            "(use list_directory / search_files) before re-running. Watch for quoting of "
-            "paths with spaces."
+            "Permission was denied for a file or folder. Close the program that holds it "
+            "(an editor, a build daemon, a stale elevated process) and check ownership/ACL "
+            "with `icacls <path>`; only use elevation if the location itself is protected "
+            "(Program Files, services, registry). Do not elevate ordinary project builds."
+        )
+
+    # Python traceback.
+    if "traceback (most recent call last)" in low:
+        return (
+            "Python raised an exception. Read the LAST line of the traceback (the exception type "
+            "and message) and the file:line just above it — fix that, not the command."
         )
 
     # C# / .NET compiler errors — the real cause is in the source, with a code.
@@ -165,18 +228,19 @@ def diagnose_command_error(command: str, output: str, exit_code: int) -> str | N
     if "msb" in low and re.search(r"msb\d+", low):
         return "MSBuild reported an error (MSBxxxx) — read the referenced project/target and fix it."
 
-    # Python traceback.
-    if "traceback (most recent call last)" in low:
-        return (
-            "Python raised an exception. Read the LAST line of the traceback (the exception type "
-            "and message) and the file:line just above it — fix that, not the command."
-        )
-
     # npm / node.
     if "npm err!" in low or "enoent" in low:
         return (
             "npm/node error. Check you are in the right directory (package.json present) and that "
             "dependencies are installed (npm install). ENOENT means a file/path is missing."
+        )
+
+    # Path/file not found.
+    if _contains(low, _PATH_NOT_FOUND):
+        return (
+            "A file or directory in the command was not found. Verify the path exists "
+            "(use list_directory / search_files) before re-running. Watch for quoting of "
+            "paths with spaces."
         )
 
     # Generic unknown non-zero exit: still nudge to read the output, not the code.

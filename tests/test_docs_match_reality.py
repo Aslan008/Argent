@@ -31,12 +31,27 @@ def _primary_commands() -> set:
 
 
 def _handled_commands() -> set:
-    """Every spelling that dispatches: names and aliases."""
+    """Every spelling the CLI dispatches: names and aliases."""
     handled = set()
     for entry in registry._entries:
         handled.add(entry.name)
         handled.update(entry.aliases)
     return handled
+
+
+def _bot_commands() -> set:
+    """The bot's published command list, plus the owner-only ones it handles but does not advertise.
+
+    `/group`, `/agent` and `/persona` exist in `_handle_command` (`src/telegram/bot.py`),
+    not in the CLI registry, and the README documents them next to the bot. They stay out
+    of `_handled_commands`: the Tab catalog is the CLI's, and the bot does not complete.
+    """
+    try:
+        from src.telegram import bot as telegram_bot
+        names = {f"/{name}" for name, _ in telegram_bot.BOT_COMMANDS}
+    except Exception:
+        return set()
+    return names | {"/agent"}
 
 
 def _dispatches(text: str) -> bool:
@@ -55,7 +70,7 @@ def _documented_commands() -> set:
 
 class TestReadme:
     def test_every_documented_command_exists(self):
-        ghosts = sorted(_documented_commands() - _handled_commands())
+        ghosts = sorted(_documented_commands() - _handled_commands() - _bot_commands())
         assert not ghosts, f"README documents commands that do not exist: {ghosts}"
 
     def test_every_command_is_documented(self):
@@ -146,7 +161,10 @@ class TestInProgramHints:
     def test_hints_do_not_point_at_removed_commands(self, source):
         """A message telling the user to run a command that was deleted is
         worse than no message."""
-        text = (_ROOT / source).read_text(encoding="utf-8")
+        path = _ROOT / source
+        if not path.exists():                       # these modules live under argent/ now
+            path = _ROOT / "argent" / source
+        text = path.read_text(encoding="utf-8")
         handled = _handled_commands()
         # Only check commands mentioned in user-facing strings.
         for command in set(re.findall(r"/(?:enable_rag|disable_rag|rag_provider|"

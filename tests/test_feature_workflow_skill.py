@@ -6,10 +6,10 @@ from unittest.mock import MagicMock
 
 import pytest
 
-import agent as agent_module
-import config
-from agent import ArgentAgent
-from skill_manager import SkillManager
+import argent.agent as agent_module
+import argent.config as config
+from argent.agent import ArgentAgent
+from argent.skill_manager import SkillManager
 
 _SKILL = Path(__file__).resolve().parents[1] / "skills" / "feature-workflow.md"
 
@@ -51,7 +51,7 @@ class TestSkillContent:
     def test_uses_existing_tools_only(self):
         # The workflow must not invent tools that don't exist in Argent.
         body = _SKILL.read_text(encoding="utf-8")
-        from tools import get_available_tools
+        from argent.tools import get_available_tools
         available = set(get_available_tools())
         import re
         for name in re.findall(r"`(\w+)\(", body):

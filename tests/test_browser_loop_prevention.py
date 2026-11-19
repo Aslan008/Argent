@@ -14,14 +14,14 @@ import pytest
 from unittest.mock import MagicMock, AsyncMock, patch
 from pathlib import Path
 
-from tools.browser_tools import (
+from argent.tools.browser_tools import (
     browser_eval_js,
     browser_wait_for,
     _reset_poll_tracker,
     _SESSION_EVAL_TRACKER,
     _SESSION_POLL_TRACKER,
 )
-from browser_engine import BrowserEngine, _SessionContext
+from argent.browser_engine import BrowserEngine, _SessionContext
 from src.agent.loop_guard import LoopGuard
 from src.agent.strategy import get_model_strategy, CloudStrategy
 
@@ -38,7 +38,7 @@ class TestBrowserEvalJsLoopPrevention:
     def test_single_eval_returns_normal_result(self, monkeypatch):
         mock_engine = MagicMock()
         mock_engine.run.return_value = 'JS result: {"status": "ok"}'
-        monkeypatch.setattr("tools.browser_tools.browser_engine", mock_engine)
+        monkeypatch.setattr("argent.tools.browser_tools.browser_engine", mock_engine)
 
         res = browser_eval_js("document.title")
         assert res == 'JS result: {"status": "ok"}'
@@ -48,7 +48,7 @@ class TestBrowserEvalJsLoopPrevention:
     def test_repeated_eval_injects_hint_at_3(self, monkeypatch):
         mock_engine = MagicMock()
         mock_engine.run.return_value = 'JS result: {"save": "disabled"}'
-        monkeypatch.setattr("tools.browser_tools.browser_engine", mock_engine)
+        monkeypatch.setattr("argent.tools.browser_tools.browser_engine", mock_engine)
 
         res1 = browser_eval_js("checkSave()")
         assert "[POLLING HINT]" not in res1
@@ -63,7 +63,7 @@ class TestBrowserEvalJsLoopPrevention:
     def test_repeated_eval_halts_at_5(self, monkeypatch):
         mock_engine = MagicMock()
         mock_engine.run.return_value = 'JS result: {"save": "disabled"}'
-        monkeypatch.setattr("tools.browser_tools.browser_engine", mock_engine)
+        monkeypatch.setattr("argent.tools.browser_tools.browser_engine", mock_engine)
 
         for _ in range(4):
             browser_eval_js("checkSave()")
@@ -77,7 +77,7 @@ class TestBrowserEvalJsLoopPrevention:
     def test_different_expression_resets_counter(self, monkeypatch):
         mock_engine = MagicMock()
         mock_engine.run.return_value = 'JS result: 0'
-        monkeypatch.setattr("tools.browser_tools.browser_engine", mock_engine)
+        monkeypatch.setattr("argent.tools.browser_tools.browser_engine", mock_engine)
 
         browser_eval_js("expr1()")
         browser_eval_js("expr1()")
@@ -91,7 +91,7 @@ class TestBrowserEvalJsLoopPrevention:
         mock_engine = MagicMock()
         results = ['JS result: "loading"', 'JS result: "loading"', 'JS result: "ready"']
         mock_engine.run.side_effect = results
-        monkeypatch.setattr("tools.browser_tools.browser_engine", mock_engine)
+        monkeypatch.setattr("argent.tools.browser_tools.browser_engine", mock_engine)
 
         browser_eval_js("status()")
         browser_eval_js("status()")
@@ -103,7 +103,7 @@ class TestBrowserEvalJsLoopPrevention:
     def test_action_resets_eval_tracker(self, monkeypatch):
         mock_engine = MagicMock()
         mock_engine.run.return_value = 'JS result: 0'
-        monkeypatch.setattr("tools.browser_tools.browser_engine", mock_engine)
+        monkeypatch.setattr("argent.tools.browser_tools.browser_engine", mock_engine)
 
         browser_eval_js("expr()")
         browser_eval_js("expr()")
@@ -314,7 +314,7 @@ class TestLoopGuardCloudProtection:
 
 class TestLoopGuardUserControl:
     def test_config_get_set_loop_guard_mode(self, monkeypatch):
-        import config
+        import argent.config as config
         stored = {}
         monkeypatch.setattr(config, "_get", lambda key, default=None: stored.get(key, default))
         monkeypatch.setattr(config, "_set", lambda key, val: stored.__setitem__(key, val))
@@ -334,7 +334,7 @@ class TestLoopGuardUserControl:
             config.set_loop_guard_mode("unknown_mode")
 
     def test_loop_guard_respects_user_off_mode(self, monkeypatch):
-        import config
+        import argent.config as config
         monkeypatch.setattr(config, "get_loop_guard_mode", lambda: "off")
 
         guard = LoopGuard()
@@ -346,7 +346,7 @@ class TestLoopGuardUserControl:
             assert guard.record("browser_eval_js", args, res_str, enabled=True, category="cloud") is None
 
     def test_loop_guard_protects_moe_with_nudge_and_stop(self, monkeypatch):
-        import config
+        import argent.config as config
         monkeypatch.setattr(config, "get_loop_guard_mode", lambda: "auto")
 
         guard = LoopGuard()
@@ -363,7 +363,7 @@ class TestLoopGuardUserControl:
 
     def test_cli_slash_command_loopguard(self, monkeypatch):
         from src.cli.commands import dispatch_command, CommandContext
-        import config
+        import argent.config as config
 
         stored = {}
         monkeypatch.setattr(config, "_get", lambda key, default=None: stored.get(key, default))
@@ -402,7 +402,7 @@ class TestLoopGuardUserControl:
 
 class TestMainAgentBrowserPrompt:
     def test_browser_protocol_included_when_browser_tools_available(self):
-        from agent import ArgentAgent
+        from argent.agent import ArgentAgent
         agent = ArgentAgent()
         agent.model_name = "glm-5.3-flash"
         prompt = agent.build_system_prompt(available_tools=["browser_open", "browser_action", "wait_heartbeat", "read_file"])
@@ -412,7 +412,7 @@ class TestMainAgentBrowserPrompt:
         assert "CANNOT see browser DOM state" in prompt
 
     def test_browser_protocol_omitted_when_browser_tools_unavailable(self):
-        from agent import ArgentAgent
+        from argent.agent import ArgentAgent
         agent = ArgentAgent()
         agent.model_name = "glm-5.3-flash"
         prompt = agent.build_system_prompt(available_tools=["read_file", "write_file", "run_command"])
@@ -426,7 +426,7 @@ class TestMainAgentBrowserPrompt:
 class TestStateChangingReset:
     def test_browser_wait_for_and_mutations_in_state_changing_tools(self):
         import inspect
-        import agent as agent_mod
+        import argent.agent as agent_mod
         src = inspect.getsource(agent_mod.ArgentAgent._run_turn)
         # wait_for is a verb of browser_action now; the agent reads the verb.
         from src.agent.semantic_loop_guard import is_page_changing_browser_action

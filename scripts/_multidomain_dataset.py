@@ -18,7 +18,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 from src.leeth.dataset_generator import LeethSample
-from _multidomain_battery import (  # единый источник правды вопросов
+from _multidomain_battery import (  
     Q_CHURN, Q_CONTACT, Q_DEPARTMENT, Q_EMAIL_TYPE, Q_PRIORITY, Q_SAFE, Q_URGENCY,
     Q_VIOLATION, DEPT_CHOICES, EMAIL_TYPE_CHOICES, VIOLATION_CHOICES,
 )

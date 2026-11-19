@@ -192,7 +192,7 @@ fn regression_rejected_turn_is_requeued_at_front() {
 
     app.requeue_rejected_message(prompt);
 
-    assert_eq!(app.message_queue.first().map(|s| s.as_str()), Some("newest"));
+    assert_eq!(app.message_queue.first().map(|m| m.text.as_str()), Some("newest"));
     assert_eq!(app.message_queue.len(), 1);
     assert!(!app.is_busy, "a refused turn must not leave the UI busy");
     // The optimistic bubble was rolled back, so no duplicate is shown.

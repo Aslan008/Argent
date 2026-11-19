@@ -231,7 +231,7 @@ class TestFilePredicates:
 
 class TestProcessPredicates:
     def test_process_finished_missing_pid(self):
-        from tools import ACTIVE_PROCESSES, ACTIVE_PROCESSES_LOCK
+        from argent.tools import ACTIVE_PROCESSES, ACTIVE_PROCESSES_LOCK
         key = "999999"
         with ACTIVE_PROCESSES_LOCK:
             saved = ACTIVE_PROCESSES.pop(key, None)
@@ -243,7 +243,7 @@ class TestProcessPredicates:
                     ACTIVE_PROCESSES[key] = saved
 
     def test_process_finished_none_process(self):
-        from tools import ACTIVE_PROCESSES, ACTIVE_PROCESSES_LOCK
+        from argent.tools import ACTIVE_PROCESSES, ACTIVE_PROCESSES_LOCK
         key = "test_pf_none"
         with ACTIVE_PROCESSES_LOCK:
             ACTIVE_PROCESSES[key] = {}
@@ -254,7 +254,7 @@ class TestProcessPredicates:
                 ACTIVE_PROCESSES.pop(key, None)
 
     def test_process_finished_running(self):
-        from tools import ACTIVE_PROCESSES, ACTIVE_PROCESSES_LOCK
+        from argent.tools import ACTIVE_PROCESSES, ACTIVE_PROCESSES_LOCK
         key = "test_pf_running"
         proc = MagicMock()
         proc.poll.return_value = None
@@ -267,7 +267,7 @@ class TestProcessPredicates:
                 ACTIVE_PROCESSES.pop(key, None)
 
     def test_process_finished_done(self):
-        from tools import ACTIVE_PROCESSES, ACTIVE_PROCESSES_LOCK
+        from argent.tools import ACTIVE_PROCESSES, ACTIVE_PROCESSES_LOCK
         key = "test_pf_done"
         proc = MagicMock()
         proc.poll.return_value = 0
@@ -284,7 +284,7 @@ class TestProcessPredicates:
         assert _process_running(999999) is False
 
     def test_process_running_active(self):
-        from tools import ACTIVE_PROCESSES, ACTIVE_PROCESSES_LOCK
+        from argent.tools import ACTIVE_PROCESSES, ACTIVE_PROCESSES_LOCK
         key = "test_pr_active"
         proc = MagicMock()
         proc.poll.return_value = None

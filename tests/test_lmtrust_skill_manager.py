@@ -9,8 +9,8 @@ from pathlib import Path
 
 import pytest
 
-import skill_manager
-from skill_manager import SkillManager, SKILL_FILE, _TOOL_NAME_MAP
+import argent.skill_manager as skill_manager
+from argent.skill_manager import SkillManager, SKILL_FILE, _TOOL_NAME_MAP
 
 
 # ── _parse_frontmatter ──────────────────────────────────────────────────────

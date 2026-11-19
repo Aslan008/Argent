@@ -31,7 +31,7 @@ from unittest.mock import MagicMock
 # DEFECT-01: Race Condition & In-Process Collision in atomic_io.py
 # ---------------------------------------------------------------------------
 def test_fixed_atomic_io_entropy(tmp_path):
-    import atomic_io
+    import argent.atomic_io as atomic_io
 
     target = tmp_path / "concurrent_file.txt"
     # Write using atomic_write_text and verify content is written properly
@@ -52,7 +52,7 @@ def test_fixed_atomic_io_entropy(tmp_path):
 # DEFECT-02: Case-Insensitive Extension Checks in tools/_helpers.py
 # ---------------------------------------------------------------------------
 def test_fixed_helpers_case_insensitive_extensions(tmp_path):
-    from tools._helpers import _validate_code_syntax
+    from argent.tools._helpers import _validate_code_syntax
 
     lower_file = tmp_path / "test_broken.py"
     lower_file.write_text("def broken(:\n    pass\n", encoding="utf-8")
@@ -113,7 +113,7 @@ def test_fixed_command_ops_log_none_returncode():
 # DEFECT-05: Context Loss on Finished Background Process in tools/command_ops.py
 # ---------------------------------------------------------------------------
 def test_fixed_background_command_preserves_context():
-    import tools.command_ops as cops
+    import argent.tools.command_ops as cops
 
     fake_proc = MagicMock()
     fake_proc.poll.return_value = 0
@@ -150,16 +150,16 @@ def test_fixed_background_command_preserves_context():
 
 
 # ---------------------------------------------------------------------------
-# DEFECT-06: Platform Crash in run_admin_command on Non-Windows
+# DEFECT-06: Platform Crash when elevating on Non-Windows
 # ---------------------------------------------------------------------------
-def test_fixed_run_admin_command_non_windows(monkeypatch):
-    import tools.command_ops as cops
+def test_fixed_elevation_on_non_windows_returns_an_error(monkeypatch):
+    import argent.tools.command_ops as cops
 
     monkeypatch.setattr(cops, "request_approval", lambda *args, **kwargs: True)
     monkeypatch.setattr(cops.os, "name", "posix")
 
-    res = cops.run_admin_command("echo 1")
-    assert "Error: run_admin_command is only supported on Windows" in res
+    res = cops.run_command("echo 1", admin=True)
+    assert "only supported on Windows" in res
 
 
 # ---------------------------------------------------------------------------
@@ -194,7 +194,7 @@ def test_fixed_parser_preserves_valid_json_with_unmatched_brace_in_code():
 # DEFECT-08: Unguarded Stream Iteration in OllamaProvider.stream_chat
 # ---------------------------------------------------------------------------
 def test_fixed_ollama_stream_exception_handling():
-    from providers import OllamaProvider, ProviderError
+    from argent.providers import OllamaProvider, ProviderError
 
     class BrokenClient:
         def chat(self, *args, **kwargs):
@@ -221,7 +221,7 @@ def test_fixed_ollama_stream_exception_handling():
 # DEFECT-09: Code Comment Truncation in _strip_section (prompt_compressor.py)
 # ---------------------------------------------------------------------------
 def test_fixed_prompt_compressor_code_comment_truncation():
-    from prompt_compressor import _strip_section
+    from argent.prompt_compressor import _strip_section
 
     original_prompt = (
         "## 1. HEADER\n"
@@ -251,7 +251,7 @@ def test_fixed_prompt_compressor_code_comment_truncation():
 # DEFECT-10: _EDIT_TOOLS Schema Drift (multi_replace_in_file) in agent.py
 # ---------------------------------------------------------------------------
 def test_fixed_agent_edit_tools_registration():
-    from agent import ArgentAgent
+    from argent.agent import ArgentAgent
 
     # Real schema edit tools must be in _EDIT_TOOLS
     assert "multi_replace_in_file" not in ArgentAgent._EDIT_TOOLS  # now replace_in_file(changes)
@@ -297,7 +297,7 @@ def test_fixed_semantic_loop_guard_counter_decay_and_reset():
 # DEFECT-12: Complete Snapshot Cleanup in file_tracker.undo_all
 # ---------------------------------------------------------------------------
 def test_fixed_file_tracker_undo_all_cleans_residue(tmp_path, monkeypatch):
-    import file_tracker
+    import argent.file_tracker as file_tracker
 
     session_id = f"test_audit_fixed_{uuid.uuid4().hex[:8]}"
     monkeypatch.setattr(file_tracker, "HISTORY_DIR", tmp_path / "history")

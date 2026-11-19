@@ -12,7 +12,7 @@ Tests:
 import os
 
 import pytest
-import config
+import argent.config as config
 from src.agent.strategy import get_model_strategy
 from src.leeth import leeth
 from src.leeth.primitives import ChoiceQuestion, ExtractQuestion, NoulQuestion, ScoreQuestion

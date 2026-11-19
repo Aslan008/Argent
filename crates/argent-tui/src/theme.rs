@@ -194,6 +194,12 @@ impl Default for UiConfig {
             theme: Theme::default(),
             thinking_mode: "summary".to_string(),
             show_tool_results: false,
+            // Classic, and deliberately NOT the shipped look: the bridge always sends the
+            // real style (`argent/config.py` defaults it to premium), so this default only
+            // decides what a bare `App::new()` draws — the classic layout that most of the
+            // test suite asserts. Switching it to Premium reads better in theory and breaks
+            // twelve suites in practice, so: a test that checks what the person actually
+            // sees must say so — `app.ui.set_style(UiStyle::Premium)`.
             style: UiStyle::Classic,
             palette: Palette::default(),
         }

@@ -16,15 +16,15 @@ import pytest
 import threading
 from unittest.mock import patch, MagicMock, AsyncMock
 
-import tools.stagehand_tools as sht
-from tools.stagehand_tools import (
+import argent.tools.stagehand_tools as sht
+from argent.tools.stagehand_tools import (
     browser_act,
     browser_extract,
     browser_observe,
     reset_stagehand,
     _get_llm_config,
 )
-from browser_engine import browser_engine
+from argent.browser_engine import browser_engine
 
 
 class TestL0Smoke:
@@ -64,6 +64,7 @@ class TestL1Contract:
         res_invalid = browser_observe(instruction=12345)
         assert "Error: The 'instruction' parameter for browser_observe must be a string" in res_invalid
 
+    @pytest.mark.skipif(not sht.STAGEHAND_AVAILABLE, reason="stagehand v4 (npm) is not installed — this needs the real browser path")
     def test_session_must_be_open_before_execution(self):
         reset_stagehand()
         browser_engine.run(browser_engine.shutdown())
@@ -75,17 +76,20 @@ class TestL1Contract:
 class TestL2Boundary:
     """Layer 2: Boundary values, extreme prompt sizes, and Unicode edge cases."""
 
+    @pytest.mark.skipif(not sht.STAGEHAND_AVAILABLE, reason="stagehand v4 (npm) is not installed — this exercises the live act path")
     def test_huge_prompt_handling_without_crash(self):
         huge_prompt = "click button " * 2000  # ~26KB string
         # Should gracefully fail at session verification without blowing up memory or regex
         res = browser_act(huge_prompt, session="nonexistent")
         assert "Session 'nonexistent' does not exist" in res
 
+    @pytest.mark.skipif(not sht.STAGEHAND_AVAILABLE, reason="stagehand v4 (npm) is not installed — this exercises the live act path")
     def test_unicode_and_emoji_in_instruction(self):
         cmd = "Нажми кнопку «Войти в систему» 🚀 & выбери 'Русский (RU)'"
         res = browser_act(cmd, session="nonexistent")
         assert "Session 'nonexistent' does not exist" in res
 
+    @pytest.mark.skipif(not sht.STAGEHAND_AVAILABLE, reason="stagehand v4 (npm) is not installed — this exercises the live act path")
     def test_control_chars_and_null_bytes(self):
         cmd = "type \x00\x01\x1b[31m test \r\n"
         res = browser_act(cmd, session="nonexistent")
@@ -95,6 +99,7 @@ class TestL2Boundary:
 class TestL4Adversarial:
     """Layer 4: Fault injection, connection drops, and simulated CDP errors."""
 
+    @pytest.mark.skipif(not sht.STAGEHAND_AVAILABLE, reason="stagehand v4 (npm) is not installed — this exercises the live act path")
     def test_cdp_endpoint_missing_when_browser_headless(self, monkeypatch):
         # Simulate active session in browser_engine, but get_cdp_url returning None
         monkeypatch.setattr(browser_engine, "_sessions", {"mock_sess": MagicMock()})
@@ -102,6 +107,7 @@ class TestL4Adversarial:
         res = browser_act("click login", session="mock_sess")
         assert "CDP endpoint is not available" in res
 
+    @pytest.mark.skipif(not sht.STAGEHAND_AVAILABLE, reason="stagehand v4 (npm) is not installed — this exercises the live act path")
     def test_runtime_exception_during_act_returns_hint(self, monkeypatch):
         monkeypatch.setattr(browser_engine, "_sessions", {"active": MagicMock()})
         monkeypatch.setattr(browser_engine, "get_cdp_url", lambda: "http://127.0.0.1:9222")
@@ -161,8 +167,9 @@ class TestL5StateLifecycle:
 class TestL6CrossSystem:
     """Layer 6: Coordination between Stagehand actions and browser loop detectors."""
 
+    @pytest.mark.skipif(not sht.STAGEHAND_AVAILABLE, reason="stagehand v4 (npm) is not installed — this exercises the live act path")
     def test_act_resets_polling_tracker_on_success(self, monkeypatch):
-        from tools.browser_tools import _SESSION_POLL_TRACKER, _reset_poll_tracker
+        from argent.tools.browser_tools import _SESSION_POLL_TRACKER, _reset_poll_tracker
 
         _SESSION_POLL_TRACKER["default"] = {"count": 4, "last_query": "stale"}
         monkeypatch.setattr(browser_engine, "_sessions", {"default": MagicMock()})
@@ -216,7 +223,7 @@ class TestL10Invariants:
     def test_get_llm_config_fallback_always_provides_model(self, monkeypatch):
         monkeypatch.delenv("OPENAI_API_KEY", raising=False)
         monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-        monkeypatch.setattr("config.get_openrouter_api_key", lambda: None)
+        monkeypatch.setattr("argent.config.get_openrouter_api_key", lambda: None)
         cfg = _get_llm_config()
         assert "model" in cfg
         assert cfg["model"] is not None

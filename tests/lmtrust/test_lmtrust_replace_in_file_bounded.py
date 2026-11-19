@@ -19,12 +19,12 @@ Covers:
 
 import pytest
 from pathlib import Path
-from tools.file_ops import replace_in_file
+from argent.tools.file_ops import replace_in_file
 
 
 @pytest.fixture(autouse=True)
 def _stub_deps(monkeypatch):
-    import memory_manager
+    import argent.memory_manager as memory_manager
 
     class FakeMemory:
         def __init__(self):
@@ -39,13 +39,13 @@ def _stub_deps(monkeypatch):
 
     monkeypatch.setattr(memory_manager, "memory", FakeMemory())
 
-    import file_tracker
+    import argent.file_tracker as file_tracker
     monkeypatch.setattr(file_tracker, "snapshot", lambda *a, **k: None)
 
-    import tools._helpers as helpers
+    import argent.tools._helpers as helpers
     monkeypatch.setattr(helpers, "_validate_code_syntax", lambda fp: None)
 
-    import tools.file_ops as file_ops_mod
+    import argent.tools.file_ops as file_ops_mod
     monkeypatch.setattr(file_ops_mod, "_validate_code_syntax", lambda fp: None)
 
 

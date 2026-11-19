@@ -11,7 +11,7 @@ import time
 from collections import OrderedDict
 from dataclasses import dataclass
 from typing import Any, Dict, Optional
-from logger import get_logger
+from argent.logger import get_logger
 
 logger = get_logger("speculative_cache")
 
@@ -72,7 +72,7 @@ class SpeculativeCache:
         # Normalize paths in arguments if present
         norm_args = {}
         for k, v in sorted(arguments.items()):
-            if k in ("file_path", "path", "directory") and isinstance(v, str):
+            if k in ("path", "file_path", "directory") and isinstance(v, str):
                 norm_args[k] = v.replace("\\", "/").strip().rstrip("/")
             else:
                 norm_args[k] = v

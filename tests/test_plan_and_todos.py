@@ -6,13 +6,13 @@ from unittest.mock import MagicMock
 
 import pytest
 
-import agent as agent_module
-from agent import ArgentAgent
+import argent.agent as agent_module
+from argent.agent import ArgentAgent
 from src.agent import plan_mode, todos
 from src.agent.plan_mode import PLAN, readonly_command, violation
 from src.agent.strategy import CloudStrategy
 from src.agent.todos import TODOS, TodoError, parse_items
-from tools.schemas import get_tool_schemas
+from argent.tools.schemas import get_tool_schemas
 
 
 def names():
@@ -96,7 +96,7 @@ class TestTodoWrite:
 
 
 def test_the_tool_is_advertised_and_runs_through_the_registry():
-    from tools.schemas import get_available_tools
+    from argent.tools.schemas import get_available_tools
     assert "todo_write" in names()
     out = get_available_tools()["todo_write"](todos=[{"content": "a", "status": "in_progress"}])
     assert "[~] a" in out
@@ -163,7 +163,7 @@ class TestPlanModeGate:
 
     def test_every_mutating_tool_name_is_a_real_tool(self):
         """A typo here would leave a real tool unguarded."""
-        from tools.schemas import TOOL_SCHEMAS
+        from argent.tools.schemas import TOOL_SCHEMAS
         real = {s["function"]["name"] for s in TOOL_SCHEMAS}
         assert plan_mode.MUTATING_TOOLS <= real, plan_mode.MUTATING_TOOLS - real
 
@@ -190,11 +190,11 @@ class TestExitPlanMode:
         return reply
 
     def test_outside_plan_mode_it_does_nothing(self, answer):
-        from tools.plan_tools import exit_plan_mode
+        from argent.tools.plan_tools import exit_plan_mode
         assert "not on" in exit_plan_mode(self.PLAN_TEXT)
 
     def test_approval_turns_plan_mode_off_and_saves_the_plan(self, answer, tmp_path):
-        from tools.plan_tools import exit_plan_mode
+        from argent.tools.plan_tools import exit_plan_mode
         PLAN.enter()
         out = exit_plan_mode(self.PLAN_TEXT)
         assert "APPROVED" in out and not PLAN.active
@@ -202,19 +202,19 @@ class TestExitPlanMode:
         assert len(saved) == 1 and "add retry" in saved[0].read_text(encoding="utf-8")
 
     def test_a_no_keeps_plan_mode_on(self, answer):
-        from tools.plan_tools import exit_plan_mode
+        from argent.tools.plan_tools import exit_plan_mode
         PLAN.enter()
         answer["value"] = False
         assert "did NOT approve" in exit_plan_mode(self.PLAN_TEXT) and PLAN.active
 
     def test_dismissing_the_question_is_not_an_approval(self, answer):
-        from tools.plan_tools import exit_plan_mode
+        from argent.tools.plan_tools import exit_plan_mode
         PLAN.enter()
         answer["value"] = None
         assert "NOT approved" in exit_plan_mode(self.PLAN_TEXT) and PLAN.active
 
     def test_a_stub_plan_is_sent_back(self, answer):
-        from tools.plan_tools import exit_plan_mode
+        from argent.tools.plan_tools import exit_plan_mode
         PLAN.enter()
         assert exit_plan_mode("do it").startswith("Error")
         assert PLAN.active
@@ -238,7 +238,7 @@ class ScriptedProvider:
 
     def stream_chat(self, **kwargs):
         if kwargs.get("tools"):
-            from providers import ProviderError
+            from argent.providers import ProviderError
             raise ProviderError("HTTP 404: No endpoints found that support tool use.")
         script = self.scripts[min(self.calls, len(self.scripts) - 1)]
         self.calls += 1

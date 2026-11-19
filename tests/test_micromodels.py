@@ -106,18 +106,18 @@ def test_read_file_specialist():
     spec = ReadFileSpecialist()
 
     res1 = spec.extract("прочитай src/agent.py")
-    assert res1 == {"file_path": "src/agent.py"}
+    assert res1 == {"path": "src/agent.py"}
 
     res2 = spec.extract("открой файл 'config/settings.yaml'")
-    assert res2 == {"file_path": "config/settings.yaml"}
+    assert res2 == {"path": "config/settings.yaml"}
 
     res3 = spec.extract("покажи содержимое файла C:\\Users\\test\\main.py строки 10-50")
-    assert res3["file_path"] == "C:/Users/test/main.py"
+    assert res3["path"] == "C:/Users/test/main.py"
     assert res3["start_line"] == 10
     assert res3["line_count"] == 41
 
     res4 = spec.extract("cat requirements.txt")
-    assert res4 == {"file_path": "requirements.txt"}
+    assert res4 == {"path": "requirements.txt"}
 
 
 def test_grep_search_specialist():
@@ -201,7 +201,7 @@ def test_micromodel_dispatch_read_file():
 
     assert res is not None
     assert res.tool_name == "read_file"
-    assert res.arguments.get("file_path") == "src/agent.py"
+    assert res.arguments.get("path") == "src/agent.py"
     assert res.confidence >= 0.85
     assert res.elapsed_ms > 0.0
 

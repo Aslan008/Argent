@@ -25,7 +25,7 @@ import pytest
 @pytest.fixture(autouse=True)
 def _import_deep_research():
     """Ensure deep_research is importable from the project root."""
-    import deep_research as dr
+    import argent.deep_research as dr
     return dr
 
 
@@ -37,23 +37,23 @@ class TestLanguageRule:
     """``_language_rule`` builds the LANGUAGE clause from configured languages."""
 
     def test_english_only_returns_english_clause(self, monkeypatch):
-        import deep_research as dr
-        import config
+        import argent.deep_research as dr
+        import argent.config as config
         monkeypatch.setattr(config, "get_search_languages", lambda: ["en"])
         result = dr._language_rule()
         assert "ENGLISH" in result
 
     def test_multi_language_includes_both_names(self, monkeypatch):
-        import deep_research as dr
-        import config
+        import argent.deep_research as dr
+        import argent.config as config
         monkeypatch.setattr(config, "get_search_languages", lambda: ["en", "ru"])
         result = dr._language_rule()
         assert "English" in result
         assert "Russian" in result
 
     def test_single_non_english_uses_local_language(self, monkeypatch):
-        import deep_research as dr
-        import config
+        import argent.deep_research as dr
+        import argent.config as config
         monkeypatch.setattr(config, "get_search_languages", lambda: ["fr"])
         result = dr._language_rule()
         assert "French" in result
@@ -63,15 +63,15 @@ class TestLanguageRule:
     def test_all_english_non_singleton_uses_local_language_fallback(self, monkeypatch):
         """When every name is English but langs != ['en'], the 'the local
         language' fallback kicks in because others is empty."""
-        import deep_research as dr
-        import config
+        import argent.deep_research as dr
+        import argent.config as config
         monkeypatch.setattr(config, "get_search_languages", lambda: ["en", "en"])
         result = dr._language_rule()
         assert "the local language" in result
 
     def test_unknown_language_code_used_as_name(self, monkeypatch):
-        import deep_research as dr
-        import config
+        import argent.deep_research as dr
+        import argent.config as config
         monkeypatch.setattr(config, "get_search_languages", lambda: ["xx"])
         result = dr._language_rule()
         # Unknown codes are used verbatim as the name.
@@ -86,12 +86,12 @@ class TestSmartTruncate:
     """``_smart_truncate`` breaks at sentence boundaries when possible."""
 
     def test_short_text_returned_unchanged(self):
-        import deep_research as dr
+        import argent.deep_research as dr
         text = "Short text."
         assert dr._smart_truncate(text, 100) == text
 
     def test_breaks_at_sentence_boundary(self):
-        import deep_research as dr
+        import argent.deep_research as dr
         text = "First sentence here. Second sentence. Third one."
         result = dr._smart_truncate(text, 25)
         # The ". " at index 19 is above 60% of 25 (15), so it breaks there.
@@ -99,21 +99,21 @@ class TestSmartTruncate:
         assert len(result) <= 25
 
     def test_no_sentence_boundary_truncates_at_max(self):
-        import deep_research as dr
+        import argent.deep_research as dr
         text = "a" * 200
         result = dr._smart_truncate(text, 50)
         assert len(result) <= 50
         assert result == "a" * 50
 
     def test_exclamation_boundary(self):
-        import deep_research as dr
+        import argent.deep_research as dr
         text = "Watch out! " + "x" * 100
         result = dr._smart_truncate(text, 50)
         # Should break at the "! " boundary if it's above 60% of max.
         assert "!" in result
 
     def test_boundary_below_60_percent_falls_through(self):
-        import deep_research as dr
+        import argent.deep_research as dr
         # Place a ". " very early (below 60% of max_chars) so it should NOT
         # be used as the break point; the function falls through to the next
         # separator and ultimately returns the full max_chars truncation.
@@ -134,7 +134,7 @@ class TestGenerateQueries:
     """``_generate_queries`` parses an LLM JSON array into a list of strings."""
 
     def test_valid_json_array_returns_list(self, monkeypatch):
-        import deep_research as dr
+        import argent.deep_research as dr
         queries = ["query one", "query two", "query three", "query four", "query five"]
         monkeypatch.setattr(dr, "_call_llm_sync",
                             lambda *a, **k: json.dumps(queries))
@@ -144,7 +144,7 @@ class TestGenerateQueries:
         assert "query one" in result
 
     def test_invalid_json_returns_fallback(self, monkeypatch):
-        import deep_research as dr
+        import argent.deep_research as dr
         monkeypatch.setattr(dr, "_call_llm_sync", lambda *a, **k: "not json at all")
         result = dr._generate_queries("my objective")
         # Fallback is [objective] when parsing fails.
@@ -152,7 +152,7 @@ class TestGenerateQueries:
         assert result == ["my objective"]
 
     def test_empty_array_returns_fallback(self, monkeypatch):
-        import deep_research as dr
+        import argent.deep_research as dr
         monkeypatch.setattr(dr, "_call_llm_sync", lambda *a, **k: "[]")
         result = dr._generate_queries("fallback objective")
         # Empty array -> parse_query_list returns [] -> fallback to [objective].
@@ -167,7 +167,7 @@ class TestFindGaps:
     """``_find_gaps`` returns follow-up queries from an LLM JSON array."""
 
     def test_valid_json_array_returns_list(self, monkeypatch):
-        import deep_research as dr
+        import argent.deep_research as dr
         monkeypatch.setattr(dr, "_call_llm_sync",
                             lambda *a, **k: json.dumps(["gap one", "gap two"]))
         result = dr._find_gaps("objective", "some notes")
@@ -175,7 +175,7 @@ class TestFindGaps:
         assert "gap one" in result
 
     def test_focus_appears_in_prompt(self, monkeypatch):
-        import deep_research as dr
+        import argent.deep_research as dr
         captured = {}
 
         def fake_llm(prompt, **kw):
@@ -187,7 +187,7 @@ class TestFindGaps:
         assert "performance" in captured["prompt"]
 
     def test_context_appears_in_prompt(self, monkeypatch):
-        import deep_research as dr
+        import argent.deep_research as dr
         captured = {}
 
         def fake_llm(prompt, **kw):
@@ -199,7 +199,7 @@ class TestFindGaps:
         assert "already known facts" in captured["prompt"]
 
     def test_empty_array_returns_empty_list(self, monkeypatch):
-        import deep_research as dr
+        import argent.deep_research as dr
         monkeypatch.setattr(dr, "_call_llm_sync", lambda *a, **k: "[]")
         result = dr._find_gaps("objective", "notes")
         assert result == []
@@ -213,26 +213,26 @@ class TestExtractInfo:
     """``_extract_info`` returns extracted text or empty string for NOTHING."""
 
     def test_returns_extracted_text(self, monkeypatch):
-        import deep_research as dr
+        import argent.deep_research as dr
         monkeypatch.setattr(dr, "_call_llm_sync",
                             lambda *a, **k: "Some useful fact [1].")
         result = dr._extract_info("objective", "fragments")
         assert result == "Some useful fact [1]."
 
     def test_nothing_returns_empty_string(self, monkeypatch):
-        import deep_research as dr
+        import argent.deep_research as dr
         monkeypatch.setattr(dr, "_call_llm_sync", lambda *a, **k: "NOTHING")
         result = dr._extract_info("objective", "fragments")
         assert result == ""
 
     def test_quoted_nothing_returns_empty_string(self, monkeypatch):
-        import deep_research as dr
+        import argent.deep_research as dr
         monkeypatch.setattr(dr, "_call_llm_sync", lambda *a, **k: '"NOTHING"')
         result = dr._extract_info("objective", "fragments")
         assert result == ""
 
     def test_focus_appears_in_prompt(self, monkeypatch):
-        import deep_research as dr
+        import argent.deep_research as dr
         captured = {}
 
         def fake_llm(prompt, **kw):
@@ -252,7 +252,7 @@ class TestFetchWithRetry:
     """``_fetch_with_retry`` retries network errors but not HTTP status errors."""
 
     def test_ok_returns_immediately(self, monkeypatch):
-        import deep_research as dr
+        import argent.deep_research as dr
         import src.research.fetch as fetch_mod
         monkeypatch.setattr(fetch_mod, "fetch_page",
                             lambda url: {"ok": True, "text": "content"})
@@ -261,7 +261,7 @@ class TestFetchWithRetry:
         assert result["text"] == "content"
 
     def test_timeout_retries(self, monkeypatch):
-        import deep_research as dr
+        import argent.deep_research as dr
         import src.research.fetch as fetch_mod
         monkeypatch.setattr(fetch_mod, "fetch_page",
                             lambda url: {"ok": False, "error": "timeout"})
@@ -271,7 +271,7 @@ class TestFetchWithRetry:
         assert result["error"] == "timeout"
 
     def test_http_404_no_retry(self, monkeypatch):
-        import deep_research as dr
+        import argent.deep_research as dr
         import src.research.fetch as fetch_mod
         call_count = {"n": 0}
 
@@ -287,7 +287,7 @@ class TestFetchWithRetry:
         assert call_count["n"] == 1
 
     def test_connection_reset_retries(self, monkeypatch):
-        import deep_research as dr
+        import argent.deep_research as dr
         import src.research.fetch as fetch_mod
         call_count = {"n": 0}
 
@@ -311,7 +311,7 @@ class TestGather:
     """``_gather`` searches, fetches, filters YouTube, dedups URLs, skips short."""
 
     def test_youtube_urls_filtered_out(self, monkeypatch):
-        import deep_research as dr
+        import argent.deep_research as dr
         import src.research.search as search_mod
 
         def fake_search(query, max_results=5):
@@ -338,7 +338,7 @@ class TestGather:
         assert "https://example.com/page" in fetched
 
     def test_already_visited_urls_not_refetched(self, monkeypatch):
-        import deep_research as dr
+        import argent.deep_research as dr
         import src.research.search as search_mod
 
         def fake_search(query, max_results=5):
@@ -360,7 +360,7 @@ class TestGather:
         assert fetched == []
 
     def test_short_content_skipped(self, monkeypatch):
-        import deep_research as dr
+        import argent.deep_research as dr
         import src.research.search as search_mod
 
         def fake_search(query, max_results=5):
@@ -388,7 +388,7 @@ class TestRunDeepResearch:
     """``run_deep_research`` orchestrates the loop with clamped rounds."""
 
     def test_max_rounds_clamped_to_3(self, monkeypatch):
-        import deep_research as dr
+        import argent.deep_research as dr
         calls = {"gather": 0}
 
         def fake_queries(*a, **k):
@@ -428,7 +428,7 @@ class TestRunDeepResearch:
         assert "final report" in result or "extracted notes" in result
 
     def test_max_rounds_zero_clamped_to_1(self, monkeypatch):
-        import deep_research as dr
+        import argent.deep_research as dr
         gather_calls = {"n": 0}
 
         def fake_queries(*a, **k):
@@ -455,7 +455,7 @@ class TestRunDeepResearch:
         assert gather_calls["n"] == 1
 
     def test_max_rounds_negative_clamped_to_1(self, monkeypatch):
-        import deep_research as dr
+        import argent.deep_research as dr
         gather_calls = {"n": 0}
 
         def fake_queries(*a, **k):
@@ -481,7 +481,7 @@ class TestRunDeepResearch:
         assert gather_calls["n"] == 1
 
     def test_no_chunks_returns_failure_message(self, monkeypatch):
-        import deep_research as dr
+        import argent.deep_research as dr
 
         monkeypatch.setattr(dr, "_generate_queries", lambda *a, **k: ["q1"])
         monkeypatch.setattr(dr, "_gather",
@@ -490,7 +490,7 @@ class TestRunDeepResearch:
         assert "failed" in result.lower()
 
     def test_empty_extracted_notes_stops_gap_filling(self, monkeypatch):
-        import deep_research as dr
+        import argent.deep_research as dr
         gap_calls = {"n": 0}
         gather_calls = {"n": 0}
 

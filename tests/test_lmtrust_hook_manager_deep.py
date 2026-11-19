@@ -13,7 +13,7 @@ import sys
 from pathlib import Path
 import pytest
 
-from hook_manager import HookManager, get_global_hooks_dir
+from argent.hook_manager import HookManager, get_global_hooks_dir
 
 
 # ============================================================================
@@ -24,8 +24,8 @@ class TestL1PluginDiscovery:
     def test_ignores_non_python_and_underscore_files(self, tmp_path, monkeypatch):
         hooks_dir = tmp_path / "hooks"
         hooks_dir.mkdir()
-        monkeypatch.setattr("hook_manager.get_global_hooks_dir", lambda: hooks_dir)
-        monkeypatch.setattr("hook_manager.get_disabled_plugins", lambda: [])
+        monkeypatch.setattr("argent.hook_manager.get_global_hooks_dir", lambda: hooks_dir)
+        monkeypatch.setattr("argent.hook_manager.get_disabled_plugins", lambda: [])
 
         # Create files
         (hooks_dir / "valid_plugin.py").write_text("def on_startup(): pass\n", encoding="utf-8")
@@ -47,8 +47,8 @@ class TestL2L3ExceptionIsolation:
     def test_broken_plugin_does_not_crash_hook_manager(self, tmp_path, monkeypatch):
         hooks_dir = tmp_path / "hooks"
         hooks_dir.mkdir()
-        monkeypatch.setattr("hook_manager.get_global_hooks_dir", lambda: hooks_dir)
-        monkeypatch.setattr("hook_manager.get_disabled_plugins", lambda: [])
+        monkeypatch.setattr("argent.hook_manager.get_global_hooks_dir", lambda: hooks_dir)
+        monkeypatch.setattr("argent.hook_manager.get_disabled_plugins", lambda: [])
 
         (hooks_dir / "syntax_error.py").write_text("def broken( invalid python syntax :\n", encoding="utf-8")
         (hooks_dir / "good_plugin.py").write_text("def my_hook(): return 'good'\n", encoding="utf-8")
@@ -62,8 +62,8 @@ class TestL2L3ExceptionIsolation:
     def test_runtime_error_in_one_plugin_does_not_stop_subsequent_plugins(self, tmp_path, monkeypatch):
         hooks_dir = tmp_path / "hooks"
         hooks_dir.mkdir()
-        monkeypatch.setattr("hook_manager.get_global_hooks_dir", lambda: hooks_dir)
-        monkeypatch.setattr("hook_manager.get_disabled_plugins", lambda: [])
+        monkeypatch.setattr("argent.hook_manager.get_global_hooks_dir", lambda: hooks_dir)
+        monkeypatch.setattr("argent.hook_manager.get_disabled_plugins", lambda: [])
 
         # Plugin A raises ZeroDivisionError
         (hooks_dir / "a_crash.py").write_text("def on_event(): return 1 / 0\n", encoding="utf-8")
@@ -77,8 +77,8 @@ class TestL2L3ExceptionIsolation:
     def test_call_modifier_hook_passes_value_sequentially(self, tmp_path, monkeypatch):
         hooks_dir = tmp_path / "hooks"
         hooks_dir.mkdir()
-        monkeypatch.setattr("hook_manager.get_global_hooks_dir", lambda: hooks_dir)
-        monkeypatch.setattr("hook_manager.get_disabled_plugins", lambda: [])
+        monkeypatch.setattr("argent.hook_manager.get_global_hooks_dir", lambda: hooks_dir)
+        monkeypatch.setattr("argent.hook_manager.get_disabled_plugins", lambda: [])
 
         (hooks_dir / "p1_prefix.py").write_text("def modify_prompt(p): return f'[P1] {p}'\n", encoding="utf-8")
         (hooks_dir / "p2_suffix.py").write_text("def modify_prompt(p): return f'{p} [P2]'\n", encoding="utf-8")
@@ -96,8 +96,8 @@ class TestL7L9GatesAndPathHygiene:
     def test_disabled_plugins_filtered(self, tmp_path, monkeypatch):
         hooks_dir = tmp_path / "hooks"
         hooks_dir.mkdir()
-        monkeypatch.setattr("hook_manager.get_global_hooks_dir", lambda: hooks_dir)
-        monkeypatch.setattr("hook_manager.get_disabled_plugins", lambda: ["disabled_plugin"])
+        monkeypatch.setattr("argent.hook_manager.get_global_hooks_dir", lambda: hooks_dir)
+        monkeypatch.setattr("argent.hook_manager.get_disabled_plugins", lambda: ["disabled_plugin"])
 
         (hooks_dir / "disabled_plugin.py").write_text("def hook(): pass\n", encoding="utf-8")
         (hooks_dir / "active_plugin.py").write_text("def hook(): pass\n", encoding="utf-8")
@@ -110,8 +110,8 @@ class TestL7L9GatesAndPathHygiene:
     def test_sys_path_not_polluted_after_loading(self, tmp_path, monkeypatch):
         hooks_dir = tmp_path / "hooks"
         hooks_dir.mkdir()
-        monkeypatch.setattr("hook_manager.get_global_hooks_dir", lambda: hooks_dir)
-        monkeypatch.setattr("hook_manager.get_disabled_plugins", lambda: [])
+        monkeypatch.setattr("argent.hook_manager.get_global_hooks_dir", lambda: hooks_dir)
+        monkeypatch.setattr("argent.hook_manager.get_disabled_plugins", lambda: [])
 
         (hooks_dir / "sample.py").write_text("x = 1\n", encoding="utf-8")
 

@@ -7,11 +7,11 @@ Every clock, sleep and network probe is injected: nothing here touches a real ne
 
 import pytest
 
-import agent as agent_module
-import providers
-import session
-from agent import ArgentAgent, RESUME_NOTE
-from providers import ProviderError, with_retry
+import argent.agent as agent_module
+import argent.providers as providers
+import argent.session as session
+from argent.agent import ArgentAgent, RESUME_NOTE
+from argent.providers import ProviderError, with_retry
 from src.agent import netstate, todos
 
 
@@ -421,7 +421,7 @@ class TestAutosave:
         a.messages = [{"role": "system", "content": "s"}, {"role": "user", "content": "hi"}]
         a.model_name, a.provider, a.session_id = "m", "openrouter", None
 
-        def fake_save(messages, meta=None, session_id=None, label=None, state=None):
+        def fake_save(messages, meta=None, session_id=None, label=None, state=None, usage=None):
             saved.append((len(messages), session_id, state))
             return "sid-1"
 
@@ -492,7 +492,7 @@ def test_ollama_in_stream_internal_error_is_busy_not_other():
     """Reported: 'OLLAMA stream error: Internal Server Error (ref: …) (status code: -1)' ended a 25-minute
     turn. -1 is the Ollama client's marker for an error inside the stream, not an HTTP status, and the
     words were not among the busy hints, so the failure was classed OTHER and never retried."""
-    from providers import ProviderError
+    from argent.providers import ProviderError
     from src.agent import service_llm
 
     class ResponseError(Exception):
@@ -509,12 +509,12 @@ def test_ollama_in_stream_internal_error_is_busy_not_other():
     assert info.kind is service_llm.Kind.BUSY
     assert info.status is None
 
-    from agent import ArgentAgent
+    from argent.agent import ArgentAgent
     assert ArgentAgent._wait_plan(wrapped)[0] == "busy"
 
 
 def test_kobold_without_mmproj_is_still_unfit_not_busy():
-    from providers import ProviderError
+    from argent.providers import ProviderError
     from src.agent import service_llm
     e = ProviderError("KOBOLDCPP error (HTTP 500): Error code: 500 - {'error': {'code': 500, 'message': "
                       "'image input is not supported - hint: if this is unexpected, you may need to provide "

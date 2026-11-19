@@ -7,13 +7,13 @@ import json
 import pytest
 from unittest.mock import MagicMock
 
-import agent as agent_module
-from agent import ArgentAgent, ArgentSubAgent
-import config
-from prompt_compressor import compress_system_prompt, drop_unavailable_tool_lines
+import argent.agent as agent_module
+from argent.agent import ArgentAgent, ArgentSubAgent
+import argent.config as config
+from argent.prompt_compressor import compress_system_prompt, drop_unavailable_tool_lines
 from src.agent.critic import CRITIC_SYSTEM
 from src.agent.mcp_prompt import build_mcp_section
-import deep_research
+import argent.deep_research as deep_research
 
 
 @pytest.fixture
@@ -31,7 +31,7 @@ class TestPromptBlindSpotsLMTrust:
 
     # L1 x D7: MCP Prompt signatures must match actual tools/schemas.py parameters
     def test_l1_mcp_prompt_parameter_names_match_schemas(self):
-        from tools.schemas import TOOL_SCHEMAS
+        from argent.tools.schemas import TOOL_SCHEMAS
         schemas_by_name = {t["function"]["name"]: t["function"] for t in TOOL_SCHEMAS}
         
         mcp_servers = [{"name": "test_server", "type": "stdio", "command": "run", "args": []}]
@@ -40,7 +40,7 @@ class TestPromptBlindSpotsLMTrust:
         
         section = build_mcp_section(mcp_servers, client=client)
         # Check call_mcp_tool signature in prompt
-        assert "call_mcp_tool(server_name, tool_name, arguments_json)" in section, \
+        assert "call_mcp_tool(server_name, tool_name, arguments)" in section, \
             "MCP prompt must use exact argument names 'server_name' and 'tool_name' matching schema"
         # Check list_mcp_tools signature in prompt
         assert "list_mcp_tools(server_name" in section or "list_mcp_tools(" in section, \
@@ -74,8 +74,8 @@ class TestPromptBlindSpotsLMTrust:
 
     # L6 x D4: run_browser_task must pass ALL browser tools to BrowserWorker
     def test_l6_browser_worker_allowed_tools_complete(self):
-        from tools.browser_tools import run_browser_task
-        from tools.schemas import TOOL_SCHEMAS
+        from argent.tools.browser_tools import run_browser_task
+        from argent.tools.schemas import TOOL_SCHEMAS
         all_browser_tools = {t["function"]["name"] for t in TOOL_SCHEMAS if t["function"]["name"].startswith("browser_")}
         
         # Check allowed_tools defined inside run_browser_task or available browser tools

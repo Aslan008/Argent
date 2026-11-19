@@ -192,6 +192,7 @@ class TestRerankEnhancements:
         assert rerank("q", chunks, top_n=-10) == []
 
     def test_bi_encoder_singleton_caching(self):
+        pytest.importorskip("sentence_transformers", reason="optional stack — pip install sentence_transformers")
         with patch("sentence_transformers.SentenceTransformer") as mock_st:
             mock_inst = MagicMock()
             mock_st.return_value = mock_inst
@@ -240,7 +241,7 @@ class TestBrowserEngineFileUpload:
 
     @pytest.mark.asyncio
     async def test_upload_file_nonexistent_returns_error(self):
-        from browser_engine import browser_engine
+        from argent.browser_engine import browser_engine
         res = await browser_engine.upload_file("C:/nonexistent/file/path.pdf", index=1)
         assert "does not exist" in res
 
@@ -260,7 +261,7 @@ class TestBrowserEngineFileUpload:
         mock_frame = MagicMock()
         mock_frame.locator = MagicMock(return_value=mock_el)
 
-        from browser_engine import browser_engine
+        from argent.browser_engine import browser_engine
         with patch.object(browser_engine, "_get_session", new=AsyncMock(return_value=mock_sc)):
             with patch.object(browser_engine, "_wait_for_page_settle", new=AsyncMock()):
                 with patch.object(browser_engine, "_format_action_result", new=AsyncMock(return_value="Action success")):

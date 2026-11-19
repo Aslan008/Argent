@@ -23,14 +23,14 @@ import re
 import threading
 from typing import Optional, Tuple
 
-from logger import get_logger
+from argent.logger import get_logger
 
 log = get_logger("agent")
 
 #: Tools that change files, processes, git history, schedules or the outside world.
 MUTATING_TOOLS = frozenset({
     "write_file", "replace_in_file", "delete_file", "move_file", "copy_file",
-    "create_directory", "run_admin_command", "git_rollback", "git_checkpoint",
+    "create_directory", "git_rollback", "git_checkpoint",
     "start_background_command", "send_background_command", "stop_background_command",
     "browser_action", "call_mcp_tool", "manage_automations", "delegate_to_leeth", "run_deep_linter",
     "ultracode", "desktop_act", "leeth_fill_form", "leeth_click_many",
@@ -113,7 +113,7 @@ def _unquoted_redirect_or_subshell(command: str) -> Optional[str]:
 
 def readonly_command(command: str) -> Tuple[bool, str]:
     """(True, "") when the shell command only reads; otherwise (False, why)."""
-    from approval import _split_unquoted_chain_commands, _has_unclosed_quotes
+    from argent.approval import _split_unquoted_chain_commands, _has_unclosed_quotes
 
     command = (command or "").strip()
     if not command:
@@ -244,6 +244,9 @@ def violation(tool_name: str, args: Optional[dict] = None) -> Optional[str]:
     if _mutates(tool_name):
         return (f"Plan mode is ON: '{tool_name}' changes things, so it is not available until the plan is "
                 "approved. Finish exploring, write the plan, then call exit_plan_mode(plan).")
+    if tool_name == "request_user_approval":
+        return ("Plan mode is ON: to submit your complete plan for user review and approval, "
+                "call exit_plan_mode(plan=...) instead of request_user_approval.")
     if tool_name == "memory" and str(args.get("action", "")).strip().lower() in ("write", "forget"):
         return ("Plan mode is ON: saving or forgetting a memory note changes things. Put it in the plan and "
                 "do it after the plan is approved.")

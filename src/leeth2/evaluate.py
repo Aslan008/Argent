@@ -234,6 +234,15 @@ def _predict_flat(
                 t = cfg.temp_choice if calibrated else 1.0
                 if calibrated and getattr(cfg, "temp_choice_big", 0.0) > 0 and e.n_opts > getattr(cfg, "big_k", 64):
                     t = cfg.temp_choice_big
+                if calibrated:
+                    # finer than the two-way split: the choice head is over-confident by +0.16-0.21 on 128-255-option catalogues and
+                    # almost calibrated at 8, so one temperature for "everything above 64" cannot serve both (measured 2026-11-05).
+                    # A list of [largest_option_count, temperature] pairs, ascending; the first that fits wins.
+                    buckets = getattr(cfg, "temp_choice_buckets", None) or []
+                    for upper, temp in buckets:
+                        if e.n_opts <= int(upper):
+                            t = float(temp)
+                            break
                 p_shown = metrics.softmax(lg / t)
                 p = np.zeros(e.n_opts)
                 for shown, orig in enumerate(e.perm):

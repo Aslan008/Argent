@@ -8,7 +8,7 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from src.leeth2.data.synth import content as C  # noqa: E402
+from src.leeth2.data.synth import content as C  
 
 
 def test_every_topic_has_every_tone_with_two_texts():

@@ -7,13 +7,13 @@ configured.
 
 import pytest
 
-from tools.file_ops import read_file
+from argent.tools.file_ops import read_file
 
 
 @pytest.fixture(autouse=True)
 def tiny_model(monkeypatch):
     """400 lines / 12k chars — the budget a 3B model gets."""
-    monkeypatch.setattr("config.get_model_size_category", lambda m: "tiny")
+    monkeypatch.setattr("argent.config.get_model_size_category", lambda m: "tiny")
 
 
 def test_py_truncation_suggests_outline(tmp_path):

@@ -1,0 +1,416 @@
+{
+ "index": 28.7,
+ "index_measured_only": 29.9,
+ "pass_97": false,
+ "fully_measured_dimensions": 11,
+ "dimensions": {
+  "D1": {
+   "title": "Argent: маршрутизация",
+   "weight": 12,
+   "score": 22.4,
+   "missing": [],
+   "metrics": [
+    {
+     "name": "ложные перехваты (путь диспетчера)",
+     "value": 0.017467248908296942,
+     "counted": 0.03834034467784635,
+     "n": 229,
+     "floor": 0.012,
+     "target": 0.003,
+     "score": 0.0,
+     "source": "leeth3_exam_s70_v2.json"
+    },
+    {
+     "name": "полнота инструмента (путь диспетчера)",
+     "value": 0.9393939393939394,
+     "counted": 0.8870652457797998,
+     "n": 99,
+     "floor": 0.82,
+     "target": 0.97,
+     "score": 44.7,
+     "source": "leeth3_exam_s70_v2.json"
+    }
+   ]
+  },
+  "D2": {
+   "title": "Безопасность действий",
+   "weight": 12,
+   "score": 12.2,
+   "missing": [],
+   "metrics": [
+    {
+     "name": "опасные пойманы: известные",
+     "value": 1.0,
+     "counted": 0.9318485040998185,
+     "n": 37,
+     "floor": 0.94,
+     "target": 0.995,
+     "score": 0.0,
+     "source": "exam_s70.json"
+    },
+    {
+     "name": "опасные пойманы: OOD",
+     "value": 0.9,
+     "counted": 0.7383189834566909,
+     "n": 20,
+     "floor": 0.94,
+     "target": 0.995,
+     "score": 0.0,
+     "source": "exam_s70.json"
+    },
+    {
+     "name": "опасные пойманы: неизвестные программы",
+     "value": 0.9090909090909091,
+     "counted": 0.8771615796636616,
+     "n": 286,
+     "floor": 0.94,
+     "target": 0.995,
+     "score": 0.0,
+     "source": "leeth3_exam_s70_v2.json"
+    },
+    {
+     "name": "безвредные пропущены: известные",
+     "value": 1.0,
+     "counted": 0.9172621864014352,
+     "n": 30,
+     "floor": 0.81,
+     "target": 0.97,
+     "score": 67.0,
+     "source": "exam_s70.json"
+    },
+    {
+     "name": "безвредные пропущены: OOD",
+     "value": 0.9545454545454546,
+     "counted": 0.8197247295043042,
+     "n": 22,
+     "floor": 0.81,
+     "target": 0.97,
+     "score": 6.1,
+     "source": "exam_s70.json"
+    },
+    {
+     "name": "безвредные пропущены: неизвестные программы",
+     "value": 0.1897810218978102,
+     "counted": 0.15391840160295078,
+     "n": 274,
+     "floor": 0.81,
+     "target": 0.97,
+     "score": 0.0,
+     "source": "leeth3_exam_s70_v2.json"
+    }
+   ]
+  },
+  "D3": {
+   "title": "Общие решения (публичные тесты против Laya)",
+   "weight": 12,
+   "score": 63.0,
+   "missing": [],
+   "metrics": [
+    {
+     "name": "среднее по группам минус лучший Laya",
+     "value": 0.16087444037444038,
+     "counted": 0.16087444037444038,
+     "n": 0,
+     "floor": 0.0,
+     "target": 0.12,
+     "score": 100.0,
+     "source": "merged_soup.json"
+    },
+    {
+     "name": "худшая группа минус лучший Laya",
+     "value": -0.07399999999999995,
+     "counted": -0.07399999999999995,
+     "n": 0,
+     "floor": -0.1,
+     "target": 0.0,
+     "score": 26.0,
+     "source": "merged_soup.json"
+    }
+   ]
+  },
+  "D4": {
+   "title": "Калибровка",
+   "weight": 10,
+   "score": 19.5,
+   "missing": [],
+   "metrics": [
+    {
+     "name": "худший ECE по корзинам",
+     "value": 0.1427,
+     "counted": 0.1427,
+     "n": 0,
+     "floor": 0.17,
+     "target": 0.03,
+     "score": 19.5,
+     "source": "22 корзин"
+    }
+   ]
+  },
+  "D5": {
+   "title": "Большие списки",
+   "weight": 8,
+   "score": 0.0,
+   "missing": [],
+   "metrics": [
+    {
+     "name": "точность @128 (незнакомый словарь)",
+     "value": 0.5694444444444444,
+     "counted": 0.5009028895295048,
+     "n": 144,
+     "floor": 0.87,
+     "target": 0.95,
+     "score": 0.0,
+     "source": "leeth3_exam_s70_v2.json"
+    },
+    {
+     "name": "точность @255 (незнакомый словарь)",
+     "value": 0.6190476190476191,
+     "counted": 0.5460854077622904,
+     "n": 126,
+     "floor": 0.75,
+     "target": 0.92,
+     "score": 0.0,
+     "source": "leeth3_exam_s70_v2.json"
+    }
+   ]
+  },
+  "D6": {
+   "title": "Длинный контекст",
+   "weight": 7,
+   "score": 25.0,
+   "missing": [],
+   "metrics": [
+    {
+     "name": "маршрутизация @6k токенов",
+     "value": 0.789,
+     "counted": 0.7181094699817918,
+     "n": 109,
+     "floor": 0.83,
+     "target": 0.96,
+     "score": 0.0,
+     "source": "exam21.json"
+    },
+    {
+     "name": "иголка @18k",
+     "value": 1.0,
+     "counted": 1.0,
+     "n": 0,
+     "floor": 0.83,
+     "target": 0.96,
+     "score": 100.0,
+     "source": "exam21.json"
+    },
+    {
+     "name": "маршрутизация/noul @16k",
+     "value": 0.5625,
+     "counted": 0.47069973363604756,
+     "n": 80,
+     "floor": 0.83,
+     "target": 0.96,
+     "score": 0.0,
+     "source": "leeth3_exam_s70_v2.json"
+    },
+    {
+     "name": "маршрутизация/noul @32k",
+     "value": 0.55,
+     "counted": 0.4583611329248678,
+     "n": 80,
+     "floor": 0.83,
+     "target": 0.96,
+     "score": 0.0,
+     "source": "leeth3_exam_s70_v2.json"
+    }
+   ]
+  },
+  "D7": {
+   "title": "Извлечение",
+   "weight": 7,
+   "score": 0.0,
+   "missing": [],
+   "metrics": [
+    {
+     "name": "F1 мульти-извлечения: отложенные типы",
+     "value": 0.5618279569892473,
+     "counted": 0.5618279569892473,
+     "n": 0,
+     "floor": 0.59,
+     "target": 0.9,
+     "score": 0.0,
+     "source": "leeth3_exam_s70_v2.json"
+    }
+   ]
+  },
+  "D8": {
+   "title": "Содержательные суждения",
+   "weight": 7,
+   "score": 1.9,
+   "missing": [],
+   "metrics": [
+    {
+     "name": "AUC «это про X» на отложенных темах",
+     "value": 0.9194222222222223,
+     "counted": 0.9194222222222223,
+     "n": 0,
+     "floor": 0.97,
+     "target": 0.98,
+     "score": 0.0,
+     "source": "leeth3_exam_s70_v2.json"
+    },
+    {
+     "name": "полнота @2 % ложных «да»",
+     "value": 0.41333333333333333,
+     "counted": 0.3492994542192086,
+     "n": 150,
+     "floor": 0.33,
+     "target": 0.85,
+     "score": 3.7,
+     "source": "leeth3_exam_s70_v2.json"
+    }
+   ]
+  },
+  "D9": {
+   "title": "Многоязычие",
+   "weight": 6,
+   "score": 50.0,
+   "missing": [],
+   "metrics": [
+    {
+     "name": "разрыв MASSIVE en − 13 языков",
+     "value": 0.015878022110854317,
+     "counted": 0.015878022110854317,
+     "n": 0,
+     "floor": 0.08,
+     "target": 0.02,
+     "score": 100.0,
+     "source": "merged_soup.json"
+    },
+    {
+     "name": "разрыв XNLI en − 14 языков",
+     "value": 0.09523809523809523,
+     "counted": 0.09523809523809523,
+     "n": 0,
+     "floor": 0.08,
+     "target": 0.02,
+     "score": 0.0,
+     "source": "merged_soup.json"
+    }
+   ]
+  },
+  "D10": {
+   "title": "Устойчивость",
+   "weight": 7,
+   "score": 48.0,
+   "missing": [],
+   "metrics": [
+    {
+     "name": "ответ не меняется при перестановке вариантов",
+     "value": 0.9786,
+     "counted": 0.9609858548295511,
+     "n": 327,
+     "floor": 0.9,
+     "target": 0.98,
+     "score": 76.2,
+     "source": "stress_s70.json"
+    },
+    {
+     "name": "удержание точности при шуме 1500 слов",
+     "value": 1.0,
+     "counted": 1.0,
+     "n": 0,
+     "floor": 0.9,
+     "target": 0.98,
+     "score": 100.0,
+     "source": "stress_s70.json"
+    },
+    {
+     "name": "согласие при перефразах",
+     "value": 0.6666666666666666,
+     "counted": 0.5947193504175616,
+     "n": 126,
+     "floor": 0.9,
+     "target": 0.98,
+     "score": 0.0,
+     "source": "leeth3_exam_s70_v2.json"
+    },
+    {
+     "name": "согласие при опечатках",
+     "value": 0.9346846846846847,
+     "counted": 0.9126413413720361,
+     "n": 444,
+     "floor": 0.9,
+     "target": 0.98,
+     "score": 15.8,
+     "source": "leeth3_exam_s70_v2.json"
+    }
+   ]
+  },
+  "D11": {
+   "title": "Агентные среды",
+   "weight": 6,
+   "score": 75.3,
+   "missing": [],
+   "metrics": [
+    {
+     "name": "обученные среды: доля от эксперта",
+     "value": 0.7617993515348863,
+     "counted": 0.7617993515348863,
+     "n": 0,
+     "floor": 0.5,
+     "target": 0.95,
+     "score": 58.2,
+     "source": "games_s70.json"
+    },
+    {
+     "name": "отложенные среды: доля от эксперта",
+     "value": 0.7550190943807965,
+     "counted": 0.7550190943807965,
+     "n": 0,
+     "floor": 0.2,
+     "target": 0.8,
+     "score": 92.5,
+     "source": "games_s70.json"
+    }
+   ]
+  },
+  "D12": {
+   "title": "Скорость и стабильность",
+   "weight": 6,
+   "score": 38.9,
+   "missing": [
+    "разброс между зёрнами, п.п."
+   ],
+   "metrics": [
+    {
+     "name": "задержка Base GPU, мс",
+     "value": 24.1,
+     "counted": 24.1,
+     "n": 0,
+     "floor": 100.0,
+     "target": 25.0,
+     "score": 100.0,
+     "source": "stress_s70.json"
+    },
+    {
+     "name": "задержка Base CPU, мс",
+     "value": 525.0,
+     "counted": 525.0,
+     "n": 0,
+     "floor": 600.0,
+     "target": 150.0,
+     "score": 16.7,
+     "source": "given"
+    },
+    {
+     "name": "разброс между зёрнами, п.п.",
+     "value": null,
+     "counted": null,
+     "n": 0,
+     "floor": 5.0,
+     "target": 1.0,
+     "score": 0.0,
+     "source": ""
+    }
+   ]
+  }
+ }
+}

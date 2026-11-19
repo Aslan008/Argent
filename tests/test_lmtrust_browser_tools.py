@@ -7,10 +7,10 @@ import pytest
 import asyncio
 from unittest.mock import MagicMock, AsyncMock, patch
 
-from browser_engine import browser_engine, _blocked_url_reason, _normalize_url
-import tools.browser_tools as bt
-from tools.schemas import AVAILABLE_TOOLS, TOOL_SCHEMAS
-from tool_profiles import slim_tools_for_category
+from argent.browser_engine import browser_engine, _blocked_url_reason, _normalize_url
+import argent.tools.browser_tools as bt
+from argent.tools.schemas import AVAILABLE_TOOLS, TOOL_SCHEMAS
+from argent.tool_profiles import slim_tools_for_category
 
 
 # ============================================================================
@@ -264,8 +264,9 @@ class TestL7CDPConnection:
 
     @pytest.mark.lmtrust(layer="L7", direction="D1")
     def test_node_options_suppresses_deprecation(self):
+        pytest.importorskip("playwright", reason="this patches playwright.async_api — pip install playwright")
         import os
-        from browser_engine import BrowserEngine
+        from argent.browser_engine import BrowserEngine
         engine = BrowserEngine()
         with patch("playwright.async_api.async_playwright") as mock_pw, \
              patch.object(engine, "_launch_isolated", AsyncMock()):
@@ -281,18 +282,18 @@ class TestL7CDPConnection:
     @pytest.mark.lmtrust(layer="L7", direction="D3")
     def test_cdp_initial_url_passed_to_args(self):
         """Verify that when launching user browser, target URL is included in args."""
-        from browser_engine import BrowserEngine
+        from argent.browser_engine import BrowserEngine
         engine = BrowserEngine()
         engine._playwright = MagicMock()
         engine._playwright.chromium.connect_over_cdp = AsyncMock(side_effect=Exception("No CDP endpoint"))
 
-        with patch("browser_detect.find_browser") as mock_find, \
-             patch("config.get_browser_name", return_value="chrome"), \
+        with patch("argent.browser_detect.find_browser") as mock_find, \
+             patch("argent.config.get_browser_name", return_value="chrome"), \
              patch.object(engine, "_is_browser_running", return_value=False), \
              patch("subprocess.Popen") as mock_popen, \
              patch("asyncio.open_connection", side_effect=OSError("Connection refused")), \
              patch.object(engine, "_launch_isolated", AsyncMock()) as mock_isolated:
-            from browser_detect import BrowserInfo
+            from argent.browser_detect import BrowserInfo
             mock_find.return_value = BrowserInfo(
                 name="Test Chrome", key="chrome", exe_path="C:\\mock\\chrome.exe", user_data_dir="C:\\mock\\data"
             )
@@ -314,17 +315,17 @@ class TestL7CDPConnection:
     @pytest.mark.lmtrust(layer="L7", direction="D8")
     def test_cdp_fast_fallback_when_browser_already_running(self):
         """Verify that when browser is already running without CDP, fallback to isolated mode is instant."""
-        from browser_engine import BrowserEngine
+        from argent.browser_engine import BrowserEngine
         engine = BrowserEngine()
         engine._playwright = MagicMock()
         engine._playwright.chromium.connect_over_cdp = AsyncMock(side_effect=Exception("No CDP endpoint"))
 
-        with patch("browser_detect.find_browser") as mock_find, \
-             patch("config.get_browser_name", return_value="chrome"), \
+        with patch("argent.browser_detect.find_browser") as mock_find, \
+             patch("argent.config.get_browser_name", return_value="chrome"), \
              patch("subprocess.Popen"), \
              patch.object(engine, "_is_browser_running", return_value=True), \
              patch.object(engine, "_launch_isolated", AsyncMock()) as mock_isolated:
-            from browser_detect import BrowserInfo
+            from argent.browser_detect import BrowserInfo
             mock_find.return_value = BrowserInfo(
                 name="Test Chrome", key="chrome", exe_path="C:\\mock\\chrome.exe", user_data_dir="C:\\mock\\data"
             )

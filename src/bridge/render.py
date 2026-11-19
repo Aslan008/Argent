@@ -19,7 +19,7 @@ from typing import Any, Callable, Dict
 
 from rich.console import Console
 
-import ui
+import argent.ui as ui
 
 # A block is never taller than this when measured by a Console (only Live
 # displays look at height; nothing here does). Fixed so output is reproducible.
@@ -93,7 +93,10 @@ def _tool_end(out: Console, d: Dict[str, Any]) -> None:
 
 
 def _diff(out: Console, d: Dict[str, Any]) -> None:
-    ui.print_inline_diff(str(d.get("file", "")), str(d.get("diff", "")), out=out)
+    # The classic look has no fold/unfold, so it prints the change to the end: a
+    # truncated diff with "… ещё N строк" is exactly what people complained about.
+    file = str(d.get("file", ""))
+    ui.print_inline_diff(file, str(d.get("diff", "")), max_lines=100_000, out=out)
 
 
 def _error(out: Console, d: Dict[str, Any]) -> None:
@@ -192,14 +195,14 @@ def ui_config() -> Dict[str, Any]:
         "content_width": int(ui.s.get("content_width", 110)),
     }
     try:
-        from config import get_thinking_display_mode, get_show_tool_results
+        from argent.config import get_thinking_display_mode, get_show_tool_results
         cfg["thinking_mode"] = get_thinking_display_mode()
         cfg["show_tool_results"] = bool(get_show_tool_results())
     except Exception:
         cfg["thinking_mode"] = "summary"
         cfg["show_tool_results"] = False
     try:
-        from config import get_ui_style
+        from argent.config import get_ui_style
         cfg["style"] = get_ui_style()
     except Exception:
         cfg["style"] = "premium"

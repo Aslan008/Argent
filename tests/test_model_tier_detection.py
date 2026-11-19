@@ -4,8 +4,8 @@ with nothing in the UI saying so."""
 
 import pytest
 
-import config
-import prompt_compressor
+import argent.config as config
+import argent.prompt_compressor as prompt_compressor
 
 
 @pytest.fixture(autouse=True)
@@ -86,8 +86,8 @@ class TestSingleTierResolution:
         """A stubbed tier in the agent must reach the compressor, otherwise the
         prompt depends on the user's live config instead of the test's."""
         from unittest.mock import MagicMock
-        import agent as agent_module
-        from agent import ArgentAgent
+        import argent.agent as agent_module
+        from argent.agent import ArgentAgent
 
         mem = MagicMock()
         mem.data = {}

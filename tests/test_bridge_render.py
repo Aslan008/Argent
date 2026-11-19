@@ -9,7 +9,7 @@ import re
 import pytest
 from rich.console import Console
 
-import ui
+import argent.ui as ui
 from src.bridge import render
 from src.bridge.render import make_console, render_block
 
@@ -101,7 +101,7 @@ def test_rethink_block():
 
 def test_diff_block_counts_changes():
     diff = "--- a/f\n+++ b/f\n@@ -1 +1 @@\n-old\n+new"
-    text = plain(render_block("diff", {"file": "src/f.py", "diff": diff}, 100))
+    text = plain(render_block("diff", {"file": "src/f.py", "diff": diff, "expanded": True}, 100))
     assert "diff f.py (+1, -1)" in text and "-old" in text and "+new" in text
 
 

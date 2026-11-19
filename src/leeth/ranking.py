@@ -171,6 +171,6 @@ def load_ranking_head(
             zipfile.BadZipFile, pickle.UnpicklingError) as load_err:
         # Контракт: None = головы нет (fallback на делегата), а не падение
         # рантайма из-за чужого/битого чекпоинта.
-        from logger import get_logger
+        from argent.logger import get_logger
         get_logger("leeth_ranking").warning("ranking head load failed (%s): %s", path, load_err)
         return None

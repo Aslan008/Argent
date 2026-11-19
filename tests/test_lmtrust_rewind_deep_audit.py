@@ -24,7 +24,7 @@ from src.agent.checkpoints import (
     rewind_to,
     set_auto_checkpoint,
 )
-from file_tracker import snapshot, undo, clear_session_snapshots
+from argent.file_tracker import snapshot, undo, clear_session_snapshots
 
 
 def _git(*args, cwd=None):
@@ -68,7 +68,7 @@ class TestL4AdversarialSafety:
         real_git = checkpoints._git
         reset_called = []
 
-        def fake_git(*args):
+        def fake_git(*args, **kw):
             if len(args) > 0 and args[0] == "stash" and "push" in args:
                 return subprocess.CompletedProcess(
                     args=["git", *args],
@@ -78,7 +78,7 @@ class TestL4AdversarialSafety:
                 )
             if len(args) > 0 and args[0] == "reset" and "--hard" in args:
                 reset_called.append(True)
-            return real_git(*args)
+            return real_git(*args, **kw)
 
         monkeypatch.setattr(checkpoints, "_git", fake_git)
 
@@ -106,27 +106,27 @@ class TestL4AdversarialSafety:
 
         (repo / "main.py").write_text("print('wip code')\n", encoding="utf-8")
 
-        # Thanks to --no-verify, the checkpoint succeeds despite the failing pre-commit hook!
+        # A snapshot is written with commit-tree, which runs no hooks: a failing pre-commit hook cannot block it.
         res = auto_checkpoint_detailed("wip turn")
         assert res.sha is not None
         assert res.warn is False
 
     def test_commit_failure_unstages_index(self, repo, monkeypatch):
-        """BUG-02 Fix (Fallback): If git commit genuinely fails, the index must be
-        cleared with git reset so subsequent turns don't see staged changes.
+        """If writing the snapshot commit genuinely fails, the user's index is untouched:
+        the snapshot was built in a temporary index, never in theirs.
         """
         (repo / "main.py").write_text("print('dirty')\n", encoding="utf-8")
 
         real_git = checkpoints._git
-        def fake_git(*args):
-            if len(args) > 0 and args[0] == "commit":
+        def fake_git(*args, **kw):
+            if len(args) > 0 and args[0] == "commit-tree":
                 return subprocess.CompletedProcess(
                     args=["git", *args],
                     returncode=1,
                     stdout="",
                     stderr="fatal: disk full or git failure",
                 )
-            return real_git(*args)
+            return real_git(*args, **kw)
 
         monkeypatch.setattr(checkpoints, "_git", fake_git)
 
@@ -145,7 +145,7 @@ class TestL4AdversarialSafety:
 
 class TestL4bStashRecovery:
     def test_reset_failure_restores_stash(self, repo, monkeypatch):
-        """INC-03 Fix: If git reset --hard fails after stash, rewind_to must
+        """INC-03 Fix: If restoring the snapshot fails after the stash, rewind_to must
         attempt git stash pop to restore the user's uncommitted work.
         """
         (repo / "main.py").write_text("print('v2')\n", encoding="utf-8")
@@ -154,15 +154,15 @@ class TestL4bStashRecovery:
         (repo / "main.py").write_text("print('dirty work')\n", encoding="utf-8")
 
         real_git = checkpoints._git
-        def fake_git(*args):
-            if len(args) > 0 and args[0] == "reset" and "--hard" in args:
+        def fake_git(*args, **kw):
+            if len(args) > 0 and args[0] == "read-tree" and "-u" in args:
                 return subprocess.CompletedProcess(
                     args=["git", *args],
                     returncode=128,
                     stdout="",
                     stderr="fatal: unable to unlink 'main.py': Permission denied",
                 )
-            return real_git(*args)
+            return real_git(*args, **kw)
 
         monkeypatch.setattr(checkpoints, "_git", fake_git)
 
@@ -201,7 +201,7 @@ class TestL5StateSync:
         """BUG-03 Fix: agent.on_rewind() must truncate subsequent turn messages
         and clear _read_cache.
         """
-        from agent import ArgentAgent
+        from argent.agent import ArgentAgent
         agent = ArgentAgent()
         agent._read_cache["/path/to/file.py"] = {"sig": [100, 200], "stored": "code"}
 
@@ -235,7 +235,7 @@ class TestL5StateSync:
         """If checkpoint SHA is not in turn indices, on_rewind still clears cache
         and injects system guidance without crashing.
         """
-        from agent import ArgentAgent
+        from argent.agent import ArgentAgent
         agent = ArgentAgent()
         agent._read_cache["foo"] = {"sig": [1, 2]}
         agent.messages.append({"role": "user", "content": "hello"})

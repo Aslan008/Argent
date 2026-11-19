@@ -28,7 +28,7 @@ def _on(flag: bool) -> str:
 # ---- sections ---------------------------------------------------------------------------------------
 
 def _model() -> Row:
-    import config
+    import argent.config as config
     provider, model = config.get_provider(), config.get_current_model()
     return ("Модель", OK, f"{provider} · {model}")
 
@@ -36,7 +36,7 @@ def _model() -> Row:
 def _local_queue() -> Row:
     from src.agent import governor
     from src.agent.local_backend import classify
-    import config
+    import argent.config as config
     backend = classify(config.get_provider(), config.get_current_model())
     if not backend.local:
         return ("Очередь локальных моделей", OFF, "основная модель не на этом ПК, очередь не нужна")
@@ -57,7 +57,7 @@ def _local_queue() -> Row:
 
 
 def _ultracode() -> Row:
-    import config
+    import argent.config as config
     from src.agent.workflow import runtime
     if runtime.enabled():
         return ("Ultracode", OK, f"вкл в этой сессии · уровень {config.get_ultracode_level()} · {runtime.status()}")
@@ -114,7 +114,7 @@ def _rooms() -> Row:
 
 
 def _memory() -> Row:
-    import config
+    import argent.config as config
     if not config.is_memory_enabled():
         return ("Память", OFF, "выкл (/memory)")
     text = "вкл"
@@ -126,18 +126,41 @@ def _memory() -> Row:
 def _desktop() -> Row:
     from src.automation import desktop_guard
     if not desktop_guard.enabled():
-        return ("Управление ПК", OFF, "выкл (/desktop on) — действия только с вашего разрешения")
-    apps = desktop_guard.allowed_apps()
-    return ("Управление ПК", ATTENTION if not apps else OK,
-            f"ВКЛ · разрешённых программ: {len(apps)}" + (" (список пуст — ничего не сработает)" if not apps else "")
-            + f" · аварийная остановка: {desktop_guard.stop_chord()}")
+        return ("Управление ПК", OFF, "выкл (/desktop on)")
+    return ("Управление ПК", OK,
+            f"ВКЛ · любое окно, кроме паролей и своего терминала · аварийная остановка: {desktop_guard.stop_chord()}")
 
 
 def _telegram() -> Row:
-    import config
+    import argent.config as config
     if not config.get_telegram_enabled():
         return ("Telegram", OFF, "выкл (/telegram)")
     return ("Telegram", OK, f"вкл · режим {config.get_telegram_mode()}")
+
+
+def _worktree() -> Row:
+    """Uncommitted work in the tree the agent is about to touch.
+
+    This session I spent a round of discovery finding out — by hand — that the tree
+    held hundreds of uncommitted changes, a package move among them. One line here
+    answers that before the first command.
+    """
+    from argent.doctor import worktree_summary
+    summary = worktree_summary()
+    if not summary.get("inside"):
+        return ("Рабочее дерево", OFF, summary.get("error") or "не git-репозиторий")
+    tracked, untracked = summary["tracked"], summary["untracked"]
+    if not tracked and not untracked:
+        return ("Рабочее дерево", OK, "чисто, всё закоммичено")
+    text = f"{tracked} изменено, {untracked} не отслеживается"
+    if summary["dirs"]:
+        names = ", ".join(summary["dirs"][:4])
+        text += f" · среди них каталоги: {names}"
+    # A few uncommitted files are normal while working. Hundreds mean somebody inherited
+    # a tree where a refactor — or a data folder — is sitting uncommitted, and that is
+    # worth knowing before the first command, not after a surprise commit.
+    level = WARN if (tracked + untracked) > 200 else OK
+    return ("Рабочее дерево", level, text)
 
 
 def _waiting() -> Row:
@@ -159,7 +182,7 @@ def _todos() -> Row:
 
 
 def _mcp() -> Row:
-    import config
+    import argent.config as config
     servers = config.get_mcp_servers()
     if not servers:
         return ("MCP", OFF, "серверов нет")
@@ -168,7 +191,7 @@ def _mcp() -> Row:
 
 
 def _browser() -> Row:
-    from browser_detect import bundled_chromium_status
+    from argent.browser_detect import bundled_chromium_status
     st = bundled_chromium_status()
     if st["known"] and st["missing"]:
         return ("Браузер Playwright", WARN,
@@ -177,8 +200,8 @@ def _browser() -> Row:
 
 
 SECTIONS: List[Callable[[], Row]] = [
-    _model, _local_queue, _ultracode, _rooms, _automations, _memory, _desktop, _telegram,
-    _waiting, _todos, _mcp, _browser,
+    _model, _worktree, _local_queue, _ultracode, _rooms, _automations, _memory, _desktop,
+    _telegram, _waiting, _todos, _mcp, _browser,
 ]
 
 

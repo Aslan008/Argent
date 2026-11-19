@@ -5,7 +5,7 @@ import time
 
 import pytest
 
-import tools.command_ops as command_ops
+import argent.tools.command_ops as command_ops
 from src.agent import pty_process
 from src.agent.pty_process import PtyPopen, PtyUnavailable, TerminalText
 
@@ -158,8 +158,10 @@ class TestThroughTheTools:
         assert "on a terminal" in started
         pid = _pid(started)
         assert "Name:" in _read_until_tool(ops, pid, "Name:")
-        assert ops.send_background_command(pid, "Anna") == f"Sent input to PID {pid}."
-        out = _read_until_tool(ops, pid, "EXITED")
+        sent = ops.send_background_command(pid, "Anna")
+        # The answer carries the reaction with it: one call, not send-then-read.
+        assert sent.startswith(f"Sent input to PID {pid}."), sent
+        out = sent + "\n" + _read_until_tool(ops, pid, "EXITED")
         import re
         # the shell around the program reports its own status (1 for a failed native command): 1 or 3
         assert "hi Anna" in out and re.search(r"EXITED with code [13]", out)
@@ -172,6 +174,31 @@ class TestThroughTheTools:
         assert "asks for a secret" in out
         ops.send_background_command(pid, "hunter2")
         assert "hunter2" not in capsys.readouterr().out
+
+    def test_one_answer_comes_back_with_the_next_question(self, ops, tmp_path):
+        """The wizard case, exactly as it happened.
+
+        A setup script asked about prod, dev and test urls. Answering it used to cost
+        two calls per prompt — send, then read — and the send always returned the same
+        sentence, which made a legitimate repeat look like a stuck loop. The model then
+        started varying its input ("y", "Y", "yes") to dodge the guard.
+        """
+        wizard = (
+            "import sys\n"
+            "print('? update prod urls? (Y/n) ', end='', flush=True)\n"
+            "input()\n"
+            "print('? update dev urls? (Y/n) ', end='', flush=True)\n"
+            "input()\n"
+            "print('done')\n"
+        )
+        pid = _pid(ops.start_background_command(_command(tmp_path, "wizard.py", wizard), pty=True))
+        assert "prod urls" in _read_until_tool(ops, pid, "prod urls")
+
+        sent = ops.send_background_command(pid, "y")
+
+        assert sent.startswith(f"Sent input to PID {pid}."), sent
+        assert "dev urls" in sent, f"ответ процесса должен прийти вместе с вводом: {sent}"
+        assert "\x1b" not in sent, "терминальные коды не должны доходить до модели"
 
     def test_without_pty_nothing_changes(self, ops, tmp_path):
         started = ops.start_background_command(_command(tmp_path, "one.py", "print(1)\n"))

@@ -809,7 +809,7 @@ def _consume_bounded(chunks, max_iterations=None, max_tokens=None) -> AgentText:
 def _skills_block(skills, rules) -> str:
     """The instructions of the skills a node was given, as one block for the worker's prompt
     (the rules cut out what the node was told to ignore)."""
-    from skill_manager import skill_manager
+    from argent.skill_manager import skill_manager
     parts = []
     with room_policy.use(rules):
         for name in skills or ():
@@ -831,9 +831,9 @@ def argent_run_agent(instruction: str, tools_override=None, max_iterations=None,
     ``skills`` are read into the worker's prompt, ``mcp_servers`` limits which MCP servers it
     may reach (None = all) and ``ignore`` lists what it must not see or use. The last two are
     enforced where the tools live (policy.py), for as long as the worker runs."""
-    from agent import ArgentSubAgent
+    from argent.agent import ArgentSubAgent
     from src.agent.subagents import FORBIDDEN_TOOLS
-    from tools.schemas import AVAILABLE_TOOLS
+    from argent.tools.schemas import AVAILABLE_TOOLS
     allowed = tools if tools is not None else tools_override
     if allowed is None:
         allowed = list(AVAILABLE_TOOLS)
@@ -852,7 +852,7 @@ def argent_run_agent(instruction: str, tools_override=None, max_iterations=None,
     if told:
         extra.append("RULES FOR THIS TASK:\n" + told)
     prompt = instruction if not extra else instruction + "\n\n" + "\n\n".join(extra)
-    from config import generation_overrides
+    from argent.config import generation_overrides
     sub = ArgentSubAgent(role or "Coder", prompt, tools_override=allowed)
     with room_policy.use(rules), generation_overrides(sampling):
         return _consume_bounded(
@@ -881,7 +881,7 @@ def argent_tool_executor(node: Node, state: State):
     of a following agent/condition node. Never raises — errors come back as text.
     """
     import inspect
-    from tools.schemas import AVAILABLE_TOOLS
+    from argent.tools.schemas import AVAILABLE_TOOLS
 
     fn = AVAILABLE_TOOLS.get(node.tool)
     if fn is None:

@@ -176,7 +176,7 @@ class TestParseFencedWrite:
         result = parse_fenced_write(content)
         assert result is not None
         assert result["parsed"]["name"] == "write_file"
-        assert result["parsed"]["arguments"]["file_path"] == "hello.py"
+        assert result["parsed"]["arguments"]["path"] == "hello.py"
         assert result["parsed"]["arguments"]["content"] == "print('hi')"
 
     def test_no_path_returns_none(self):
@@ -188,13 +188,13 @@ class TestParseFencedWrite:
         content = '```write_file "my file.py"\nprint(1)\n```'
         result = parse_fenced_write(content)
         assert result is not None
-        assert result["parsed"]["arguments"]["file_path"] == "my file.py"
+        assert result["parsed"]["arguments"]["path"] == "my file.py"
 
     def test_path_with_single_quotes(self):
         content = "```write_file 'my file.py'\nprint(1)\n```"
         result = parse_fenced_write(content)
         assert result is not None
-        assert result["parsed"]["arguments"]["file_path"] == "my file.py"
+        assert result["parsed"]["arguments"]["path"] == "my file.py"
 
     def test_content_with_backticks_inside(self):
         # Inner triple backticks should be part of the greedy body
@@ -315,13 +315,13 @@ class TestTryParseJsonTool:
         result = try_parse_json_tool('{"name": "read_file", "arguments": {"file_path": "a.txt"}}')
         assert result is not None
         assert result["parsed"]["name"] == "read_file"
-        assert result["parsed"]["arguments"]["file_path"] == "a.txt"
+        assert result["parsed"]["arguments"]["path"] == "a.txt"
 
     def test_function_arguments_format(self):
         result = try_parse_json_tool('{"function": "read_file", "arguments": {"file_path": "a.txt"}}')
         assert result is not None
         assert result["parsed"]["name"] == "read_file"
-        assert result["parsed"]["arguments"]["file_path"] == "a.txt"
+        assert result["parsed"]["arguments"]["path"] == "a.txt"
 
     def test_shorthand_format(self, monkeypatch):
         monkeypatch.setattr("src.agent.parser.get_available_tools",
@@ -329,7 +329,7 @@ class TestTryParseJsonTool:
         result = try_parse_json_tool('{"read_file": {"file_path": "a.txt"}}')
         assert result is not None
         assert result["parsed"]["name"] == "read_file"
-        assert result["parsed"]["arguments"]["file_path"] == "a.txt"
+        assert result["parsed"]["arguments"]["path"] == "a.txt"
 
     def test_non_dict_returns_none(self):
         assert try_parse_json_tool('[1, 2, 3]') is None
@@ -378,23 +378,23 @@ class TestNormalizeToolParams:
     def test_write_file_filename_alias(self):
         parsed = {"name": "write_file", "arguments": {"filename": "a.py"}}
         result = normalize_tool_params(parsed)
-        assert result["arguments"]["file_path"] == "a.py"
+        assert result["arguments"]["path"] == "a.py"
         assert "filename" not in result["arguments"]
 
     def test_write_file_path_alias(self):
         parsed = {"name": "write_file", "arguments": {"path": "a.py"}}
         result = normalize_tool_params(parsed)
-        assert result["arguments"]["file_path"] == "a.py"
+        assert result["arguments"]["path"] == "a.py"
 
     def test_write_file_file_alias(self):
         parsed = {"name": "write_file", "arguments": {"file": "a.py"}}
         result = normalize_tool_params(parsed)
-        assert result["arguments"]["file_path"] == "a.py"
+        assert result["arguments"]["path"] == "a.py"
 
     def test_write_file_filepath_alias(self):
         parsed = {"name": "write_file", "arguments": {"filepath": "a.py"}}
         result = normalize_tool_params(parsed)
-        assert result["arguments"]["file_path"] == "a.py"
+        assert result["arguments"]["path"] == "a.py"
 
     def test_unknown_tool_passthrough(self):
         parsed = {"name": "unknown_tool", "arguments": {"xyz": 1}}
@@ -410,13 +410,13 @@ class TestNormalizeToolParams:
     def test_mixed_alias_and_canonical(self):
         parsed = {"name": "write_file", "arguments": {"filename": "a.py", "content": "hi"}}
         result = normalize_tool_params(parsed)
-        assert result["arguments"]["file_path"] == "a.py"
+        assert result["arguments"]["path"] == "a.py"
         assert result["arguments"]["content"] == "hi"
 
     def test_create_directory_path_alias(self):
         parsed = {"name": "create_directory", "arguments": {"path": "/tmp/x"}}
         result = normalize_tool_params(parsed)
-        assert result["arguments"]["dir_path"] == "/tmp/x"
+        assert result["arguments"]["path"] == "/tmp/x"
 
     def test_empty_name(self):
         parsed = {"name": "", "arguments": {"a": 1}}
@@ -433,7 +433,7 @@ class TestTryRecoverMalformedTool:
         result = try_recover_malformed_tool(raw, "write_file")
         assert result is not None
         assert result["parsed"]["name"] == "write_file"
-        assert result["parsed"]["arguments"]["file_path"] == "z.txt"
+        assert result["parsed"]["arguments"]["path"] == "z.txt"
         assert "hello" in result["parsed"]["arguments"]["content"]
 
     def test_non_content_tool_returns_none(self):
@@ -453,7 +453,7 @@ class TestTryRecoverMalformedTool:
         raw = '{"name": "replace_in_file", "arguments": {"file_path": "z.txt", "content": "data"}}'
         result = try_recover_malformed_tool(raw, "replace_in_file")
         assert result is not None
-        assert result["parsed"]["arguments"]["file_path"] == "z.txt"
+        assert result["parsed"]["arguments"]["path"] == "z.txt"
 
     def test_replace_in_file_recovery_python_content(self):
         raw = '{"name": "replace_in_file", "arguments": {"file_path": "z.py", "content": "def f(): pass"}}'
@@ -464,7 +464,7 @@ class TestTryRecoverMalformedTool:
         raw = '{"name": "write_file", "arguments": {"filename": "z.txt", "content": "hello"}}'
         result = try_recover_malformed_tool(raw, "write_file")
         assert result is not None
-        assert result["parsed"]["arguments"]["file_path"] == "z.txt"
+        assert result["parsed"]["arguments"]["path"] == "z.txt"
 
     def test_content_with_trailing_braces_stripped(self):
         raw = '{"file_path": "z.txt", "content": "hello"}}'
@@ -483,13 +483,13 @@ class TestTryRecoverMalformedTool:
         raw = '{"filepath": "z.txt", "content": "hello"}'
         result = try_recover_malformed_tool(raw, "write_file")
         assert result is not None
-        assert result["parsed"]["arguments"]["file_path"] == "z.txt"
+        assert result["parsed"]["arguments"]["path"] == "z.txt"
 
     def test_path_alias_in_recovery(self):
         raw = '{"path": "z.txt", "content": "hello"}'
         result = try_recover_malformed_tool(raw, "write_file")
         assert result is not None
-        assert result["parsed"]["arguments"]["file_path"] == "z.txt"
+        assert result["parsed"]["arguments"]["path"] == "z.txt"
 
     def test_content_with_newline_escape_decoded(self):
         raw = '{"file_path": "z.txt", "content": "line1\\nline2"}'
@@ -594,7 +594,7 @@ class TestParseRawToolCallMarkdown:
         result = parse_raw_tool_call(content)
         assert result is not None
         assert result["parsed"]["name"] == "read_file"
-        assert result["parsed"]["arguments"]["file_path"] == "a.txt"
+        assert result["parsed"]["arguments"]["path"] == "a.txt"
         # With no closing fence, match_str is the prefix + JSON (no trailing ```).
         assert result["match_str"] == content
 
@@ -633,7 +633,7 @@ class TestParseRawToolCallBraceFallback:
         result = parse_raw_tool_call(content)
         assert result is not None
         assert result["parsed"]["name"] == "read_file"
-        assert result["parsed"]["arguments"]["file_path"] == "a.txt"
+        assert result["parsed"]["arguments"]["path"] == "a.txt"
         assert result["match_str"] == '{"name": "read_file", "arguments": {"file_path": "a.txt"}}'
 
     def test_brace_at_position_zero(self, monkeypatch):

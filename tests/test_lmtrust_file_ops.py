@@ -20,9 +20,9 @@ import pytest
 from pathlib import Path
 from unittest.mock import MagicMock
 
-import tools.file_ops
-import memory_manager
-from tools.file_ops import move_file, copy_file, replace_python_function
+import argent.tools as tools
+import argent.memory_manager as memory_manager
+from argent.tools.file_ops import move_file, copy_file, replace_python_function
 
 
 # --------------------------------------------------------------------------- #
@@ -81,9 +81,10 @@ def _isolate(monkeypatch):
 
     # Mock rag_engine to avoid indexing side-effects
     mock_rag = MagicMock()
-    mock_rag.update_file_index = lambda fp: None
+    # **kw: the tool passes async_mode=True (the re-index is queued, not run inline)
+    mock_rag.update_file_index = lambda fp, **kw: None
     mock_rag.remove_file_index = lambda fp: None
-    monkeypatch.setitem(sys.modules, "rag_engine", mock_rag)
+    monkeypatch.setitem(sys.modules, "argent.rag_engine", mock_rag)
 
     yield
 

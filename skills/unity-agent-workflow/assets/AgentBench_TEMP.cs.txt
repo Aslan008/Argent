@@ -1,0 +1,84 @@
+// ВРЕМЕННЫЙ замер кадра и снимок экрана в batchmode С ВИДЕОКАРТОЙ.
+// Запуск:  python unity_batch.py --graphics --no-quit --method AgentBench_TEMP.Run --grep AGENT_BENCH
+// Переменные окружения: AGENT_OUT — папка для .csv/.jpg (по умолчанию %TEMP%/agent_bench),
+//                       AGENT_SCENE — путь сцены (Assets/...unity), иначе пустая сцена.
+// Снимки .jpg агент смотрит как изображения (инструмент чтения файлов с картинками).
+// После работы УДАЛИТЬ вместе с .meta.
+using System.Collections.Generic;
+using System.IO;
+using UnityEditor;
+using UnityEditor.SceneManagement;
+using UnityEngine;
+using UnityEngine.Rendering;
+
+public static class AgentBench_TEMP
+{
+    const string Tag = "AGENT_BENCH";
+    static string Out => System.Environment.GetEnvironmentVariable("AGENT_OUT")
+                         ?? Path.Combine(Path.GetTempPath(), "agent_bench");
+
+    public static void Run()
+    {
+        int errors = 0;
+        Application.logMessageReceived += (m, st, t) => { if (t != LogType.Log && t != LogType.Warning && !m.StartsWith(Tag)) { errors++; Debug.Log($"{Tag} ERR {t}: {m}"); } };
+        Directory.CreateDirectory(Out);
+        try
+        {
+            string scene = System.Environment.GetEnvironmentVariable("AGENT_SCENE");
+            if (!string.IsNullOrEmpty(scene)) EditorSceneManager.OpenScene(scene, OpenSceneMode.Single);
+            else EditorSceneManager.NewScene(NewSceneSetup.DefaultGameObjects, NewSceneMode.Single);
+
+            var cam = Camera.main != null ? Camera.main : Object.FindAnyObjectByType<Camera>();
+            if (cam == null) { cam = new GameObject("BenchCam").AddComponent<Camera>(); cam.transform.position = new Vector3(0, 2, -10); }
+
+            var rt = new RenderTexture(1920, 1080, 24, RenderTextureFormat.ARGB32);
+            var probe = new Texture2D(4, 4, TextureFormat.RGBA32, false);
+            float ms = Measure(cam, rt, probe, 120);
+            Debug.Log($"{Tag} frame_ms={ms:F2}");
+            File.AppendAllText(Path.Combine(Out, "bench.csv"), $"{System.DateTime.Now:s};{ms:F2}\n");
+            SaveShot(rt, Path.Combine(Out, "shot.jpg"));
+            Debug.Log($"{Tag} shot={Path.Combine(Out, "shot.jpg")}");
+        }
+        catch (System.Exception e) { errors++; Debug.Log($"{Tag} EXCEPTION {e}"); }
+        Debug.Log($"{Tag} SUMMARY errors={errors}");
+        EditorApplication.Exit(errors == 0 ? 0 : 1);
+    }
+
+    // В batchmode нет игрового цикла: Update() компонентов сам не вызывается.
+    // Если кадру нужен Update — вызвать его вручную (рефлексией) перед cam.Render().
+    static void Frame(Camera cam) => cam.Render();
+
+    static float Measure(Camera cam, RenderTexture rt, Texture2D probe, int frames)
+    {
+        cam.targetTexture = rt;
+        for (int i = 0; i < 60; i++) Frame(cam);        // прогрев: шейдеры, ленивые загрузки
+        AsyncGPUReadback.WaitAllRequests();
+        var series = new List<float>();
+        for (int s = 0; s < 3; s++)                      // медиана трёх серий — меньше шума
+        {
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            for (int i = 0; i < frames; i++)
+            {
+                Frame(cam);
+                RenderTexture.active = rt;
+                probe.ReadPixels(new Rect(0, 0, 4, 4), 0, 0); // ждём, пока GPU дорисует кадр
+                RenderTexture.active = null;
+            }
+            series.Add((float)sw.Elapsed.TotalMilliseconds / frames);
+        }
+        series.Sort();
+        return series[1];
+    }
+
+    static void SaveShot(RenderTexture rt, string path)
+    {
+        var prev = RenderTexture.active;
+        RenderTexture.active = rt;
+        var t = new Texture2D(rt.width, rt.height, TextureFormat.RGB24, false);
+        t.ReadPixels(new Rect(0, 0, rt.width, rt.height), 0, 0);
+        t.Apply();
+        RenderTexture.active = prev;
+        File.WriteAllBytes(path, t.EncodeToJPG(88));
+        Object.DestroyImmediate(t);
+    }
+}

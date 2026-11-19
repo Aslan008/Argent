@@ -2,7 +2,7 @@
 string literals (e.g. print("a\\nb")), but must still decode leaked JSON
 escaping in plain text (e.g. "line1\\nline2")."""
 
-from tools._helpers import _maybe_unescape_content
+from argent.tools._helpers import _maybe_unescape_content
 
 
 class TestAutoDetectQuotes:

@@ -4,7 +4,7 @@ import contextlib
 
 import pytest
 
-import approval
+import argent.approval as approval
 from src.agent.workflow import night, runtime, store
 from src.agent.workflow.calibration import Profile
 from src.automation import store as astore
@@ -16,7 +16,7 @@ _REAL_APPROVAL = approval.request_approval
 @pytest.fixture(autouse=True)
 def _project(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr("project_paths.project_root_or_cwd", lambda *a, **k: tmp_path)
+    monkeypatch.setattr("argent.project_paths.project_root_or_cwd", lambda *a, **k: tmp_path)
     runtime.set_enabled(False)
     monkeypatch.setattr(runtime, "say", lambda text: None)
     monkeypatch.setattr(runtime, "_say", lambda text: None)

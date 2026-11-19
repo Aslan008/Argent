@@ -10,9 +10,9 @@ import logging
 
 import pytest
 
-import agent as agent_module
-from agent import ArgentAgent
-from providers import ProviderError
+import argent.agent as agent_module
+from argent.agent import ArgentAgent
+from argent.providers import ProviderError
 
 
 class _Strategy:

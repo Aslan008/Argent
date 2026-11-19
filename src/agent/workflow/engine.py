@@ -14,11 +14,14 @@ with stand-ins. What lives here is the part that has to be right:
 
 from __future__ import annotations
 
+import re
+import threading
 import time
 from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Optional, Tuple
 
-from logger import get_logger
+from argent.logger import get_logger
+from src.agent.workflow import checks as C
 from src.agent.workflow import plan as P
 from src.agent.workflow import roles, store
 from src.agent.workflow.advisor import Advice
@@ -57,6 +60,8 @@ class Job:
     def apply(self) -> str: ...                        # "" on success, else why not
     def discard(self) -> None: ...
     def stop(self) -> None: ...
+    def progress(self) -> str:                         # what it is doing now, for the panel
+        return ""
 
 
 @dataclass
@@ -65,12 +70,20 @@ class Ports:
     start: Callable[[Step, str], Job]                              # step, task text -> running job
     check: Callable[[str, str], Tuple[bool, str]]                  # command, cwd -> (passed, output)
     critic: Optional[Callable[[Step, str], Tuple[str, str]]] = None    # step, material -> (verdict, text)
+    verify: Optional[Callable[[str], Tuple[bool, str]]] = None          # task text -> (passed, answer)
     advise: Optional[Callable[[str, str, str], Optional[Advice]]] = None   # kind, goal, body -> advice
     confirm: Callable[[Plan, int], bool] = lambda plan, level: True
     say: Callable[[str], None] = lambda text: None
     stop_requested: Callable[[], bool] = lambda: False
     repo_hint: Callable[[], str] = lambda: ""
+    # What a worker may be told to run on (provider:model, local/cloud). The planner
+    # needs it to be able to choose a cheap target at all, instead of inventing one.
+    targets: Callable[[], str] = lambda: ""
     progress: Callable[[Plan], None] = lambda plan: None             # the plan changed (a step state, an attempt)
+    # The observers: a command kept running for the whole run, and its newest output.
+    watch_start: Optional[Callable[[str], str]] = None
+    watch_tail: Optional[Callable[[str], str]] = None
+    watch_stop: Callable[[str], None] = lambda pid: None
 
 
 def _tail(text: str, limit: int = 1500) -> str:
@@ -92,6 +105,12 @@ class Engine:
         self._base_spent = state.spent_seconds
         self._halt_reason = ""
         self._jobs: Dict[str, Job] = {}
+        # The plan the loop is working on, so a step can join it while the run goes.
+        self._live: Optional[Plan] = None
+        self._lock = threading.Lock()
+        self._watchers: Dict[str, str] = {}          # pid -> command
+        self._watcher_seen: Dict[str, str] = {}      # pid -> the newest line already reported
+        self._scheduled: List[dict] = []
 
     # -- small things -----------------------------------------------------------------------
 
@@ -159,7 +178,8 @@ class Engine:
         problem = feedback
         for _ in range(2):
             messages = roles.planner_messages(self.state.goal, self.budgets.max_steps,
-                                              self.ports.repo_hint(), problem)
+                                              self.ports.repo_hint(), problem,
+                                              self.ports.targets())
             text = self.ports.plan(messages)
             try:
                 return P.parse_plan(text, self.state.goal, self.budgets.max_steps), ""
@@ -197,12 +217,15 @@ class Engine:
                     return self._end("cancelled", "План не одобрен — ничего не запускалось.")
             st.status = "running"
             self._persist()
+            self._start_observers(st.get_plan())
             self._execute()
             if self._halt_reason:
                 return self._end("stopped", self._halt_reason)
             return self._finish()
         finally:
             self._stop_all()
+            self._stop_observers()
+            self._live = None
             self._persist()
 
     def _stop_all(self) -> None:
@@ -229,6 +252,129 @@ class Engine:
             return f"Исчерпан лимит времени ({self.budgets.max_minutes:.0f} мин)."
         return ""
 
+    def _watch(self, plan: Plan) -> None:
+        """A running worker's own last words, for the panel.
+
+        A step that says only "running" is a black box for as long as it thinks. The
+        worker's log already says which tool it is calling; taking the newest line is
+        the whole of this monitor — it costs nothing and answers "what is it doing".
+        """
+        by_id = plan.by_id()
+        for step_id, job in self._jobs.items():
+            step = by_id.get(step_id)
+            getter = getattr(job, "progress", None)
+            if step is None or getter is None:
+                continue
+            try:
+                lines = (getter() or "").strip().splitlines()
+            except Exception as e:                     # a monitor must never stop a run
+                log.debug("progress of %s failed: %s", step_id, e)
+                continue
+            if lines and lines[-1] != step.progress:
+                step.progress = _tail(lines[-1], 160)
+
+    # -- observers: the world outside the steps ----------------------------------------------
+
+    _ERROR_LINE = re.compile(r"\b(error|failed|failure|exception|traceback|fatal|panic)\b", re.I)
+
+    def _start_observers(self, plan: Optional[Plan]) -> None:
+        """Start what should watch the world for the whole run.
+
+        A dev server or a log tail is not a step: it runs from the first minute to the
+        last, and the interesting thing is the moment its newest line turns bad. The
+        deferred checks are the same idea on a clock — "twenty minutes in, run the smoke
+        test again" — which is as close to cron as a run of minutes can honestly get.
+        """
+        if plan is None:
+            return
+        self._live = plan
+        self._scheduled = [dict(item, done=False) for item in plan.scheduled]
+        if not plan.watch:
+            return
+        if self.ports.watch_start is None:
+            self._say("· план просит наблюдателей, но смотреть нечем — пропускаю")
+            return
+        for command in plan.watch:
+            try:
+                pid = self.ports.watch_start(command)
+            except Exception as e:
+                self._say(f"· наблюдатель `{command}` не запустился: {e}")
+                continue
+            if pid:
+                self._watchers[str(pid)] = command
+                self._say(f"наблюдатель: `{command}` (pid {pid})")
+
+    def _stop_observers(self) -> None:
+        for pid in list(self._watchers):
+            try:
+                self.ports.watch_stop(pid)
+            except Exception as e:                     # a leftover process is not a reason to fail the run
+                log.debug("stopping watcher %s: %s", pid, e)
+        self._watchers.clear()
+
+    def _poll_observers(self) -> None:
+        """Between polls of the workers: did a watcher say something new, is a check due?"""
+        for pid, command in list(self._watchers.items()):
+            try:
+                text = (self.ports.watch_tail(pid) if self.ports.watch_tail else "") or ""
+            except Exception as e:
+                log.debug("watcher %s: %s", pid, e)
+                continue
+            lines = [line for line in text.strip().splitlines() if line.strip()]
+            last = lines[-1][:200] if lines else ""
+            if not last or self._watcher_seen.get(pid) == last:
+                continue
+            self._watcher_seen[pid] = last
+            if self._ERROR_LINE.search(last):
+                self._say(f"внимание, наблюдатель `{command}`: {last[:160]}")
+                self.state.event(f"watcher {command}: {last}")
+
+        now = self._spent() / 60.0
+        for item in self._scheduled:
+            if item.get("done") or now < float(item.get("after") or 0):
+                continue
+            item["done"] = True
+            command = str(item.get("command") or "")
+            try:
+                passed, output = self.ports.check(command, self.state.cwd)
+            except Exception as e:
+                self._say(f"· отложенная проверка `{command}` не выполнилась: {e}")
+                continue
+            self._say(f"{'✓' if passed else '✗'} отложенная проверка `{command}`: {_tail(output, 200)}")
+            self.state.event(f"scheduled {command}: {'passed' if passed else 'FAILED'}")
+
+    def add_step(self, goal: str, role: str = "coder", title: str = "",
+                 files: Tuple[str, ...] = (), checks: Tuple[str, ...] = (),
+                 verify: Tuple[str, ...] = ()) -> str:
+        """A step discovered while the run goes: it joins the plan at once.
+
+        The loop re-reads the ready steps every time round, so a step added here starts as
+        soon as a worker slot and its files allow — the plan's parallelism, usable
+        mid-flight instead of only at planning time. Returns the new id, or "" when there
+        is no run to add it to.
+        """
+        with self._lock:
+            plan = self._live
+            if plan is None:
+                return ""
+            if len(plan.steps) >= self.budgets.max_steps * 3:
+                return ""
+            used = plan.by_id()
+            index = len(plan.steps) + 1
+            while f"x{index}" in used:
+                index += 1
+            step = Step(id=f"x{index}", title=(title or goal).strip()[:120],
+                        goal=goal.strip()[:1200],
+                        role=role if role in P.ROLES else "coder",
+                        files=[str(f) for f in files][:12],
+                        checks=[str(c) for c in checks][:3],
+                        verify=[str(v) for v in verify][:2])
+            step.notes.append("added while the run was going (found by a worker)")
+            plan.steps.append(step)
+            self._commit(plan)
+        self._say(f"+ шаг {step.id} «{step.title}» добавлен на ходу")
+        return step.id
+
     def _startable(self, plan: Plan) -> List[Step]:
         running = [plan.by_id()[i] for i in self._jobs if i in plan.by_id()]
         out: List[Step] = []
@@ -240,6 +386,7 @@ class Engine:
 
     def _execute(self) -> None:
         plan = self._plan()
+        self._live = plan
         while True:
             reason = self._must_halt()
             if reason:
@@ -262,6 +409,8 @@ class Engine:
                 return
             finished = [i for i, job in self._jobs.items() if job.finished()]
             if not finished:
+                self._watch(plan)                        # what the workers are doing right now
+                self._poll_observers()                   # watchers and deferred checks
                 self._progress(plan)                     # the queue and the PC change while a worker thinks
                 time.sleep(self.poll)
                 continue
@@ -273,7 +422,8 @@ class Engine:
     def _launch(self, plan: Plan, step: Step) -> None:
         step.attempts += 1
         step.status = RUNNING
-        task = roles.executor_task(step, plan, self.state.level)
+        task = roles.executor_task(step, plan, self.state.level,
+                                   self.ports.repo_hint(), roles.history_of(plan, step))
         try:
             job = self.ports.start(step, task)
         except Exception as e:
@@ -288,10 +438,16 @@ class Engine:
 
     # -- one finished step ------------------------------------------------------------------
 
-    def _after_failure(self, plan: Plan, step: Step, why: str) -> None:
+    def _after_failure(self, plan: Plan, step: Step, why: str, report: str = "") -> None:
         """A try failed: try again with the lesson, or give the step up."""
         step.notes.append(why)
         step.error = why
+        # What the attempt DID, not only what it got wrong: the next worker starts from
+        # this instead of from zero. Its changes are not in the tree, so it is told.
+        done = (report or "").strip()
+        if done:
+            step.attempt_reports.append(done)
+        step.progress = ""
         if step.attempts >= self.budgets.max_attempts:
             step.status = FAILED
             self._say(f"✗ шаг {step.id} не получился за {step.attempts} попытк.: {_tail(why, 200)}")
@@ -311,11 +467,66 @@ class Engine:
         step.status = PENDING
         self._say(f"↻ шаг {step.id}: повторяю ({_tail(why, 160)})")
 
+    # -- the checks a step is judged by ------------------------------------------------------
+
+    def _verify(self, step: Step, instruction: str, out: Outcome, check_log: str) -> Tuple[bool, str]:
+        """The semantic check: a second agent does the instruction and answers PASS or FAIL.
+
+        A missing or broken verifier is not a failed patch: the step keeps the verdict of
+        its mechanical checks, and the reason is written down rather than guessed.
+        """
+        if self.ports.verify is None:
+            step.notes.append("the semantic check was not run: no verifier at this level")
+            self._say(f"· шаг {step.id}: проверку глазами некому сделать — она пропущена")
+            return True, ""
+        task = roles.verifier_task(step, out.diff, check_log, instruction)
+        try:
+            ok, text = self.ports.verify(task)
+        except Exception as e:
+            log.warning("verifier failed: %s", e)
+            self._say(f"· шаг {step.id}: проверяющий не ответил ({e}) — сужу по механическим проверкам")
+            return True, ""
+        return bool(ok), text or ""
+
+    def _commands_for(self, step: Step, out: Outcome) -> List[str]:
+        """What this step is judged by: the plan's checks, or the tests for its files."""
+        if step.checks:
+            return list(step.checks)
+        if not step.writes:
+            return []
+        derived = C.derive_checks(step.changed or step.files, self.state.cwd)
+        if not derived:
+            return []
+        step.notes.append("the plan gave no checks; using the tests for the files it touched: "
+                          + "; ".join(derived))
+        self._say(f"· шаг {step.id}: проверок не задано — беру тесты по своим файлам: "
+                  f"{', '.join(derived)}")
+        return derived
+
+    def _judge_check(self, step: Step, command: str, after_output: str, out: Outcome) -> C.Verdict:
+        """Is this red check about the patch, or about the repository as it already was?"""
+        after = C.Result(ok=False, failed=C.failure_signature(after_output), output=after_output)
+        if out.in_place:
+            return C.Verdict(
+                ok=False, measured=False, new=sorted(after.failed)[:6],
+                reason="the worker changed the real tree, so there is no unpatched state left "
+                       "to compare this check with")
+        base = C.Result.from_dict(step.baseline.get(command))
+        if base is None:
+            ok_before, before_output = self.ports.check(command, self.state.cwd)
+            base = C.Result(ok=ok_before, failed=C.failure_signature(before_output), output=before_output)
+            step.baseline[command] = base.to_dict()
+            self._say(f"· `{command}` без патча: "
+                      f"{'зелёная' if ok_before else 'красная — и это не про патч'}")
+        return C.judge(base, after)
+
     def _settle(self, plan: Plan, step: Step, job: Job) -> None:
         out = job.outcome()
+        step.progress = ""
         if not out.ok:
             job.discard()
-            self._after_failure(plan, step, f"the worker failed: {out.error or 'it ended without a report'}")
+            self._after_failure(plan, step, f"the worker failed: {out.error or 'it ended without a report'}",
+                                report=out.report)
             return
         step.report = (out.report or "").strip()
         if out.denied:
@@ -333,14 +544,37 @@ class Engine:
             return
 
         step.changed = list(out.files)
+        commands = self._commands_for(step, out)
         check_log: List[str] = []
-        for command in step.checks:
+        for command in commands:
             passed, output = self.ports.check(command, out.cwd)
-            check_log.append(f"$ {command}\n{_tail(output, 600)}")
-            if not passed:
+            if passed:
+                check_log.append(f"$ {command}\n{_tail(output, 400)}\n=> passed")
+                step.verified.append(f"✓ {command}")
+                continue
+            verdict = self._judge_check(step, command, output, out)
+            check_log.append(f"$ {command}\n{_tail(output, 600)}\n=> {'passed' if verdict.ok else 'FAILED'}: {verdict.reason}")
+            if verdict.ok:
+                step.verified.append(f"≈ {command}: {C.describe(verdict)}")
+                continue
+            job.discard()
+            self._after_failure(plan, step, f"the check `{command}` failed:\n{_tail(output)}\n\n"
+                                            f"WHAT THE COMPARISON WITH THE UNPATCHED TREE SHOWS: "
+                                            f"{C.describe(verdict)}", report=out.report)
+            return
+
+        # An exit code proves that nothing broke; it does not prove the work is right.
+        # The plan can name instructions a second agent carries out (open the page, read
+        # the report) — they run on the patched copy, before anything reaches the tree.
+        for instruction in step.verify:
+            ok, text = self._verify(step, instruction, out, "\n".join(check_log))
+            if not ok:
                 job.discard()
-                self._after_failure(plan, step, f"the check `{command}` failed:\n{_tail(output)}")
+                self._after_failure(plan, step, f"the verifier said FAIL on «{instruction}»:\n{_tail(text)}",
+                                    report=out.report)
                 return
+            if text:
+                step.verified.append(f"◐ {instruction}: {_tail(text, 120)}")
 
         verdict = ""
         if not out.in_place and self.ports.critic is not None and self.state.level >= 2:

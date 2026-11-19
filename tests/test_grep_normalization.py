@@ -1,6 +1,6 @@
 import pytest
 from pathlib import Path
-from tools.search_ops import _normalize_grep_pattern, grep_search, _python_grep_search
+from argent.tools.search_ops import _normalize_grep_pattern, grep_search, _python_grep_search
 from src.agent.parser import normalize_tool_params, _PARAM_ALIASES
 
 
@@ -57,7 +57,7 @@ class TestGrepSearchQueryAlias:
         test_file = tmp_path / "sample.py"
         test_file.write_text("class MyAgent:\n    pass\n", encoding="utf-8")
 
-        result = grep_search(directory=str(tmp_path), query="MyAgent")
+        result = grep_search(path=str(tmp_path), query="MyAgent")
         assert "Found" in result
         assert "MyAgent" in result
 
@@ -73,7 +73,7 @@ class TestGrepSearchQueryAlias:
         test_file = tmp_path / "sample.py"
         test_file.write_text("alpha = 1\nbeta = 2\n", encoding="utf-8")
 
-        result = grep_search(directory=str(tmp_path), query=r"alpha\|beta")
+        result = grep_search(path=str(tmp_path), query=r"alpha\|beta")
         assert "Found" in result
         assert "alpha = 1" in result
         assert "beta = 2" in result
@@ -82,7 +82,7 @@ class TestGrepSearchQueryAlias:
         test_file = tmp_path / "sample.py"
         test_file.write_text("alpha = 1\n", encoding="utf-8")
 
-        result = grep_search(directory=str(tmp_path), query='"alpha"')
+        result = grep_search(path=str(tmp_path), query='"alpha"')
         assert "Found" in result
         assert "alpha = 1" in result
 
@@ -111,7 +111,7 @@ class TestParserGrepAliases:
             }
         }
         res = normalize_tool_params(parsed)
-        assert res["arguments"]["directory"] == "tools"
+        assert res["arguments"]["path"] == "tools"
         assert "search_path" not in res["arguments"]
 
     def test_normalize_query_and_search_path_together(self):
@@ -123,5 +123,5 @@ class TestParserGrepAliases:
             }
         }
         res = normalize_tool_params(parsed)
-        assert res["arguments"]["directory"] == "tools"
+        assert res["arguments"]["path"] == "tools"
         assert res["arguments"]["pattern"] == "grep_search"

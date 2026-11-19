@@ -21,7 +21,7 @@ difference is the 250k-token vocabulary, not depth, so inference speed is
 comparable.
 """
 
-from logger import get_logger
+from argent.logger import get_logger
 
 log = get_logger("research")
 
@@ -37,7 +37,7 @@ _cross_encoder_name = None  # so switching the setting reloads instead of reusin
 def active_model_name() -> str:
     """The reranker the session should use: multilingual when configured."""
     try:
-        from config import get_reranker_model
+        from argent.config import get_reranker_model
         return get_reranker_model() or _DEFAULT_MODEL
     except Exception:
         return _DEFAULT_MODEL

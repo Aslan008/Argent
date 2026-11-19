@@ -17,7 +17,7 @@ from typing import Any, Dict, List, Optional
 
 import requests
 
-from logger import get_logger
+from argent.logger import get_logger
 from src.telegram.render import MAX_HTML, split_html, strip_html
 
 log = get_logger("telegram_bot")
@@ -82,6 +82,11 @@ class TelegramClient:
     def get_me(self) -> Optional[Dict[str, Any]]:
         """Test the token and get bot metadata."""
         return self._call("getMe", req_timeout=10)
+
+    def get_chat_member_count(self, chat_id: str | int) -> Optional[int]:
+        """How many people are in the chat — the only `list` fact the Bot API gives a bot."""
+        res = self._call("getChatMemberCount", {"chat_id": chat_id}, req_timeout=10)
+        return res if isinstance(res, int) else None
 
     def get_updates(self, offset: Optional[int] = None, timeout: int = 20) -> List[Dict[str, Any]]:
         """Long poll for updates."""

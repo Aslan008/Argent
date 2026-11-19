@@ -4,7 +4,7 @@ import sys
 
 from src.cli.commands.base import CommandContext, CommandResult
 from src.cli.commands.registry import registry
-from ui import print_error, print_system
+from argent.ui import print_error, print_system
 
 DREAM_TASK_NAME = "memory-dream"
 DREAM_SCHEDULE = "every 3h"
@@ -21,7 +21,7 @@ def _dream_command() -> str:
 
 
 def _dream_status() -> str:
-    import config
+    import argent.config as config
     from src.automation import store as astore
     from src.memory import dream, hub
     job = astore.get_automation(DREAM_TASK_NAME)
@@ -48,7 +48,7 @@ def _dream_status() -> str:
 
 
 def _dream(rest: str) -> None:
-    import config
+    import argent.config as config
     from src.automation import store as astore
     from src.memory import dream, hub
 
@@ -59,7 +59,7 @@ def _dream(rest: str) -> None:
     elif word == "run":
         provider, model, cloud = dream.resolve_target()
         flags = arg.lower().split()
-        from project_paths import project_root_or_cwd
+        from argent.project_paths import project_root_or_cwd
         from pathlib import Path
         store = hub.store_for("project")
         print_system("Консолидация идёт (запросы к модели — с низким приоритетом, может занять несколько минут)…")
@@ -112,7 +112,7 @@ def _dream(rest: str) -> None:
                                         "(list / show / search / add / forget / restore / migrate / undo / dream)",
                    category="agent", is_prefix=True)
 def handle_memory(ctx: CommandContext) -> CommandResult:
-    import config
+    import argent.config as config
     from src.memory import hub
     from src.memory.migrate import import_working_memory
     from src.memory.store import MemoryRefused
@@ -191,7 +191,7 @@ def handle_memory(ctx: CommandContext) -> CommandResult:
                 print_system(f"Глобальные заметки возвращены к снимку {Path(shot).name}: восстановлено "
                              f"{stat['restored']}, убрано в корзину {stat['removed']}.")
         elif word == "migrate":
-            from memory_manager import resolve_memory_file
+            from argent.memory_manager import resolve_memory_file
             result = import_working_memory(hub.store_for("project"), resolve_memory_file())
             print_system("Факты рабочей памяти импортированы в заметку imported-key-facts." if result
                          else "В рабочей памяти нет фактов для импорта.")

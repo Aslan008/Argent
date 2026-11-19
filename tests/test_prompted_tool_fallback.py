@@ -8,9 +8,9 @@ from unittest.mock import MagicMock
 
 import pytest
 
-import agent as agent_module
-from agent import ArgentAgent
-from providers import ProviderError
+import argent.agent as agent_module
+from argent.agent import ArgentAgent
+from argent.providers import ProviderError
 from src.agent.strategy import CloudStrategy
 
 HANG_CAP = 500
@@ -53,7 +53,7 @@ def make_agent(monkeypatch):
         monkeypatch.setattr(agent_module, "create_provider", lambda *a, **k: provider)
         # These tests are about the provider falling back to prompted tool calls. A working Leeth
         # fast path would answer "what is 40+2" itself and the scripted provider would never be asked.
-        import config
+        import argent.config as config
         monkeypatch.setattr(config, "get_fast_dispatch_backend", lambda: "off")
         monkeypatch.setattr(agent_module, "estimate_tokens", lambda t, m, p: len(t) // 4)
         a = ArgentAgent()

@@ -3,8 +3,8 @@
 import pytest
 from pathlib import Path
 
-import file_tracker
-from file_tracker import (
+import argent.file_tracker as file_tracker
+from argent.file_tracker import (
     get_diff, get_pending_changes, snapshot, undo, undo_all,
 )
 

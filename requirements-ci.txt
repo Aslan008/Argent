@@ -2,6 +2,11 @@
 # unit suite touches, without the heavy optional stacks (sentence-transformers,
 # crawl4ai) that are only imported lazily at runtime.
 pytest
+pytest-asyncio
+pytest-timeout
+pytest-cov
+hypothesis
+ruff
 requests>=2.31.0
 beautifulsoup4>=4.12.0
 ddgs
@@ -17,3 +22,4 @@ pyyaml
 json5
 numpy
 psutil
+keyring

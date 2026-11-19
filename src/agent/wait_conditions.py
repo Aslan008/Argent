@@ -22,7 +22,7 @@ import ast
 import time
 from pathlib import Path
 
-from logger import get_logger
+from argent.logger import get_logger
 
 log = get_logger("agent")
 
@@ -37,7 +37,7 @@ class ConditionError(ValueError):
 
 
 def _resolve(path: str) -> Path:
-    from tools._helpers import _resolve_path
+    from argent.tools._helpers import _resolve_path
     return _resolve_path(path)
 
 
@@ -80,7 +80,7 @@ def _process_finished(pid) -> bool:
     running" would hang the wait forever.
     """
     try:
-        from tools import ACTIVE_PROCESSES, ACTIVE_PROCESSES_LOCK
+        from argent.tools import ACTIVE_PROCESSES, ACTIVE_PROCESSES_LOCK
     except ImportError:
         return True
         

@@ -14,8 +14,8 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 import pytest
 
-import tools.misc_tools as misc
-from tools.misc_tools import (
+import argent.tools.misc_tools as misc
+from argent.tools.misc_tools import (
     _option_text,
     _normalize_options,
     _fit_options,
@@ -70,7 +70,7 @@ class TestL2L4PayloadAndFallbacks:
     def test_single_dict_payload_unwrapped_automatically(self, monkeypatch):
         monkeypatch.setattr("prompt_toolkit.prompt", lambda *a, **k: "My answer")
         res = ask_user_questions({"type": "text", "question": "Single question?"})
-        assert "User responses:" in res
+        assert res.startswith("ANSWERED")
         assert "- Single question?: My answer" in res
 
     def test_empty_or_non_list_questions_return_error(self):
@@ -84,7 +84,7 @@ class TestL2L4PayloadAndFallbacks:
             {"type": "single_choice", "question": "Pick option?", "options": []}
         ]
         res = ask_user_questions(payload)
-        assert "User responses:" in res
+        assert res.startswith("ANSWERED")
         assert "- Pick option?: Fell back to text" in res
 
 
@@ -100,8 +100,8 @@ class TestL3L7InteractiveFlows:
         monkeypatch.setattr("prompt_toolkit.prompt", raise_sigint)
         payload = [{"type": "text", "question": "Will be cancelled"}]
         res = ask_user_questions(payload)
-        assert "User responses:" in res
-        assert "- Will be cancelled: Skipped" in res
+        assert res.startswith("SKIPPED")
+        assert "- Will be cancelled: SKIPPED (dismissed without an answer)" in res
 
     def test_custom_write_in_option_in_single_choice(self, monkeypatch):
         CUSTOM = "✏ Свой вариант..."
@@ -114,7 +114,7 @@ class TestL3L7InteractiveFlows:
             "options": ["Monolith", "Microservices"]
         }]
         res = ask_user_questions(payload)
-        assert "User responses:" in res
+        assert res.startswith("ANSWERED")
         assert "- Which architecture?: Custom typed answer" in res
 
     def test_fit_options_formats_long_strings_cleanly(self, monkeypatch):

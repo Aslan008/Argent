@@ -12,7 +12,7 @@ import json
 
 import pytest
 
-import config
+import argent.config as config
 
 
 @pytest.fixture(autouse=True)

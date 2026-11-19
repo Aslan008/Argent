@@ -3,7 +3,7 @@
 import pytest
 from src.cli.commands import get_registry, dispatch_command, CommandContext, CommandResult
 from src.cli.commands.registry import CommandRegistry
-from command_handler import handle_slash_command, known_commands, unknown_command_message
+from argent.command_handler import handle_slash_command, known_commands, unknown_command_message
 
 
 class DummyAgent:
@@ -77,7 +77,7 @@ def test_research_command_validation_and_prompt():
 
 
 def test_think_command_modes():
-    from config import get_thinking_display_mode
+    from argent.config import get_thinking_display_mode
     agent = DummyAgent()
 
     # think summary
@@ -130,7 +130,7 @@ def test_thinking_alias_supported():
 
 
 def test_thinking_and_effort_commands_dispatch():
-    import config
+    import argent.config as config
     agent = DummyAgent()
 
     # /think on / off / auto
@@ -173,7 +173,7 @@ def test_thinking_and_effort_commands_dispatch():
 
 def test_duration_and_preview_hardening():
     """L2×D1: Test numerical edge cases (NaN, Inf, None, negative) and None safety."""
-    from ui import _format_duration_short, _extract_thought_preview
+    from argent.ui import _format_duration_short, _extract_thought_preview
     assert _format_duration_short(None) == ""
     assert _format_duration_short(-5.0) == ""
     assert _format_duration_short(float("nan")) == ""
@@ -188,7 +188,7 @@ def test_duration_and_preview_hardening():
 
 def test_print_inline_diff_none_safety():
     """L2×D4: Ensure print_inline_diff does not crash when file_path is None or diff is empty."""
-    from ui import print_inline_diff
+    from argent.ui import print_inline_diff
     # None file path
     print_inline_diff(None, "+ added line\n- removed line")
     # Empty diff

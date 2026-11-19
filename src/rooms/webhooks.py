@@ -36,7 +36,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
-from logger import get_logger
+from argent.logger import get_logger
 
 log = get_logger("rooms.webhooks")
 
@@ -59,7 +59,7 @@ _STORE = "webhooks.json"
 
 
 def _argent_dir() -> Path:
-    from project_paths import project_root_or_cwd
+    from argent.project_paths import project_root_or_cwd
     return Path(project_root_or_cwd()) / ".argent"
 
 
@@ -90,7 +90,7 @@ def _load() -> dict:
 
 
 def _save(data: dict) -> None:
-    from atomic_io import atomic_write_text
+    from argent.atomic_io import atomic_write_text
     store_path().parent.mkdir(parents=True, exist_ok=True)
     atomic_write_text(store_path(), json.dumps(data, ensure_ascii=False, indent=2))
 
@@ -234,7 +234,7 @@ def allowed_fields(hook: dict, library=None) -> set:
 def run_in_child(room: str, task: str, params: dict, timeout: float = RUN_TIMEOUT_SECONDS) -> dict:
     """Run the room as `python -m src.rooms.headless` and return its verdict (never raises)."""
     import tempfile
-    from project_paths import project_root_or_cwd
+    from argent.project_paths import project_root_or_cwd
     from src.rooms.headless import RESULT_MARKER
     root = Path(__file__).resolve().parents[2]
     env = os.environ.copy()

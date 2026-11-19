@@ -3,7 +3,7 @@
 # pyrefly: ignore [missing-import]
 import pytest
 
-from approval import assess_command_risk, is_destructive_command
+from argent.approval import assess_command_risk, is_destructive_command
 
 
 class TestAssessLevels:
@@ -91,8 +91,8 @@ class TestBackwardCompat:
 
 class TestRunCommandGate:
     def _run(self, monkeypatch, guard, command, approve=False):
-        import tools.command_ops as co
-        import config
+        import argent.tools.command_ops as co
+        import argent.config as config
         monkeypatch.setattr(config, "get_command_guard", lambda: guard)
         calls = {}
 

@@ -12,6 +12,7 @@ pytestmark = pytest.mark.skipif(not (TOK_DIR / "tokenizer.json").exists(), reaso
 
 
 def test_exact_lengths_match_direct_encoding_and_packing_respects_the_budget(tmp_path):
+    pytest.importorskip("transformers", reason="Leeth tests build a real ModernBERT backbone — pip install transformers")
     from transformers import AutoTokenizer
 
     from src.leeth2.datafile import JsonlReader, exact_token_lengths, plan_batches

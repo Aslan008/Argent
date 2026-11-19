@@ -17,7 +17,7 @@ import json
 
 import pytest
 
-from providers import OllamaProvider
+from argent.providers import OllamaProvider
 
 
 class _FakeOllama:
@@ -63,49 +63,49 @@ class TestIndexing:
     def test_two_calls_in_separate_chunks_stay_separate(self):
         """The reported failure: read_file + read_file -> "read_fileread_file"."""
         p = _provider([
-            {"message": {"tool_calls": [_call("read_file", file_path="a.py")]}},
-            {"message": {"tool_calls": [_call("read_file", file_path="b.py")]}},
+            {"message": {"tool_calls": [_call("read_file", path="a.py")]}},
+            {"message": {"tool_calls": [_call("read_file", path="b.py")]}},
         ])
         slots = _accumulate(_deltas(p))
         assert [s["name"] for s in slots] == ["read_file", "read_file"]
-        assert [json.loads(s["arguments"])["file_path"] for s in slots] == ["a.py", "b.py"]
+        assert [json.loads(s["arguments"])["path"] for s in slots] == ["a.py", "b.py"]
 
     def test_three_different_tools(self):
         """run_command + read_file + read_file -> "run_commandread_fileread_file"."""
         p = _provider([
             {"message": {"tool_calls": [_call("run_command", command="ls")]}},
-            {"message": {"tool_calls": [_call("read_file", file_path="a.py")]}},
-            {"message": {"tool_calls": [_call("read_file", file_path="b.py")]}},
+            {"message": {"tool_calls": [_call("read_file", path="a.py")]}},
+            {"message": {"tool_calls": [_call("read_file", path="b.py")]}},
         ])
         assert [s["name"] for s in _accumulate(_deltas(p))] == [
             "run_command", "read_file", "read_file"]
 
     def test_several_calls_in_one_chunk_are_also_distinct(self):
         p = _provider([
-            {"message": {"tool_calls": [_call("read_file", file_path="a.py"),
-                                        _call("read_file", file_path="b.py")]}},
+            {"message": {"tool_calls": [_call("read_file", path="a.py"),
+                                        _call("read_file", path="b.py")]}},
         ])
         assert [d["index"] for d in _deltas(p)] == [0, 1]
 
     def test_the_arguments_remain_parseable(self):
         """Concatenated JSON is what produced "Extra data: line 1 column 95"."""
         p = _provider([
-            {"message": {"tool_calls": [_call("read_file", file_path="a.py")]}},
-            {"message": {"tool_calls": [_call("read_file", file_path="b.py")]}},
+            {"message": {"tool_calls": [_call("read_file", path="a.py")]}},
+            {"message": {"tool_calls": [_call("read_file", path="b.py")]}},
         ])
         for slot in _accumulate(_deltas(p)):
             json.loads(slot["arguments"])          # must not raise
 
     def test_content_chunks_between_calls_do_not_shift_the_index(self):
         p = _provider([
-            {"message": {"tool_calls": [_call("read_file", file_path="a.py")]}},
+            {"message": {"tool_calls": [_call("read_file", path="a.py")]}},
             {"message": {"content": "думаю…"}},
-            {"message": {"tool_calls": [_call("read_file", file_path="b.py")]}},
+            {"message": {"tool_calls": [_call("read_file", path="b.py")]}},
         ])
         assert [d["index"] for d in _deltas(p)] == [0, 1]
 
     def test_a_single_call_is_unaffected(self):
-        p = _provider([{"message": {"tool_calls": [_call("read_file", file_path="a.py")]}}])
+        p = _provider([{"message": {"tool_calls": [_call("read_file", path="a.py")]}}])
         assert [d["index"] for d in _deltas(p)] == [0]
 
     def test_no_tool_calls(self):

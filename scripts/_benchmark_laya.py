@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-import torch  # noqa: E402
+import torch
 
 VAL_PATH = ROOT / "src/leeth/data_400m/leeth_400m_val.jsonl"
 OUT_ARTIFACT = ROOT / ".argent/artifacts/phase3_laya_benchmark.md"

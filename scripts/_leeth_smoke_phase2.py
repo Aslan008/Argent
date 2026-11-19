@@ -7,7 +7,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from src.leeth.dataset_generator import generator  # noqa: E402
+from src.leeth.dataset_generator import generator  
 
 js = generator.generate_json_state_samples()
 print("json samples:", len(js))

@@ -35,11 +35,11 @@ def setup(root):
 def make_bridge():
     # Nothing here may touch the user's real setup: no MCP servers, no Telegram,
     # no startup hooks, no knowledge-base indexing.
-    import config
+    import argent.config as config
     config.get_mcp_servers = lambda: []
     config.get_telegram_enabled = lambda: False
     config.get_auto_kb = lambda: False
-    from hook_manager import hook_manager
+    from argent.hook_manager import hook_manager
     hook_manager.call_hook = lambda *a, **k: None
 
     class Agent:
@@ -93,7 +93,7 @@ fn skip_or_fail(reason: &str) {
 #[test]
 fn a_scripted_turn_reaches_the_screen_through_the_real_bridge() {
     pyo3::prepare_freethreaded_python();
-    let outcome: Option<(App, String, Vec<ArgentEvent>)> = Python::with_gil(|py| {
+    let outcome: Option<(App, String, String, Vec<ArgentEvent>)> = Python::with_gil(|py| {
         let shim = PyModule::from_code_bound(py, SHIM, "e2e_shim.py", "e2e_shim").ok()?;
         shim.getattr("setup").ok()?.call1((project_root(),)).ok()?;
         let bridge = match shim.getattr("make_bridge").and_then(|f| f.call0()) {
@@ -114,6 +114,9 @@ fn a_scripted_turn_reaches_the_screen_through_the_real_bridge() {
         app.renderer = Box::new(PyRenderer::new(bridge.clone_ref(py)));
         let raw: String = bridge.call_method0(py, "get_ui_config").ok()?.extract(py).ok()?;
         app.ui = UiConfig::from_json(&raw);
+        // This test is about the pipeline, not the compact look: once the turn folds on
+        // `Done`, the steps it asserts on are deliberately out of sight.
+        app.compact_view = false;
 
         bridge.call_method1(py, "start_turn", ("hello",)).ok()?;
         app.insert_str("hello");
@@ -139,9 +142,9 @@ fn a_scripted_turn_reaches_the_screen_through_the_real_bridge() {
             return None;
         }
 
-        let mut term = Terminal::new(TestBackend::new(110, 50)).unwrap();
-        term.draw(|f| draw_ui(f, &app)).unwrap();
-        let frame: String = {
+        let render = |app: &App| -> String {
+            let mut term = Terminal::new(TestBackend::new(110, 50)).unwrap();
+            term.draw(|f| draw_ui(f, app)).unwrap();
             let buf = term.backend().buffer();
             (0..buf.area.height)
                 .map(|y| {
@@ -154,11 +157,18 @@ fn a_scripted_turn_reaches_the_screen_through_the_real_bridge() {
                 .collect::<Vec<_>>()
                 .join("\n")
         };
+        let frame = render(&app);
+        // The turn summary arrives folded to one row; opening it must bring the
+        // REPL's own lines back.
+        if let Some(idx) = app.messages.iter().rposition(|m| matches!(m, MessageItem::Snapshot { .. })) {
+            app.toggle_block_by_idx(idx);
+        }
+        let opened = render(&app);
         let _ = bridge.call_method0(py, "cleanup");
-        Some((app, frame, seen))
+        Some((app, frame, opened, seen))
     });
 
-    let Some((app, frame, seen)) = outcome else {
+    let Some((app, frame, opened, seen)) = outcome else {
         skip_or_fail("the real bridge could not be driven");
         return;
     };
@@ -171,8 +181,8 @@ fn a_scripted_turn_reaches_the_screen_through_the_real_bridge() {
         "read_file: agent.py:10-50",
         "↳ 2 строк · line1",
         "It has two lines.",
-        "┄",
-        "Context: 10.0%",
+        "▸",
+        "клик — подробности",
     ];
     let mut from = 0usize;
     for needle in order {
@@ -181,6 +191,10 @@ fn a_scripted_turn_reaches_the_screen_through_the_real_bridge() {
             None => panic!("{needle:?} missing or out of order in:\n{frame}"),
         }
     }
+
+    // Opened, the summary is exactly the REPL's own four lines and the context meter.
+    assert!(opened.contains("┄"), "развёрнутая сводка — строки REPL:\n{opened}");
+    assert!(opened.contains("Context: 10.0%"), "счётчик контекста под сводкой:\n{opened}");
 
     // No error or fallback notice crept in, and the turn left the app idle.
     assert!(!frame.contains("Ошибка"), "an error was shown:\n{frame}");

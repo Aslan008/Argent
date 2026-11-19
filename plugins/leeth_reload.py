@@ -5,7 +5,7 @@ Reloads leeth_best.pt from src/leeth/data into the live runtime singleton
 (no Argent restart needed). Use after training/finetuning or manual checkpoint swaps.
 """
 
-from ui import console
+from argent.ui import console
 
 
 def command_leeth_reload(*args):

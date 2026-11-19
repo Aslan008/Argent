@@ -22,8 +22,8 @@ class TestBlindSpots:
         # Assumption: ACTIVE_PROCESSES supports .get(key) and LOCK is a context manager
         # Violation: ACTIVE_PROCESSES is None -> None.get(key) raises AttributeError
         fake_lock = MagicMock()
-        with patch("tools.ACTIVE_PROCESSES", None), \
-             patch("tools.ACTIVE_PROCESSES_LOCK", fake_lock):
+        with patch("argent.tools.ACTIVE_PROCESSES", None), \
+             patch("argent.tools.ACTIVE_PROCESSES_LOCK", fake_lock):
             result = _process_finished(123)
         # Correct behavior: handle None registry gracefully
         assert result is True
@@ -34,7 +34,7 @@ class TestBlindSpots:
     def test_file_exists_propagates_value_error_from_resolve(self):
         # Assumption: _resolve_path only raises OSError on failure
         # Violation: _resolve_path raises ValueError -> propagates up
-        with patch("tools._helpers._resolve_path",
+        with patch("argent.tools._helpers._resolve_path",
                    side_effect=ValueError("bad path")):
             result = _file_exists("/some/path")
         # Correct behavior: catch all exceptions, return False
@@ -158,8 +158,8 @@ class TestBlindSpots:
         fake_process.poll.return_value = 0     # the real process IS finished
         fake_lock = MagicMock()
         fake_registry = {"12": {"process": fake_process}}
-        with patch("tools.ACTIVE_PROCESSES", fake_registry), \
-             patch("tools.ACTIVE_PROCESSES_LOCK", fake_lock):
+        with patch("argent.tools.ACTIVE_PROCESSES", fake_registry), \
+             patch("argent.tools.ACTIVE_PROCESSES_LOCK", fake_lock):
             result = _process_finished(12.0)
         # Correct behavior: should normalize numeric pid, or report finished
         # when the same int is registered under any numeric form

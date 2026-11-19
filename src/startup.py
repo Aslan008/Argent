@@ -21,7 +21,7 @@ from typing import Callable, Optional
 
 import questionary
 
-from session import get_last_session, load_session
+from argent.session import get_last_session, load_session
 
 
 @dataclass
@@ -42,7 +42,7 @@ class StartupIO:
 
 def console_io() -> StartupIO:
     """The terminal's own printers (looked up at call time, so they can be patched)."""
-    import ui
+    import argent.ui as ui
 
     return StartupIO(system=lambda text: ui.print_system(text),
                      error=lambda text: ui.print_error(text),
@@ -64,7 +64,7 @@ def carried_over_memory() -> list:
     anchor in the prompt. Nothing said so, which is why declining to restore a
     session did not actually give you a clean slate.
     """
-    from memory_manager import memory
+    from argent.memory_manager import memory
 
     data = memory.data or {}
     parts = []
@@ -97,7 +97,7 @@ def offer_previous_context(agent, io: Optional[StartupIO] = None) -> None:
     was pressed 115 times, more than every other command combined. Now the
     choice covers both, so "начать с чистого листа" is literally true.
     """
-    from memory_manager import memory
+    from argent.memory_manager import memory
 
     io = io or console_io()
     last = previous_session()
@@ -127,9 +127,42 @@ def offer_previous_context(agent, io: Optional[StartupIO] = None) -> None:
 
     if choice == RESTORE:
         restore_session(agent, last, io)
+    elif choice == KEEP_MEMORY:
+        # New conversation, same project knowledge: keep the objective and the
+        # facts, but drop the previous run's completed steps, current task and
+        # errors. Keeping the errors is what made a "new" chat repeat old
+        # failures from the last session.
+        memory.start_session()
+        io.system("[dim]История шагов прошлой сессии очищена; цель и факты проекта сохранены.[/dim]")
     elif choice == CLEAN:
         memory.clear()
         io.system("[dim]Рабочая память очищена — контекста прошлых разговоров нет.[/dim]")
+
+
+def restore_usage(saved: Optional[dict], io: Optional[StartupIO] = None) -> bool:
+    """Put the saved session's spending back, and say what the last task took.
+
+    The counters live in a process-wide singleton, so a restart began at zero:
+    the toolbar said "sum 0 tok" and the one number a person wants after coming
+    back — what the last task cost — was gone. The balance comes back as a
+    reading, not as a spend, so the next real reading measures only this run.
+    """
+    if not saved:
+        return False
+    io = io or console_io()
+    try:
+        from argent.usage_tracker import usage as session_usage
+
+        if not session_usage.restore(saved):
+            return False
+        last = session_usage.format_last_spend()
+        if last:
+            approx = " (по изменению баланса, приблизительно)" if session_usage.last_spent_approx else ""
+            io.system(f"[dim]Прошлая сессия: {last}{approx} · "
+                      f"всего {session_usage.format_session()}[/dim]")
+        return True
+    except Exception:
+        return False
 
 
 def restore_session(agent, meta: dict, io: Optional[StartupIO] = None) -> bool:
@@ -172,7 +205,7 @@ def restore_session(agent, meta: dict, io: Optional[StartupIO] = None) -> bool:
         try:
             interrupted = bool(agent.repair_history())
         except Exception as e:
-            from logger import get_logger
+            from argent.logger import get_logger
             get_logger("session").warning("repair_history during restore failed: %s", e)
 
     saved_time = (data.get("saved_at") or "")[:16]
@@ -184,6 +217,7 @@ def restore_session(agent, meta: dict, io: Optional[StartupIO] = None) -> bool:
         pass
     io.system(f"Восстановлено {len(data['messages'])} сообщений "
               f"({saved_time}).")
+    restore_usage(data.get("usage"), io)
     if interrupted:
         io.system("[yellow]Прошлый ход был прерван (сбой, обрыв связи или закрытие окна).[/yellow] "
                   "Напишите «продолжай» — работа пойдёт с последнего сохранённого шага.")
@@ -214,7 +248,7 @@ def restore_session(agent, meta: dict, io: Optional[StartupIO] = None) -> bool:
         if go:
             os.chdir(saved_cwd)
             try:
-                from memory_manager import memory
+                from argent.memory_manager import memory
                 memory._mgr = None
             except Exception:
                 pass
@@ -231,7 +265,7 @@ def offer_first_run_setup(run_slash: Callable[[str], object], io: Optional[Start
     `run_slash` executes a slash command in the caller's own way (the REPL's
     handler, or the bridge's dispatcher). Returns True when the walk-through ran.
     """
-    from config import CONFIG_FILE
+    from argent.config import CONFIG_FILE
 
     if Path(CONFIG_FILE).exists():
         return False

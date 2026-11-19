@@ -12,7 +12,7 @@ so the triage room exits "routed" into the freshly-authored room. Proposal and
 approval are injected, so the gate logic is tested without an LLM or prompts.
 """
 
-from logger import get_logger
+from argent.logger import get_logger
 from src.rooms.models import Room
 from src.rooms.validator import validate_room
 
@@ -92,7 +92,7 @@ def questionary_approve(room) -> bool:
     """Production approval: show the proposed room and ask the human."""
     import questionary
     from src.rooms.library import describe_room
-    from ui import print_system
+    from argent.ui import print_system
     print_system("[bold cyan]Предложена новая комната:[/bold cyan]")
     print_system(describe_room(room))
     return bool(questionary.confirm(

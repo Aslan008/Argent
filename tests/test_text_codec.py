@@ -9,8 +9,8 @@ import codecs
 
 import pytest
 
-import text_codec
-from text_codec import decode, sniff, write_text
+import argent.text_codec as text_codec
+from argent.text_codec import decode, sniff, write_text
 
 
 TEXT = "строка один\r\nline two: 42\r\n"
@@ -81,7 +81,7 @@ def test_a_character_the_codec_cannot_hold_writes_utf8_instead_of_failing(tmp_pa
 # ── the tools ────────────────────────────────────────────────────────────────
 
 def test_read_file_reads_a_powershell_log(tmp_path, monkeypatch):
-    from tools.file_ops import read_file
+    from argent.tools.file_ops import read_file
     monkeypatch.chdir(tmp_path)
     log = tmp_path / "miss_diff_v2.log"
     log.write_bytes(codecs.BOM_UTF16_LE + "Бенигн прошли: 3/6\r\nExit code: 0\r\n".encode("utf-16-le"))
@@ -91,7 +91,7 @@ def test_read_file_reads_a_powershell_log(tmp_path, monkeypatch):
 
 
 def test_read_file_still_refuses_binary(tmp_path, monkeypatch):
-    from tools.file_ops import read_file
+    from argent.tools.file_ops import read_file
     monkeypatch.chdir(tmp_path)
     blob = tmp_path / "x.bin"
     blob.write_bytes(bytes(range(256)) * 8)
@@ -100,7 +100,7 @@ def test_read_file_still_refuses_binary(tmp_path, monkeypatch):
 
 @pytest.mark.parametrize("codec", ["utf-16", "cp1251", "utf-8-sig"])
 def test_replace_in_file_keeps_the_encoding(tmp_path, monkeypatch, codec):
-    from tools.file_ops import replace_in_file
+    from argent.tools.file_ops import replace_in_file
     monkeypatch.setattr(text_codec, "_legacy_codec", lambda: "cp1251")
     monkeypatch.chdir(tmp_path)
     path = tmp_path / "notes.txt"

@@ -12,8 +12,8 @@ def _isolate(tmp_path, monkeypatch):
 
 class TestSetGoalTool:
     def test_sets_objective_and_task(self):
-        from tools.misc_tools import set_goal
-        from memory_manager import memory
+        from argent.tools.misc_tools import set_goal
+        from argent.memory_manager import memory
         memory.clear()
         out = set_goal(objective="Build X", current_task="write tests")
         assert "Goal updated" in out
@@ -21,15 +21,15 @@ class TestSetGoalTool:
         assert memory.data["current_task"] == "write tests"
 
     def test_objective_only(self):
-        from tools.misc_tools import set_goal
-        from memory_manager import memory
+        from argent.tools.misc_tools import set_goal
+        from argent.memory_manager import memory
         memory.clear()
         set_goal(objective="Just the goal")
         assert memory.data["objective"] == "Just the goal"
         assert memory.data["current_task"] == ""
 
     def test_requires_an_argument(self):
-        from tools.misc_tools import set_goal
+        from argent.tools.misc_tools import set_goal
         assert set_goal().startswith("Error")
         assert set_goal(objective="   ").startswith("Error")
 
@@ -37,7 +37,7 @@ class TestSetGoalTool:
 class TestSetGoalRegistration:
     def test_not_in_tool_schemas(self):
         """set_goal is not in LLM schemas to avoid goal confusion and token waste."""
-        from tools.schemas import AVAILABLE_TOOLS, TOOL_SCHEMAS
+        from argent.tools.schemas import AVAILABLE_TOOLS, TOOL_SCHEMAS
         assert "set_goal" not in AVAILABLE_TOOLS
         names = {t["function"]["name"] for t in TOOL_SCHEMAS if "function" in t}
         assert "set_goal" not in names
@@ -49,8 +49,8 @@ class TestObjectiveAnchor:
     redo finished work or retry failed approaches, without pinning a stale goal."""
 
     def _agent(self, monkeypatch):
-        import agent as agent_module
-        import config
+        import argent.agent as agent_module
+        import argent.config as config
         monkeypatch.setattr(config, "get_current_model", lambda: "qwen2.5-coder:7b")
         monkeypatch.setattr(agent_module, "get_current_model", lambda: "qwen2.5-coder:7b")
         monkeypatch.setattr(agent_module, "get_mcp_servers", lambda: [])
@@ -59,7 +59,7 @@ class TestObjectiveAnchor:
         return agent_module.ArgentAgent()
 
     def test_anchor_includes_done_and_failures(self, monkeypatch):
-        from memory_manager import memory
+        from argent.memory_manager import memory
         memory.clear()
         memory.add_completed("Wrote lexer.py")
         memory.add_completed("Ran tests")
@@ -70,12 +70,12 @@ class TestObjectiveAnchor:
         assert "RECENT ERRORS" in anchor and "import error" in anchor
 
     def test_anchor_none_when_memory_empty(self, monkeypatch):
-        from memory_manager import memory
+        from argent.memory_manager import memory
         memory.clear()
         assert self._agent(monkeypatch)._build_objective_anchor() is None
 
     def test_anchor_present_with_only_working_memory(self, monkeypatch):
-        from memory_manager import memory
+        from argent.memory_manager import memory
         memory.clear()
         memory.add_completed("Created project skeleton")
         anchor = self._agent(monkeypatch)._build_objective_anchor()
@@ -83,7 +83,7 @@ class TestObjectiveAnchor:
         assert "COMPLETED" in anchor and "skeleton" in anchor
 
     def test_anchor_is_bounded(self, monkeypatch):
-        from memory_manager import memory
+        from argent.memory_manager import memory
         memory.clear()
         for i in range(10):
             memory.add_completed(f"did {i}")
@@ -97,7 +97,7 @@ class TestObjectiveAnchor:
     def test_anchor_pins_edited_files(self, monkeypatch):
         # On a long task the early edits scroll out of history; without this the
         # model re-edits a file it already rewrote.
-        from memory_manager import memory
+        from argent.memory_manager import memory
         memory.clear()
         memory.add_file_modified("src/board/MatchDetector.cs")
         anchor = self._agent(monkeypatch)._build_objective_anchor()
@@ -105,7 +105,7 @@ class TestObjectiveAnchor:
         assert "MatchDetector.cs" in anchor
 
     def test_edited_files_are_deduplicated_and_bounded(self, monkeypatch):
-        from memory_manager import memory
+        from argent.memory_manager import memory
         memory.clear()
         for i in range(12):
             memory.add_file_modified(f"f{i}.py")
@@ -117,7 +117,7 @@ class TestObjectiveAnchor:
         assert "f11.py" in files_line and "f0.py" not in files_line   # newest kept
 
     def test_anchor_fires_with_only_touched_files(self, monkeypatch):
-        from memory_manager import memory
+        from argent.memory_manager import memory
         memory.clear()
         memory.add_file_modified("only.py")
         anchor = self._agent(monkeypatch)._build_objective_anchor()

@@ -15,7 +15,7 @@ NOW = datetime(2026, 10, 8, 14, 30)       # a Thursday
 
 @pytest.fixture
 def project(tmp_path, monkeypatch):
-    monkeypatch.setattr("project_paths.project_root_or_cwd", lambda *a, **k: tmp_path)
+    monkeypatch.setattr("argent.project_paths.project_root_or_cwd", lambda *a, **k: tmp_path)
     return tmp_path
 
 
@@ -695,7 +695,7 @@ class TestNamelessAdd:
         assert (name, sched, task) == ("", "every 1h", "проверь сайт") and opts == [" notify: always"]
 
     def test_add_without_name_gets_a_readable_one(self, tmp_path, monkeypatch):
-        monkeypatch.setattr("project_paths.project_root_or_cwd", lambda *a, **k: tmp_path)
+        monkeypatch.setattr("argent.project_paths.project_root_or_cwd", lambda *a, **k: tmp_path)
         from src.automation import store, tasks_cli
         out, errs = [], []
         tasks_cli.handle("/tasks add по будням в 9:00 | Собери сводку по git за вчера", out.append, errs.append)
@@ -706,7 +706,7 @@ class TestNamelessAdd:
         assert len(store.load_automations()) == 2 and not errs
 
     def test_add_with_only_schedule_is_an_error(self, tmp_path, monkeypatch):
-        monkeypatch.setattr("project_paths.project_root_or_cwd", lambda *a, **k: tmp_path)
+        monkeypatch.setattr("argent.project_paths.project_root_or_cwd", lambda *a, **k: tmp_path)
         from src.automation import tasks_cli
         out, errs = [], []
         tasks_cli.handle("/tasks add по будням в 9:00", out.append, errs.append)

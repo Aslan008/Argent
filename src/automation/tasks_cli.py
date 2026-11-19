@@ -685,7 +685,7 @@ def _run(a, out, err, live) -> None:
         return
     try:
         from src.automation.runner import SubprocessRunner
-        from ui import console
+        from argent.ui import console
         out(f"Запускаю «{escape(a.name)}» сейчас (без подтверждений, в отдельном процессе)…")
         with console.status("[bold cyan]Выполняется…[/bold cyan]"):
             result = SubprocessRunner()(a, trigger="manual")

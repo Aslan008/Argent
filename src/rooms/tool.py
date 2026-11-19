@@ -63,7 +63,7 @@ def _ask_run(room, task, params) -> bool:
 def _human(node, state) -> None:
     import questionary
     from src.rooms.ask import ask_human
-    from ui import print_system
+    from argent.ui import print_system
     ask_human(node, state, print_system,
               lambda q: questionary.text(q).ask(),
               lambda q, options: questionary.select(q, choices=options).ask())
@@ -72,7 +72,7 @@ def _human(node, state) -> None:
 def _ask_save(flow: str, name: str) -> bool:
     import questionary
     try:
-        from ui import print_system
+        from argent.ui import print_system
         print_system(flow)
     except Exception:
         pass

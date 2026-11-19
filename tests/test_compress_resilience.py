@@ -7,10 +7,10 @@ that carries the facts a model-free summary can give, and never touches the orig
 
 import copy
 
-import providers
+import argent.providers as providers
 import src.agent.service_llm as sl
 import src.agent.trimmer as trimmer
-from providers import ProviderError
+from argent.providers import ProviderError
 from tests.test_service_llm import FakeProvider, GOOD, provider_error
 
 
@@ -110,7 +110,7 @@ def test_the_summariser_hands_its_ui_to_the_runner(monkeypatch):
 
 
 def test_the_compress_settings_default_sensibly_and_reject_nonsense(tmp_path, monkeypatch):
-    import config
+    import argent.config as config
     assert config.get_compress_on_failure() == "auto"
     assert config.get_compress_retries() == 3
     assert config.get_compress_fallback_models() == []

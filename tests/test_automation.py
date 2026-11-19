@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 
 import pytest
 
-import approval
+import argent.approval as approval
 from src.automation import store
 from src.automation.runner import (
     UNATTENDED_TOOL_DENYLIST, UnattendedGate, resolve_tools, run_and_record, run_automation,
@@ -177,8 +177,25 @@ class TestToolBounding:
         assert "filter_new_items" in resolve_tools(["read_file"])
 
     def test_interactive_and_escaping_tools_are_denied(self):
-        for tool in ("ask_user_questions", "run_admin_command", "wait_heartbeat"):
+        for tool in ("ask_user_questions", "wait_heartbeat", "manage_automations"):
             assert tool in UNATTENDED_TOOL_DENYLIST
+
+    def test_elevation_is_refused_because_nobody_can_answer(self, monkeypatch):
+        """`admin=true` is a flag on `run_command`, which an unattended run must keep.
+        The UAC prompt is what stops it: there is nobody to answer one."""
+        import argent.tools.command_ops as co
+        from argent.approval import reset_approval_backend, set_approval_backend
+
+        def _deny(action, destructive, grant_key):
+            return "deny"
+
+        _deny.unattended = True
+        set_approval_backend(_deny)
+        try:
+            out = co.run_command("whoami", admin=True)
+        finally:
+            reset_approval_backend()
+        assert "NOT run" in out
 
 
 class _FakeAgent:
@@ -253,7 +270,7 @@ class TestRunMemory:
     once the run actually delivered it."""
 
     def _agent(self, items, crash=False):
-        from tools.misc_tools import filter_new_items
+        from argent.tools.misc_tools import filter_new_items
 
         class _A:
             def process_user_input(self, text, allowed_tools=None):

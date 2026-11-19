@@ -1,9 +1,9 @@
 import pytest
 from unittest.mock import patch, MagicMock
 
-import config
-import providers
-from providers import WormSoftProvider, OllamaProvider
+import argent.config as config
+import argent.providers as providers
+from argent.providers import WormSoftProvider, OllamaProvider
 from src.agent.strategy import get_model_strategy, CloudStrategy
 from src.agent.critic import parse_critic_model
 

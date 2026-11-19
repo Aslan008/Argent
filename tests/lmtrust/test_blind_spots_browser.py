@@ -20,7 +20,7 @@ def _no_real_browser(monkeypatch):
     doesn't exist") everywhere else — for a reason that has nothing to do with
     what is under test.
     """
-    from browser_engine import BrowserEngine
+    from argent.browser_engine import BrowserEngine
 
     async def _already_running(self, *args, **kwargs):
         return None
@@ -35,7 +35,7 @@ def _no_real_browser(monkeypatch):
 class TestURLGuardBlindSpots:
     def test_unc_path_is_blocked(self):
         """UNC paths (e.g. \\\\server\\share) must not bypass the scheme check."""
-        from browser_engine import _blocked_url_reason
+        from argent.browser_engine import _blocked_url_reason
         reason = _blocked_url_reason(r"\\evil-server\share\file.html")
         # Currently returns None because urlparse(r'\\...').scheme == ''
         # We test whether it catches UNC path
@@ -44,12 +44,12 @@ class TestURLGuardBlindSpots:
         assert is_blocked or reason is None, "Documents UNC path handling behavior"
 
     def test_non_string_url_handled_safely(self):
-        from browser_engine import _blocked_url_reason
+        from argent.browser_engine import _blocked_url_reason
         assert _blocked_url_reason(None).startswith("Error:")
         assert _blocked_url_reason(123).startswith("Error:")
 
     def test_about_blank_allowed(self):
-        from browser_engine import _blocked_url_reason
+        from argent.browser_engine import _blocked_url_reason
         assert _blocked_url_reason("about:blank") is None
         assert _blocked_url_reason("about:") is None
 
@@ -60,7 +60,7 @@ class TestURLGuardBlindSpots:
 
 class TestBrowserDetectBlindSpots:
     def test_find_browser_none_or_empty(self):
-        from browser_detect import find_browser
+        from argent.browser_detect import find_browser
         # If None is passed, it should return None, not raise AttributeError
         try:
             result = find_browser(None)
@@ -69,7 +69,7 @@ class TestBrowserDetectBlindSpots:
             pytest.fail("find_browser(None) raised AttributeError instead of returning None")
 
     def test_find_browser_case_insensitive(self):
-        from browser_detect import find_browser
+        from argent.browser_detect import find_browser
         # Non-existent browser returns None
         assert find_browser("nonexistent_browser_xyz") is None
 
@@ -80,7 +80,7 @@ class TestBrowserDetectBlindSpots:
 
 class TestHtmlToMarkdownBlindSpots:
     def test_none_input_does_not_crash(self):
-        from browser_engine import _html_to_markdown
+        from argent.browser_engine import _html_to_markdown
         try:
             res = _html_to_markdown(None)
             assert res == ""
@@ -89,11 +89,11 @@ class TestHtmlToMarkdownBlindSpots:
             pass
 
     def test_empty_string(self):
-        from browser_engine import _html_to_markdown
+        from argent.browser_engine import _html_to_markdown
         assert _html_to_markdown("") == ""
 
     def test_heading_and_formatting(self):
-        from browser_engine import _html_to_markdown
+        from argent.browser_engine import _html_to_markdown
         html = "<h1>Title</h1><p>Text with <b>bold</b> and <a href='https://x.com'>link</a></p>"
         md = _html_to_markdown(html)
         assert "# Title" in md
@@ -108,7 +108,7 @@ class TestHtmlToMarkdownBlindSpots:
 class TestSessionLifecycleBlindSpots:
     def test_close_session_in_cdp_mode_does_not_close_user_context(self):
         """In CDP mode, close_session must NOT close sc.context (the user's browser)."""
-        from browser_engine import BrowserEngine, _SessionContext
+        from argent.browser_engine import BrowserEngine, _SessionContext
 
         engine = BrowserEngine()
         engine._cdp_mode = True
@@ -131,7 +131,7 @@ class TestSessionLifecycleBlindSpots:
 
     def test_shutdown_clears_element_frames(self):
         """shutdown() must reset _element_frames so stale frame references are not leaked."""
-        from browser_engine import BrowserEngine
+        from argent.browser_engine import BrowserEngine
 
         engine = BrowserEngine()
         engine._element_frames = {1: MagicMock(), 2: MagicMock()}
@@ -143,7 +143,7 @@ class TestSessionLifecycleBlindSpots:
 
     def test_open_page_recreates_closed_page(self):
         """open_page must detect closed page in existing session and recreate it."""
-        from browser_engine import BrowserEngine, _SessionContext
+        from argent.browser_engine import BrowserEngine, _SessionContext
 
         engine = BrowserEngine()
         dead_page = MagicMock()
@@ -186,7 +186,7 @@ class TestSessionLifecycleBlindSpots:
 class TestFrameTargetingBlindSpots:
     def test_get_text_respects_element_frames(self):
         """get_text(index=X) must look up frame in _element_frames, like click/fill/scroll."""
-        from browser_engine import BrowserEngine, _SessionContext
+        from argent.browser_engine import BrowserEngine, _SessionContext
 
         engine = BrowserEngine()
         mock_context = MagicMock()
@@ -222,7 +222,7 @@ class TestFrameTargetingBlindSpots:
 
 class TestTabSwitchingBlindSpots:
     def test_switch_tab_handles_string_index(self):
-        from browser_engine import BrowserEngine, _SessionContext
+        from argent.browser_engine import BrowserEngine, _SessionContext
 
         engine = BrowserEngine()
         mock_page1 = MagicMock()
@@ -242,7 +242,7 @@ class TestTabSwitchingBlindSpots:
         assert "Switched to tab [1]" in result
 
     def test_switch_tab_invalid_type_none(self):
-        from browser_engine import BrowserEngine, _SessionContext
+        from argent.browser_engine import BrowserEngine, _SessionContext
         engine = BrowserEngine()
         live_page = MagicMock()
         live_page.is_closed.return_value = False
@@ -260,7 +260,7 @@ class TestBrowserToolsContentIndex:
     def test_browser_get_content_passes_index_for_markdown(self):
         """browser_get_content should not discard index when content_type='markdown'."""
         import inspect
-        from browser_engine import BrowserEngine
+        from argent.browser_engine import BrowserEngine
         sig = inspect.signature(BrowserEngine.get_markdown)
         assert "index" in sig.parameters, (
             "CONTRACT GAP: BrowserEngine.get_markdown does not accept 'index', dropping element targeting"

@@ -11,7 +11,7 @@
 
 use std::collections::HashMap;
 
-use argent_tui::app::{App, CompletionItem, MessageItem, Submit};
+use argent_tui::app::{App, CompletionItem, MessageItem, QueuedMessage, Submit};
 use argent_tui::events::ArgentEvent;
 
 // ── L8: incremental reverse history search (Ctrl+R) ─────────────────────────
@@ -340,7 +340,7 @@ fn l8_done_stops_every_running_tool() {
 #[test]
 fn l8_a_permanently_rejected_prompt_does_not_livelock_the_queue() {
     let mut app = App::new();
-    app.message_queue = vec!["healthy".into(), "blocked".into()];
+    app.message_queue = vec![QueuedMessage::plain("healthy"), QueuedMessage::plain("blocked")];
 
     let mut attempts: HashMap<String, usize> = HashMap::new();
     // 50 main-loop ticks; the bridge rejects every single prompt.
@@ -370,7 +370,7 @@ fn l8_a_permanently_rejected_prompt_does_not_livelock_the_queue() {
 #[test]
 fn l8_exhausted_retry_budget_surfaces_an_error() {
     let mut app = App::new();
-    app.message_queue = vec!["blocked".into()];
+    app.message_queue = vec![QueuedMessage::plain("blocked")];
     for _ in 0..5 {
         if let Some(prompt) = app.pop_next_queued_message() {
             app.requeue_rejected_message(prompt);
@@ -387,7 +387,7 @@ fn l8_exhausted_retry_budget_surfaces_an_error() {
 #[test]
 fn l8_turn_output_resets_the_retry_budget() {
     let mut app = App::new();
-    app.message_queue = vec!["p".into()];
+    app.message_queue = vec![QueuedMessage::plain("p")];
     for _ in 0..2 {
         if let Some(prompt) = app.pop_next_queued_message() {
             app.requeue_rejected_message(prompt);

@@ -91,7 +91,7 @@ class RoomBoard:
         printer = self._print
         if printer is None:
             try:
-                from ui import print_system
+                from argent.ui import print_system
                 printer = print_system
             except Exception:
                 return

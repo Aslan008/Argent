@@ -3,8 +3,8 @@ stopping at the home directory so ~/.argent is never mistaken for it."""
 
 import pytest
 
-import memory_manager
-from memory_manager import resolve_memory_file
+import argent.memory_manager as memory_manager
+from argent.memory_manager import resolve_memory_file
 
 
 @pytest.fixture

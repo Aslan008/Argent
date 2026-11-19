@@ -17,7 +17,7 @@ from typing import Any, Dict, List, Optional
 
 from src.leeth.primitives import ChoiceQuestion, ExtractQuestion, NoulQuestion
 from src.leeth.runtime import leeth
-from logger import get_logger
+from argent.logger import get_logger
 from pathlib import Path
 
 # The routing state names the working directory the models were trained on: the project's usual
@@ -119,6 +119,29 @@ COMPOUND_RE = re.compile(
     r"(исправ|удали|обнови|найди|перепиши|почини|закрой|составь)",
     re.IGNORECASE)
 
+# ── Courtesy openings ────────────────────────────────────────────────────────
+# They carry no instruction, but the classifier reads an English one as a shell
+# command: "please открой файл package.json" came back as run_command with
+# command="package.json" — a request to READ a file turned into an attempt to
+# execute it. The Russian ones were routed correctly only by luck of the training
+# data, so both languages are made explicit here.
+#
+# Stripped for the classifier ONLY. Parameter validation still runs against the
+# text the person typed, and the extracted span must still be a substring of it.
+_COURTEOUS_PREFIXES = (
+    "please", "could you", "would you", "can you", "kindly", "would you kindly",
+    "пожалуйста", "будь добр", "будьте добры", "срочно", "быстро", "попробуй",
+)
+_COURTEOUS_RE = re.compile(
+    r"^\s*(?:(?:" + "|".join(re.escape(p) for p in _COURTEOUS_PREFIXES) + r")\s*[,:!.\-]?\s*)+",
+    re.IGNORECASE)
+
+
+def _strip_courtesy(text: str) -> str:
+    """The query without its polite opening, or the text itself if that leaves nothing."""
+    stripped = _COURTEOUS_RE.sub("", text, count=1).strip()
+    return stripped if len(stripped) >= 3 else text
+
 
 @dataclass
 class FastDispatchResult:
@@ -206,7 +229,10 @@ class LeethDispatcher:
 
         # Step 1: Standalone evaluation. Self-contained queries (e.g. 'найди файл runtime.py',
         # 'посчитай 128*64') have complete intent in the text and avoid history bias.
-        state, questions = self._build_state_and_questions(q_clean, context=None)
+        # The classifier sees the query without its polite opening; everything below
+        # (validation, logging, feedback) keeps the text as typed.
+        q_model = _strip_courtesy(q_clean)
+        state, questions = self._build_state_and_questions(q_model, context=None)
         batch = self._runtime.decide(state, questions)
 
         need_tool_res = batch.results.get("need_tool")
@@ -232,7 +258,7 @@ class LeethDispatcher:
                 or context.get("prev_turn")
             )
             if has_real_context:
-                ctx_state, ctx_questions = self._build_state_and_questions(q_clean, context=context)
+                ctx_state, ctx_questions = self._build_state_and_questions(q_model, context=context)
                 ctx_batch = self._runtime.decide(ctx_state, ctx_questions)
                 ctx_tool = ctx_batch.results.get("tool")
                 if ctx_tool and ctx_tool.confidence >= self.confidence_threshold:
@@ -469,6 +495,15 @@ class LeethDispatcher:
                     arb_res.core or "-", arb_res.model_tool or "-",
                     arb_res.latency_ms, q_clean[:60],
                 )
+                # A formal conflict is the case worth a human's attention: the neural gates already
+                # let it through, often with confidence >= 0.95. So it becomes review priority, not
+                # a refusal — the solver never blocks (see arbitrator.py docstring).
+                if decision_id and not arb_res.sat:
+                    try:
+                        from src.leeth import feedback as leeth_feedback
+                        leeth_feedback.attach_arbitrator(decision_id, arb_res.sat, arb_res.core, arb_res.latency_ms)
+                    except Exception as _arb_att_err:
+                        logger.debug("Arbitrator attach skipped: %s", _arb_att_err)
         except Exception as _arb_err:
             logger.debug("Arbitrator shadow failed (fail-open): %s", _arb_err)
 

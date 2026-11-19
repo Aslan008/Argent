@@ -63,7 +63,7 @@ def _as_int(value, field_name: str):
 
 def known_tool_names():
     try:
-        from tools.schemas import AVAILABLE_TOOLS
+        from argent.tools.schemas import AVAILABLE_TOOLS
         return set(AVAILABLE_TOOLS) if isinstance(AVAILABLE_TOOLS, dict) else None
     except Exception:
         return None
@@ -241,7 +241,7 @@ def warnings_for(a: Automation) -> list:
                    "проверьте её руками один раз: /tasks run " + a.name)
     if "telegram" in a.channels:
         try:
-            from config import get_telegram_chat_id, get_telegram_token
+            from argent.config import get_telegram_chat_id, get_telegram_token
             if not (get_telegram_token() and get_telegram_chat_id()):
                 out.append("канал telegram выбран, но бот не настроен (токен и chat id) — "
                            "уведомление туда не дойдёт")

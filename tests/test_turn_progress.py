@@ -17,7 +17,7 @@ What the log does show is turns running 30-40 minutes. The thing actually
 missing was a way to notice one and decide.
 """
 
-import agent as agent_mod
+import argent.agent as agent_mod
 
 
 class TestTheNotice:

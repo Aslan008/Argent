@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-import hook_manager as hm
+import argent.hook_manager as hm
 from src.rooms.integrations import Integrations
 from src.rooms.models import Node
 from src.rooms.runner import derive_value, derive_result_values

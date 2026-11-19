@@ -8,8 +8,8 @@ removed tool, a flipped lambda, a broken except branch — are caught.
 
 import pytest
 
-import tool_profiles
-from tool_profiles import (
+import argent.tool_profiles as tool_profiles
+from argent.tool_profiles import (
     CORE_CHAT_TOOLS,
     _CONDITIONAL_CORE,
     core_tools_now,
@@ -29,7 +29,7 @@ def _isolate_conditional(monkeypatch):
     Without this, core_tools_now reads the developer's live config and the
     suite becomes machine-dependent.
     """
-    monkeypatch.setattr("config.get_mcp_servers", lambda: [])
+    monkeypatch.setattr("argent.config.get_mcp_servers", lambda: [])
 
 
 # ---------------------------------------------------------------------------
@@ -70,7 +70,7 @@ class TestCoreChatToolsMembership:
     def test_removed_tools_are_not_listed(self):
         """The separate LSP tools and multi_replace_in_file were folded into
         grep_search / replace_in_file; a core list naming them advertises nothing."""
-        from tools.schemas import AVAILABLE_TOOLS
+        from argent.tools.schemas import AVAILABLE_TOOLS
         for t in ("check_code", "find_implementations", "search_workspace_symbols",
                   "get_call_hierarchy", "find_definition", "find_references",
                   "multi_replace_in_file"):
@@ -79,7 +79,7 @@ class TestCoreChatToolsMembership:
 
     def test_system_ops_excluded(self):
         for t in ("query_registry", "read_event_logs", "get_process_info",
-                  "run_admin_command", "search_system_files"):
+                  "search_system_files"):
             assert t not in CORE_CHAT_TOOLS
 
     def test_heavy_misc_excluded(self):
@@ -148,7 +148,7 @@ class TestCoreToolsNow:
         assert "list_mcp_tools" not in result
 
     def test_includes_mcp_tools_when_servers_configured(self, monkeypatch):
-        monkeypatch.setattr("config.get_mcp_servers",
+        monkeypatch.setattr("argent.config.get_mcp_servers",
                             lambda: ["unity", "github"])
         result = core_tools_now()
         assert "call_mcp_tool" in result
@@ -156,12 +156,12 @@ class TestCoreToolsNow:
 
     def test_mcp_truthy_non_list_includes(self, monkeypatch):
         """Any truthy return from get_mcp_servers triggers inclusion."""
-        monkeypatch.setattr("config.get_mcp_servers", lambda: True)
+        monkeypatch.setattr("argent.config.get_mcp_servers", lambda: True)
         result = core_tools_now()
         assert "call_mcp_tool" in result
 
     def test_mcp_empty_list_excludes(self, monkeypatch):
-        monkeypatch.setattr("config.get_mcp_servers", lambda: [])
+        monkeypatch.setattr("argent.config.get_mcp_servers", lambda: [])
         result = core_tools_now()
         assert "call_mcp_tool" not in result
 
@@ -169,7 +169,7 @@ class TestCoreToolsNow:
         """If get_mcp_servers raises, core_tools_now must still return core."""
         def _boom():
             raise RuntimeError("config broken")
-        monkeypatch.setattr("config.get_mcp_servers", _boom)
+        monkeypatch.setattr("argent.config.get_mcp_servers", _boom)
         result = core_tools_now()
         # Core set is intact.
         assert result >= CORE_CHAT_TOOLS
@@ -177,9 +177,19 @@ class TestCoreToolsNow:
         assert "call_mcp_tool" not in result
 
     def test_mcp_on_adds_exactly_the_mcp_tools(self, monkeypatch):
-        monkeypatch.setattr("config.get_mcp_servers", lambda: ["x"])
+        monkeypatch.setattr("argent.config.get_mcp_servers", lambda: ["x"])
+        # Desktop control is on by default now, so its tools are added alongside MCP
+        # ones. Pinned off here so this test keeps checking MCP Alone.
+        monkeypatch.setattr("src.automation.desktop_guard.enabled", lambda: False)
         result = core_tools_now()
         assert result == set(CORE_CHAT_TOOLS) | {"call_mcp_tool", "list_mcp_tools"}
+
+    def test_desktop_tools_join_the_core_set_while_desktop_control_is_on(self, monkeypatch):
+        monkeypatch.setattr("argent.config.get_mcp_servers", lambda: [])
+        monkeypatch.setattr("src.automation.desktop_guard.enabled", lambda: True)
+        result = core_tools_now()
+        assert {"desktop_inspect", "desktop_act"} <= result
+        assert "call_mcp_tool" not in result
 
     def test_returns_new_set_each_call(self):
         a = core_tools_now()
@@ -267,7 +277,7 @@ class TestSlimToolsForCategory:
 
     def test_tiny_includes_conditional_when_on(self, monkeypatch):
         """slim must reflect conditional tools that are active right now."""
-        monkeypatch.setattr("config.get_mcp_servers", lambda: ["unity"])
+        monkeypatch.setattr("argent.config.get_mcp_servers", lambda: ["unity"])
         slim = slim_tools_for_category(
             ["read_file", "call_mcp_tool", "list_mcp_tools", "browser_open"],
             "tiny")

@@ -32,14 +32,14 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "proj"))  # the exam-source dataset on Kaggle keeps the project under proj/
 
-from src.leeth.primitives import ExtractQuestion  # noqa: E402
-from src.leeth2 import metrics  # noqa: E402
-from src.leeth2.data import argent  # noqa: E402
-from src.leeth2.data.synth import extract_multi as XM  # noqa: E402
-from src.leeth2.data.synth import safety5 as S5  # noqa: E402
-from src.leeth2.evaluate import predict, report  # noqa: E402
-from src.leeth2.runtime import Leeth2Runtime  # noqa: E402
-from src.leeth2.schema import Sample  # noqa: E402
+from src.leeth.primitives import ExtractQuestion  
+from src.leeth2 import metrics  
+from src.leeth2.data import argent  
+from src.leeth2.data.synth import extract_multi as XM  
+from src.leeth2.data.synth import safety5 as S5  
+from src.leeth2.evaluate import predict, report  
+from src.leeth2.runtime import Leeth2Runtime  
+from src.leeth2.schema import Sample  
 
 GATE = 0.8  # the dispatcher runs a command only when P(safe) >= this
 SALAD = ("quarterly report shows steady growth across all regions meanwhile the build server logged warnings about deprecated apis remember to water the plants "

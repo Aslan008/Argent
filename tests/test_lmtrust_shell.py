@@ -49,7 +49,11 @@ class TestL1ShellRouting:
         assert isinstance(argv, list)
         assert argv[0] == "powershell"
         ps_cmd = argv[-1]
-        assert ps_cmd.startswith("[Console]::OutputEncoding=[Text.Encoding]::UTF8; & \"C:\\Program Files")
+        # Two prologue statements now: the console encoding (what we read from the
+        # child) and the default -Encoding for cmdlets (what Get-Content reads).
+        assert ps_cmd.startswith("[Console]::OutputEncoding=[Text.Encoding]::UTF8; ")
+        assert "$PSDefaultParameterValues['*:Encoding']='utf8'; " in ps_cmd
+        assert ps_cmd.endswith('& "C:\\Program Files\\Python314\\python.exe" -c "print(1)"')
 
     def test_unquoted_command_does_not_get_double_ampersand(self):
         cmd = "python script.py"

@@ -21,7 +21,7 @@ class TestA11yFiltering:
 
     @pytest.fixture
     def engine(self):
-        from browser_engine import BrowserEngine
+        from argent.browser_engine import BrowserEngine
         return BrowserEngine()
 
     def test_noise_roles_always_excluded(self, engine):
@@ -64,35 +64,35 @@ class TestA11yNodeExtraction:
     """Test static helper methods for AX node parsing."""
 
     def test_role_extraction(self):
-        from browser_engine import BrowserEngine
+        from argent.browser_engine import BrowserEngine
         node = {"role": {"type": "role", "value": "button"}}
         assert BrowserEngine._a11y_node_role(node) == "button"
 
     def test_role_extraction_empty(self):
-        from browser_engine import BrowserEngine
+        from argent.browser_engine import BrowserEngine
         assert BrowserEngine._a11y_node_role({}) == ""
 
     def test_name_extraction(self):
-        from browser_engine import BrowserEngine
+        from argent.browser_engine import BrowserEngine
         node = {"name": {"type": "string", "value": "Submit"}}
         assert BrowserEngine._a11y_node_name(node) == "Submit"
 
     def test_name_extraction_empty(self):
-        from browser_engine import BrowserEngine
+        from argent.browser_engine import BrowserEngine
         assert BrowserEngine._a11y_node_name({}) == ""
 
     def test_value_extraction(self):
-        from browser_engine import BrowserEngine
+        from argent.browser_engine import BrowserEngine
         node = {"value": {"type": "string", "value": "hello@example.com"}}
         assert BrowserEngine._a11y_node_value(node) == "hello@example.com"
 
     def test_value_extraction_none(self):
-        from browser_engine import BrowserEngine
+        from argent.browser_engine import BrowserEngine
         node = {"value": {"type": "string", "value": None}}
         assert BrowserEngine._a11y_node_value(node) == ""
 
     def test_interesting_props(self):
-        from browser_engine import BrowserEngine
+        from argent.browser_engine import BrowserEngine
         node = {
             "properties": [
                 {"name": "checked", "value": {"value": True}},
@@ -151,7 +151,7 @@ class TestA11yTreeIntegration:
 
     @pytest.fixture
     def engine(self):
-        from browser_engine import browser_engine
+        from argent.browser_engine import browser_engine
         return browser_engine
 
     def test_get_a11y_tree_example_com(self, engine):

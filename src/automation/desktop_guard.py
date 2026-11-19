@@ -2,18 +2,19 @@
 
 The rules, in the order they are applied to every action:
 
-  1. switched on         `/desktop on` (off at start of every session: a mouse that moves by itself is an event
-                         the person must have chosen)
+  1. switched on         acting is the default; `/desktop off` is the brake (a hand on the wheel, not a
+                         permission slip), and it stays off until `/desktop on`
   2. emergency stop      Ctrl+Alt+Shift+F12 (or the chord set in config) held anywhere ends the series at once and
                          keeps control off until `/desktop on`
-  3. a place to act      only a program on the allow-list (`/desktop allow notepad.exe`; empty at the start)
+  3. a place to act      any program, except the console Argent itself runs in (a click that misses lands
+                         there and types into the agent)
   4. never in            password managers, the Windows security and UAC dialogs, a window named like a password
                          or a payment step, a field that is a password field
   5. fresh sight         an element id or a point must come from the observation of the SAME window made after
                          the last action; no blind series of clicks
-  6. the person's yes    through the same approval gate as every command; a control called Delete / Удалить /
-                         Pay / Send ... is "destructive": asked every time, refused in auto mode
-  7. pace                at most N actions in a series and a pause between them
+  6. the person's yes    only for what a click cannot take back: a control called Delete / Удалить / Pay /
+                         Send ... is "destructive" and always asks; an ordinary click runs without a prompt
+  7. pace                a pause between actions, and a very generous ceiling per series
   8. a record            every decision, allowed or refused, goes to `.argent/run/desktop_audit.jsonl`
 
 Pure decisions (no Windows calls) so they can be tested anywhere; the tools pass in what they observed.
@@ -30,12 +31,12 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable, List, Optional
 
-from logger import get_logger
+from argent.logger import get_logger
 
 log = get_logger("desktop_guard")
 
 DEFAULT_STOP_CHORD = "ctrl+alt+shift+f12"
-MAX_SERIES = 25                  # actions without a new instruction from the person
+MAX_SERIES = 200                 # actions in one series; the audit and the chord are the real brake
 MIN_INTERVAL = 0.25              # seconds between two actions
 OBSERVATION_MAX_AGE = 90.0       # an observation older than this is not "fresh"
 
@@ -118,32 +119,48 @@ SERIES = Series()
 
 # --- settings --------------------------------------------------------------------------------------------------
 
-_session_enabled = False
+_session_enabled = True
+
+#: The emergency-stop listener is armed once, whoever switched control on.
+_armed = False
+
+
+def _arm_stop() -> None:
+    """A brake that only exists after `/desktop on` is no brake at all."""
+    global _armed
+    if _armed:
+        return
+    try:
+        from src.automation import desktop_stop
+        desktop_stop.start(SERIES)
+        _armed = True
+    except Exception as e:
+        log.warning("emergency stop could not be armed: %s", e)
 
 
 def enabled() -> bool:
-    """On only for this run of Argent, and only after the person said so."""
+    """On by default: the tools exist to be used. `/desktop off` is the brake."""
     return _session_enabled
 
 
 def set_enabled(value: bool) -> None:
-    global _session_enabled
+    global _session_enabled, _armed
     _session_enabled = bool(value)
     if value:
         SERIES.reset()
-        from src.automation import desktop_stop
-        desktop_stop.start(SERIES)
+        _arm_stop()
     else:
         try:
             from src.automation import desktop_stop
             desktop_stop.stop()
         except Exception:
             pass
+        _armed = False
 
 
 def allowed_apps() -> List[str]:
     try:
-        import config
+        import argent.config as config
         return [a.lower() for a in config.get_desktop_allowed_apps()]
     except Exception:
         return []
@@ -151,7 +168,7 @@ def allowed_apps() -> List[str]:
 
 def stop_chord() -> str:
     try:
-        import config
+        import argent.config as config
         return config.get_desktop_stop_chord() or DEFAULT_STOP_CHORD
     except Exception:
         return DEFAULT_STOP_CHORD
@@ -166,23 +183,61 @@ def normalize_app(name: str) -> str:
     return name
 
 
+_own_cache: Optional[set] = None
+
+
+def own_process_names() -> set:
+    """Processes whose window is the console Argent itself runs in.
+
+    Not "the person owns dangerous programs": the terminal the agent runs in is the
+    most dangerous window on the machine. A click that misses its target lands there
+    and the model then reads, and acts on, whatever got typed into its own input.
+    Own name plus every ancestor, so a console started from cmd.exe is caught too.
+    """
+    global _own_cache
+    if _own_cache is not None:
+        return _own_cache
+    names = {"windowsterminal.exe", "conhost.exe", "openconsole.exe", "wt.exe"}
+    try:
+        import os
+        import psutil
+        proc = psutil.Process(os.getpid())
+        for p in [proc] + list(proc.parents())[:6]:
+            try:
+                names.add((p.name() or "").lower())
+            except Exception:
+                pass
+    except Exception:
+        pass
+    _own_cache = names
+    return names
+
+
 def is_destructive(element_name: str) -> bool:
     return bool(_DESTRUCTIVE_NAME.search(element_name or ""))
 
 
 def check_window(process: str, title: str, allowed: Optional[List[str]] = None) -> Decision:
-    """May anything be done in this window at all?"""
+    """May anything be done in this window at all?
+
+    `allowed` is an OPT-IN restriction: a non-empty list limits acting to those
+    programs, and an empty or absent list means "any program" — the hard denials
+    below still apply either way. The list used to have to be filled by hand before
+    anything worked, which protected nobody and made the tools useless until
+    configured; callers now pass `allowed_apps() or None`, so the key protects the
+    person who fills it and stays out of the way of everyone else.
+    """
     proc = (process or "").lower()
     if proc in _FORBIDDEN_PROCESSES:
         return Decision(False, f"'{process}' holds secrets or system security: Argent does not act there")
     if _FORBIDDEN_TITLE.search(title or ""):
         return Decision(False, f"the window '{title}' looks like a password, payment or security step: "
                                f"do it yourself")
-    apps = allowed_apps() if allowed is None else [a.lower() for a in allowed]
-    if proc not in apps:
-        hint = f"/desktop allow {proc}" if proc else "/desktop allow <программа.exe>"
-        return Decision(False, f"'{process or title}' is not on the list of programs Argent may act in "
-                               f"(the person adds one with: {hint})")
+    if proc and proc in own_process_names() and proc != "explorer.exe":
+        return Decision(False, f"'{process}' is the console Argent itself runs in: a click that misses its "
+                               f"target would type into the agent")
+    if allowed is not None and proc not in [a.lower() for a in allowed]:
+        return Decision(False, f"'{process or title}' is not on the allowed list")
     return Decision(True)
 
 
@@ -193,7 +248,8 @@ def check_action(*, action: str, process: str, title: str, element_name: str = "
     """The whole chain of rules for one action. The first that says no is the answer."""
     series = series or SERIES
     if not enabled():
-        return Decision(False, "desktop control is off: the person switches it on with /desktop on")
+        return Decision(False, "desktop control is off: /desktop off turned it off, /desktop on turns it back on")
+    _arm_stop()
     if series.stopped:
         return Decision(False, f"stopped ({series.stop_reason}); the person re-enables with /desktop on")
     if not foreground_ok:
@@ -219,7 +275,7 @@ def check_action(*, action: str, process: str, title: str, element_name: str = "
 # --- the record ------------------------------------------------------------------------------------------------
 
 def audit_path() -> Path:
-    from project_paths import project_root_or_cwd
+    from argent.project_paths import project_root_or_cwd
     return Path(project_root_or_cwd()) / ".argent" / "run" / "desktop_audit.jsonl"
 
 

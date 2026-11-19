@@ -11,10 +11,10 @@ import os
 
 import pytest
 
-import main as main_module
-import session as session_module
-from main import restore_session
-from session import save_session
+import argent.main as main_module
+import argent.session as session_module
+from argent.main import restore_session
+from argent.session import save_session
 
 
 class _Agent:
@@ -37,8 +37,8 @@ def store(tmp_path, monkeypatch):
 @pytest.fixture
 def said(monkeypatch):
     lines = []
-    monkeypatch.setattr("ui.print_system", lambda t, *a, **k: lines.append(str(t)))
-    monkeypatch.setattr("ui.print_error", lambda t, *a, **k: lines.append(str(t)))
+    monkeypatch.setattr("argent.ui.print_system", lambda t, *a, **k: lines.append(str(t)))
+    monkeypatch.setattr("argent.ui.print_error", lambda t, *a, **k: lines.append(str(t)))
     return lines
 
 

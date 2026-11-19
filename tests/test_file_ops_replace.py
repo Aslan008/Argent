@@ -21,7 +21,7 @@ import json
 import os
 from pathlib import Path
 
-from tools.file_ops import (
+from argent.tools.file_ops import (
     replace_in_file,
     multi_replace_in_file,
     multi_replace_in_file_chunk,
@@ -34,7 +34,7 @@ from tools.file_ops import (
 
 @pytest.fixture(autouse=True)
 def _stub_deps(monkeypatch):
-    import memory_manager
+    import argent.memory_manager as memory_manager
 
     class FakeMemory:
         def __init__(self):
@@ -49,15 +49,15 @@ def _stub_deps(monkeypatch):
 
     monkeypatch.setattr(memory_manager, "memory", FakeMemory())
 
-    import file_tracker
+    import argent.file_tracker as file_tracker
     monkeypatch.setattr(file_tracker, "snapshot", lambda *a, **k: None)
 
-    import tools._helpers as helpers
+    import argent.tools._helpers as helpers
     monkeypatch.setattr(helpers, "_validate_code_syntax", lambda fp: None)
 
     # replace_in_file uses the top-level import, not a local re-import, so
     # patch the name in file_ops' own namespace too.
-    import tools.file_ops as file_ops_mod
+    import argent.tools.file_ops as file_ops_mod
     monkeypatch.setattr(file_ops_mod, "_validate_code_syntax", lambda fp: None)
 
     yield
@@ -172,7 +172,7 @@ class TestReplaceInFileErrors:
 class TestReplaceInFileRestrictions:
     def test_plugin_restricted_path(self, tmp_path, monkeypatch):
         """L1×D7: Plugin-restricted path → restriction error."""
-        import config
+        import argent.config as config
         plugins_dir = tmp_path / "plugins"
         plugins_dir.mkdir(exist_ok=True)
         monkeypatch.setattr(config, "get_hooks_dir", lambda: str(plugins_dir))
@@ -273,7 +273,7 @@ class TestReplaceInFileUTF8:
 class TestReplaceInFileSyntaxValidation:
     def test_syntax_validation_fails_reverts(self, tmp_path, monkeypatch):
         """L1: Syntax validation fails after replace → 'Modification aborted', file reverted."""
-        import tools.file_ops as file_ops_mod
+        import argent.tools.file_ops as file_ops_mod
         original = "def foo():\n    return 1\n"
         (tmp_path / "f.py").write_text(original, encoding="utf-8")
         monkeypatch.setattr(
@@ -283,6 +283,17 @@ class TestReplaceInFileSyntaxValidation:
         assert "Modification aborted" in out or "aborted" in out.lower()
         # File should be reverted to original
         assert (tmp_path / "f.py").read_text(encoding="utf-8") == original
+
+    def test_reverted_edit_points_at_the_file_as_it_is_now(self, tmp_path, monkeypatch):
+        """After the revert the broken attempt is gone, so the reply must say the file is unchanged."""
+        import argent.tools.file_ops as file_ops_mod
+        original = "def foo():\n    return 1\n"
+        (tmp_path / "f.py").write_text(original, encoding="utf-8")
+        monkeypatch.setattr(file_ops_mod, "_validate_code_syntax", lambda fp: "SyntaxError in your Python code:\nunmatched ')'")
+        out = replace_in_file("f.py", "return 1", "return )(")
+        assert (tmp_path / "f.py").read_text(encoding="utf-8") == original
+        assert "file on disk is unchanged" in out
+        assert "using the `replace_in_file` tool" not in out
 
 
 class TestReplaceInFileCRLF:
@@ -350,15 +361,15 @@ class TestMultiReplaceInFile:
         assert "Error" in out
         assert "array" in out.lower()
 
-    def test_missing_file_path(self, tmp_path):
-        """L1: Missing file_path in entry → 'Skipping change: file_path is missing.'"""
+    def test_missing_path(self, tmp_path):
+        """L1: Missing path in entry → 'Skipping change: path is missing.'"""
         (tmp_path / "a.txt").write_text("hello\n", encoding="utf-8")
         changes = json.dumps([
             {"target_text": "hello", "replacement_text": "HI"}
         ])
         out = multi_replace_in_file(changes)
         assert "Multi-replace execution finished" in out
-        assert "file_path" in out and "missing" in out.lower()
+        assert "path" in out and "missing" in out.lower()
 
     def test_one_fails_one_succeeds(self, tmp_path):
         """L1: One file fails, one succeeds → report shows both results."""
@@ -580,7 +591,7 @@ class TestMultiReplaceInFileChunk:
         """L1: Syntax validation fails → 'Modification aborted', file reverted."""
         # multi_replace_in_file_chunk does a LOCAL import of
         # _validate_code_syntax from tools._helpers, so patch it there.
-        import tools._helpers as helpers
+        import argent.tools._helpers as helpers
         original = "def foo():\n    return 1\n\ndef bar():\n    return 2\n"
         (tmp_path / "f.py").write_text(original, encoding="utf-8")
         monkeypatch.setattr(
@@ -875,4 +886,45 @@ class TestReplaceInFileBounded:
         # Line 5 changed
         assert new_lines[4] == "line_05 = 999"
         # Lines 7-10 (indices 6-9) are 100% identical
-        assert new_lines[6:] == lines[6:]
+        assert new_lines[6:] == lines[6:]
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Doc-comment runs: an edit in the middle splits the block silently
+# ══════════════════════════════════════════════════════════════════════════════
+
+def test_an_edit_inside_a_doc_comment_run_is_named(tmp_path):
+    """`///` lines above and below an insertion belong to different items afterwards.
+
+    The build stays clean, so this note is the only way the model can learn about it.
+    """
+    f = tmp_path / "app.rs"
+    f.write_text(
+        "    /// Turning down stops at the newest output.\n"
+        "    /// It never carries on into the empty history.\n"
+        "    pub fn down(&mut self) {}\n",
+        encoding="utf-8",
+    )
+
+    out = replace_in_file(
+        str(f),
+        target_text="    /// It never carries on into the empty history.\n",
+        replacement_text="    fn inserted(&self) {}\n",
+    )
+
+    assert "Successfully replaced" in out
+    assert "MIDDLE of a doc comment" in out
+
+
+def test_a_whole_doc_block_can_be_replaced_quietly(tmp_path):
+    f = tmp_path / "app.rs"
+    f.write_text("    /// one\n    /// two\n    pub fn down(&mut self) {}\n", encoding="utf-8")
+
+    out = replace_in_file(
+        str(f),
+        target_text="    /// one\n    /// two\n",
+        replacement_text="    /// one, rewritten\n    /// two, rewritten\n",
+    )
+
+    assert "Successfully replaced" in out
+    assert "MIDDLE of a doc comment" not in out

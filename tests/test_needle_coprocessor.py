@@ -178,24 +178,24 @@ class TestNeedleConfig:
     """Tests for config.py Needle 3 get/set functions."""
 
     def test_needle_enabled_default(self, monkeypatch):
-        import config
+        import argent.config as config
         monkeypatch.setattr(config, "_get", lambda key, default=None: default)
         assert config.get_needle_enabled() is False
 
     def test_needle_fast_path_default(self, monkeypatch):
-        import config
+        import argent.config as config
         monkeypatch.setattr(config, "_get", lambda key, default=None: default)
         assert config.get_needle_fast_path() is False
 
     def test_set_needle_enabled(self, monkeypatch):
-        import config
+        import argent.config as config
         stored = {}
         monkeypatch.setattr(config, "_set", lambda k, v: stored.update({k: v}))
         config.set_needle_enabled(True)
         assert stored["needle_enabled"] is True
 
     def test_set_needle_fast_path(self, monkeypatch):
-        import config
+        import argent.config as config
         stored = {}
         monkeypatch.setattr(config, "_set", lambda k, v: stored.update({k: v}))
         config.set_needle_fast_path(True)
@@ -208,8 +208,9 @@ class TestDelegateLocalMicroTier:
     """Tests that tier=-1 routes to Needle micro path."""
 
     def test_micro_tier_fallback_when_needle_unavailable(self, monkeypatch):
+        pytest.importorskip("local_inference", reason="optional stack — pip install local_inference")
         """When cactus-needle is not installed, micro tier falls back to tier 1."""
-        from local_inference import delegate_local
+        from argent.local_inference import delegate_local
 
         # Mock to prevent actual Ollama/cloud calls
         monkeypatch.setattr(

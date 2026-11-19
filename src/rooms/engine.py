@@ -35,7 +35,7 @@ import time
 from collections import defaultdict
 from dataclasses import dataclass, field
 
-import run_scope
+import argent.run_scope as run_scope
 from src.rooms import condition
 from src.rooms.models import Edge, Room, State
 

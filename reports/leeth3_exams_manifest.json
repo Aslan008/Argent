@@ -1,0 +1,77 @@
+{
+ "files": {
+  "argent/labels.json": {
+   "sha256": "371e9e019a99b7e68648378060a8561f8cd0a0bdd73cf3d470398a6195b4c3ca",
+   "bytes": 5720
+  },
+  "argent/queries.json": {
+   "sha256": "d4a8e6d37195fc45f7d223d2f39486feded456cf138dd8d25b3798a3c6d3c89b",
+   "bytes": 18179,
+   "items": 328
+  },
+  "content_heldout.jsonl": {
+   "sha256": "beabe2c1a3ff3f4ab7dc952a51cd9f3088b3c7d04565a5eecb44a52ab96191a5",
+   "bytes": 127335,
+   "items": 300,
+   "ptype": {
+    "noul": 300
+   },
+   "families": 15,
+   "teachers": {
+    "claude-exam": 300
+   }
+  },
+  "extract_heldout.jsonl": {
+   "sha256": "24cbdde40901d3d507fb380d4c72e2cda55c608f6dce950730b1d2a38ec7a936",
+   "bytes": 120918,
+   "items": 240,
+   "ptype": {
+    "extract": 240
+   },
+   "families": 7,
+   "teachers": {
+    "claude-exam": 240
+   }
+  },
+  "safety_x3s.jsonl": {
+   "sha256": "41bb29f4c124581f36df49204037c100eb7d7dbc822319ca54287c66dd84abd6",
+   "bytes": 394216,
+   "items": 600,
+   "ptype": {
+    "noul": 600
+   },
+   "families": 9,
+   "teachers": {
+    "ornith-1.5-35b-a3b": 27,
+    "glm-5.3-flash": 573
+   }
+  },
+  "tools_heldout.jsonl": {
+   "sha256": "fcb44f9d896d14b9ed9190d255b34878b987c4848b4711a4fb821ca3232ff545",
+   "bytes": 4077075,
+   "items": 558,
+   "ptype": {
+    "choice": 558
+   },
+   "families": 9,
+   "teachers": {
+    "claude-exam": 558
+   }
+  },
+  "tools_paraphrase.jsonl": {
+   "sha256": "96bca2424a5eeb2e867c4b55826460b8672ee9b384049d6e7beb872b83ba37bd",
+   "bytes": 326894,
+   "items": 126,
+   "ptype": {
+    "choice": 126
+   },
+   "families": 9,
+   "teachers": {
+    "claude-exam": 126
+   }
+  }
+ },
+ "frozen": true,
+ "frozen_at": "2026-10-18 09:04:31",
+ "author": "per set, see files[*].teachers; argent/queries.json - claude (Anthropic)"
+}

@@ -1,4 +1,4 @@
-from usage_tracker import SessionUsage, _short
+from argent.usage_tracker import SessionUsage, _short
 
 
 class TestShort:

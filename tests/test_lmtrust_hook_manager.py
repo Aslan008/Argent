@@ -39,8 +39,8 @@ def hooks_dir(tmp_path):
 def patched_config(monkeypatch, hooks_dir):
     """Monkeypatch config and hook_manager so the
     hook_manager module (and any HookManager instance) uses our tmp_path."""
-    import config
-    import hook_manager
+    import argent.config as config
+    import argent.hook_manager as hook_manager
 
     monkeypatch.setattr(config, "get_hooks_dir", lambda: str(hooks_dir))
     monkeypatch.setattr(config, "get_disabled_plugins", lambda: [])
@@ -299,8 +299,8 @@ class TestDisabledPlugins:
     def test_disabled_plugin_is_not_loaded(self, monkeypatch, tmp_path, hooks_dir):
         """A plugin whose stem name appears in get_disabled_plugins() is skipped
         during discovery."""
-        import config
-        import hook_manager
+        import argent.config as config
+        import argent.hook_manager as hook_manager
 
         _write_plugin(hooks_dir, "enabled_plug", """
             def on_event():

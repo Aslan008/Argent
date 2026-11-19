@@ -17,15 +17,21 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch, AsyncMock
 import pytest
 
-from browser_engine import browser_engine, _get_stagehand_extension_dir, BrowserEngine
-from tools import browser_tools as bt
-from tools import stagehand_tools as sht
-from tools.schemas import TOOL_SCHEMAS
+from argent.browser_engine import browser_engine, _get_stagehand_extension_dir, BrowserEngine
+from argent.tools import browser_tools as bt
+from argent.tools import stagehand_tools as sht
+from argent.tools.schemas import TOOL_SCHEMAS
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # L0: Smoke — «Оно вообще живое?»
 # ═══════════════════════════════════════════════════════════════════════════════
+
+
+needs_stagehand = pytest.mark.skipif(
+    not sht.STAGEHAND_AVAILABLE,
+    reason="stagehand v4 (npm) is not installed — this patched object only exists with it",
+)
 
 class TestSmoke:
     """L0: Smoke tests — точки входа существуют, импортируются и базово работают."""
@@ -160,6 +166,7 @@ class TestAdversarial:
     """L4: Fault injection — битый JSON CDP, сетевой таймаут, отказ сокета."""
 
     @pytest.mark.lmtrust(layer="L4", direction="D4")
+    @needs_stagehand
     def test_cdp_discovery_handles_malformed_json_response(self, monkeypatch):
         """Если эндпоинт /json/list возвращает невалидный JSON, discovery не падает, а продолжает с extension_id=None."""
         mock_resp = MagicMock()
@@ -183,6 +190,7 @@ class TestAdversarial:
             assert "extension_id" not in call_kwargs
 
     @pytest.mark.lmtrust(layer="L4", direction="D4")
+    @needs_stagehand
     def test_cdp_discovery_handles_http_connection_timeout(self, monkeypatch):
         """Если запрос к /json/list падает по таймауту/ошибке сети, connect вызывается без extension_id."""
         with patch("urllib.request.urlopen", side_effect=TimeoutError("CDP query timed out")):
@@ -209,6 +217,7 @@ class TestFallback:
     """L4b: Fallback degradation — автоматический откат на нативный Markdown + LLM."""
 
     @pytest.mark.lmtrust(layer="L4b", direction="D4")
+    @needs_stagehand
     def test_browser_extract_fallback_on_cdp_method_not_available(self, monkeypatch):
         """При ошибке Stagehand CDP Extensions.loadUnpacked срабатывает fallback на LLM JSON parse."""
         sht.reset_stagehand()
@@ -218,11 +227,12 @@ class TestFallback:
 
         mock_provider = MagicMock()
         mock_provider.chat.return_value = '{"item": "Test Widget", "price": 99}'
-        with patch("providers.create_provider", return_value=mock_provider):
+        with patch("argent.providers.create_provider", return_value=mock_provider):
             res = sht.browser_extract("extract price", schema={"type": "object"})
             assert '{"item": "Test Widget", "price": 99}' in res
 
     @pytest.mark.lmtrust(layer="L4b", direction="D4")
+    @needs_stagehand
     def test_browser_extract_handles_both_stagehand_and_fallback_failure(self, monkeypatch):
         """Если и Stagehand, и нативный fallback завершились ошибкой, возвращается ясное сообщение."""
         sht.reset_stagehand()
@@ -241,6 +251,7 @@ class TestState:
     """L5: State transitions — смена режимов user -> isolated и изолированный перезапуск."""
 
     @pytest.mark.lmtrust(layer="L5", direction="D2")
+    @needs_stagehand
     def test_switch_from_user_to_isolated_reinitializes_engine(self, monkeypatch):
         """Если браузер открыт в user CDP, а затем запрошен mode='isolated', старый браузер закрывается."""
         eng = BrowserEngine()
@@ -278,7 +289,7 @@ class TestState:
 
         shutdown_mock = AsyncMock()
         monkeypatch.setattr(eng, "shutdown", shutdown_mock)
-        monkeypatch.setattr("config.get_browser_mode", lambda: "isolated")
+        monkeypatch.setattr("argent.config.get_browser_mode", lambda: "isolated")
 
         asyncio.run(eng._ensure_browser(headed=True, mode_override="auto"))
         assert not shutdown_mock.called
@@ -301,7 +312,7 @@ class TestIntegration:
 
         monkeypatch.setattr(eng, "_playwright", mock_playwright)
         monkeypatch.setattr(eng, "_find_free_port", lambda p: 9222)
-        monkeypatch.setattr("browser_engine._get_stagehand_extension_dir", lambda: "/mock/stagehand/assets")
+        monkeypatch.setattr("argent.browser_engine._get_stagehand_extension_dir", lambda: "/mock/stagehand/assets")
 
         asyncio.run(eng._launch_isolated(headed=False))
 
@@ -312,6 +323,7 @@ class TestIntegration:
         assert any("--remote-debugging-port=9222" in a for a in args)
 
     @pytest.mark.lmtrust(layer="L6", direction="D7")
+    @needs_stagehand
     def test_extension_discovery_extracts_clean_extension_id(self, monkeypatch):
         """Интеграция CDP target polling извлекает чистый extension_id из chrome-extension:// URL."""
         dummy_targets = json.dumps([
@@ -348,6 +360,7 @@ class TestCompositional:
     """L7: Compositional faults — Stagehand падает + LLM возвращает markdown code fences."""
 
     @pytest.mark.lmtrust(layer="L7", direction="D4")
+    @needs_stagehand
     def test_stagehand_failure_with_markdown_fenced_llm_response(self, monkeypatch):
         """Stagehand бросает ошибку, а LLM возвращает ответ в ```json ... ``` — обертка корректно счищается."""
         sht.reset_stagehand()
@@ -357,7 +370,7 @@ class TestCompositional:
         mock_provider = MagicMock()
         mock_provider.chat.return_value = "```json\n{\n  \"price\": 50\n}\n```"
 
-        with patch("providers.create_provider", return_value=mock_provider):
+        with patch("argent.providers.create_provider", return_value=mock_provider):
             res = sht.browser_extract("get price")
             # Проверяем, что markdown code fence удален и остался чистый JSON
             assert res.startswith("{\n  \"price\": 50\n}")

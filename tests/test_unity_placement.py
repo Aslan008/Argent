@@ -1,7 +1,7 @@
 """Refuse to create a Unity script outside Assets/, where Unity never sees it."""
 
-from tools._helpers import _unity_project_root, _unity_script_placement_error
-from tools.file_ops import write_file
+from argent.tools._helpers import _unity_project_root, _unity_script_placement_error
+from argent.tools.file_ops import write_file
 
 
 def _make_unity_project(tmp_path):

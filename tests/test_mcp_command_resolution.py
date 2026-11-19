@@ -13,7 +13,7 @@ import subprocess
 import sys
 from unittest.mock import MagicMock
 
-import mcp_client
+import argent.mcp_client as mcp_client
 
 
 def _start_and_capture_argv(monkeypatch, command, env=None):

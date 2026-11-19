@@ -10,8 +10,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
-import agent as agent_module
-import approval
+import argent.agent as agent_module
+import argent.approval as approval
 from src.agent import permissions, subagents, wait_conditions, worktrees
 from src.agent.permissions import Permissions
 from src.agent.plan_mode import PLAN, violation
@@ -279,7 +279,7 @@ class TestToolsAndAuthority:
 
 class TestSubagentTools:
     def test_a_background_run_tells_the_model_how_to_get_the_result(self, manager, repo):
-        from tools.misc_tools import run_subagent, subagents as subagents_tool
+        from argent.tools.misc_tools import run_subagent, subagents as subagents_tool
         out = run_subagent("Researcher", "look around", background=True)
         assert "started in the background" in out and "subagent_finished" in out
         run = manager.all()[0]
@@ -288,7 +288,7 @@ class TestSubagentTools:
 
     def test_in_the_tui_a_watch_wakes_the_model_when_it_ends(self, manager, repo):
         from src.agent.watches import WATCHES
-        from tools.misc_tools import run_subagent
+        from argent.tools.misc_tools import run_subagent
         woken = []
         WATCHES.set_handler(lambda message, watch: woken.append(message))
         out = run_subagent("Researcher", "sleep:1", background=True)
@@ -301,28 +301,28 @@ class TestSubagentTools:
         assert woken and "subagent_finished" in woken[0] and "Условие выполнено" in woken[0]
 
     def test_a_foreground_isolated_run_blocks_and_returns_the_report_and_patch(self, manager, repo):
-        from tools.misc_tools import run_subagent, subagents as subagents_tool
+        from argent.tools.misc_tools import run_subagent, subagents as subagents_tool
         out = run_subagent("Coder", "write:made.txt:hello", isolation="worktree")
         assert "report of write" in out and "made.txt" in out
         assert not (repo / "made.txt").exists()
         assert "Applied" in subagents_tool(action="apply", id=1) and (repo / "made.txt").exists()
 
     def test_wait_true_blocks_until_the_run_ends(self, manager, repo):
-        from tools.misc_tools import run_subagent, subagents as subagents_tool
+        from argent.tools.misc_tools import run_subagent, subagents as subagents_tool
         run_subagent("Researcher", "sleep:1", background=True)
         started = time.time()
         out = subagents_tool(action="result", id=1, wait=True, timeout_seconds=30)
         assert "finished" in out and time.time() - started >= 0.5
 
     def test_bad_requests_are_answers_not_exceptions(self, manager, repo):
-        from tools.misc_tools import run_subagent, subagents as subagents_tool
+        from argent.tools.misc_tools import run_subagent, subagents as subagents_tool
         assert run_subagent("Coder", "x", isolation="sideways", background=True).startswith("Error")
         assert "no sub-agent #9" in subagents_tool(action="result", id=9)
         assert subagents_tool(action="list") == "No sub-agents in this session."
         assert subagents_tool(action="explode", id=1).startswith("Error")
 
     def test_isolation_without_a_repository_is_a_clear_error(self, manager, tmp_path, monkeypatch):
-        from tools.misc_tools import run_subagent
+        from argent.tools.misc_tools import run_subagent
         plain = tmp_path / "plain"
         plain.mkdir()
         monkeypatch.chdir(plain)
@@ -354,7 +354,7 @@ class ScriptedProvider:
 
     def stream_chat(self, **kwargs):
         if kwargs.get("tools"):
-            from providers import ProviderError
+            from argent.providers import ProviderError
             raise ProviderError("HTTP 404: No endpoints found that support tool use.")
         script = self.scripts[min(self.calls, len(self.scripts) - 1)]
         self.calls += 1
@@ -401,8 +401,8 @@ def test_the_worker_runs_an_agent_under_the_unattended_gate(worker_env, repo):
 def test_the_worker_applies_the_parents_deny_rules_and_plan_mode(worker_env, repo):
     from src.agent import subagent_worker
     worker_env(ScriptedProvider([
-        call("write_file", file_path=".env", content="x"),
-        call("write_file", file_path="other.txt", content="y"),
+        call("write_file", path=".env", content="x"),
+        call("write_file", path="other.txt", content="y"),
         [{"content": "ok"}],
     ]))
     result = subagent_worker.run({
@@ -412,7 +412,7 @@ def test_the_worker_applies_the_parents_deny_rules_and_plan_mode(worker_env, rep
     assert not (repo / ".env").exists() and (repo / "other.txt").exists()
     PLAN.leave()
 
-    worker_env(ScriptedProvider([call("write_file", file_path="third.txt", content="z"), [{"content": "ok"}]]))
+    worker_env(ScriptedProvider([call("write_file", path="third.txt", content="z"), [{"content": "ok"}]]))
     subagent_worker.run({"role": "Coder", "task": "t", "cwd": str(repo), "tools": ["write_file"],
                          "allowed_commands": [], "deny": [], "ask": [], "plan_mode": True})
     assert not (repo / "third.txt").exists()
@@ -420,13 +420,13 @@ def test_the_worker_applies_the_parents_deny_rules_and_plan_mode(worker_env, rep
 
 
 def test_a_subagent_never_goes_through_the_fast_path():
-    from agent import ArgentSubAgent
+    from argent.agent import ArgentSubAgent
     assert ArgentSubAgent.fast_path_allowed is False
 
 
 def test_the_in_process_subagent_keeps_its_own_checklist(worker_env, repo):
     from src.agent import todos
-    from agent import ArgentSubAgent
+    from argent.agent import ArgentSubAgent
     worker_env(ScriptedProvider([call("todo_write", todos=[{"content": "child step", "status": "in_progress"}]),
                                  [{"content": "ok"}]]))
     todos.write(["supervisor step"])
@@ -458,7 +458,7 @@ def test_a_broad_grant_does_not_override_an_ask_rule_in_the_child(worker_env, re
 
 def test_fetching_the_report_cancels_the_wake_up_for_that_run(manager, repo):
     from src.agent.watches import WATCHES
-    from tools.misc_tools import run_subagent, subagents as subagents_tool
+    from argent.tools.misc_tools import run_subagent, subagents as subagents_tool
     WATCHES.set_handler(lambda message, watch: None)
     run_subagent("Researcher", "sleep:1", background=True)
     assert len(WATCHES.pending()) == 1

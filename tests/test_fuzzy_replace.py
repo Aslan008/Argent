@@ -2,8 +2,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
-import tools.file_ops as file_ops
-from tools._helpers import _shift_indent
+import argent.tools.file_ops as file_ops
+from argent.tools._helpers import _shift_indent
 
 
 @pytest.fixture(autouse=True)

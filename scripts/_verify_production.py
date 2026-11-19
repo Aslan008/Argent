@@ -16,7 +16,7 @@ if not ok:
 from src.leeth.dispatcher import LeethDispatcher
 d = LeethDispatcher.get_instance()
 
-from config import get_fast_dispatch_backend
+from argent.config import get_fast_dispatch_backend
 print(f"fast_dispatch_backend: {get_fast_dispatch_backend()}", flush=True)
 
 # Live production-path smoke via try_fast_dispatch (the real agent-turn entry)

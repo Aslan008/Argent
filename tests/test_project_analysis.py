@@ -1,4 +1,4 @@
-from tools.project_analysis import analyze_project, _should_skip_dir, _file_stats
+from argent.tools.project_analysis import analyze_project, _should_skip_dir, _file_stats
 
 
 class TestShouldSkipDir:

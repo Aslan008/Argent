@@ -1,9 +1,9 @@
 import pytest
 from unittest.mock import patch, MagicMock
 
-import config
-import providers
-from providers import DeepSeekProvider, _is_openai_reasoning_model
+import argent.config as config
+import argent.providers as providers
+from argent.providers import DeepSeekProvider, _is_openai_reasoning_model
 from src.agent.strategy import get_model_strategy, CloudStrategy
 from src.agent.critic import parse_critic_model
 
@@ -60,24 +60,26 @@ class TestDeepSeekValidation:
 
 
 class TestDeepSeekListModels:
-    def test_falls_back_to_curated_list_without_network(self):
+    def test_falls_back_to_current_models_without_network(self):
         p = DeepSeekProvider(api_key=None, base_url="https://api.deepseek.com")
         models = p.list_models()
-        assert "deepseek-chat" in models
-        assert "deepseek-reasoner" in models
+        assert "deepseek-flash" in models
+        assert "deepseek-v4-pro" in models
+        assert "deepseek-chat" not in models
+        assert "deepseek-reasoner" not in models
 
     def test_fetches_models_from_api_endpoint(self):
         p = DeepSeekProvider(api_key="sk-ds-test", base_url="https://api.deepseek.com")
         mock_client = MagicMock()
         mock_model_1 = MagicMock()
-        mock_model_1.id = "deepseek-chat"
+        mock_model_1.id = "deepseek-flash"
         mock_model_2 = MagicMock()
-        mock_model_2.id = "deepseek-reasoner"
+        mock_model_2.id = "deepseek-v4-pro"
         mock_client.models.list.return_value = MagicMock(data=[mock_model_1, mock_model_2])
 
         with patch.object(p, "_get_client", return_value=mock_client):
             models = p.list_models()
-            assert models == ["deepseek-chat", "deepseek-reasoner"]
+            assert models == ["deepseek-flash", "deepseek-v4-pro"]
 
 
 class TestDeepSeekErrorHandling:
@@ -167,3 +169,81 @@ class TestDeepSeekReasoning:
             assert len(chunks) == 1
             assert chunks[0]["content"] == "Here is the solution."
             assert chunks[0]["thinking"] == "Thinking through the steps..."
+
+
+def _sent_body(provider, model, monkeypatch, mode, effort, budget=None):
+    """The kwargs Argent puts on the wire for one stream request (client mocked)."""
+    monkeypatch.setattr(config, "get_thinking_mode", lambda: mode)
+    monkeypatch.setattr(config, "get_reasoning_effort", lambda: effort)
+    monkeypatch.setattr(config, "get_thinking_budget", lambda: budget)
+    client = MagicMock()
+    client.chat.completions.create.return_value = []
+    with patch.object(provider, "_get_client", return_value=client):
+        list(provider.stream_chat(model=model, messages=[{"role": "user", "content": "hi"}]))
+    return client.chat.completions.create.call_args.kwargs
+
+
+class TestDeepSeekThinkingDialect:
+    """DeepSeek documents its own thinking fields; the generic ones must not leak in."""
+
+    def _prov(self):
+        return DeepSeekProvider(api_key="sk-ds", base_url="https://api.deepseek.com")
+
+    def test_off_sends_the_documented_toggle_not_reasoning_effort_none(self, monkeypatch):
+        body = _sent_body(self._prov(), "deepseek-flash", monkeypatch, "off", None)["extra_body"]
+        assert body["thinking"] == {"type": "disabled"}
+        assert "reasoning_effort" not in body          # "none" is not a DeepSeek value
+        assert "chat_template_kwargs" not in body      # a foreign dialect
+
+    def test_on_sends_enabled_toggle_and_effort(self, monkeypatch):
+        body = _sent_body(self._prov(), "deepseek-flash", monkeypatch, "on", "high")["extra_body"]
+        assert body["thinking"] == {"type": "enabled"}
+        assert body["reasoning_effort"] == "high"
+
+    def test_auto_with_no_effort_sends_no_extra_body(self, monkeypatch):
+        kw = _sent_body(self._prov(), "deepseek-flash", monkeypatch, "auto", None)
+        assert not kw.get("extra_body")
+
+    def test_max_is_passed_through_to_deepseek(self, monkeypatch):
+        body = _sent_body(self._prov(), "deepseek-flash", monkeypatch, "on", "max")["extra_body"]
+        assert body["reasoning_effort"] == "max"
+
+    def test_provider_declares_it_needs_reasoning_content(self):
+        assert DeepSeekProvider.wants_reasoning_content is True
+        assert providers.wants_reasoning_content("deepseek") is True
+        assert providers.wants_reasoning_content("openrouter") is False
+
+
+class TestMaxEffortFolding:
+    """`max` is DeepSeek's top level; any other API rejects it, so it folds to high."""
+
+    def test_other_providers_get_high_instead_of_max(self, monkeypatch):
+        from argent.providers import ZAIProvider
+        p = ZAIProvider(api_key="k", base_url="https://api.z.ai/api/paas/v4/")
+        body = _sent_body(p, "glm-5", monkeypatch, "on", "max")["extra_body"]
+        assert body["reasoning_effort"] == "high"
+
+
+class TestReasoningContentPassthrough:
+    def test_keep_reasoning_puts_it_in_reasoning_content(self):
+        from src.agent.trimmer import clean_messages_for_llm
+        msgs = [
+            {"role": "system", "content": "sys"},
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": "", "thinking": "I should call a tool",
+             "tool_calls": [{"id": "c1", "function": {"name": "f", "arguments": "{}"}}]},
+            {"role": "tool", "tool_call_id": "c1", "content": "ok"},
+        ]
+        out = clean_messages_for_llm(msgs, strip_reasoning=True, keep_reasoning=True)
+        assistant = [m for m in out if m.get("role") == "assistant"][0]
+        assert assistant["reasoning_content"] == "I should call a tool"
+        assert "thinking" not in assistant
+        assert "<think>" not in (assistant.get("content") or "")
+
+    def test_without_keep_reasoning_reasoning_is_not_sent(self):
+        from src.agent.trimmer import clean_messages_for_llm
+        msgs = [{"role": "system", "content": "s"},
+                {"role": "assistant", "content": "answer", "thinking": "hidden"}]
+        out = clean_messages_for_llm(msgs, strip_reasoning=True)
+        assistant = [m for m in out if m.get("role") == "assistant"][0]
+        assert "reasoning_content" not in assistant

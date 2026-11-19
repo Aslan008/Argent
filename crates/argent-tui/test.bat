@@ -40,5 +40,17 @@ if "!PY_DLL!"=="" (
 
 echo [test.bat] interpreter: !PY_HOME!
 echo [test.bat] dll        : !PY_DLL!
-cargo test --manifest-path "%~dp0Cargo.toml" %*
-exit /b %ERRORLEVEL%
+REM --no-fail-fast: cargo stops at the first failing test binary otherwise, and the
+REM rest of the suite never runs. Half of this suite read as "green" for a whole step
+REM because of that default: test_cards, test_scroll_anchor and test_cli_parity were
+REM broken while the run reported only test_bridge_e2e.
+pushd "%~dp0"
+cargo test --no-fail-fast %*
+set "RC=!ERRORLEVEL!"
+popd
+if not "!RC!"=="0" (
+echo.
+echo [test.bat] some targets FAILED ^(exit !RC!^). Re-read the "test result:" lines above:
+echo [test.bat] a failure here is real, not an environment problem - the DLL path is already set.
+)
+exit /b !RC!

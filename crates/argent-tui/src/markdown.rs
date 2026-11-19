@@ -406,10 +406,10 @@ fn list_item(line: &str) -> Option<(usize, usize, String, String)> {
 fn quote_prefix(line: &str) -> Option<usize> {
     let indent = line.len() - line.trim_start().len();
     let t = line.trim_start();
-    if let Some(rest) = t.strip_prefix("> ") {
-        return Some(indent + 2.min(rest.len()));
+    if t.starts_with("> ") {
+        return Some(indent + 2);
     }
-    if t == ">" {
+    if t.starts_with('>') {
         return Some(indent + 1);
     }
     None

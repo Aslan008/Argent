@@ -13,10 +13,10 @@ from unittest.mock import MagicMock
 
 import pytest
 
-import agent as agent_module
-import config
-from agent import ArgentAgent, ArgentSubAgent
-from prompt_compressor import drop_unavailable_tool_lines
+import argent.agent as agent_module
+import argent.config as config
+from argent.agent import ArgentAgent, ArgentSubAgent
+from argent.prompt_compressor import drop_unavailable_tool_lines
 
 
 @pytest.fixture
@@ -80,6 +80,15 @@ class TestPromptFollowsToolset:
             agent_module, "get_mcp_servers",
             lambda: [{"name": "srv", "type": "stdio", "command": "x", "args": []}],
         )
+        # The section only renders for a server that answers: a dead one is dropped
+        # now (it cannot be called), so the test must not rely on "configured" alone.
+        import argent.mcp_client as mcp_client
+
+        class _Client:
+            def list_tools(self, name):
+                return [{"name": "some_tool"}]
+
+        monkeypatch.setattr(mcp_client, "mcp_client", _Client())
         with_tool = agent.build_system_prompt({"read_file", "call_mcp_tool"})
         without = agent.build_system_prompt({"read_file"})
         assert "MCP SERVERS" in with_tool
@@ -139,11 +148,22 @@ class TestTierLadderPointsBothWays:
         """Exit code 0 lying about success is not something a model can infer."""
         assert "False Success" in self._core(monkeypatch, "cloud")
 
-    def test_language_rule_is_stated_once(self, monkeypatch):
-        """It was stated at the top and then pointed at again from section 7 —
-        a second mention that added nothing."""
+    def test_no_language_rule_is_sent(self, monkeypatch):
+        """A capable model answers in the language it is addressed in; the explicit
+        rule was a whole section of the prompt that bought nothing on every turn."""
         for cat in ("cloud", "medium", "small"):
-            assert self._core(monkeypatch, cat).count("LANGUAGE RULE") == 1
+            assert "LANGUAGE RULE" not in self._core(monkeypatch, cat)
+
+    def test_the_short_prompt_keeps_the_essentials(self, monkeypatch):
+        """The default prompt is short — but not empty: the rules that catch real
+        failure modes must survive the cut."""
+        import argent.config as config
+
+        monkeypatch.setattr(config, "get_system_prompt_style", lambda: "minimal")
+        prompt = self._core(monkeypatch, "cloud")
+        assert len(prompt) < 6000
+        for rule in ("Exit code: 0", "replace_in_file", "todo_write", "No emoji"):
+            assert rule in prompt, f"short prompt lost: {rule}"
 
     def test_response_length_is_requested_explicitly(self, monkeypatch):
         """Effort controls reasoning, not output length — it has to be asked for."""

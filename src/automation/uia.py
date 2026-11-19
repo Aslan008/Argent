@@ -20,7 +20,7 @@ from ctypes import wintypes
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
-from logger import get_logger
+from argent.logger import get_logger
 
 log = get_logger("uia")
 
@@ -42,7 +42,7 @@ def available() -> bool:
     if os.name != "nt":
         return False
     try:
-        import uiautomation  # noqa: F401
+        import uiautomation
         return True
     except Exception:
         return False
@@ -287,6 +287,25 @@ def invoke(control) -> str:
     return "click"
 
 
+def _double_click(x: int, y: int) -> None:
+    """Two presses inside the system double-click time.
+
+    `uiautomation` 2.0.29 has no DoubleClick — Click, RightClick, MiddleClick and the
+    press/release pair, nothing else — so `auto.DoubleClick(...)` raised AttributeError
+    the first time a real window was asked for a double click; the stand-in for Windows
+    in the tests hid it. Two press/release pairs closer together than
+    GetDoubleClickTime() is exactly what Windows itself calls a double click.
+    """
+    user32 = ctypes.windll.user32
+    left_down, left_up = 0x0002, 0x0004
+    user32.SetCursorPos(int(x), int(y))
+    time.sleep(0.03)
+    for _ in range(2):
+        user32.mouse_event(left_down, 0, 0, 0, 0)
+        user32.mouse_event(left_up, 0, 0, 0, 0)
+        time.sleep(0.03)
+
+
 def click_at(x: int, y: int, button: str = "left", double: bool = False) -> None:
     auto = _lib()
     auto.SetCursorPos(int(x), int(y))
@@ -294,7 +313,7 @@ def click_at(x: int, y: int, button: str = "left", double: bool = False) -> None
     if button == "right":
         auto.RightClick(int(x), int(y), waitTime=0.05)
     elif double:
-        auto.DoubleClick(int(x), int(y), waitTime=0.05)
+        _double_click(int(x), int(y))
     else:
         auto.Click(int(x), int(y), waitTime=0.05)
 

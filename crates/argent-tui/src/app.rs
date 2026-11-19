@@ -1,6 +1,7 @@
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::time::Instant;
+use ratatui::style::Color;
 use crate::events::{ApprovalPrompt, ArgentEvent, HistoryItem};
 use crate::renderer::{BlockRenderer, FallbackRenderer};
 use crate::speed::SpeedMeter;
@@ -73,6 +74,10 @@ pub struct SelectModalData {
     pub options: Vec<String>,
     pub selected_idx: usize,
     pub filter: String,
+    /// Caret position inside `filter`, in chars. Without it the modal could only
+    /// append and delete from the end — there was no way back to fix a typo in
+    /// the middle of a free-text answer.
+    pub filter_cursor: usize,
     pub multi: bool,
     pub checked: Vec<bool>,
 }
@@ -95,6 +100,7 @@ impl SelectModalData {
         } else {
             String::new()
         };
+        let filter_cursor = filter.chars().count();
         let selected_idx = if let Some(ref def) = default_val {
             options.iter().position(|o| o == def).unwrap_or(0)
         } else {
@@ -113,6 +119,7 @@ impl SelectModalData {
             options,
             selected_idx,
             filter,
+            filter_cursor,
             multi,
             checked,
         }
@@ -200,12 +207,118 @@ impl SelectModalData {
             }
         }
     }
+
+    /// Number of chars in the typed text (the caret counts chars, not bytes).
+    pub fn filter_len(&self) -> usize {
+        self.filter.chars().count()
+    }
+
+    /// Byte offset of a char index, clamped to the end.
+    fn filter_byte(&self, char_idx: usize) -> usize {
+        self.filter
+            .char_indices()
+            .nth(char_idx)
+            .map(|(b, _)| b)
+            .unwrap_or(self.filter.len())
+    }
+
+    pub fn filter_insert(&mut self, c: char) {
+        let at = self.filter_byte(self.filter_cursor);
+        self.filter.insert(at, c);
+        self.filter_cursor += 1;
+        self.on_filter_changed();
+    }
+
+    /// Delete the char before the caret.
+    pub fn filter_backspace(&mut self) {
+        if self.filter_cursor == 0 {
+            return;
+        }
+        let start = self.filter_byte(self.filter_cursor - 1);
+        let end = self.filter_byte(self.filter_cursor);
+        self.filter.replace_range(start..end, "");
+        self.filter_cursor -= 1;
+        self.on_filter_changed();
+    }
+
+    /// Delete the char under the caret.
+    pub fn filter_delete(&mut self) {
+        if self.filter_cursor >= self.filter_len() {
+            return;
+        }
+        let start = self.filter_byte(self.filter_cursor);
+        let end = self.filter_byte(self.filter_cursor + 1);
+        self.filter.replace_range(start..end, "");
+        self.on_filter_changed();
+    }
+
+    pub fn filter_left(&mut self) {
+        self.filter_cursor = self.filter_cursor.saturating_sub(1);
+    }
+
+    pub fn filter_right(&mut self) {
+        self.filter_cursor = (self.filter_cursor + 1).min(self.filter_len());
+    }
+
+    pub fn filter_home(&mut self) {
+        self.filter_cursor = 0;
+    }
+
+    pub fn filter_end(&mut self) {
+        self.filter_cursor = self.filter_len();
+    }
+
+    pub fn filter_clear(&mut self) {
+        self.filter.clear();
+        self.filter_cursor = 0;
+        self.on_filter_changed();
+    }
 }
 
 #[derive(Debug, Clone)]
 pub struct CompletionItem {
     pub name: String,
     pub help: String,
+}
+
+/// What a message says, for the transcript search. Blocks that carry no prose
+/// (an image preview, a checkpoint marker) contribute nothing — searching them
+/// would only produce hits with an empty preview.
+fn message_text(msg: &MessageItem) -> String {
+    match msg {
+        MessageItem::User(text) => text.clone(),
+        MessageItem::Assistant { content, thinking, .. } => format!("{content} {thinking}"),
+        MessageItem::Rethink { text, .. } => text.clone(),
+        MessageItem::Tool { name, result, .. } => match result {
+            Some(result) => format!("{name} {result}"),
+            None => name.clone(),
+        },
+        MessageItem::Notice(text)
+        | MessageItem::Output(text)
+        | MessageItem::System(text)
+        | MessageItem::Banner(text) => text.clone(),
+        MessageItem::Error { text, hint } => match hint {
+            Some(hint) => format!("{text} {hint}"),
+            None => text.clone(),
+        },
+        MessageItem::Diff { file, diff, .. } => format!("{file} {diff}"),
+        MessageItem::Checkpoint { sha, label } => format!("{label} {sha}"),
+        // An image preview or a snapshot carries no prose worth searching.
+        _ => String::new(),
+    }
+}
+
+/// One line of a hit, short enough for the popup. Cut by CHARACTERS: Russian is
+/// two bytes per letter, and slicing a String by bytes would panic mid-word.
+fn search_preview(text: &str) -> String {
+    let flat = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    let chars: Vec<char> = flat.chars().collect();
+    if chars.len() <= 64 {
+        flat
+    } else {
+        let head: String = chars[..64].iter().collect();
+        format!("{head}…")
+    }
 }
 
 /// The input as it was when Tab started cycling through suggestions.
@@ -256,17 +369,28 @@ pub enum MessageItem {
     Diff {
         file: String,
         diff: String,
+        /// A long change is folded to its first rows; a click shows every line.
+        expanded: bool,
     },
     /// The REPL's own post-response snapshot, as Rich markup lines, plus the
     /// `Context: …` meter printed under it.
     Snapshot {
         lines: Vec<String>,
         context_line: Option<String>,
+        /// The folded row: time · tokens · context · tools · cost, computed from the
+        /// raw numbers of the event. `lines` can be four typed rows (verbose mode),
+        /// but between two answers the person needs one line, not a table.
+        summary: String,
+        /// False until the row is clicked: the full breakdown is one click away.
+        expanded: bool,
     },
     /// Live card shown while the model streams a tool call's raw arguments.
     ToolGenerating { name: String, bytes: usize, text: String },
     /// Raw command output (may carry SGR colour) or a plain notice.
     Notice(String),
+    /// A fragment of live console output. Fragments are joined into one item until
+    /// one of them ends the line, so a read() boundary never becomes a line break.
+    Output(String),
     /// A line styled like the REPL's `print_system` (muted).
     System(String),
     /// The rule at the top of a fresh session.
@@ -320,6 +444,19 @@ pub struct AppStatus {
     pub mode: String,
     /// `sum 5k tok · $0.01`, empty until something was spent.
     pub session_summary: String,
+    /// What the LAST request took (`last $0.0021`, `last~ $0.03`), empty when
+    /// the provider reports neither a cost nor a balance. Restored with the
+    /// session, so it survives a restart.
+    pub last_spend: String,
+    /// Hover text for the spend chip: the last request's tokens, how the money
+    /// figure was obtained, the balance and the session total.
+    pub spend_breakdown: String,
+    /// Settings this provider/model is known to ignore (`n/a: thinking, depth`),
+    /// empty when nothing is known (see argent/model_capabilities.py).
+    pub inert_label: String,
+    /// Hover text for the context chip: where the next request's tokens go
+    /// (system prompt, tool schemas, history, total).
+    pub ctx_breakdown: String,
     pub vibe: bool,
     pub cwd: String,
     pub turn_counter: usize,
@@ -327,14 +464,28 @@ pub struct AppStatus {
     pub can_rewind: bool,
     /// The agent's checklist for the work in hand (`todo_write`), shown above the prompt.
     pub todos: Vec<TodoItem>,
+    /// The sub-agents' own checklists: delegated work has a plan too, and showing
+    /// only the main one left the interesting part of an unattended run invisible.
+    pub todos_sub: Vec<SubTodos>,
+    /// The sub-agents themselves: a swarm's members, each with status and time.
+    pub subagents: Vec<SubRun>,
+    /// Commands still running in the background (`start_background_command`).
+    pub background: Vec<BgTask>,
+    /// How many have finished this session: the count on the panel's button.
+    pub background_done: usize,
+    /// The last few finished commands, named in the panel's "Завершённые" fold.
+    pub bg_done: Vec<BgDone>,
     pub start_time: Instant,
 }
 
 /// One step of the agent's checklist. `status` is `pending`, `in_progress` or `completed`.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct TodoItem {
     pub content: String,
     pub status: String,
+    /// When the step entered `in_progress`, epoch seconds, from the bridge. A step
+    /// that hangs is the one thing a person watching an unattended run must see.
+    pub since: Option<f64>,
 }
 
 impl TodoItem {
@@ -360,9 +511,696 @@ pub fn parse_todos(raw: &str) -> Vec<TodoItem> {
                 return None;
             }
             let status = v.get("status").and_then(|s| s.as_str()).unwrap_or("pending").to_string();
-            Some(TodoItem { content, status })
+            let since = v.get("since").and_then(|s| s.as_f64());
+            Some(TodoItem { content, status, since })
         })
         .collect()
+}
+
+/// A sub-agent's own checklist, as `state["todos_sub"]` reports it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SubTodos {
+    pub name: String,
+    pub items: Vec<TodoItem>,
+}
+
+impl SubTodos {
+    pub fn done(&self) -> usize {
+        self.items.iter().filter(|t| t.is_done()).count()
+    }
+    /// The step it is on now, or the first still to come.
+    pub fn current(&self) -> Option<&TodoItem> {
+        self.items.iter().find(|t| t.is_active()).or_else(|| self.items.iter().find(|t| !t.is_done()))
+    }
+}
+
+/// The sub-agents' checklists: `{"sub-1": [{"content": .., "status": ..}, ..]}`.
+/// Anything unreadable is an empty list — a broken payload must not break the screen.
+pub fn parse_sub_todos(raw: &str) -> Vec<SubTodos> {
+    let Ok(map) = serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(raw.trim()) else {
+        return Vec::new();
+    };
+    map.into_iter()
+        .filter_map(|(name, value)| {
+            let items = parse_todos(&value.to_string());
+            if items.is_empty() {
+                return None;
+            }
+            Some(SubTodos { name, items })
+        })
+        .collect()
+}
+
+/// Why a queued message waits instead of going out with the next turn.
+#[derive(Debug, Clone, PartialEq)]
+pub enum QueueCondition {
+    /// Send when a turn fails. `filter`, when set, narrows it to failures whose
+    /// text contains it. A failure caused by the provider's empty balance never
+    /// fires it: sending "продолжай" to an account with no credit is noise.
+    OnError { filter: Option<String> },
+    /// Send when a turn ends successfully.
+    OnSuccess,
+    /// Send when a step has sat in `in_progress` too long: an unattended run that
+    /// stopped advancing rather than failed.
+    OnStuck,
+    /// Send no earlier than this moment.
+    At(Instant),
+}
+
+/// What just happened, for `release_queued`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum QueueTrigger {
+    Error,
+    Success,
+    Stuck,
+    Timer,
+}
+
+/// A message waiting its turn, and the reason it waits.
+#[derive(Debug, Clone, PartialEq)]
+pub struct QueuedMessage {
+    pub text: String,
+    pub condition: Option<QueueCondition>,
+}
+
+impl From<&str> for QueuedMessage {
+    fn from(text: &str) -> Self {
+        Self::plain(text)
+    }
+}
+
+impl From<String> for QueuedMessage {
+    fn from(text: String) -> Self {
+        Self::plain(text)
+    }
+}
+
+// A queued message is its text as far as a caller is concerned; the condition is
+// the transport detail. Comparing and converting without unwrapping keeps the
+// queue readable at the call sites.
+impl PartialEq<str> for QueuedMessage {
+    fn eq(&self, other: &str) -> bool {
+        self.text == other
+    }
+}
+
+impl PartialEq<&str> for QueuedMessage {
+    fn eq(&self, other: &&str) -> bool {
+        self.text == *other
+    }
+}
+
+impl PartialEq<String> for QueuedMessage {
+    fn eq(&self, other: &String) -> bool {
+        self.text == *other
+    }
+}
+
+impl QueuedMessage {
+    pub fn plain(text: impl Into<String>) -> Self {
+        Self { text: text.into(), condition: None }
+    }
+
+    /// Ready to go out with the next turn.
+    pub fn is_ready(&self) -> bool {
+        self.condition.is_none()
+    }
+
+    /// The badge the panel shows next to a waiting message.
+    pub fn badge(&self) -> Option<String> {
+        Some(match self.condition.as_ref()? {
+            QueueCondition::OnError { filter: Some(f) } => format!("⚡ ошибка «{f}»"),
+            QueueCondition::OnError { filter: None } => "⚡ при ошибке".to_string(),
+            QueueCondition::OnSuccess => "✓ при успехе".to_string(),
+            QueueCondition::OnStuck => "⏳ при зависании".to_string(),
+            QueueCondition::At(at) => {
+                let secs = at.saturating_duration_since(Instant::now()).as_secs();
+                format!("⏱ через {}", crate::ui::fmt_step_time(secs as f64))
+            }
+        })
+    }
+}
+
+/// One running background command, as the bridge reports it in `background`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BgTask {
+    pub pid: String,
+    pub command: String,
+    pub elapsed: u64,
+    pub pty: bool,
+}
+
+/// The commands running in the background: JSON text
+/// (`[{"pid": .., "command": .., "elapsed": .., "pty": ..}, ..]`). Anything
+/// unreadable is an empty list — a broken payload must not break the screen.
+pub fn parse_background(raw: &str) -> Vec<BgTask> {
+    let Ok(items) = serde_json::from_str::<Vec<serde_json::Value>>(raw.trim()) else {
+        return Vec::new();
+    };
+    items
+        .into_iter()
+        .filter_map(|v| {
+            let pid = match v.get("pid") {
+                Some(serde_json::Value::String(s)) => s.trim().to_string(),
+                Some(other) => other.to_string(),
+                None => return None,
+            };
+            let command = v.get("command")?.as_str()?.trim().to_string();
+            if pid.is_empty() || command.is_empty() {
+                return None;
+            }
+            Some(BgTask {
+                pid,
+                command,
+                elapsed: v.get("elapsed").and_then(|e| e.as_u64().or_else(|| e.as_f64().map(|f| f as u64))).unwrap_or(0),
+                pty: v.get("pty").and_then(|p| p.as_bool()).unwrap_or(false),
+            })
+        })
+        .collect()
+}
+
+/// One finished background command, kept for the panel's "Завершённые" fold.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BgDone {
+    pub pid: String,
+    pub command: String,
+    /// `None` when the exit code was never observed.
+    pub code: Option<i64>,
+    pub secs: u64,
+}
+
+impl BgDone {
+    pub fn succeeded(&self) -> bool {
+        self.code == Some(0)
+    }
+}
+
+/// The finished commands, JSON text (`[{"pid": .., "command": .., "code": .., "secs": ..}, ..]`).
+pub fn parse_background_done(raw: &str) -> Vec<BgDone> {
+    let Ok(items) = serde_json::from_str::<Vec<serde_json::Value>>(raw.trim()) else {
+        return Vec::new();
+    };
+    items
+        .into_iter()
+        .filter_map(|v| {
+            let pid = match v.get("pid") {
+                Some(serde_json::Value::String(s)) => s.trim().to_string(),
+                Some(other) => other.to_string(),
+                None => return None,
+            };
+            let command = v.get("command")?.as_str()?.trim().to_string();
+            if pid.is_empty() || command.is_empty() {
+                return None;
+            }
+            Some(BgDone {
+                pid,
+                command,
+                code: v.get("code").and_then(|c| c.as_i64()),
+                secs: v.get("secs").and_then(|s| s.as_u64()).unwrap_or(0),
+            })
+        })
+        .collect()
+}
+
+/// An open window on one background command: its state and what it printed.
+///
+/// The panel under the checklist can only name the tasks — a row is one line, and a
+/// build's output is hundreds. A click opens this instead: a small terminal of its
+/// own, which follows the newest line while the process runs and can be scrolled
+/// back, so a command that is still going can be watched without `read_background_command`
+/// (which would take the output away from the agent).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct BgView {
+    pub pid: String,
+    pub command: String,
+    /// `running`, `done`, `stopped` or `unknown`.
+    pub status: String,
+    pub elapsed: u64,
+    pub code: Option<i64>,
+    pub output: String,
+    /// Rows scrolled back from the newest line: 0 follows the tail.
+    pub scroll: usize,
+    /// The `status` line as the last refresh read it, kept while a refresh is in
+    /// flight so the window never blinks blank.
+    pub error: String,
+}
+
+impl BgView {
+    pub fn placeholder(pid: &str) -> Self {
+        BgView { pid: pid.to_string(), status: "opening".into(), ..Default::default() }
+    }
+
+    pub fn running(&self) -> bool {
+        self.status == "running"
+    }
+
+    /// Which line of the window to draw — one line for the header of the panel.
+    pub fn headline(&self) -> String {
+        let mark = match self.status.as_str() {
+            "running" => "▶",
+            "done" => "✓",
+            "stopped" => "■",
+            _ => "·",
+        };
+        let mut text = format!("{mark} pid {} · {}", self.pid, self.command);
+        match self.status.as_str() {
+            "running" => text.push_str(&format!(" · выполняется {}", clock(self.elapsed))),
+            "done" => {
+                text.push_str(&format!(" · завершён, код {}", self.code.unwrap_or(-1)));
+                text.push_str(&format!(" · {}", clock(self.elapsed)));
+            }
+            "stopped" => text.push_str(" · остановлен"),
+            _ => {}
+        }
+        text
+    }
+
+    /// The lines the window shows, wrapped to `width` columns: the tail by default,
+    /// the `scroll` rows above it when the wheel or PgUp moved back.
+    pub fn window(&self, width: usize, height: usize) -> Vec<String> {
+        let rows = wrap_output(&self.output, width.max(1));
+        let total = rows.len();
+        let visible = height.max(1);
+        let back = self.scroll.min(total.saturating_sub(visible.min(total)));
+        let end = total.saturating_sub(back);
+        let start = end.saturating_sub(visible);
+        rows[start..end].to_vec()
+    }
+
+    /// How far back the window can be scrolled at this size.
+    pub fn max_scroll(&self, width: usize, height: usize) -> usize {
+        let total = wrap_output(&self.output, width.max(1)).len();
+        total.saturating_sub(height.max(1))
+    }
+}
+
+fn clock(seconds: u64) -> String {
+    if seconds >= 3600 {
+        format!("{}ч {:02}м", seconds / 3600, (seconds % 3600) / 60)
+    } else if seconds >= 60 {
+        format!("{}м {:02}с", seconds / 60, seconds % 60)
+    } else {
+        format!("{seconds}с")
+    }
+}
+
+/// Wrap text to `width` columns, keeping empty lines: a build's output is mostly
+/// blank space and long lines, and losing either would misrepresent it.
+fn wrap_output(text: &str, width: usize) -> Vec<String> {
+    let mut rows = Vec::new();
+    for raw in text.replace('\r', "").split('\n') {
+        let mut rest = raw.trim_end();
+        if rest.is_empty() {
+            rows.push(String::new());
+            continue;
+        }
+        while rest.chars().count() > width {
+            let (head, tail) = split_at_chars(rest, width);
+            rows.push(head.to_string());
+            rest = tail.trim_start();
+        }
+        rows.push(rest.to_string());
+    }
+    while rows.last().map(|r| r.is_empty()).unwrap_or(false) {
+        rows.pop();
+    }
+    rows
+}
+
+fn split_at_chars(text: &str, at: usize) -> (&str, &str) {
+    let mut index = 0;
+    for (count, (byte, _)) in text.char_indices().enumerate() {
+        if count == at {
+            return (&text[..byte], &text[byte..]);
+        }
+        index = byte;
+    }
+    let end = if index < text.len() { text.len() } else { index };
+    (&text[..end], "")
+}
+
+/// The window's payload from the bridge: `{"pid": .., "status": .., "command": ..,
+/// "elapsed": .., "code": .., "output": ..}`.
+pub fn parse_bg_view(raw: &str) -> Option<BgView> {
+    let value: serde_json::Value = serde_json::from_str(raw.trim()).ok()?;
+    if !value.is_object() {
+        return None;                       // a list or a number is not a window
+    }
+    let pid = match value.get("pid") {
+        Some(serde_json::Value::String(s)) => s.trim().to_string(),
+        Some(other) if !other.is_null() => other.to_string(),
+        _ => String::new(),
+    };
+    let status = value.get("status").and_then(|s| s.as_str()).unwrap_or("unknown").trim().to_string();
+    Some(BgView {
+        pid,
+        command: value.get("command").and_then(|c| c.as_str()).unwrap_or("").trim().to_string(),
+        status,
+        elapsed: value.get("elapsed").and_then(|e| e.as_u64().or_else(|| e.as_f64().map(|f| f as u64))).unwrap_or(0),
+        code: value.get("code").and_then(|c| c.as_i64()),
+        output: value.get("output").and_then(|o| o.as_str()).unwrap_or("").to_string(),
+        error: value.get("error").and_then(|e| e.as_str()).unwrap_or("").to_string(),
+        scroll: 0,
+    })
+}
+// ── sub-agents ───────────────────────────────────────────────────────────────
+
+/// Один субагент, как его отдаёт `state["subagents"]`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SubRun {
+    pub id: u64,
+    pub role: String,
+    pub task: String,
+    /// `running` | `done` | `failed` | `stopped`
+    pub status: String,
+    pub elapsed: u64,
+    pub model: String,
+    pub files: usize,
+    /// Последняя строка его диалога: панель отвечает «чем он занят» без клика.
+    pub last: String,
+    pub patch: bool,
+}
+
+impl SubRun {
+    pub fn running(&self) -> bool {
+        self.status == "running"
+    }
+
+    pub fn mark(&self) -> &'static str {
+        match self.status.as_str() {
+            "running" => "●",
+            "done" => "✓",
+            "failed" => "✗",
+            "stopped" => "■",
+            _ => "·",
+        }
+    }
+
+    /// `coder #3` — по этой строке агента узнают в списке и в окне.
+    pub fn label(&self) -> String {
+        format!("{} #{}", self.role, self.id)
+    }
+}
+
+/// `[{"id": .., "role": .., "status": .., "elapsed": .., "last": ..}, ..]`.
+/// Непонятное — пустой список: сломанная посылка не должна ломать экран.
+pub fn parse_subagents(raw: &str) -> Vec<SubRun> {
+    let Ok(items) = serde_json::from_str::<Vec<serde_json::Value>>(raw.trim()) else {
+        return Vec::new();
+    };
+    items
+        .into_iter()
+        .filter_map(|v| {
+            let id = v.get("id").and_then(|i| i.as_u64().or_else(|| i.as_str().and_then(|s| s.parse().ok())))?;
+            Some(SubRun {
+                id,
+                role: v.get("role").and_then(|r| r.as_str()).unwrap_or("worker").to_string(),
+                task: v.get("task").and_then(|t| t.as_str()).unwrap_or("").to_string(),
+                status: v.get("status").and_then(|s| s.as_str()).unwrap_or("unknown").to_string(),
+                elapsed: v.get("elapsed").and_then(|e| e.as_f64()).unwrap_or(0.0) as u64,
+                model: v.get("model").and_then(|m| m.as_str()).unwrap_or("").to_string(),
+                files: v.get("files").and_then(|f| f.as_u64()).unwrap_or(0) as usize,
+                last: v.get("last").and_then(|l| l.as_str()).unwrap_or("").to_string(),
+                patch: v.get("patch").and_then(|p| p.as_bool()).unwrap_or(false),
+            })
+        })
+        .collect()
+}
+
+/// Открытое окно одного субагента: задача, итог и его собственный диалог.
+///
+/// Строки воркеров больше не идут в чат: они копятся у запуска и показываются
+/// здесь — по одному агенту за раз, чтобы рой из четырёх не залил разговор.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SubView {
+    pub id: u64,
+    pub role: String,
+    pub task: String,
+    pub status: String,
+    pub elapsed: u64,
+    pub model: String,
+    pub isolation: String,
+    pub files: Vec<String>,
+    pub patch: String,
+    pub report: String,
+    pub error: String,
+    pub lines: Vec<String>,
+    /// Строк отступа от конца: 0 — окно следит за хвостом.
+    pub scroll: usize,
+}
+
+impl SubView {
+    pub fn running(&self) -> bool {
+        self.status == "running"
+    }
+
+    pub fn label(&self) -> String {
+        format!("{} #{}", self.role, self.id)
+    }
+
+    pub fn headline(&self) -> String {
+        let mark = match self.status.as_str() {
+            "running" => "▶",
+            "done" => "✓",
+            "failed" => "✗",
+            "stopped" => "■",
+            _ => "·",
+        };
+        let mut text = format!("{mark} {}", self.label());
+        match self.status.as_str() {
+            "running" => text.push_str(&format!(" · работает {}", clock(self.elapsed))),
+            "done" => text.push_str(&format!(" · готово · {}", clock(self.elapsed))),
+            "failed" => text.push_str(&format!(" · не получился · {}", clock(self.elapsed))),
+            "stopped" => text.push_str(" · остановлен"),
+            _ => {}
+        }
+        if !self.model.is_empty() {
+            text.push_str(&format!(" · {}", self.model));
+        }
+        text
+    }
+
+    /// Всё, что стоит над диалогом: задача, чем кончилось, файлы, патч, отчёт.
+    pub fn body(&self) -> String {
+        let mut out = String::new();
+        if !self.task.is_empty() {
+            out.push_str(&format!("Задача: {}\n\n", self.task));
+        }
+        if !self.error.is_empty() {
+            out.push_str(&format!("Ошибка: {}\n\n", self.error));
+        }
+        if !self.files.is_empty() {
+            out.push_str(&format!("Файлы ({}): {}\n\n", self.files.len(), self.files.join(", ")));
+        }
+        if !self.patch.is_empty() {
+            out.push_str(&format!("Патч: {}\n\n", self.patch));
+        }
+        if !self.report.is_empty() {
+            out.push_str(&format!("Отчёт:\n{}\n\n", self.report));
+        }
+        out.push_str("Диалог:\n");
+        out.push_str(&self.lines.join("\n"));
+        out
+    }
+
+    pub fn window(&self, width: usize, height: usize) -> Vec<String> {
+        let rows = wrap_output(&self.body(), width.max(1));
+        let total = rows.len();
+        let visible = height.max(1);
+        let back = self.scroll.min(total.saturating_sub(visible.min(total)));
+        let end = total.saturating_sub(back);
+        let start = end.saturating_sub(visible);
+        rows[start..end].to_vec()
+    }
+
+    pub fn max_scroll(&self, width: usize, height: usize) -> usize {
+        wrap_output(&self.body(), width.max(1)).len().saturating_sub(height.max(1))
+    }
+}
+
+/// `{"id": .., "role": .., "task": .., "status": .., "lines": [..], ..}`.
+pub fn parse_sub_view(raw: &str) -> Option<SubView> {
+    let v: serde_json::Value = serde_json::from_str(raw.trim()).ok()?;
+    if !v.is_object() {
+        return None;
+    }
+    let strings = |key: &str| -> Vec<String> {
+        v.get(key)
+            .and_then(|x| x.as_array())
+            .map(|a| a.iter().filter_map(|s| s.as_str().map(str::to_string)).collect())
+            .unwrap_or_default()
+    };
+    Some(SubView {
+        id: v.get("id").and_then(|i| i.as_u64()).unwrap_or(0),
+        role: v.get("role").and_then(|r| r.as_str()).unwrap_or("worker").to_string(),
+        task: v.get("task").and_then(|t| t.as_str()).unwrap_or("").to_string(),
+        status: v.get("status").and_then(|s| s.as_str()).unwrap_or("unknown").to_string(),
+        elapsed: v.get("elapsed").and_then(|e| e.as_f64()).unwrap_or(0.0) as u64,
+        model: v.get("model").and_then(|m| m.as_str()).unwrap_or("").to_string(),
+        isolation: v.get("isolation").and_then(|m| m.as_str()).unwrap_or("").to_string(),
+        files: strings("files"),
+        patch: v.get("patch").and_then(|p| p.as_str()).unwrap_or("").to_string(),
+        report: v.get("report").and_then(|r| r.as_str()).unwrap_or("").to_string(),
+        error: v.get("error").and_then(|r| r.as_str()).unwrap_or("").to_string(),
+        lines: strings("lines"),
+        scroll: 0,
+    })
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RgbGrid {
+    pub cols: usize,
+    /// Cells, not pixels: the data holds `rows * 2` pixel rows.
+    pub rows: usize,
+    /// RGB, row-major, `cols * rows * 2 * 3` bytes.
+    pub data: Vec<u8>,
+}
+
+impl RgbGrid {
+    /// The colour of one pixel, `Reset` outside the grid.
+    pub fn pixel(&self, x: usize, y: usize) -> Color {
+        if x >= self.cols || y >= self.rows * 2 {
+            return Color::Reset;
+        }
+        let i = (y * self.cols + x) * 3;
+        match self.data.get(i..i + 3) {
+            Some(px) => Color::Rgb(px[0], px[1], px[2]),
+            None => Color::Reset,
+        }
+    }
+}
+
+/// Where the prompt's text sits on the screen, as of the last frame.
+///
+/// A mouse press is a pair of screen cells; the draft is a string and a caret.
+/// Without this box the press cannot become a caret position, which is why
+/// clicking in the prompt used to do nothing at all.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct InputGeom {
+    /// Screen row of the first visible text row.
+    pub top: u16,
+    /// Screen column of the prompt's left edge.
+    pub left: u16,
+    /// Columns of `❯ ` before the text.
+    pub prefix: u16,
+    /// Columns the text was wrapped at.
+    pub avail: usize,
+    /// Rows scrolled away above the visible ones.
+    pub skip: usize,
+    /// Text rows on screen. Zero when the prompt is not drawn at all.
+    pub rows: usize,
+    /// Rows between the block's top and the first text row (the panel's edge).
+    pub pad: u16,
+    /// How far the caret-following scroll had already gone: the wheel can peek
+    /// back at most this far, so it never scrolls past the top of the draft.
+    pub base_skip: usize,
+}
+
+/// A picture brought back by an image tool, ready for the screen.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImagePreview {
+    /// The bridge counts these: the same payload must not be attached twice.
+    pub seq: u64,
+    pub path: String,
+    pub caption: String,
+    pub thumb: RgbGrid,
+    pub full: RgbGrid,
+}
+
+/// Standard base64, hand-rolled: one picture per turn does not justify a
+/// dependency, and the decoding is twenty lines.
+pub fn b64_decode(text: &str) -> Vec<u8> {
+    fn val(c: u8) -> Option<u8> {
+        match c {
+            b'A'..=b'Z' => Some(c - b'A'),
+            b'a'..=b'z' => Some(c - b'a' + 26),
+            b'0'..=b'9' => Some(c - b'0' + 52),
+            b'+' => Some(62),
+            b'/' => Some(63),
+            _ => None,
+        }
+    }
+    let mut out = Vec::with_capacity(text.len() * 3 / 4);
+    let mut acc: u32 = 0;
+    let mut bits: u32 = 0;
+    for &c in text.as_bytes() {
+        let Some(v) = val(c) else { continue };
+        acc = (acc << 6) | v as u32;
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push(((acc >> bits) & 0xFF) as u8);
+        }
+    }
+    out
+}
+
+/// A picture attached to the next message.
+///
+/// The thumbnail is a grid prepared by Python, ready for the half-block renderer:
+/// the Rust side never decodes a picture, the same contract the image cards use.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Attachment {
+    pub label: String,
+    pub thumb: RgbGrid,
+    /// The wide frame, when Python sent one: the strip draws from it so the
+    /// preview matches the space it is given instead of stretching a thumb.
+    pub full: Option<RgbGrid>,
+}
+
+/// `[{"index":0,"label":"…","thumb":{"cols","rows","rgb"}}]`.
+/// Anything unreadable is skipped: a broken payload must not cost the message.
+pub fn parse_attachments(raw: &str) -> Vec<Attachment> {
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(raw.trim()) else {
+        return Vec::new();
+    };
+    let Some(items) = v.as_array() else {
+        return Vec::new();
+    };
+    items
+        .iter()
+        .filter_map(|it| {
+            let grid = |key: &str| -> Option<RgbGrid> {
+                let g = it.get(key)?;
+                let cols = g.get("cols")?.as_u64()? as usize;
+                let rows = g.get("rows")?.as_u64()? as usize;
+                let data = b64_decode(g.get("rgb")?.as_str()?);
+                if cols == 0 || rows == 0 || data.len() < cols * rows * 2 * 3 {
+                    return None;
+                }
+                Some(RgbGrid { cols, rows, data })
+            };
+            Some(Attachment {
+                label: it.get("label").and_then(|l| l.as_str()).unwrap_or("").to_string(),
+                thumb: grid("thumb")?,
+                full: grid("full"),
+            })
+        })
+        .collect()
+}
+
+/// `{"seq": .., "path": .., "thumb": {"cols", "rows", "rgb"}, "full": {..}}`.
+/// Anything unreadable is `None`: a broken payload must not break the screen.
+pub fn parse_image_preview(raw: &str) -> Option<ImagePreview> {
+    let v: serde_json::Value = serde_json::from_str(raw.trim()).ok()?;
+    let seq = v.get("seq")?.as_u64()?;
+    let grid = |key: &str| -> Option<RgbGrid> {
+        let g = v.get(key)?;
+        let cols = g.get("cols")?.as_u64()? as usize;
+        let rows = g.get("rows")?.as_u64()? as usize;
+        let data = b64_decode(g.get("rgb")?.as_str()?);
+        if cols == 0 || rows == 0 || data.len() < cols * rows * 2 * 3 {
+            return None;
+        }
+        Some(RgbGrid { cols, rows, data })
+    };
+    Some(ImagePreview {
+        seq,
+        path: v.get("path").and_then(|p| p.as_str()).unwrap_or_default().to_string(),
+        caption: v.get("caption").and_then(|c| c.as_str()).unwrap_or_default().to_string(),
+        thumb: grid("thumb")?,
+        full: grid("full")?,
+    })
 }
 
 impl Default for AppStatus {
@@ -383,6 +1221,10 @@ impl Default for AppStatus {
             thinking_label: String::new(),
             mode: "CHAT".to_string(),
             session_summary: String::new(),
+            last_spend: String::new(),
+            spend_breakdown: String::new(),
+            inert_label: String::new(),
+            ctx_breakdown: String::new(),
             vibe: false,
             cwd: std::env::current_dir()
                 .map(|p| p.file_name().unwrap_or_default().to_string_lossy().to_string())
@@ -390,6 +1232,11 @@ impl Default for AppStatus {
             turn_counter: 0,
             can_rewind: false,
             todos: Vec::new(),
+            todos_sub: Vec::new(),
+            background: Vec::new(),
+            background_done: 0,
+            bg_done: Vec::new(),
+            subagents: Vec::new(),
             start_time: Instant::now(),
         }
     }
@@ -429,6 +1276,72 @@ pub enum Submit {
     Dispatch,
     /// Handled entirely inside the TUI; nothing to send.
     Handled,
+}
+
+/// `10`, `10m`, `2h`, `90s`, `1d` → a delay. A bare number means minutes, because
+/// "через 10" is what a person types. `None` when it is not a duration at all.
+pub fn parse_delay(text: &str) -> Option<std::time::Duration> {
+    let mut t = text.trim().to_lowercase().replace(' ', "");
+    if t.is_empty() {
+        return None;
+    }
+    let last = t.chars().last()?;
+    let unit = if last.is_ascii_digit() {
+        "m"
+    } else {
+        t.pop();
+        match last {
+            's' | 'с' => "s",
+            'm' | 'м' => "m",
+            'h' | 'ч' => "h",
+            'd' | 'д' => "d",
+            _ => return None,
+        }
+    };
+    let n: u64 = t.parse().ok()?;
+    if n == 0 {
+        return None;
+    }
+    let secs = match unit {
+        "s" => n,
+        "m" => n.saturating_mul(60),
+        "h" => n.saturating_mul(3600),
+        _ => n.saturating_mul(86_400),
+    };
+    Some(std::time::Duration::from_secs(secs))
+}
+
+/// The provider's balance is empty: an account with no credit will not run a turn,
+/// so a message queued "on error" would only buy another failure.
+pub fn is_balance_error(text: &str) -> bool {
+    let t = text.to_lowercase();
+    const NEEDLES: [&str; 16] = [
+        "insufficient_quota",
+        "insufficient quota",
+        "insufficient balance",
+        "insufficient credit",
+        "insufficient funds",
+        "exceeded your current quota",
+        "quota exceeded",
+        "credit balance",
+        "balance is too low",
+        "payment required",
+        "error code: 402",
+        "out of credits",
+        "no credits",
+        "недостаточно средств",
+        "баланс исчерпан",
+        "billing",
+    ];
+    NEEDLES.iter().any(|p| t.contains(p))
+}
+
+/// Seconds on the wall clock, for the `since` stamps the bridge sends.
+pub fn now_secs() -> f64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs_f64())
+        .unwrap_or(0.0)
 }
 
 /// Truncate for single-line queue display, matching the legacy CLI's 65-char cap.
@@ -478,6 +1391,59 @@ fn format_time(secs: f64) -> String {
     }
 }
 
+/// The folded one-liner of a finished turn: время · токены · кеш · инструменты · контекст · цена.
+///
+/// Built from the raw numbers rather than from `lines`, so the folded row does not
+/// depend on which `turn_snapshot` mode the bridge used: `verbose` sends four typed
+/// rows, and between two answers the person still gets one line until they click.
+#[allow(clippy::too_many_arguments)]
+fn compact_snapshot_line(
+    total_s: f64,
+    prompt_tokens: Option<f64>,
+    completion_tokens: Option<f64>,
+    cached_tokens: Option<f64>,
+    cost: Option<f64>,
+    ctx_tokens: Option<f64>,
+    ctx_max: Option<f64>,
+    ctx_percent: Option<f64>,
+    tool_calls: usize,
+    compaction: Option<&str>,
+) -> String {
+    let mut parts: Vec<String> = vec![format_time(total_s)];
+    if let (Some(p), Some(c)) = (prompt_tokens, completion_tokens) {
+        let mut tok = format!("{}\u{2192}{} tok", short_tokens(p), short_tokens(c));
+        if let Some(cached) = cached_tokens {
+            if cached > 0.0 && p > 0.0 {
+                tok.push_str(&format!(
+                    " \u{b7} cached {} ({}%)",
+                    short_tokens(cached),
+                    (cached / p * 100.0) as i64
+                ));
+            }
+        }
+        parts.push(tok);
+    }
+    if tool_calls > 0 {
+        parts.push(format!("{tool_calls} tools"));
+    }
+    if let (Some(t), Some(m), Some(p)) = (ctx_tokens, ctx_max, ctx_percent) {
+        if m > 0.0 {
+            parts.push(format!("ctx {}/{} ({:.0}%)", short_tokens(t), short_tokens(m), p));
+        }
+    }
+    if let Some(c) = cost {
+        if c > 0.0 {
+            parts.push(if c < 0.1 { format!("${c:.4}") } else { format!("${c:.2}") });
+        }
+    }
+    // Only when the turn really compacted the history: an ordinary turn keeps the
+    // folded row to the numbers it already had.
+    if let Some(note) = compaction.map(str::trim).filter(|n| !n.is_empty()) {
+        parts.push(note.to_string());
+    }
+    parts.join(" \u{b7} ")
+}
+
 /// `1234` -> `1.2k`, `1500000` -> `1.5M` (matches `usage_tracker._short`).
 fn short_tokens(n: f64) -> String {
     let n = n.max(0.0);
@@ -498,6 +1464,8 @@ fn short_tokens(n: f64) -> String {
 pub enum ClickAction {
     ToggleThinking(usize), // message index
     ToggleTool(usize),     // message index
+    /// A folded turn: open it (and hide it again).
+    ToggleFold(usize),     // index of the group's first message
     CycleThinkingLevel,
     OpenModelPicker,
     OpenProviderPicker,
@@ -505,6 +1473,10 @@ pub enum ClickAction {
     CopyLastResponse,
     CopyLastCode,
     CopyCode(String),
+    /// Click on the toolbar's `ctx:` figure — say what it actually measures.
+    ShowContext,
+    /// Click on the toolbar's spend figure — the per-request breakdown.
+    ShowSpend,
     ToggleMouseCapture,
     /// The "back to here" button under the last message the person sent.
     RewindLast,
@@ -512,6 +1484,102 @@ pub enum ClickAction {
     ScrollToBottom,
     /// Fold / unfold the agent's checklist above the prompt.
     ToggleTodos,
+    /// Fold / unfold the finished steps inside that checklist.
+    ToggleTodosDone,
+    /// Open / close one sub-agent's own checklist (by its position in the list).
+    ToggleSubTodos(usize),
+    /// Fold / unfold the background-command panel.
+    ToggleBackground,
+    /// Fold / unfold its "Завершённые" section.
+    ToggleBackgroundDone,
+    /// One finished entry: prints that process's output in the chat.
+    ShowBackgroundOutput(String),
+    /// A row of the background panel, running or finished: opens the window on it —
+    /// status, elapsed time and the output as it arrives.
+    OpenBackground(String),
+    /// The ⏹ at the right edge of a running row. Takes two clicks: stopping a
+    /// process is not something to do by brushing the panel.
+    StopBackground(String),
+    /// A thumbnail under an image-tool card: opens it for the whole screen.
+    ShowImage(usize),
+    /// Hand the picture to the system viewer — the only way to see real pixels.
+    OpenImageExternally(usize),
+    /// An artifact card: hand the written file to the system's default application.
+    OpenArtifactExternally(String),
+    /// The turn summary under an answer: the folded one-liner and its breakdown.
+    ToggleSnapshot(usize), // message index
+    /// Fold / unfold the sub-agent list above the prompt.
+    ToggleSubagents,
+    /// One sub-agent's row: opens its window — task, files and its own dialogue.
+    OpenSubagent(u64),
+    /// The ⏹ on a running sub-agent. Takes two clicks, like stopping a process.
+    StopSubagent(u64),
+    /// A queued message: click takes it into the draft for editing.
+    EditQueue(usize),
+    /// The ✕ on the right of a queued row.
+    DropQueue(usize),
+    /// The ⏎ on a queued row: send it now, stopping whatever the agent is doing.
+    SendQueueNow(usize),
+    /// An attached picture above the prompt: opens it for the whole screen.
+    ShowAttachment(usize),
+    /// The ✕ in an attachment's corner: takes it off the message.
+    DropAttachment(usize),
+}
+
+impl ClickAction {
+    /// The one-line hover hint for this control. `None` for actions that are
+    /// keyboard-only or too self-evident to explain.
+    pub fn hint(&self) -> Option<&'static str> {
+        match self {
+            Self::ToggleThinking(_) => Some("Клик — раскрыть/свернуть рассуждение"),
+            // The card already says it can be opened with its ▸/▾ marker. A
+            // tooltip repeating that is noise over the output the user is
+            // reading; the chevron is the affordance.
+            Self::ToggleTool(_) => None,
+            Self::ToggleFold(_) => Some("Клик — показать или свернуть работу этого хода"),
+            Self::CycleThinkingLevel => Some("Клик — сменить глубину рассуждений · Ctrl+T"),
+            Self::OpenModelPicker => Some("Клик — выбрать модель"),
+            Self::OpenProviderPicker => Some("Клик — выбрать провайдера"),
+            Self::CopyResponse(_) | Self::CopyLastResponse => Some("Клик — скопировать ответ"),
+            Self::CopyLastCode | Self::CopyCode(_) => Some("Клик — скопировать код"),
+            Self::ToggleMouseCapture => Some("Клик — включить/выключить мышь"),
+            Self::RewindLast => Some("Клик — вернуться к состоянию до этого сообщения · /back"),
+            Self::ScrollToBottom => Some("Клик — к последнему сообщению"),
+            Self::ToggleTodos => Some("Клик — свернуть/развернуть список задач"),
+            Self::ToggleTodosDone => Some("Клик — показать/скрыть выполненные шаги"),
+            Self::ToggleSubTodos(_) => Some("Клик — раскрыть/свернуть список подагента"),
+            Self::ToggleBackground => Some("Клик — свернуть/развернуть фоновые задачи"),
+            Self::ToggleBackgroundDone => Some("Клик — свернуть/развернуть завершённые"),
+            Self::ShowBackgroundOutput(_) => Some("Клик — показать вывод в чате · /jobs <pid>"),
+            Self::OpenBackground(_) => Some("Клик — окно задачи: статус и вывод · Esc — закрыть"),
+            Self::StopBackground(_) => Some("Клик — остановить · второй клик подтвердит"),
+            Self::EditQueue(_) => Some("Клик — править сообщение · Enter заменит его в очереди"),
+            Self::DropQueue(_) => Some("Клик — убрать из очереди"),
+            Self::SendQueueNow(_) => Some("Клик — отправить сейчас · текущий ход остановится"),
+            Self::ShowAttachment(_) => Some("Клик — открыть на весь экран"),
+            Self::DropAttachment(_) => Some("Клик — убрать вложение"),
+            Self::ShowImage(_) => Some("Клик — открыть изображение на весь экран · Esc закроет"),
+            Self::OpenImageExternally(_) => Some("Клик — открыть в просмотрщике Windows"),
+            Self::OpenArtifactExternally(_) => Some("Клик — открыть артефакт в системе"),
+            Self::ToggleSnapshot(_) => Some("Клик — подробности хода: время, токены, контекст"),
+            Self::ToggleSubagents => Some("Клик — свернуть/развернуть список субагентов"),
+            Self::OpenSubagent(_) => Some("Клик — окно субагента: задача и его диалог"),
+            Self::StopSubagent(_) => Some("Клик — остановить · второй клик подтвердит"),
+            Self::ShowContext => Some("Клик — сколько контекста занято и чем"),
+            Self::ShowSpend => Some("Клик — расход: сессия и последний запрос"),
+        }
+    }
+}
+
+/// A rectangle that shows a tooltip when the pointer is over it. Unlike a
+/// `ClickableRegion` it does not act on click; it only explains.
+#[derive(Debug, Clone)]
+pub struct HoverRegion {
+    pub x: u16,
+    pub y: u16,
+    pub width: u16,
+    pub height: u16,
+    pub text: String,
 }
 
 #[derive(Debug, Clone)]
@@ -540,8 +1608,45 @@ pub struct ScrollAnchor {
 }
 
 #[allow(dead_code)]
+/// One folded turn-process: the tool calls and their output of a finished turn, hidden
+/// behind a single line. `end` is exclusive; the key is the index of the first hidden
+/// message, whose row becomes the summary line.
+pub struct FoldGroup {
+    pub end: usize,
+}
+
+/// Whitespace-insensitive key for "is this the same text".
+///
+/// The console writes a table with runs of spaces and its own line breaks; the tool's
+/// result string has the same content laid out slightly differently. Collapsing runs of
+/// whitespace is what makes the two comparable without pretending they are identical.
+fn squash(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// Did this tool result come back as an error?
+pub(crate) fn tool_failed(result: Option<&str>) -> bool {
+    let text = match result {
+        Some(t) => t.trim_start(),
+        None => return false,
+    };
+    if text.starts_with("Error") || text.starts_with("Ошибка") || text.starts_with("Traceback") {
+        return true;
+    }
+    let low = text.to_ascii_lowercase();
+    low.starts_with("error:") || low.starts_with("error ") || low.contains("\nerror:")
+        || low.contains("\ntraceback")
+}
+
+pub type CardRect = (u16, u16, u16, u16, usize);
+
 pub struct App {
     pub clickable_regions: std::cell::RefCell<Vec<ClickableRegion>>,
+    /// Rectangles that explain themselves on hover (the context chip, the
+    /// approval buttons, a collapsed card).
+    pub hover_regions: std::cell::RefCell<Vec<HoverRegion>>,
+    /// Where the pointer is, in screen cells; `None` until the mouse moves.
+    pub mouse_pos: Option<(u16, u16)>,
     pub mouse_capture_enabled: bool,
     pub status: AppStatus,
     pub messages: Vec<MessageItem>,
@@ -556,7 +1661,21 @@ pub struct App {
     /// A stop was requested and acknowledged; the turn is still unwinding, so
     /// `is_busy` stays true and the message queue stays paused.
     pub is_cancelling: bool,
-    pub message_queue: Vec<String>,
+    /// A queued message was asked to go out immediately. The loop honours it by
+    /// stopping the running turn — it is the only side holding the bridge — and
+    /// then starts the message through the ordinary queue path.
+    pub start_queued_now: bool,
+    pub message_queue: Vec<QueuedMessage>,
+    /// How many queue rows the person scrolled past: the panel shows a window, and
+    /// a queue longer than it must stay reachable with the mouse.
+    pub queue_scroll: usize,
+    /// Where the queue panel was drawn, so the wheel over it scrolls that list.
+    pub queue_hover: std::cell::Cell<Option<(u16, u16, u16, u16)>>,
+    /// The last balance failure reported to the person: the queue keeps its
+    /// "on error" messages, and saying it once per turn would be a lecture.
+    pub queue_error_seen: Option<String>,
+    /// This turn reported an error, so its end is not a success. Reset by `Done`.
+    pub turn_had_error: bool,
     /// Consecutive `turn_was_rejected` answers for the prompt at the head of the
     /// queue. Reset as soon as the bridge produces any turn output.
     pub reject_streak: usize,
@@ -570,12 +1689,99 @@ pub struct App {
     pub overscroll: usize,
     /// The agent's checklist is folded to one row (a click on its header, or on its row, toggles it).
     pub todos_folded: bool,
+    /// Whether the finished steps are listed or folded into one «✓ N готово» row.
+    pub todos_done_expanded: bool,
+    /// The sub-agents' own checklists, drawn under the main one.
+    pub todos_sub: Vec<SubTodos>,
+    /// Which sub-agent lists are opened.
+    pub todos_sub_open: Vec<bool>,
+    /// How far the checklist window is moved from its automatic position: positive
+    /// is back (earlier steps), negative is forward. Clamped to
+    /// `todos_scroll_bounds`, which the drawing code sets every frame.
+    pub todos_scroll: i32,
+    /// How far that window may move up (0) and down (1), in rows.
+    pub todos_scroll_bounds: std::cell::Cell<(i32, i32)>,
+    /// Where the checklist was drawn, so the wheel over it scrolls the list and
+    /// not the chat behind it.
+    pub todos_hover: std::cell::Cell<Option<(u16, u16, u16, u16)>>,
+    /// Which drawn rows are sub-agent headers, for the click that opens them.
+    pub todos_sub_rows: std::cell::RefCell<Vec<(u16, usize)>>,
+    /// Rows the input was peeked back from the caret (the wheel over the prompt).
+    pub input_scroll: usize,
+    /// The background-command panel starts folded: it is a glance, not the screen.
+    pub bg_folded: bool,
+    /// Its "Завершённые" section starts folded too — twice folded, opened on demand.
+    pub bg_done_folded: bool,
+    /// An open window on one background command (see `BgView`), or none.
+    pub bg_view: Option<BgView>,
+    /// The process whose ⏹ was clicked once. The second click on the same row stops
+    /// it; anything else disarms it. Destructive controls in a panel you scan with
+    /// the mouse need that gap.
+    pub pending_stop: Option<String>,
+    /// The window's inner size as of the last frame: the wheel and PgUp need it to
+    /// know how far the output can be scrolled back.
+    pub bg_view_bounds: std::cell::Cell<(usize, usize)>,
+    /// When the window may ask the bridge for fresh output (`None` = right now).
+    pub bg_view_refresh: std::cell::Cell<Option<Instant>>,
+    /// The sub-agent list starts folded: a swarm is a glance, not the screen.
+    pub sub_folded: bool,
+    /// An open window on one sub-agent (see `SubView`), or none.
+    pub sub_view: Option<SubView>,
+    /// The sub-agent whose ⏹ was clicked once: the second click stops it.
+    pub pending_sub_stop: Option<u64>,
+    /// The sub-agent window's inner size, as of the last frame (wheel and PgUp).
+    pub sub_view_bounds: std::cell::Cell<(usize, usize)>,
+    /// When the sub-agent window may ask the bridge for its log (`None` = now).
+    pub sub_view_refresh: std::cell::Cell<Option<Instant>>,
+    /// The folded process of each finished turn, keyed by the index of its first row.
+    pub fold_groups: std::collections::BTreeMap<usize, FoldGroup>,
+    /// Which of those the person opened again (a click on the summary line).
+    pub fold_open: std::collections::HashSet<usize>,
+    /// Whether a finished turn folds its process at all (`/compact-view off` turns it off).
+    pub compact_view: bool,
+    /// How far the window inside a tool card is scrolled, keyed by message index. The
+    /// card is a window on the whole result: nothing is dropped, only moved out of sight.
+    pub card_scroll: std::collections::HashMap<usize, usize>,
+    /// The largest offset each card's window can reach, measured at the last draw (it
+    /// depends on the number of lines and on the viewport, not on the scroll itself).
+    pub card_max: std::cell::RefCell<std::collections::HashMap<usize, usize>>,
+    /// Where the scrollable tool cards were drawn, so the wheel knows which one is under
+    /// the pointer. A card is not a panel: several can be on screen at once.
+    pub card_rects: std::cell::RefCell<Vec<CardRect>>,
+    /// Pictures brought back by image tools, drawn under their own card.
+    pub previews: std::collections::HashMap<usize, ImagePreview>,
+    /// The newest preview sequence taken from the bridge.
+    pub preview_seq: u64,
+    /// Pictures waiting to go out with the next message, shown above the prompt.
+    pub attachments: Vec<Attachment>,
+    /// The queue slot the draft is editing: Enter puts the text back there
+    /// instead of appending it to the tail, so editing never reorders the turn.
+    pub queue_edit: Option<usize>,
+    /// The full-screen view: a click on a thumbnail opens it, Esc closes it.
+    pub image_view: Option<ImagePreview>,
     pub auto_scroll: bool,
     /// Set by an `exit` event from the bridge (e.g. the `/exit` command). The
     /// main loop checks it and shuts down cleanly.
     pub should_quit: bool,
     pub completions: Vec<CompletionItem>,
     pub completion_idx: usize,
+    /// The transcript search box's query, or `None` when it is closed.
+    pub search: Option<String>,
+    /// The highlighted hit of the transcript search.
+    pub search_sel: usize,
+    /// A message the next draw should scroll to. A request instead of a scroll
+    /// value: only the draw knows the width and height the rows were laid out
+    /// at, so the offset cannot be computed where the search box is.
+    pub jump_to: std::cell::Cell<Option<usize>>,
+    /// The command palette's query, or `None` when it is closed.
+    ///
+    /// The `/` popup only matches a command NAME from its start, so reaching
+    /// `/queue` means remembering the word "queue". Here the same list is
+    /// filtered by name OR by the command's own description, so «очередь»
+    /// finds it too.
+    pub palette: Option<String>,
+    /// The highlighted row of the palette.
+    pub palette_idx: usize,
     pub show_completions: bool,
     pub file_completions: Vec<String>,
     pub file_completion_idx: usize,
@@ -660,6 +1866,10 @@ pub struct App {
     pub last_wheel: Option<(Instant, bool, u8)>,
     /// What the rows last drawn in the transcript are, for selecting and copying.
     pub view_text: RefCell<ViewText>,
+    /// The prompt's box as last drawn: the mouse needs it to place the caret.
+    pub input_geom: Cell<InputGeom>,
+    /// A press inside the prompt is dragging a selection through the draft.
+    pub input_selecting: bool,
 }
 
 /// The transcript rows as last drawn: their text and where each one comes from.
@@ -698,6 +1908,8 @@ impl App {
             last_edge_scroll: None,
             last_wheel: None,
             view_text: RefCell::new(ViewText::default()),
+            input_geom: Cell::new(InputGeom::default()),
+            input_selecting: false,
             status: AppStatus::default(),
             messages: Vec::new(),
             input: String::new(),
@@ -731,7 +1943,12 @@ impl App {
             is_busy: false,
             is_command_in_flight: false,
             is_cancelling: false,
+            start_queued_now: false,
             message_queue: Vec::new(),
+            queue_scroll: 0,
+            queue_hover: std::cell::Cell::new(None),
+            queue_error_seen: None,
+            turn_had_error: false,
             reject_streak: 0,
             scroll_offset: 0,
             max_scroll: std::cell::Cell::new(0),
@@ -739,10 +1956,45 @@ impl App {
             scroll_anchor: std::cell::Cell::new(None),
             overscroll: 0,
             todos_folded: false,
+            todos_sub: Vec::new(),
+            todos_sub_open: Vec::new(),
+            todos_scroll: 0,
+            todos_scroll_bounds: std::cell::Cell::new((0, 0)),
+            todos_hover: std::cell::Cell::new(None),
+            todos_sub_rows: std::cell::RefCell::new(Vec::new()),
+            input_scroll: 0,
+            todos_done_expanded: false,
+            bg_folded: true,
+            bg_done_folded: true,
+            bg_view: None,
+        pending_stop: None,
+            bg_view_bounds: std::cell::Cell::new((80, 20)),
+            bg_view_refresh: std::cell::Cell::new(None),
+            sub_folded: true,
+            sub_view: None,
+            pending_sub_stop: None,
+            sub_view_bounds: std::cell::Cell::new((80, 20)),
+            sub_view_refresh: std::cell::Cell::new(None),
+            fold_groups: std::collections::BTreeMap::new(),
+            fold_open: std::collections::HashSet::new(),
+            compact_view: true,
+            card_scroll: std::collections::HashMap::new(),
+            card_max: std::cell::RefCell::new(std::collections::HashMap::new()),
+            card_rects: std::cell::RefCell::new(Vec::new()),
+            previews: std::collections::HashMap::new(),
+            preview_seq: 0,
+            attachments: Vec::new(),
+            queue_edit: None,
+            image_view: None,
             auto_scroll: true,
             should_quit: false,
             completions: Vec::new(),
             completion_idx: 0,
+            palette: None,
+            palette_idx: 0,
+            search: None,
+            search_sel: 0,
+            jump_to: std::cell::Cell::new(None),
             show_completions: false,
             file_completions: Vec::new(),
             file_completion_idx: 0,
@@ -753,6 +2005,8 @@ impl App {
             focus_pinned: false,
             spinner_frames: ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"],
             clickable_regions: std::cell::RefCell::new(Vec::new()),
+            hover_regions: std::cell::RefCell::new(Vec::new()),
+            mouse_pos: None,
             mouse_capture_enabled: false,
         }
     }
@@ -767,6 +2021,87 @@ impl App {
                 action,
             });
         }
+    }
+
+    /// A rectangle that shows `text` in a tooltip on hover.
+    pub fn register_hover(&self, x: u16, y: u16, width: u16, height: u16, text: impl Into<String>) {
+        if width > 0 && height > 0 {
+            self.hover_regions.borrow_mut().push(HoverRegion {
+                x,
+                y,
+                width,
+                height,
+                text: text.into(),
+            });
+        }
+    }
+
+    pub fn clear_hoverables(&self) {
+        self.hover_regions.borrow_mut().clear();
+    }
+
+    /// The hint under the pointer: an explicit hover region wins over a clickable
+    /// control's generic hint.
+    pub fn hover_text_at(&self, col: u16, row: u16) -> Option<String> {
+        for r in self.hover_regions.borrow().iter().rev() {
+            if col >= r.x
+                && col < r.x.saturating_add(r.width)
+                && row >= r.y
+                && row < r.y.saturating_add(r.height)
+            {
+                return Some(r.text.clone());
+            }
+        }
+        self.get_clicked_action(col, row)
+            .and_then(|a| a.hint().map(str::to_string))
+    }
+
+    /// The pointer moved; the tooltip (and any hover highlight) follows.
+    pub fn set_mouse_pos(&mut self, col: u16, row: u16) {
+        if self.mouse_pos != Some((col, row)) {
+            self.mouse_pos = Some((col, row));
+            self.dirty.set(true);
+        }
+    }
+
+    /// An input event arrived, which is itself proof that this window has focus.
+    ///
+    /// Keys and clicks cannot reach this process while another window owns the
+    /// keyboard, so a lost `FocusGained` (a minimize, a window switch, a terminal that
+    /// never sends the event) must not be able to leave `focused` false forever: that
+    /// state dropped every keystroke and made the whole interface look frozen.
+    pub fn note_input(&mut self) {
+        if !self.focused {
+            self.focused = true;
+            self.dirty.set(true);
+        }
+    }
+
+    /// Forget where the pointer was.
+    ///
+    /// After the window loses focus or changes size, the last known position refers to
+    /// a layout that no longer exists (or to a pointer that is no longer reported). The
+    /// hover hint is drawn from it, and a stale one hangs over the chat forever — the
+    /// symptom a person describes as "the tooltip got stuck".
+    pub fn forget_pointer(&mut self) {
+        if self.mouse_pos.take().is_some() {
+            self.dirty.set(true);
+        }
+    }
+
+    /// Leave the answer to a question in the transcript.
+    ///
+    /// The modal is the only place the question and the answer ever appeared: closing
+    /// it left nothing behind, so there was no way to look back and see what had been
+    /// picked.
+    pub fn note_answer(&mut self, chosen: &str) {
+        let text = if chosen.trim().is_empty() {
+            "Ответ: (без выбора)".to_string()
+        } else {
+            format!("Ответ: {chosen}")
+        };
+        self.push_static(MessageItem::Notice(text));
+        self.dirty.set(true);
     }
 
     pub fn clear_clickables(&self) {
@@ -804,10 +2139,24 @@ impl App {
                 self.focus_pinned = true;
                 true
             }
+            // A file change is often longer than 25 rows, and the tail is exactly
+            // what a person wants when reviewing. Folded it is a glance; a click
+            // shows every line.
+            MessageItem::Diff { expanded, .. } => {
+                *expanded = !*expanded;
+                self.focus_idx = Some(idx);
+                self.focus_pinned = true;
+                true
+            }
             MessageItem::Rethink { expanded, text, .. } if !text.is_empty() => {
                 *expanded = !*expanded;
                 self.focus_idx = Some(idx);
                 self.focus_pinned = true;
+                true
+            }
+            // The turn summary: one folded row that opens into the REPL's breakdown.
+            MessageItem::Snapshot { expanded, .. } => {
+                *expanded = !*expanded;
                 true
             }
             _ => false,
@@ -816,6 +2165,17 @@ impl App {
 
     pub fn current_spinner(&self) -> &'static str {
         self.spinner_frames[(self.tick as usize / 2) % self.spinner_frames.len()]
+    }
+
+    /// The card a fresh picture belongs to: the newest image tool's.
+    fn last_image_card(&self) -> Option<usize> {
+        self.messages.iter().rposition(|m| match m {
+            MessageItem::Tool { name, .. } => matches!(
+                name.as_str(),
+                "view_image" | "capture_desktop_window" | "capture_desktop_screen" | "get_clipboard_image"
+            ),
+            _ => false,
+        })
     }
 
     pub fn update_status(&mut self, state: HashMap<String, String>) {
@@ -837,6 +2197,59 @@ impl App {
             let todos = parse_todos(raw);
             if todos != self.status.todos {
                 self.status.todos = todos;
+                // A new plan starts at its top: a scroll position left over from the
+                // previous one would open the panel in the middle of an empty list.
+                self.todos_scroll = 0;
+            }
+        }
+        if let Some(raw) = state.get("todos_sub") {
+            let subs = parse_sub_todos(raw);
+            if subs != self.status.todos_sub {
+                self.status.todos_sub = subs;
+                self.todos_sub_open.resize(self.status.todos_sub.len(), false);
+            }
+        }
+        if let Some(raw) = state.get("background") {
+            let tasks = parse_background(raw);
+            if tasks != self.status.background {
+                self.status.background = tasks;
+            }
+        }
+        if let Some(raw) = state.get("subagents") {
+            let runs = parse_subagents(raw);
+            if runs != self.status.subagents {
+                self.status.subagents = runs;
+                self.dirty.set(true);
+            }
+        }
+        if let Some(n) = state.get("background_done") {
+            if let Ok(val) = n.trim().parse::<usize>() {
+                self.status.background_done = val;
+            }
+        }
+        if let Some(raw) = state.get("background_finished") {
+            let done = parse_background_done(raw);
+            if done != self.status.bg_done {
+                self.status.bg_done = done;
+            }
+        }
+        if let Some(raw) = state.get("image_preview") {
+            if let Some(p) = parse_image_preview(raw) {
+                // The same payload arrives on every poll: only a new one is news,
+                // and it belongs to the newest image-tool card.
+                if p.seq > self.preview_seq {
+                    self.preview_seq = p.seq;
+                    if let Some(idx) = self.last_image_card() {
+                        self.previews.insert(idx, p);
+                    }
+                }
+            }
+        }
+        if let Some(raw) = state.get("pending_images") {
+            let items = parse_attachments(raw);
+            if items != self.attachments {
+                self.attachments = items;
+                self.dirty.set(true);
             }
         }
         if let Some(v) = state.get("can_rewind") {
@@ -875,6 +2288,18 @@ impl App {
         if let Some(s) = state.get("session_summary") {
             self.status.session_summary = s.trim().to_string();
         }
+        if let Some(s) = state.get("last_spend") {
+            self.status.last_spend = s.trim().to_string();
+        }
+        if let Some(s) = state.get("spend_breakdown") {
+            self.status.spend_breakdown = s.trim().to_string();
+        }
+        if let Some(s) = state.get("inert_label") {
+            self.status.inert_label = s.trim().to_string();
+        }
+        if let Some(s) = state.get("ctx_breakdown") {
+            self.status.ctx_breakdown = s.trim().to_string();
+        }
         let usage_keys = ["session_prompt", "session_completion", "session_cost", "session_requests"];
         for (i, key) in usage_keys.iter().enumerate() {
             if let Some(v) = state.get(*key) {
@@ -912,6 +2337,108 @@ impl App {
 
     /// `messages.retain(|m| !gone(m))` that keeps the scroll anchor on the same
     /// message, or drops it when that message is the one removed.
+    /// Is message `idx` hidden inside a folded turn-process?
+    pub fn fold_hides(&self, idx: usize) -> bool {
+        match self.fold_groups.range(..=idx).next_back() {
+            Some((start, group)) => idx > *start && idx < group.end && !self.fold_open.contains(start),
+            None => false,
+        }
+    }
+
+    /// The group that starts at `idx` and is closed: its row becomes the summary.
+    pub fn fold_at(&self, idx: usize) -> Option<&FoldGroup> {
+        self.fold_groups.get(&idx).filter(|_| !self.fold_open.contains(&idx))
+    }
+
+    /// Fold the work of EVERY finished turn into one line per turn.
+    ///
+    /// The unit is the turn, and it is the whole of it: a turn that thought, then ran
+    /// three tools, then said "проверяю ещё раз", then ran two more, reads as ONE line
+    /// with the answer right under it. Not a line per run of tools, not a line per
+    /// block — the person asked for "all the steps" as one thing.
+    ///
+    /// Everything before the answer goes in: the reasoning, the progress notes, the
+    /// cards, their output, the diffs, a failed call (the line names failures in yellow,
+    /// so the fold does not hide a red step without saying so). What stays out: the
+    /// answer itself, the question, and whatever came AFTER the last text — that is an
+    /// open auto-run, not part of "everything before the answer".
+    ///
+    /// Every turn is folded, not just the newest one: a history where only the last
+    /// turn is compact reads as a wall of individual blocks.
+    pub fn fold_finished_turn(&mut self) {
+        if !self.compact_view || self.messages.is_empty() {
+            return;
+        }
+        // Groups are keyed by message index, so they are rebuilt whole: a key left over
+        // from a previous pass would hide the wrong rows.
+        self.fold_groups.clear();
+
+        // A turn is what the person asked for. Output with no question above it — a
+        // command's own printout, `/help`, a background job — is not a turn and has no
+        // answer, so there is nothing to fold.
+        let starts: Vec<usize> = self
+            .messages
+            .iter()
+            .enumerate()
+            .filter(|(_, m)| matches!(m, MessageItem::User(_)))
+            .map(|(i, _)| i + 1)
+            .collect();
+        if starts.is_empty() {
+            return;
+        }
+        let ends: Vec<usize> = starts
+            .iter()
+            .skip(1)
+            .copied()
+            .chain(std::iter::once(self.messages.len()))
+            .collect();
+
+        let newest = starts.len() - 1;
+        for (n, (&from, &to)) in starts.iter().zip(ends.iter()).enumerate() {
+            // A running turn is not a finished one: folding it would hide the output
+            // the person is watching arrive.
+            if n == newest && self.is_busy {
+                continue;
+            }
+            if to <= from {
+                continue;
+            }
+            let answer = self.messages[from..to]
+                .iter()
+                .rposition(|m| matches!(m, MessageItem::Assistant { content, .. } if !content.trim().is_empty()))
+                .map(|i| from + i);
+            // No text of its own — it ended on a question, an error or a tool call. There
+            // is no "before the final answer" of such a turn, so it stays as it is.
+            let Some(answer) = answer else { continue };
+            if answer > from {
+                self.fold_groups.insert(from, FoldGroup { end: answer });
+            }
+        }
+
+        // A turn the person opened stays open while the other turns re-fold.
+        let groups: Vec<usize> = self.fold_groups.keys().copied().collect();
+        self.fold_open.retain(|at| groups.contains(at));
+    }
+
+    /// A click on the summary line: show the work, or hide it again.
+    pub fn toggle_fold(&mut self, idx: usize) {
+        if !self.fold_groups.contains_key(&idx) {
+            return;
+        }
+        if !self.fold_open.remove(&idx) {
+            self.fold_open.insert(idx);
+        }
+        self.dirty.set(true);
+    }
+
+    /// Forget every group: the message indices they are keyed by may have moved.
+    pub fn fold_clear(&mut self) {
+        if !self.fold_groups.is_empty() {
+            self.fold_groups.clear();
+            self.fold_open.clear();
+        }
+    }
+
     fn drop_messages(&mut self, gone: impl Fn(&MessageItem) -> bool) {
         if let Some(mut a) = self.scroll_anchor.get() {
             let mut before = 0;
@@ -932,7 +2459,13 @@ impl App {
                 self.scroll_anchor.set(Some(a));
             }
         }
+        let before = self.messages.len();
         self.messages.retain(|m| !gone(m));
+        // Only a real removal moves the indices a folded group is keyed by. Clearing them on
+        // every pass would make each new turn forget the folds of the previous ones.
+        if self.messages.len() != before {
+            self.fold_clear();
+        }
     }
 
     /// The message the "back to here" button sits under: the newest one the person sent
@@ -972,8 +2505,8 @@ impl App {
         if let Some(at) = at {
             self.messages.truncate(at);
         }
-        self.scroll_anchor.set(None);
-        self.view_cache.borrow_mut().clear();
+        self.fold_clear();
+        self.scroll_anchor.set(None);        self.view_cache.borrow_mut().clear();
         self.mouse_sel = None;
         self.selecting = false;
         self.clear_selection();
@@ -1002,8 +2535,8 @@ impl App {
         self.finish_streams();
         if replace {
             self.messages.clear();
-            self.scroll_anchor.set(None);
-            self.view_cache.borrow_mut().clear();
+            self.fold_clear();
+            self.scroll_anchor.set(None);            self.view_cache.borrow_mut().clear();
             self.mouse_sel = None;
             self.selecting = false;
             self.clear_selection();
@@ -1027,6 +2560,9 @@ impl App {
         }
         self.auto_scroll = true;
         self.scroll_offset = 0;
+        // A restored dialogue is history: every turn in it is finished, so every turn in it
+        // folds. Otherwise an old session opens as a wall of individual blocks.
+        self.fold_finished_turn();
         self.dirty.set(true);
     }
 
@@ -1054,6 +2590,36 @@ impl App {
         }
     }
 
+    /// Append a fragment of live console output, continuing the previous one when
+    /// it did not end its line.
+    ///
+    /// The REPL prints a command's output as it arrives and tells the console to
+    /// continue the line (`end=""`), so a write that starts mid-line has to land on
+    /// that same row. Pushed as separate items, each fragment became its own
+    /// paragraph: `git status --short` broke after its status letter, and every
+    /// fragment lost the leading space that is part of the column layout.
+    fn push_output(&mut self, text: String) {
+        if text.is_empty() {
+            return;
+        }
+        // A running tool's placeholder stays last (see `push_static`), so the
+        // fragment belongs just before it.
+        let mut at = self.messages.len();
+        while at > 0 && matches!(self.messages[at - 1], MessageItem::Tool { is_running: true, .. }) {
+            at -= 1;
+        }
+        if at > 0 {
+            if let MessageItem::Output(prev) = &mut self.messages[at - 1] {
+                if !prev.ends_with('\n') {
+                    prev.push_str(&text);
+                    self.dirty.set(true);
+                    return;
+                }
+            }
+        }
+        self.push_static(MessageItem::Output(text));
+    }
+
     /// Close any reasoning/answer stream that is still open: commit the rest of
     /// the answer and freeze the reasoning timers. Idempotent.
     fn finish_streams(&mut self) {
@@ -1063,6 +2629,7 @@ impl App {
                     content,
                     is_streaming_thinking,
                     is_streaming_content,
+                    thinking_expanded,
                     thinking_start,
                     thinking_duration,
                     stream,
@@ -1070,6 +2637,11 @@ impl App {
                 } => {
                     if *is_streaming_thinking {
                         *is_streaming_thinking = false;
+                        // The thought is over: a tool call or the answer follows.
+                        // Folding it here is what keeps the transcript readable by
+                        // default — an open chain of reasoning buries the very call
+                        // it led to. A click on the block opens it again.
+                        *thinking_expanded = false;
                         if let Some(start) = thinking_start {
                             *thinking_duration = Some(start.elapsed().as_secs_f64());
                         }
@@ -1080,8 +2652,11 @@ impl App {
                     *is_streaming_content = false;
                     break;
                 }
-                MessageItem::Rethink { is_streaming, start, duration, .. } if *is_streaming => {
+                MessageItem::Rethink { is_streaming, start, duration, expanded, .. } if *is_streaming => {
                     *is_streaming = false;
+                    // The second pass is reasoning too: it folds when it ends and
+                    // opens on a click, exactly like the first one.
+                    *expanded = false;
                     if let Some(s) = start {
                         *duration = Some(s.elapsed().as_secs_f64());
                     }
@@ -1116,8 +2691,10 @@ impl App {
         }
         let blocks_before = self.collapsible_blocks().len();
         self.dirty.set(true);
-        // New output follows the newest line: the empty space under it closes.
-        if !matches!(event, ArgentEvent::UiStyle(_)) {
+        // New output follows the newest line: the empty space under it closes. A state
+        // refresh is not output — it must not pull a reader back to the bottom once a
+        // second, which is what made the transcript seem to jump on its own.
+        if !matches!(event, ArgentEvent::UiStyle(_) | ArgentEvent::State(_)) {
             self.overscroll = 0;
         }
         match event {
@@ -1131,6 +2708,7 @@ impl App {
                     content,
                     is_streaming_content,
                     is_streaming_thinking,
+                    thinking_expanded,
                     thinking_start,
                     thinking_duration,
                     stream,
@@ -1139,6 +2717,10 @@ impl App {
                 {
                     if *is_streaming_thinking {
                         *is_streaming_thinking = false;
+                        // The answer has begun, so the thought that produced it is
+                        // finished: fold it. (While it streamed it was shown live;
+                        // the block opens again on a click.)
+                        *thinking_expanded = false;
                         if let Some(start) = thinking_start {
                             *thinking_duration = Some(start.elapsed().as_secs_f64());
                         }
@@ -1181,7 +2763,8 @@ impl App {
                 self.is_busy = true;
                 self.is_command_in_flight = false;
                 self.reject_streak = 0;
-                let expand_by_default = self.ui.thinking_mode == "full";
+                // Reasoning is shown live while it streams and folds the moment it
+                // ends (see `finish_streams`), so a block never starts expanded.
                 // Reasoning that resumes after the answer already started is a
                 // NEW reasoning block, exactly as the REPL prints it.
                 let reuse = matches!(
@@ -1209,7 +2792,7 @@ impl App {
                     self.messages.push(MessageItem::Assistant {
                         content: String::new(),
                         thinking: delta,
-                        thinking_expanded: expand_by_default,
+                        thinking_expanded: false,
                         is_streaming_thinking: true,
                         is_streaming_content: false,
                         thinking_duration: None,
@@ -1232,7 +2815,7 @@ impl App {
                     self.finish_streams();
                     self.messages.push(MessageItem::Rethink {
                         text: delta,
-                        expanded: self.ui.thinking_mode == "full",
+                        expanded: false,
                         is_streaming: true,
                         duration: None,
                         start: Some(Instant::now()),
@@ -1266,6 +2849,12 @@ impl App {
                 if self.interactive_running.as_deref() == Some(name.as_str()) {
                     self.interactive_running = None;
                 }
+                // The live stream and the finished card are the same text: `run_command`
+                // prints while it runs (the bridge forwards each chunk as `output`) and
+                // the call arrives again as `tool_end` with the whole result. Keeping
+                // both showed the output twice — three tables, then a card saying
+                // "13 строк" underneath them (seen in a screenshot).
+                self.absorb_streamed_output(&name, &result);
                 for item in self.messages.iter_mut().rev() {
                     if let MessageItem::Tool { name: t_name, result: t_res, duration_secs: t_dur, is_running, .. } = item {
                         if *is_running && t_name == &name {
@@ -1279,13 +2868,14 @@ impl App {
                 self.phase_started = Instant::now();
             }
             ArgentEvent::ApprovalRequest { id, action, destructive, grant_key, prompt } => {
+                let initial_selected = if prompt.as_ref().map_or(destructive, |p| p.confirm) { 1 } else { 0 };
                 self.active_approval = Some(ApprovalData {
                     id,
                     action,
                     destructive,
                     grant_key,
                     prompt,
-                    selected: 0,
+                    selected: initial_selected,
                 });
             }
             ArgentEvent::Checkpoint { sha, label } => {
@@ -1294,7 +2884,7 @@ impl App {
             ArgentEvent::Rewound { text, detail } => self.apply_rewind(&text, &detail),
             ArgentEvent::History { items, replace } => self.apply_history(items, replace),
             ArgentEvent::Diff { file, diff } => {
-                self.push_static(MessageItem::Diff { file, diff });
+                self.push_static(MessageItem::Diff { file, diff, expanded: false });
             }
             ArgentEvent::ToolGenerating { name, bytes, delta } => {
                 // Update the existing card in place so the counter does not emit a
@@ -1320,6 +2910,7 @@ impl App {
             ArgentEvent::Notice(text) => {
                 self.push_static(MessageItem::Notice(text));
             }
+            ArgentEvent::Output(text) => self.push_output(text),
             ArgentEvent::System(text) => {
                 self.push_static(MessageItem::System(text));
             }
@@ -1374,56 +2965,47 @@ impl App {
                 ctx_percent,
                 lines,
                 context_line,
+                compaction,
                 ..
             } => {
+                let summary = compact_snapshot_line(
+                    total_s,
+                    prompt_tokens,
+                    completion_tokens,
+                    cached_tokens,
+                    cost,
+                    ctx_tokens,
+                    ctx_max,
+                    ctx_percent,
+                    tool_calls,
+                    compaction.as_deref(),
+                );
                 if self.status.snapshot_mode == "off" && lines.is_empty() {
                     // Nothing to show and no bridge text to defer to.
                 } else if !lines.is_empty() {
-                    self.messages.push(MessageItem::Snapshot { lines, context_line });
+                    self.messages.push(MessageItem::Snapshot {
+                        lines,
+                        context_line,
+                        summary,
+                        expanded: false,
+                    });
                 } else {
-                    // No bridge-built text (an older bridge): format the compact
-                    // line the REPL would, from the raw numbers.
-                    let mut parts: Vec<String> = vec![format_time(total_s)];
-                    if let (Some(p), Some(c)) = (prompt_tokens, completion_tokens) {
-                        let mut tok = format!("{}\u{2192}{} tok", short_tokens(p), short_tokens(c));
-                        if let Some(cached) = cached_tokens {
-                            if cached > 0.0 && p > 0.0 {
-                                tok.push_str(&format!(
-                                    " \u{b7} cached {} ({}%)",
-                                    short_tokens(cached),
-                                    (cached / p * 100.0) as i64
-                                ));
-                            }
-                        }
-                        parts.push(tok);
-                    }
-                    if tool_calls > 0 {
-                        parts.push(format!("{tool_calls} tools"));
-                    }
-                    if let (Some(t), Some(m), Some(p)) = (ctx_tokens, ctx_max, ctx_percent) {
-                        if m > 0.0 {
-                            parts.push(format!(
-                                "ctx {}/{} ({:.0}%)",
-                                short_tokens(t),
-                                short_tokens(m),
-                                p
-                            ));
-                        }
-                    }
-                    if let Some(c) = cost {
-                        if c > 0.0 {
-                            parts.push(if c < 0.1 { format!("${c:.4}") } else { format!("${c:.2}") });
-                        }
-                    }
-                    let mut out = vec![format!("  [dim]\u{2504} {}[/dim]", parts.join(" \u{b7} "))];
+                    // No bridge-built text (an older bridge): the same compact line,
+                    // in the REPL's markup.
+                    let mut out = vec![format!("  [dim]┄ {summary}[/dim]")];
                     if let Some(p) = ctx_percent {
                         if p > 85.0 {
                             out.push(format!(
-                                "  [bold yellow]\u{25b2} Контекст заполнен на {p:.0}% \u{2014} рекомендуется /clear или /compact[/bold yellow]"
+                                "  [bold yellow]▲ Контекст заполнен на {p:.0}% — рекомендуется /clear или /compact[/bold yellow]"
                             ));
                         }
                     }
-                    self.messages.push(MessageItem::Snapshot { lines: out, context_line });
+                    self.messages.push(MessageItem::Snapshot {
+                        lines: out,
+                        context_line,
+                        summary,
+                        expanded: false,
+                    });
                 }
             }
             ArgentEvent::Exit => {
@@ -1455,6 +3037,9 @@ impl App {
                         }
                     }
                 }
+                // The answer is in: the work that produced it folds into one line, so the
+                // chat reads as what was asked and what was answered.
+                self.fold_finished_turn();
             }
             ArgentEvent::Cancelling => {
                 // Stay busy: the turn is still unwinding. Only the label changes.
@@ -1462,6 +3047,10 @@ impl App {
                 // unwind, so it must NOT re-busy the UI — the queue would stall
                 // forever with no worker left to send the clearing `Done`.
                 self.is_cancelling = self.is_busy;
+            }
+            ArgentEvent::State(map) => {
+                // Numbers for the toolbar only: no turn state, no scrolling.
+                self.update_status(map);
             }
         }
         if self.auto_scroll {
@@ -1491,7 +3080,7 @@ impl App {
             // retry loop; the user is told why rather than left with a queue
             // that silently stops moving.
             self.reject_streak = 0;
-            self.message_queue.retain(|m| *m != prompt);
+            self.message_queue.retain(|m| m.text != prompt);
             self.messages.push(MessageItem::Error {
                 text: format!("Не удалось начать запрос: {prompt}"),
                 hint: Some(format!(
@@ -1501,7 +3090,7 @@ impl App {
             });
             return;
         }
-        self.message_queue.insert(0, prompt);
+        self.message_queue.insert(0, QueuedMessage::plain(prompt));
     }
 
     /// Take the next queued prompt, or `None` if a turn is still in flight.
@@ -1513,8 +3102,9 @@ impl App {
         if self.is_busy {
             return None;
         }
-        if !self.message_queue.is_empty() {
-            let next_text = self.message_queue.remove(0);
+        // A message whose condition has not come true is not "next": it waits.
+        if let Some(idx) = self.message_queue.iter().position(|m| m.is_ready()) {
+            let next_text = self.drop_queued(idx).unwrap_or_default();
             self.messages.push(MessageItem::User(next_text.clone()));
             self.is_command_in_flight = next_text.starts_with('/') || next_text.starts_with('!');
             self.is_busy = true;
@@ -1658,6 +3248,25 @@ impl App {
         n
     }
 
+    /// Open or close every tool card at once, Rethink blocks with them.
+    ///
+    /// There are three levels of folding in this view — thinkings, cards, and the turn
+    /// itself — and each had its own way to open one by one. A person who wants the raw
+    /// chain of steps should not have to click forty times to get it.
+    pub fn expand_all_cards(&mut self, expand: bool) -> usize {
+        let mut n = 0usize;
+        for m in self.messages.iter_mut() {
+            match m {
+                MessageItem::Tool { expanded, .. } | MessageItem::Rethink { expanded, .. } => {
+                    *expanded = expand;
+                    n += 1;
+                }
+                _ => {}
+            }
+        }
+        n
+    }
+
     /// Handle the prompts that only the TUI can answer.
     ///
     /// Everything else -- including `/exit`, `/clear` and friends -- is dispatched
@@ -1674,6 +3283,50 @@ impl App {
         let mut parts = trimmed.splitn(2, char::is_whitespace);
         let cmd = parts.next().unwrap_or("");
         let rest = parts.next().unwrap_or("").trim();
+
+        // The switch for the fold: on by default, because a chat that reads as question and
+        // answer is what the person has to scroll through; off while working on Argent
+        // itself, where the raw chain of steps is the thing being read.
+        if cmd == "/compact-view" || cmd == "/fold" {
+            match rest.split_whitespace().next().unwrap_or("").to_lowercase().as_str() {
+                "off" | "0" | "выкл" => {
+                    self.compact_view = false;
+                    self.fold_clear();
+                    self.messages.push(MessageItem::Notice(
+                        "Сворачивание выключено: каждый шаг виден.".into()));
+                }
+                "on" | "1" | "вкл" => {
+                    self.compact_view = true;
+                    self.fold_finished_turn();
+                    self.messages.push(MessageItem::Notice(
+                        "Сворачивание включено: работа хода уходит в одну строку после ответа.".into()));
+                }
+                "all" | "всё" | "все" => {
+                    self.compact_view = true;
+                    self.fold_finished_turn();
+                    self.fold_open = self.fold_groups.keys().copied().collect();
+                    self.toggle_all_reasoning(true);
+                    self.expand_all_cards(true);
+                    self.messages.push(MessageItem::Notice(
+                        "Развёрнуто всё: мысли, карточки инструментов и работа ходов.".into()));
+                }
+                "none" | "nothing" | "ничего" => {
+                    self.fold_open.clear();
+                    self.toggle_all_reasoning(false);
+                    self.expand_all_cards(false);
+                    self.messages.push(MessageItem::Notice(
+                        "Свёрнуто всё: мысли, карточки инструментов и работа ходов.".into()));
+                }
+                _ => {
+                    let state = if self.compact_view { "включено" } else { "выключено" };
+                    self.messages.push(MessageItem::Notice(format!(
+                        "Сворачивание {state}. Использование: /compact-view on|off|all|none")));
+                }
+            }
+            self.auto_scroll = true;
+            self.dirty.set(true);
+            return Submit::Handled;
+        }
 
         if !matches!(cmd, "/queue" | "/qmsg") {
             return Submit::Dispatch;
@@ -1692,7 +3345,10 @@ impl App {
                         .message_queue
                         .iter()
                         .enumerate()
-                        .map(|(i, m)| format!("  {}. {}", i + 1, queue_preview(m)))
+                        .map(|(i, m)| {
+                            let badge = m.badge().map(|b| format!("  {b}")).unwrap_or_default();
+                            format!("  {}. {}{}", i + 1, queue_preview(&m.text), badge)
+                        })
                         .collect();
                     self.messages.push(MessageItem::Notice(format!(
                         "\u{041e}\u{0447}\u{0435}\u{0440}\u{0435}\u{0434}\u{044c} \u{0441}\u{043e}\u{043e}\u{0431}\u{0449}\u{0435}\u{043d}\u{0438}\u{0439} ({len}):\n{}",
@@ -1702,6 +3358,8 @@ impl App {
             }
             "clear" | "clean" | "reset" => {
                 self.message_queue.clear();
+                self.queue_edit = None;
+                self.queue_scroll = 0;
                 self.messages.push(MessageItem::Notice(format!(
                     "\u{041e}\u{0447}\u{0435}\u{0440}\u{0435}\u{0434}\u{044c} \u{043e}\u{0447}\u{0438}\u{0449}\u{0435}\u{043d}\u{0430} ({len})"
                 )));
@@ -1709,15 +3367,30 @@ impl App {
             "rm" | "remove" | "del" | "pop" => {
                 match arg.trim().parse::<usize>() {
                     Ok(v) if v >= 1 && v <= len => {
-                        let removed = self.message_queue.remove(v - 1);
+                        let text = self.drop_queued(v - 1).unwrap_or_default();
                         self.messages.push(MessageItem::Notice(format!(
                             "\u{0423}\u{0434}\u{0430}\u{043b}\u{0435}\u{043d}\u{043e} \u{0438}\u{0437} \u{043e}\u{0447}\u{0435}\u{0440}\u{0435}\u{0434}\u{0438}: {}",
-                            queue_preview(&removed)
+                            queue_preview(&text)
                         )));
                     }
                     _ => self.messages.push(MessageItem::Error { text: format!(
                         "\u{0423}\u{043a}\u{0430}\u{0436}\u{0438}\u{0442}\u{0435} \u{043d}\u{043e}\u{043c}\u{0435}\u{0440} \u{043e}\u{0442} 1 \u{0434}\u{043e} {len}: /queue rm <\u{2116}>"
                     ), hint: None }),
+                }
+            }
+            "now" | "send" | "сейчас" => {
+                match arg.trim().parse::<usize>() {
+                    Ok(v) if v >= 1 && v <= len => {
+                        let text = self.promote_queued(v - 1).unwrap_or_default();
+                        self.messages.push(MessageItem::Notice(format!(
+                            "Отправлю сейчас: {} · текущий ход останавливается",
+                            queue_preview(&text)
+                        )));
+                    }
+                    _ => self.messages.push(MessageItem::Error {
+                        text: format!("Укажите номер от 1 до {len}: /queue now <№>"),
+                        hint: None,
+                    }),
                 }
             }
             "edit" | "change" => {
@@ -1726,7 +3399,7 @@ impl App {
                 let new_text = it.next().unwrap_or("").trim().to_string();
                 match idx {
                     Ok(v) if v >= 1 && v <= len && !new_text.is_empty() => {
-                        self.message_queue[v - 1] = new_text;
+                        self.message_queue[v - 1].text = new_text;
                         self.messages.push(MessageItem::Notice(format!(
                             "\u{041e}\u{0431}\u{043d}\u{043e}\u{0432}\u{043b}\u{0435}\u{043d}\u{043e} \u{0441}\u{043e}\u{043e}\u{0431}\u{0449}\u{0435}\u{043d}\u{0438}\u{0435} {v} \u{0432} \u{043e}\u{0447}\u{0435}\u{0440}\u{0435}\u{0434}\u{0438}"
                         )));
@@ -1741,15 +3414,83 @@ impl App {
                     self.messages.push(MessageItem::Error { text: 
                         "\u{0424}\u{043e}\u{0440}\u{043c}\u{0430}\u{0442}: /queue add <\u{0442}\u{0435}\u{043a}\u{0441}\u{0442}>".into(), hint: None });
                 } else {
-                    self.message_queue.push(text.to_string());
+                    self.message_queue.push(QueuedMessage::plain(text));
                     self.messages.push(MessageItem::Notice(format!(
                         "Добавлено в очередь (всего: {})",
                         self.message_queue.len()
                     )));
                 }
             }
+            "in" | "after" | "через" => {
+                let mut it = arg.splitn(2, char::is_whitespace);
+                let when = it.next().unwrap_or("");
+                let text = it.next().unwrap_or("").trim().to_string();
+                match (parse_delay(when), text.is_empty()) {
+                    (Some(delay), false) => {
+                        if let Some(target_at) = Instant::now().checked_add(delay) {
+                            self.message_queue.push(QueuedMessage {
+                                text,
+                                condition: Some(QueueCondition::At(target_at)),
+                            });
+                            self.messages.push(MessageItem::Notice(format!(
+                                "Встанет в очередь через {} (всего: {})",
+                                crate::ui::fmt_step_time(delay.as_secs() as f64),
+                                self.message_queue.len()
+                            )));
+                        } else {
+                            self.messages.push(MessageItem::Error {
+                                text: "Слишком большая задержка (переполнение времени)".into(),
+                                hint: None,
+                            });
+                        }
+                    }
+                    _ => self.messages.push(MessageItem::Error {
+                        text: "Формат: /queue in 10m <текст> (s, m, h, d; число без буквы — минуты)".into(),
+                        hint: None,
+                    }),
+                }
+            }
+            "on" | "when" | "при" => {
+                // "on error <текст>", "on error:timeout <текст>", "on success", "on stuck".
+                let mut it = arg.splitn(2, char::is_whitespace);
+                let kind_raw = it.next().unwrap_or("").to_lowercase();
+                let text = it.next().unwrap_or("").trim().to_string();
+                let (kind, filter) = match kind_raw.split_once(':') {
+                    Some((k, f)) => {
+                        let f = f.trim();
+                        (k.to_string(), if f.is_empty() { None } else { Some(f.to_string()) })
+                    }
+                    None => (kind_raw, None),
+                };
+                let condition = match kind.as_str() {
+                    "error" | "ошибка" | "ошибке" => QueueCondition::OnError { filter },
+                    "success" | "done" | "успех" => QueueCondition::OnSuccess,
+                    "stuck" | "зависло" | "зависание" => QueueCondition::OnStuck,
+                    _ => {
+                        self.messages.push(MessageItem::Error {
+                            text: "Условия: /queue on error[:<подстрока>] <текст> · on success <текст> · on stuck <текст>".into(),
+                            hint: None,
+                        });
+                        return Submit::Handled;
+                    }
+                };
+                if text.is_empty() {
+                    self.messages.push(MessageItem::Error {
+                        text: "Формат: /queue on error <текст, который отправится>".into(),
+                        hint: None,
+                    });
+                    return Submit::Handled;
+                }
+                let msg = QueuedMessage { text, condition: Some(condition) };
+                let badge = msg.badge().unwrap_or_default();
+                self.message_queue.push(msg);
+                self.messages.push(MessageItem::Notice(format!(
+                    "Встанет в очередь ({badge}; всего: {})",
+                    self.message_queue.len()
+                )));
+            }
             _ => self.messages.push(MessageItem::Error { text: 
-                "\u{041d}\u{0435}\u{0438}\u{0437}\u{0432}\u{0435}\u{0441}\u{0442}\u{043d}\u{0430}\u{044f} \u{043f}\u{043e}\u{0434}\u{043a}\u{043e}\u{043c}\u{0430}\u{043d}\u{0434}\u{0430} \u{043e}\u{0447}\u{0435}\u{0440}\u{0435}\u{0434}\u{0438}. \u{0414}\u{043e}\u{0441}\u{0442}\u{0443}\u{043f}\u{043d}\u{043e}: list | rm <\u{2116}> | edit <\u{2116}> <\u{0442}\u{0435}\u{043a}\u{0441}\u{0442}> | add <\u{0442}\u{0435}\u{043a}\u{0441}\u{0442}> | clear".into(), hint: None }),
+                "\u{041d}\u{0435}\u{0438}\u{0437}\u{0432}\u{0435}\u{0441}\u{0442}\u{043d}\u{0430}\u{044f} \u{043f}\u{043e}\u{0434}\u{043a}\u{043e}\u{043c}\u{0430}\u{043d}\u{0434}\u{0430} \u{043e}\u{0447}\u{0435}\u{0440}\u{0435}\u{0434}\u{0438}. \u{0414}\u{043e}\u{0441}\u{0442}\u{0443}\u{043f}\u{043d}\u{043e}: list | rm <\u{2116}> | now <\u{2116}> | edit <\u{2116}> <\u{0442}\u{0435}\u{043a}\u{0441}\u{0442}> | add <\u{0442}\u{0435}\u{043a}\u{0441}\u{0442}> | clear · in 10m · on error[:текст] · on success · on stuck".into(), hint: None }),
         }
         Submit::Handled
     }
@@ -1762,7 +3503,8 @@ impl App {
     /// Put the newest queued message back into the input line for editing.
     pub fn recall_last_queued(&mut self) -> bool {
         match self.message_queue.pop() {
-            Some(text) => {
+            Some(msg) => {
+                let text = msg.text;
                 self.saved_draft = Some(std::mem::take(&mut self.input));
                 self.input = text;
                 self.cursor_pos = self.input.chars().count();
@@ -1771,6 +3513,82 @@ impl App {
             }
             None => false,
         }
+    }
+
+    /// Put queued message `index` into the input for editing.
+    ///
+    /// The message stays in its slot (marked ✎) so the turn order does not change:
+    /// editing the second of three must not move it to the end when Enter is
+    /// pressed.
+    pub fn edit_queued(&mut self, index: usize) -> bool {
+        if index >= self.message_queue.len() {
+            return false;
+        }
+        self.saved_draft = Some(std::mem::take(&mut self.input));
+        self.input = self.message_queue[index].text.clone();
+        self.cursor_pos = self.input.chars().count();
+        self.sel_anchor = None;
+        self.queue_edit = Some(index);
+        self.check_completions();
+        true
+    }
+
+    /// Leave the edit, putting the draft that was interrupted back in the input.
+    pub fn cancel_queue_edit(&mut self) {
+        if self.queue_edit.take().is_some() {
+            if let Some(draft) = self.saved_draft.take() {
+                self.input = draft;
+                self.cursor_pos = self.input.chars().count();
+                self.check_completions();
+            }
+        }
+    }
+
+    /// Take a message out of the queue; the edit marker follows the list.
+    pub fn drop_queued(&mut self, index: usize) -> Option<String> {
+        if index >= self.message_queue.len() {
+            return None;
+        }
+        let removed = self.message_queue.remove(index);
+        match self.queue_edit {
+            Some(n) if n == index => {
+                // The message being edited is gone: what is in the input is now a
+                // new message rather than a replacement for a slot that vanished.
+                self.queue_edit = None;
+            }
+            Some(n) if n > index => self.queue_edit = Some(n - 1),
+            _ => {}
+        }
+        Some(removed.text)
+    }
+
+    /// Move a queued message to the front and ask for it to go out immediately.
+    ///
+    /// The message still leaves through the ordinary path: the loop starts the next
+    /// ready prompt the moment the turn ends. So "send now" is "stop what is in the
+    /// way and put this first", not a second road into the bridge — and a turn that
+    /// is already unwinding cannot be interrupted twice.
+    ///
+    /// A condition is cleared on the way: "when this step hangs" stops meaning
+    /// anything once the person asks for the message right now.
+    pub fn promote_queued(&mut self, index: usize) -> Option<String> {
+        if index >= self.message_queue.len() {
+            return None;
+        }
+        let mut message = self.message_queue.remove(index);
+        message.condition = None;
+        let text = message.text.clone();
+        self.message_queue.insert(0, message);
+        // The edit marker follows the message it marks. Removing at `index` and
+        // inserting at 0 shifts everything below `index` up by one.
+        match self.queue_edit {
+            Some(n) if n == index => self.queue_edit = Some(0),
+            Some(n) if n < index => self.queue_edit = Some(n + 1),
+            _ => {}
+        }
+        self.start_queued_now = true;
+        self.dirty.set(true);
+        Some(text)
     }
 
     pub fn submit_input(&mut self) -> Option<String> {
@@ -1792,9 +3610,19 @@ impl App {
         self.focus_pinned = false;
 
         if self.is_busy {
-            // Enqueue message while agent is active. No notice: the queue box
-            // under the spinner already shows what is waiting, as in the REPL.
-            self.message_queue.push(text);
+            // Enqueue message while agent is active. No notice: the queue panel
+            // above the prompt already shows what is waiting.
+            match self.queue_edit.take() {
+                Some(slot) if slot < self.message_queue.len() => {
+                    // Editing in place: the slot is kept, only its text changes,
+                    // and so does its condition — the wait reason survives an edit.
+                    self.message_queue[slot].text = text;
+                    self.saved_draft = None;
+                }
+                _ => {
+                    self.message_queue.push(QueuedMessage::plain(text));
+                }
+            }
             None
         } else {
             self.messages.push(MessageItem::User(text.clone()));
@@ -2052,7 +3880,6 @@ impl App {
             "ask_user_questions"
                 | "request_user_approval"
                 | "run_command"
-                | "run_admin_command"
                 | "start_background_command"
                 | "delete_file"
                 | "git_rollback"
@@ -2061,6 +3888,8 @@ impl App {
 
     pub fn clear_selection(&mut self) {
         self.sel_anchor = None;
+        // A selection that is gone cannot still be dragged.
+        self.input_selecting = false;
     }
 
     /// Drop the selection anchor.
@@ -2081,6 +3910,151 @@ impl App {
         matches!(self.sel_anchor, Some(a) if a != self.cursor_pos && a <= len && self.cursor_pos <= len)
     }
 
+    /// The prompt records its own box while drawing: width, wrap, scroll.
+    pub fn set_input_box(&self, prefix: usize, avail: usize, skip: usize, rows: usize, pad: u16) {
+        let mut g = self.input_geom.get();
+        g.prefix = prefix as u16;
+        g.avail = avail.max(1);
+        g.skip = skip;
+        g.rows = rows;
+        g.pad = pad;
+        self.input_geom.set(g);
+    }
+
+    /// How far the caret-following scroll went; the wheel may peek back that far.
+    pub fn set_input_base_skip(&self, base: usize) {
+        let mut g = self.input_geom.get();
+        g.base_skip = base;
+        self.input_geom.set(g);
+    }
+
+    /// Where the prompt was drawn: the caller knows the screen position.
+    pub fn set_input_origin(&self, top: u16, left: u16) {
+        let mut g = self.input_geom.get();
+        g.top = top;
+        g.left = left;
+        self.input_geom.set(g);
+    }
+
+    /// What kind of text a char belongs to, for word selection: a word is letters,
+    /// digits and `_`; everything else is its own character.
+    fn is_word_char(c: char) -> bool {
+        c.is_alphanumeric() || c == '_'
+    }
+
+    /// Caret position under a screen cell of the prompt, `None` when the cell is
+    /// not in it (so a click elsewhere keeps its old meaning).
+    pub fn input_char_at(&self, x: u16, y: u16) -> Option<usize> {
+        let g = self.input_geom.get();
+        if g.rows == 0 || y < g.top || y >= g.top.saturating_add(g.rows as u16) {
+            return None;
+        }
+        let line = g.skip + (y - g.top) as usize;
+        let layout = crate::ui::layout_input(&self.input, g.avail);
+        let row = layout.get(line)?;
+        let col = x.saturating_sub(g.left.saturating_add(g.prefix)) as usize;
+        // Wide characters take two cells, so the click walks the row by widths
+        // and lands on the nearer edge of the character it hit.
+        let mut used = 0usize;
+        for (k, ch) in self.input.chars().skip(row.start).take(row.end.saturating_sub(row.start)).enumerate() {
+            let cw = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(1).max(1);
+            if col < used + cw {
+                return Some(row.start + k + usize::from(col - used > cw / 2));
+            }
+            used += cw;
+        }
+        Some(row.end)
+    }
+
+    /// The word around a char index: what a double click selects.
+    pub fn word_bounds_at(&self, idx: usize) -> (usize, usize) {
+        let chars: Vec<char> = self.input.chars().collect();
+        if chars.is_empty() {
+            return (0, 0);
+        }
+        let mut at = idx.min(chars.len() - 1);
+        // A press just past a word still means that word, as in any editor.
+        if at > 0 && !Self::is_word_char(chars[at]) && Self::is_word_char(chars[at - 1]) {
+            at -= 1;
+        }
+        if !Self::is_word_char(chars[at]) {
+            return (at, at + 1);
+        }
+        let mut lo = at;
+        while lo > 0 && Self::is_word_char(chars[lo - 1]) {
+            lo -= 1;
+        }
+        let mut hi = at + 1;
+        while hi < chars.len() && Self::is_word_char(chars[hi]) {
+            hi += 1;
+        }
+        (lo, hi)
+    }
+
+    /// Select the word under a char index (a double click in the prompt).
+    pub fn select_word_at(&mut self, idx: usize) {
+        let (lo, hi) = self.word_bounds_at(idx);
+        self.sel_anchor = Some(lo);
+        self.cursor_pos = hi;
+        self.check_completions();
+    }
+
+    /// A press inside the prompt: place the caret, take the word (`clicks == 2`)
+    /// or the whole draft (`clicks >= 3`). False when the press was not in the
+    /// prompt at all.
+    pub fn begin_input_selection(&mut self, x: u16, y: u16, clicks: u8) -> bool {
+        let Some(idx) = self.input_char_at(x, y) else {
+            return false;
+        };
+        self.mouse_sel = None;
+        self.selecting = false;
+        match clicks {
+            0 | 1 => {
+                self.sel_anchor = None;
+                self.cursor_pos = idx;
+                self.check_completions();
+            }
+            2 => self.select_word_at(idx),
+            _ => {
+                self.select_all_input();
+            }
+        }
+        // Even a double click may be dragged on: the anchor is where it landed.
+        self.input_selecting = true;
+        true
+    }
+
+    /// The pointer moved with the button down inside the draft: the selection
+    /// grows from where the press landed to the cell under the pointer.
+    pub fn drag_input_selection(&mut self, x: u16, y: u16) {
+        if !self.input_selecting {
+            return;
+        }
+        let g = self.input_geom.get();
+        if g.rows == 0 {
+            return;
+        }
+        // Past the top or the bottom of the prompt the drag keeps extending to
+        // the first or the last visible row instead of stopping where it left.
+        let last = g.top.saturating_add(g.rows.saturating_sub(1) as u16);
+        let mut ty = y.clamp(g.top, last);
+        if y > last {
+            ty = last;
+        }
+        let Some(idx) = self.input_char_at(x, ty) else {
+            return;
+        };
+        if self.sel_anchor.is_none() {
+            self.sel_anchor = Some(self.cursor_pos);
+        }
+        self.cursor_pos = idx;
+    }
+
+    /// The button went up: the selection stays (it is a draft, not a copy).
+    pub fn finish_input_selection(&mut self) {
+        self.input_selecting = false;
+    }
+
     pub fn selected_text(&self) -> Option<String> {
         let a = self.sel_anchor?;
         let b = self.cursor_pos;
@@ -2092,6 +4066,40 @@ impl App {
     }
 
     /// Extract clean Markdown text of the Assistant response at a specific index.
+    /// The whole answer a click on `idx` refers to.
+    ///
+    /// An answer is sometimes re-sent as a second ADJACENT Assistant item (a
+    /// resumed segment). The header — and so the copy button — sits on the first
+    /// one, and copying just that item handed over half a reply.
+    pub fn assistant_run_content(&self, idx: usize) -> Option<String> {
+        if !matches!(self.messages.get(idx), Some(MessageItem::Assistant { .. })) {
+            return None;
+        }
+        let mut start = idx;
+        while start > 0
+            && matches!(self.messages.get(start - 1), Some(MessageItem::Assistant { .. }))
+        {
+            start -= 1;
+        }
+        let mut end = idx;
+        while matches!(self.messages.get(end + 1), Some(MessageItem::Assistant { .. })) {
+            end += 1;
+        }
+        let mut parts: Vec<String> = Vec::new();
+        for item in &self.messages[start..=end] {
+            if let MessageItem::Assistant { content, .. } = item {
+                if !content.trim().is_empty() {
+                    parts.push(content.trim().to_string());
+                }
+            }
+        }
+        if parts.is_empty() {
+            None
+        } else {
+            Some(parts.join("\n\n"))
+        }
+    }
+
     pub fn assistant_content_at(&self, idx: usize) -> Option<String> {
         if let Some(MessageItem::Assistant { content, .. }) = self.messages.get(idx) {
             if !content.trim().is_empty() {
@@ -2422,8 +4430,11 @@ impl App {
         self.search_query.clear();
         self.search_idx = None;
         self.search_saved = None;
+        self.history_idx = None;
+        self.saved_draft = None;
         self.last_kill_unit = None;
         self.yanked = None;
+        self.check_completions();
     }
 
     /// Restore whatever was in the line before the search started.
@@ -2525,6 +4536,7 @@ impl App {
             self.input = hist_entry.clone();
             self.cursor_pos = self.input.chars().count();
             self.collapse_selection();
+            self.check_completions();
         }
         true
     }
@@ -2543,6 +4555,7 @@ impl App {
                 self.cursor_pos = self.input.chars().count();
                 self.collapse_selection();
             }
+            self.check_completions();
         }
     }
 
@@ -2586,25 +4599,401 @@ impl App {
         if amount == 0 {
             return;
         }
-        let max = self.max_scroll.get();
         self.scroll_offset = self.scroll_offset.saturating_add(amount);
+        let max = self.max_scroll.get();
         if max > 0 && self.scroll_offset > max {
             self.scroll_offset = max;
         }
         self.auto_scroll = false;
     }
 
+    /// Let the queue conditions that just became true go.
+    ///
+    /// A message keeps its slot; it simply stops waiting, and the normal "next
+    /// message after the turn" path picks it up. Returns how many went free.
+    pub fn release_queued(&mut self, trigger: QueueTrigger, detail: &str) -> usize {
+        let detail_lc = detail.to_lowercase();
+        let mut fired = 0;
+        for m in self.message_queue.iter_mut() {
+            let go = match (&m.condition, trigger) {
+                (Some(QueueCondition::OnError { filter }), QueueTrigger::Error) => match filter {
+                    Some(f) => detail_lc.contains(&f.to_lowercase()),
+                    None => true,
+                },
+                (Some(QueueCondition::OnSuccess), QueueTrigger::Success) => true,
+                (Some(QueueCondition::OnStuck), QueueTrigger::Stuck) => true,
+                (Some(QueueCondition::At(at)), QueueTrigger::Timer) => Instant::now() >= *at,
+                _ => false,
+            };
+            if go {
+                m.condition = None;
+                fired += 1;
+            }
+        }
+        fired
+    }
+
+    /// A turn failed. Messages waiting for a failure go — unless the failure is the
+    /// provider's empty balance: the turn they would start cannot run either, so
+    /// "продолжай" against an account with no credit is noise, not recovery.
+    pub fn fire_error_conditions(&mut self, error_text: &str) -> usize {
+        if is_balance_error(error_text) {
+            if self.queue_error_seen.as_deref() != Some(error_text) {
+                self.queue_error_seen = Some(error_text.to_string());
+                self.messages.push(MessageItem::Notice(
+                    "Ошибка баланса у провайдера: сообщения «при ошибке» не отправлены — \
+                     без средств они закончатся той же ошибкой. Проверьте счёт или смените \
+                     модель (/model)."
+                        .into(),
+                ));
+            }
+            return 0;
+        }
+        self.queue_error_seen = None;
+        self.release_queued(QueueTrigger::Error, error_text)
+    }
+
+    /// Time-based conditions and the stuck check. The event loop calls this a few
+    /// times a second; it returns how many messages became ready.
+    pub fn tick_queue(&mut self) -> usize {
+        let mut fired = self.release_queued(QueueTrigger::Timer, "");
+        if self.active_step_hangs() {
+            fired += self.release_queued(QueueTrigger::Stuck, "");
+        }
+        fired
+    }
+
+    fn active_step_hangs(&self) -> bool {
+        const HANG_SECONDS: f64 = 600.0;
+        self.status.todos.iter().any(|t| {
+            t.is_active()
+                && t.since
+                    .map(|s| now_secs() - s >= HANG_SECONDS)
+                    .unwrap_or(false)
+        })
+    }
+
+    /// Open the window on one background task. The panel's row is one line; a
+    /// build's output is hundreds, and watching it must not take the output away
+    /// from the agent (that is what `read_background_command` does).
+    pub fn open_bg_view(&mut self, pid: &str) {
+        let mut view = BgView::placeholder(pid);
+        if let Some(task) = self.status.background.iter().find(|t| t.pid == pid) {
+            view.command = task.command.clone();
+            view.status = "running".into();
+            view.elapsed = task.elapsed;
+        } else if let Some(done) = self.status.bg_done.iter().find(|t| t.pid == pid) {
+            view.command = done.command.clone();
+            view.status = "done".into();
+            view.code = done.code;
+            view.elapsed = done.secs;
+        }
+        self.bg_view = Some(view);
+        self.bg_view_refresh.set(None);       // ask the bridge at once
+    }
+
+    pub fn close_bg_view(&mut self) {
+        self.bg_view = None;
+    }
+
+    /// Take a refresh from the bridge. Where the person scrolled to is kept: a
+    /// window that jumped back to the tail every half second could not be read.
+    pub fn apply_bg_view(&mut self, raw: &str) {
+        let Some(fresh) = parse_bg_view(raw) else { return };
+        if let Some(view) = self.bg_view.as_mut() {
+            if !fresh.pid.is_empty() && !view.pid.is_empty() && fresh.pid != view.pid {
+                return;                        // an answer for another window
+            }
+            if !fresh.command.is_empty() {
+                view.command = fresh.command;
+            }
+            view.status = fresh.status;
+            view.elapsed = fresh.elapsed;
+            view.code = fresh.code;
+            view.output = fresh.output;
+            view.error = fresh.error;
+            if view.pid.is_empty() {
+                view.pid = fresh.pid;
+            }
+        }
+    }
+
+    /// Rows back from the newest line: negative `delta` (wheel up) reads further
+    /// back, positive returns toward the tail.
+    pub fn bg_view_scroll(&mut self, delta: i32) {
+        let (width, height) = self.bg_view_bounds.get();
+        let Some(view) = self.bg_view.as_mut() else { return };
+        let max = view.max_scroll(width, height);
+        let next = if delta < 0 {
+            view.scroll.saturating_add(delta.unsigned_abs() as usize)
+        } else {
+            view.scroll.saturating_sub(delta as usize)
+        };
+        view.scroll = next.min(max);
+    }
+
+    /// A page of the window (PgUp/PgDn): the wheel's notch is a row, a page is the
+    /// whole height, so long output is crossed quickly.
+    pub fn bg_view_page(&mut self, up: bool) {
+        let (_, height) = self.bg_view_bounds.get();
+        let step = height.saturating_sub(2).max(1) as i32;
+        self.bg_view_scroll(if up { -step } else { step });
+    }
+
+    // ── the sub-agent window ─────────────────────────────────────────────────
+
+    /// Open the window on one sub-agent. The list row is one line; a worker's
+    /// dialogue is hundreds, and it belongs to that worker, not to the chat.
+    pub fn open_sub_view(&mut self, id: u64) {
+        let mut view = SubView { id, status: "opening".into(), ..Default::default() };
+        if let Some(run) = self.status.subagents.iter().find(|r| r.id == id) {
+            view.role = run.role.clone();
+            view.task = run.task.clone();
+            view.status = run.status.clone();
+            view.elapsed = run.elapsed;
+            view.model = run.model.clone();
+        }
+        self.sub_view = Some(view);
+        self.sub_view_refresh.set(None);        // ask the bridge at once
+        self.dirty.set(true);
+    }
+
+    pub fn close_sub_view(&mut self) {
+        if self.sub_view.is_some() {
+            self.sub_view = None;
+            self.dirty.set(true);
+        }
+    }
+
+    /// Fresh payload for the open window. Where the person scrolled to is kept: a
+    /// window that jumped back to the tail every second could not be read.
+    pub fn apply_sub_view(&mut self, raw: &str) {
+        let Some(fresh) = parse_sub_view(raw) else { return };
+        if let Some(view) = self.sub_view.as_mut() {
+            if fresh.id != 0 && view.id != 0 && fresh.id != view.id {
+                return;                        // an answer for another window
+            }
+            let keep = view.scroll;
+            *view = fresh;
+            view.scroll = keep;
+            self.dirty.set(true);
+        }
+    }
+
+    /// Rows back from the newest line (negative = further back).
+    pub fn sub_view_scroll(&mut self, delta: i32) {
+        let (width, height) = self.sub_view_bounds.get();
+        let Some(view) = self.sub_view.as_mut() else { return };
+        let max = view.max_scroll(width, height);
+        let next = if delta < 0 {
+            view.scroll.saturating_add(delta.unsigned_abs() as usize)
+        } else {
+            view.scroll.saturating_sub(delta as usize)
+        };
+        view.scroll = next.min(max);
+        self.dirty.set(true);
+    }
+
+    pub fn sub_view_page(&mut self, up: bool) {
+        let (_, height) = self.sub_view_bounds.get();
+        let step = height.saturating_sub(2).max(1) as i32;
+        self.sub_view_scroll(if up { -step } else { step });
+    }
+
+    /// True when the pointer (as last seen) is inside the rectangle.
+    fn pointer_in(&self, x: u16, y: u16, w: u16, h: u16) -> bool {
+        match self.mouse_pos {
+            Some((mx, my)) => {
+                mx >= x && mx < x.saturating_add(w) && my >= y && my < y.saturating_add(h)
+            }
+            None => false,
+        }
+    }
+
+    fn pointer_in_input(&self) -> bool {
+        let g = self.input_geom.get();
+        if g.rows == 0 {
+            return false;
+        }
+        self.pointer_in(g.left, g.top, g.avail as u16 + g.prefix, g.rows as u16)
+    }
+
+    /// The scrollable tool card under the pointer, if any. Unlike the panels, cards live
+    /// inside the transcript: several can be on screen, so the rects of the last draw
+    /// decide which one the wheel belongs to.
+    fn card_under_pointer(&self) -> Option<usize> {
+        let (x, y) = self.mouse_pos?;
+        self.card_rects
+            .borrow()
+            .iter()
+            .rev()
+            .find(|(cx, cy, cw, ch, _)| {
+                x >= *cx && x < cx.saturating_add(*cw) && y >= *cy && y < cy.saturating_add(*ch)
+            })
+            .map(|(_, _, _, _, idx)| *idx)
+    }
+
+    /// Move the window inside one tool card. `max` is what the last draw measured.
+    pub fn scroll_card(&mut self, idx: usize, delta: isize, max: usize) -> bool {
+        let cur = self.card_scroll.get(&idx).copied().unwrap_or(0).min(max);
+        let next = if delta < 0 {
+            cur.saturating_sub(delta.unsigned_abs())
+        } else {
+            cur.saturating_add(delta as usize).min(max)
+        };
+        if next == cur {
+            return false;
+        }
+        self.card_scroll.insert(idx, next);
+        self.dirty.set(true);
+        true
+    }
+
+    /// Page the focused tool card's window (PgUp/PgDn). `false` when the focus is not on
+    /// a card with more output than fits, so the chat keeps the keys.
+    pub fn page_focused_card(&mut self, up: bool) -> bool {
+        let Some(idx) = self.focus_idx else { return false };
+        if !matches!(self.messages.get(idx), Some(MessageItem::Tool { .. })) {
+            return false;
+        }
+        let max = self.card_max.borrow().get(&idx).copied().unwrap_or(0);
+        if max == 0 {
+            return false;
+        }
+        self.scroll_card(idx, if up { -10 } else { 10 }, max);
+        true
+    }
+
     /// One notch of the mouse wheel: three rows, and more the longer the wheel keeps
     /// turning (notches less than 70 ms apart in the same direction build up to
     /// twelve), so a long history is crossed in a flick and a slow turn stays fine.
     ///
+    /// Drop the live copy of a result that the finished card now carries.
+    ///
+    /// A running command prints as it goes; the bridge turns every chunk into an
+    /// `output` event, and `tool_end` then delivers the same text as the call's result.
+    /// `push_output` keeps those fragments just ABOVE the running card, which is why an
+    /// untouched transcript shows the output first and a card saying "13 строк" below it.
+    /// The fragments are removed only when they really are the result (whitespace aside):
+    /// a truncated live tail is information, not a duplicate.
+    fn absorb_streamed_output(&mut self, name: &str, result: &str) {
+        // Compare what the person SEES. The live rows still carry the colours the REPL
+        // wrote (`\x1b[2m …`), while the result arrives cleaned by Python — the raw
+        // bytes never match, and the same text looked different to the two sides.
+        let want = squash(&crate::ansi::strip_ansi(result));
+        if want.is_empty() {
+            return;
+        }
+        let Some(card) = self.messages.iter().rposition(|m| {
+            matches!(m, MessageItem::Tool { name: n, is_running: true, .. } if n == name)
+        }) else {
+            return;
+        };
+        let mut start = card;
+        while start > 0 {
+            match &self.messages[start - 1] {
+                MessageItem::Output(_) => start -= 1,
+                _ => break,
+            }
+        }
+        if start == card {
+            return;
+        }
+        // Take the block apart from its END, one row at a time. The items above the
+        // running card are not all the command's output: the approval line (“✓
+        // Авто-одобрено …”, “Чекпоинт хода позволит откатить”) lands there too, and
+        // comparing the whole block with the result could never match — the output
+        // stayed on the screen twice because of one line in front of it.
+        //
+        // Each row the result already carries is a duplicate of the card; the first
+        // row it does not carry is the boundary, and everything from there up is left
+        // alone. `run_command` wraps the child's bytes in “Exit code: N / OUTPUT:”, so
+        // containment, not equality, is what “the card carries this row” means.
+        let mut from = card;
+        while from > start {
+            let Some(MessageItem::Output(text)) = self.messages.get(from - 1) else { break };
+            let piece = squash(&crate::ansi::strip_ansi(text));
+            if !piece.is_empty() && !want.contains(&piece) {
+                break;
+            }
+            from -= 1;
+        }
+        if from < card {
+            // Nothing before `from` moves, so the grids of earlier turns stay valid.
+            self.messages.drain(from..card);
+            self.dirty.set(true);
+        }
+    }
+
     /// Turning down stops at the newest output. It never carries on into the empty
     /// space under it (`lower`): the prompt sits right under the chat, so that space
     /// pushes the input field up the screen, and a wheel is turned too freely to be
     /// allowed to move it. Only the scroll keys open that space on purpose.
+    ///
+    /// Over the checklist, the queue panel or the prompt, the wheel moves that
+    /// panel's own window instead — a scroll that silently scrolls something else
+    /// is worse than no scroll at all.
     pub fn wheel(&mut self, up: bool, now: Instant) {
+        self.dirty.set(true);
+        // An open background window is a window: it takes the wheel before anything
+        // behind it does.
+        if self.bg_view.is_some() {
+            self.bg_view_scroll(if up { -1 } else { 1 });
+            return;
+        }
+        // A tool card is a window on its own output: a wheel over it must move the card,
+        // not the chat behind it. Checked before the chat and before the panels, because
+        // the card sits in the chat itself.
+        if let Some(idx) = self.card_under_pointer() {
+            let max = self.card_max.borrow().get(&idx).copied().unwrap_or(0);
+            if max > 0 {
+                self.scroll_card(idx, if up { -3 } else { 3 }, max);
+                return;
+            }
+        }
+        // A panel with its own list takes the wheel when the pointer is over it:
+        // scrolling the chat because the pointer happened to rest on the checklist
+        // is what makes a scroll feel broken.
+        if let Some((x, y, w, h)) = self.todos_hover.get() {
+            let (back, fwd) = self.todos_scroll_bounds.get();
+            if (back > 0 || fwd > 0) && self.pointer_in(x, y, w, h) {
+                self.todos_scroll = if up {
+                    (self.todos_scroll + 1).min(back)
+                } else {
+                    (self.todos_scroll - 1).max(-fwd)
+                };
+                return;
+            }
+        }
+        if let Some((x, y, w, h)) = self.queue_hover.get() {
+            let hidden = self.message_queue.len().saturating_sub(crate::ui::QUEUE_ROWS);
+            if hidden > 0 && self.pointer_in(x, y, w, h) {
+                self.queue_scroll = if up {
+                    self.queue_scroll.saturating_sub(1)
+                } else {
+                    (self.queue_scroll + 1).min(hidden)
+                };
+                return;
+            }
+        }
+        let peek_max = self.input_geom.get().base_skip;
+        if peek_max > 0 && self.pointer_in_input() {
+            self.input_scroll = if up {
+                self.input_scroll.saturating_add(1).min(peek_max)
+            } else {
+                self.input_scroll.saturating_sub(1)
+            };
+            return;
+        }
+        // The wheel is on the chat: the prompt goes back to following its caret
+        // instead of staying peeked back at the lines above it.
+        self.input_scroll = 0;
         let streak = match self.last_wheel {
-            Some((at, was_up, n)) if was_up == up && now.duration_since(at) <= WHEEL_STREAK_GAP => (n + 1).min(9),
+            Some((at, was_up, n))
+                if was_up == up && now.checked_duration_since(at).is_some_and(|d| d <= WHEEL_STREAK_GAP) =>
+            {
+                (n + 1).min(9)
+            }
             _ => 0,
         };
         self.last_wheel = Some((now, up, streak));
@@ -2676,10 +5065,10 @@ impl App {
             if is_at_boundary {
                 let file_query = &chars_before[at_idx + 1..];
                 if !file_query.contains(' ') {
-                    self.show_file_completions = true;
                     self.show_completions = false;
                     self.file_completion_idx = 0;
                     self.find_matching_files(file_query);
+                    self.show_file_completions = !self.file_completions.is_empty();
                     return;
                 }
             }
@@ -2792,6 +5181,183 @@ impl App {
 
     /// Every command that matches what was typed. The popup shows a window of
     /// them and scrolls, so the list is not cut: `/` alone reaches all commands.
+    // ── transcript search ──────────────────────────────────────────────────
+    //
+    // Ctrl+R searches what you TYPED (input history). Finding the place where the
+    // agent said something was impossible: on a long session there was no way to
+    // get back to a paragraph you remembered reading.
+
+    pub fn search_is_open(&self) -> bool {
+        self.search.is_some()
+    }
+
+    pub fn open_search(&mut self) {
+        self.search = Some(String::new());
+        self.search_sel = 0;
+        self.show_completions = false;
+        self.show_file_completions = false;
+    }
+
+    pub fn search_close(&mut self) {
+        self.search = None;
+        self.search_sel = 0;
+    }
+
+    pub fn search_push(&mut self, ch: char) {
+        if let Some(query) = self.search.as_mut() {
+            query.push(ch);
+        }
+        self.search_sel = 0;
+    }
+
+    pub fn search_backspace(&mut self) {
+        let empty = match self.search.as_mut() {
+            Some(query) => {
+                query.pop();
+                query.is_empty()
+            }
+            None => false,
+        };
+        if empty {
+            self.search_close();
+        }
+        self.search_sel = 0;
+    }
+
+    /// Every message whose text contains the query, as (index, one-line preview).
+    pub fn search_matches(&self) -> Vec<(usize, String)> {
+        let query = self.search.as_deref().unwrap_or("").trim().to_lowercase();
+        if query.is_empty() {
+            return Vec::new();
+        }
+        let mut out = Vec::new();
+        for (idx, msg) in self.messages.iter().enumerate() {
+            let text = message_text(msg);
+            if text.to_lowercase().contains(&query) {
+                out.push((idx, search_preview(&text)));
+            }
+        }
+        out
+    }
+
+    pub fn search_move(&mut self, delta: isize) {
+        let count = self.search_matches().len();
+        if count == 0 {
+            self.search_sel = 0;
+            return;
+        }
+        let current = self.search_sel.min(count - 1) as isize;
+        self.search_sel = (current + delta).rem_euclid(count as isize) as usize;
+    }
+
+    /// Scroll to the highlighted hit. Returns false when nothing matched.
+    pub fn search_accept(&mut self) -> bool {
+        let target = {
+            let hits = self.search_matches();
+            if hits.is_empty() {
+                return false;
+            }
+            hits[self.search_sel.min(hits.len() - 1)].0
+        };
+        self.search_close();
+        self.auto_scroll = false;
+        // The frame that resolves the jump measures the real distance, but
+        // `sync_scroll` writes that measurement back only when `scroll_offset` is
+        // non-zero. Leaving it at 0 made the jump last exactly one frame and then
+        // snap back to the bottom. "As far as it goes" is the same trick
+        // `scroll_to_top` uses: the jump overrides it in this frame, and the next
+        // one adopts the measured value.
+        self.scroll_offset = usize::MAX;
+        self.jump_to.set(Some(target));
+        true
+    }
+
+    /// Take a pending jump. Called once by the draw, which knows the geometry.
+    pub fn take_jump(&self) -> Option<usize> {
+        self.jump_to.take()
+    }
+
+    // ── the command palette ────────────────────────────────────────────────
+
+    pub fn palette_is_open(&self) -> bool {
+        self.palette.is_some()
+    }
+
+    pub fn open_palette(&mut self) {
+        self.palette = Some(String::new());
+        self.palette_idx = 0;
+        // The `/` popup and the palette would fight for the same corner.
+        self.show_completions = false;
+        self.show_file_completions = false;
+    }
+
+    pub fn palette_close(&mut self) {
+        self.palette = None;
+        self.palette_idx = 0;
+    }
+
+    pub fn palette_push(&mut self, ch: char) {
+        if let Some(query) = self.palette.as_mut() {
+            query.push(ch);
+        }
+        self.palette_idx = 0;
+    }
+
+    pub fn palette_backspace(&mut self) {
+        let empty = match self.palette.as_mut() {
+            Some(query) => {
+                query.pop();
+                query.is_empty()
+            }
+            None => false,
+        };
+        // Backspacing past the start closes it, as in any search box.
+        if empty {
+            self.palette_close();
+        }
+        self.palette_idx = 0;
+    }
+
+    /// Commands whose name OR description mentions the query.
+    pub fn palette_matches(&self) -> Vec<&CompletionItem> {
+        let query = self.palette.as_deref().unwrap_or("").to_lowercase();
+        self.completions
+            .iter()
+            .filter(|c| {
+                query.is_empty()
+                    || c.name.to_lowercase().contains(&query)
+                    || c.help.to_lowercase().contains(&query)
+            })
+            .collect()
+    }
+
+    pub fn palette_move(&mut self, delta: isize) {
+        let count = self.palette_matches().len();
+        if count == 0 {
+            self.palette_idx = 0;
+            return;
+        }
+        let current = self.palette_idx.min(count - 1) as isize;
+        self.palette_idx = (current + delta).rem_euclid(count as isize) as usize;
+    }
+
+    /// Put the highlighted command into the prompt, ready for its arguments.
+    /// Returns false when nothing matched.
+    pub fn palette_accept(&mut self) -> bool {
+        let name = {
+            let matches = self.palette_matches();
+            if matches.is_empty() {
+                return false;
+            }
+            matches[self.palette_idx.min(matches.len() - 1)].name.clone()
+        };
+        self.palette_close();
+        self.input = format!("{name} ");
+        self.cursor_pos = self.input.chars().count();
+        self.check_completions();
+        true
+    }
+
     pub fn get_matched_completions(&self) -> Vec<&CompletionItem> {
         let typed: String = match &self.completion_cycle {
             Some(cycle) => cycle.typed.clone(),
@@ -2856,9 +5422,11 @@ impl App {
         let (text, cursor) = if commands {
             let name = self.get_matched_completions()[idx].name.clone();
             let cursor = name.chars().count();
-            (name, cursor)
+            (format!("{name}{}", cycle.tail), cursor)
         } else {
-            let at = cycle.typed.rfind('@').expect("checked above");
+            let Some(at) = cycle.typed.rfind('@') else {
+                return false;
+            };
             let head = format!("{}{}", &cycle.typed[..=at], self.file_completions[idx]);
             let cursor = head.chars().count();
             (format!("{head}{}", cycle.tail), cursor)
@@ -2886,8 +5454,9 @@ impl App {
             self.show_completions = false;
             let name = self.get_matched_completions_for(&typed).get(self.completion_idx).map(|c| c.name.clone());
             let Some(name) = name else { return false };
-            self.cursor_pos = name.chars().count();
-            self.input = name;
+            let cursor = name.chars().count();
+            self.input = format!("{name}{tail}");
+            self.cursor_pos = cursor;
             return true;
         }
         if self.show_file_completions && !self.file_completions.is_empty() {
@@ -2959,5 +5528,51 @@ impl App {
 impl Default for App {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod output_tests {
+    use super::*;
+
+    fn running_tool() -> MessageItem {
+        MessageItem::Tool {
+            name: "run_command".to_string(),
+            args: HashMap::new(),
+            result: None,
+            duration_secs: None,
+            expanded: false,
+            is_running: true,
+        }
+    }
+
+    #[test]
+    fn output_fragments_join_until_a_newline_ends_the_line() {
+        // The REPL prints a command's output write by write with `end=""`; a write
+        // that starts mid-line has to land on the row the previous one left open.
+        let mut app = App::new();
+        app.push_output(" M".to_string());
+        app.push_output(" .github/ci.yml\n".to_string());
+        assert_eq!(app.messages.len(), 1);
+        match &app.messages[0] {
+            MessageItem::Output(text) => assert_eq!(text, " M .github/ci.yml\n"),
+            _ => panic!("expected one joined output item"),
+        }
+        // A finished line takes the next fragment with it.
+        app.push_output(" M .gitignore\n".to_string());
+        assert_eq!(app.messages.len(), 2);
+    }
+
+    #[test]
+    fn output_lands_before_the_tool_that_is_still_running() {
+        let mut app = App::new();
+        app.messages.push(running_tool());
+        app.push_output("first\n".to_string());
+        app.push_output("second\n".to_string());
+        assert_eq!(app.messages.len(), 3);
+        assert!(matches!(app.messages[0], MessageItem::Output(_)));
+        assert!(matches!(app.messages[1], MessageItem::Output(_)));
+        // The placeholder stays last, so the result still lands under its output.
+        assert!(matches!(app.messages[2], MessageItem::Tool { is_running: true, .. }));
     }
 }

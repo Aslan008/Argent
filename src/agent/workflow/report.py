@@ -36,7 +36,16 @@ def render(state: RunState, final_log: Optional[List[str]] = None, brief: bool =
             tail.append(f"критик: {s.verdict}")
         if s.changed:
             tail.append("файлы: " + ", ".join(s.changed[:5]) + (f" и ещё {len(s.changed) - 5}" if len(s.changed) > 5 else ""))
+        if s.model or s.thinking:
+            # Whose balance this step spent: chosen, not guessed.
+            where = f"{s.provider}:" if s.provider else ""
+            where += s.model or "основная"
+            tail.append(where + (f", мышление {s.thinking}" if s.thinking else ""))
         lines.append(f"{_MARK.get(s.status, '?')} {s.id}. {s.title}" + (f" ({'; '.join(tail)})" if tail else ""))
+        if s.status == RUNNING and s.progress:
+            lines.append(f"    сейчас: {s.progress[:150]}")
+        for line in s.verified[:3]:
+            lines.append(f"    {line[:150]}")
         if s.status in (FAILED, SKIPPED) and s.error:
             lines.append(f"    причина: {s.error.splitlines()[0][:200]}")
 

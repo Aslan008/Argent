@@ -1,7 +1,7 @@
 """Conditional unescape: never corrupt a literal \\n that lives inside real code."""
 
-from tools._helpers import _maybe_unescape_content
-from tools.file_ops import write_file
+from argent.tools._helpers import _maybe_unescape_content
+from argent.tools.file_ops import write_file
 
 
 def test_real_newlines_preserve_literal_backslash_n():

@@ -160,7 +160,7 @@ class Rules:
         if self.no_tools:
             return []
         if tools is None:
-            from tools.schemas import AVAILABLE_TOOLS
+            from argent.tools.schemas import AVAILABLE_TOOLS
             tools = list(AVAILABLE_TOOLS)
         return [t for t in tools if self.tool_block(t) is None]
 

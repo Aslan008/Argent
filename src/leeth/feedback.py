@@ -29,7 +29,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from src.leeth.dataset_generator import LeethSample
-from logger import get_logger
+from argent.logger import get_logger
 
 logger = get_logger("leeth_feedback")
 
@@ -65,7 +65,7 @@ def _is_enabled() -> bool:
     if "pytest" in sys.modules:
         return False
     try:
-        import config
+        import argent.config as config
         return config.get_leeth_feedback_enabled()
     except Exception:
         return True
@@ -195,6 +195,31 @@ def attach_dispatch(decision_id: str, tool_name: str, arguments: Dict[str, Any])
         return _update_record(decision_id, _mutate)
     except Exception as exc:
         logger.debug("attach_dispatch failed: %s", exc)
+        return False
+
+
+def attach_arbitrator(decision_id: str, sat: bool, core: Optional[Any] = None,
+                      latency_ms: Optional[float] = None) -> bool:
+    """Attaches the CDCL arbitrator's verdict to a decision record — as a priority, never as a block.
+
+    Why it is not a block: the solver is right about 100% of the conflicts it can be checked on
+    (measured 2026-11-06 by re-running each disputed call), but it costs 45 ms on average and up to
+    3 s in the tail, against a fast path that promises 60-190 ms. So its disagreement is recorded and
+    surfaced first in `/leeth review`, where a person turns it into a label, instead of costing the
+    request an answer.
+    """
+    def _mutate(rec: Dict[str, Any]) -> None:
+        rec["arbitrator"] = {
+            "sat": bool(sat),
+            "core": [str(c) for c in (core or [])][:4],
+            "latency_ms": round(float(latency_ms), 2) if latency_ms is not None else None,
+            "ts": time.time(),
+        }
+
+    try:
+        return _update_record(decision_id, _mutate)
+    except Exception as exc:
+        logger.debug("attach_arbitrator failed: %s", exc)
         return False
 
 

@@ -1,9 +1,9 @@
 """Unity .meta write-guard + actionable fuzzy-ambiguity error in replace_in_file,
 plus skipping the slow/unreliable dotnet build for Unity project files."""
 
-import tools._helpers as helpers
-from tools._helpers import _is_unity_project_file, _validate_code_syntax
-from tools.file_ops import (
+import argent.tools._helpers as helpers
+from argent.tools._helpers import _is_unity_project_file, _validate_code_syntax
+from argent.tools.file_ops import (
     append_to_file, multi_replace_in_file_chunk, replace_in_file, write_file,
 )
 
@@ -105,8 +105,8 @@ class TestUnityValidationSkip:
 
 class TestPluginGuard:
     def test_small_model_blocked_from_direct_plugin_edit(self, tmp_path, monkeypatch):
-        import config
-        from hook_manager import hook_manager
+        import argent.config as config
+        from argent.hook_manager import hook_manager
 
         plugins_dir = tmp_path / "plugins"
         plugins_dir.mkdir()
@@ -123,8 +123,8 @@ class TestPluginGuard:
         assert plugin_file.read_text(encoding="utf-8") == "print('hello')"
 
     def test_medium_model_allowed_and_auto_reloads(self, tmp_path, monkeypatch):
-        import config
-        from hook_manager import hook_manager
+        import argent.config as config
+        from argent.hook_manager import hook_manager
 
         plugins_dir = tmp_path / "plugins"
         plugins_dir.mkdir()
@@ -145,7 +145,7 @@ class TestPluginGuard:
         assert len(reloaded) == 1
 
     def test_non_python_file_in_plugins_blocked(self, tmp_path, monkeypatch):
-        import config
+        import argent.config as config
         plugins_dir = tmp_path / "plugins"
         plugins_dir.mkdir()
         monkeypatch.setattr(config, "get_hooks_dir", lambda: str(plugins_dir))

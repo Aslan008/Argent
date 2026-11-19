@@ -1,6 +1,6 @@
 import pytest
 
-import doctor
+import argent.doctor as doctor
 
 
 @pytest.fixture(autouse=True)
@@ -38,7 +38,7 @@ class TestBundledChromium:
     """The Chromium revision is pinned to the installed Playwright; a stale download must be reported in words."""
 
     def _make(self, tmp_path, monkeypatch, installed):
-        import browser_detect
+        import argent.browser_detect as browser_detect
         monkeypatch.setenv("PLAYWRIGHT_BROWSERS_PATH", str(tmp_path))
         needed = browser_detect.bundled_chromium_status()["needed"]
         for folder in installed(needed):

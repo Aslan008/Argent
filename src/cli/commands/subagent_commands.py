@@ -4,7 +4,7 @@ from rich.syntax import Syntax
 
 from src.cli.commands.base import CommandContext, CommandResult
 from src.cli.commands.registry import registry
-from ui import console, print_error, print_system
+from argent.ui import console, print_error, print_system
 
 _USAGE = ("/agents — список; /agents <N> — отчёт; /agents diff <N> — патч; /agents apply <N> — применить правки "
           "изолированного подагента; /agents discard <N> — выбросить; /agents stop <N> — остановить")

@@ -30,7 +30,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-from logger import get_logger
+from argent.logger import get_logger
 
 log = get_logger("memory")
 
@@ -216,7 +216,7 @@ class NodeStore:
     def put(self, name: str, description: str, body: str, type: str = "project", source: str = "agent",
             now: Optional[datetime] = None) -> WriteResult:
         """Create or replace a note. Secrets are removed first; a `user` note is not replaced by anyone else."""
-        from atomic_io import atomic_write_text
+        from argent.atomic_io import atomic_write_text
         from src.agent.secret_redactor import redact
 
         name = normalize_name(name)
@@ -307,7 +307,7 @@ class NodeStore:
         return [f"- [{n.name}]({n.name}.md) — {n.description}" for n in nodes]
 
     def rebuild_index(self) -> Path:
-        from atomic_io import atomic_write_text
+        from argent.atomic_io import atomic_write_text
         lines = self.index_lines()
         if len(lines) > INDEX_MAX_LINES:
             extra = len(lines) - INDEX_MAX_LINES + 1

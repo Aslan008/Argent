@@ -32,7 +32,7 @@ import os
 import threading
 from datetime import datetime
 
-from logger import get_logger
+from argent.logger import get_logger
 from src.automation.schedule import ScheduleError, is_due, parse_schedule
 from src.automation.store import (
     claim_run, get_automation, load_automations, pause_until, release_run, running_elsewhere,

@@ -16,8 +16,8 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import config
-from providers import create_provider
+import argent.config as config
+from argent.providers import create_provider
 
 
 def main():

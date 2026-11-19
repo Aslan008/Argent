@@ -19,7 +19,7 @@ import time
 
 import pytest
 
-import mcp_client
+import argent.mcp_client as mcp_client
 from src.agent import shell
 
 psutil = pytest.importorskip("psutil")

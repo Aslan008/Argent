@@ -33,12 +33,11 @@ def test_markup_in_a_value_is_not_interpreted():
     assert "\\[bold]" in lines[0]            # escaped for rich
 
 
-def test_desktop_on_with_no_allowed_apps_says_nothing_will_work(monkeypatch):
+def test_desktop_is_reported_as_on_and_where_it_may_act(monkeypatch):
     from src.automation import desktop_guard
     monkeypatch.setattr(desktop_guard, "enabled", lambda: True)
-    monkeypatch.setattr(desktop_guard, "allowed_apps", lambda: [])
     name, level, text = so._desktop()
-    assert level == so.ATTENTION and "пуст" in text
+    assert level == so.OK and "парол" in text
 
 
 def test_unfinished_room_run_is_flagged(monkeypatch, tmp_path):

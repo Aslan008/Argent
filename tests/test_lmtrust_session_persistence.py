@@ -21,8 +21,8 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 import pytest
 
-import session as session_mod
-from session import (
+import argent.session as session_mod
+from argent.session import (
     _sanitize_for_filename,
     _first_user_message,
     _make_serializable,
@@ -162,7 +162,7 @@ class TestL5RelativeTimeFormatting:
 
     def test_format_relative_time_yesterday_and_older(self):
         now = datetime(2026, 8, 28, 15, 0, 0)
-        with patch("session.datetime") as mock_dt:
+        with patch("argent.session.datetime") as mock_dt:
             mock_dt.now.return_value = now
             mock_dt.fromisoformat = datetime.fromisoformat
             mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)

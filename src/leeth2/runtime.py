@@ -21,7 +21,7 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, Union
 import numpy as np
 import torch
 
-from ..leeth.primitives import (  # shared result types: callers do not care which model answered
+from ..leeth.primitives import (  
     BaseQuestion,
     ChoiceQuestion,
     ChoiceResult,
@@ -36,6 +36,7 @@ from ..leeth.primitives import (  # shared result types: callers do not care whi
 )
 from .encoding import Leeth2Encoder
 from .evaluate import Prediction, predict
+from .window import shrink
 from .model import Leeth2Model, compress_for_inference
 from .schema import Sample
 
@@ -69,6 +70,23 @@ class Leeth2Runtime:
         self.encoder = encoder
         self.device = device
         self.amp = device.startswith("cuda")
+        # A list longer than ``shortlist_above`` options can be cut to ``shortlist_k`` by an outside retriever first (off unless
+        # set_shortlist is called). Why it exists: the encoder gives each option ``cap`` tokens, which is ~48 at 8-32 options and
+        # ~15 at 128-255, so the model reads big lists with half-erased descriptions — accuracy 0.57-0.62 against 0.77-0.82 at 8.
+        # Measured 2026-11-04 on the frozen exams: with the right option among 96 candidates the same model answers 0.762 at
+        # 128-option lists against 0.569 in one pass (an embedding retriever, see reports/leeth3_decision_2026-11-04.md §4b).
+        self.retriever: Optional[Callable[[str, str, List[str], int], Sequence[str]]] = None
+        self.shortlist_above = 64
+        self.shortlist_k = 96
+
+    def set_shortlist(self, retriever: Optional[Callable[[str, str, List[str], int], Sequence[str]]],
+                      above: int = 64, k: int = 96) -> None:
+        """Install a two-stage chooser: ``retriever(state, question, options, k)`` returns at most ``k`` of the options, and only
+        those are asked. It must never invent an option — the answer and the confidences are then relative to what it returned,
+        exactly like ``choose_gated``. ``None`` turns the stage off again."""
+        self.retriever = retriever
+        self.shortlist_above = int(above)
+        self.shortlist_k = int(k)
 
     @classmethod
     def load(cls, path: str | Path, device: Optional[str] = None, max_len: Optional[int] = None, compress: Optional[str] = None) -> "Leeth2Runtime":
@@ -139,6 +157,38 @@ class Leeth2Runtime:
                 return out
             a += step
 
+    def fit_state(self, state: str, question: str, budget_tokens: int = 0) -> str:
+        """What the model gets to read from a long state: the parts that relate to the question.
+
+        The encoder keeps the first 70 % and the last 30 % of a long state (src/leeth2/encoding.py:174), so a fact in the middle is
+        never shown to the model — the frozen long exam scored 0.52-0.56 there, the same as guessing, against 0.76 at the edges.
+        Measured with this window instead (2026-11-04, 80 items per condition, same weights): the WORST position rose 0.06-0.11
+        (0.525→0.625, 0.563→0.625, 0.550→0.663) and the average over nine conditions rose from 0.679 to 0.692, at no cost in memory
+        or latency — it is word overlap over the lines of the text.
+
+        LEETH2_WINDOW=0 turns it off (the model then reads head-and-tail as it did before).
+        """
+        if not state or not state.strip():
+            return state
+        if os.environ.get("LEETH2_WINDOW", "1").strip() in ("0", "false", "no"):
+            return state
+        budget = int(budget_tokens or (self.encoder.max_len or 4096) * 0.95)
+        try:
+            tok = self.encoder.tok
+            if len(tok(state)["input_ids"]) <= budget:
+                return state
+            chars = int(budget * 3.4)            # Cyrillic measures ~3.8 chars per token here; a low estimate keeps the result inside
+            out = state
+            for _ in range(6):
+                out = shrink(state, question, chars)
+                n = len(tok(out)["input_ids"])
+                if n <= budget:
+                    break
+                chars = max(400, int(chars * budget / max(1, n) * 0.95))
+            return out
+        except Exception:                        # never lose an answer because the window could not be computed
+            return state
+
     def decide(self, state: str, questions: Sequence[BaseQuestion]) -> LeethDecisionBatch:
         t0 = time.perf_counter()
         wins = self._state_windows(state) if any(isinstance(q, ExtractQuestion) for q in questions) else None
@@ -153,7 +203,7 @@ class Leeth2Runtime:
                     rows.append((len(samples) - 1, a))
                 plan.append(rows)
             else:
-                samples.append(self._to_sample(state, q))
+                samples.append(self._to_sample(self.fit_state(state, q.question), q))
                 plan.append([(len(samples) - 1, 0)])
         preds = predict(self.model, self.encoder, samples, device=self.device, amp=self.amp, calibrated=True, tokens_per_batch=24000)
         results: Dict[str, LeethResult] = {}
@@ -236,7 +286,12 @@ class Leeth2Runtime:
         return self._many(states, ChoiceQuestion("q", question, list(options)))  # type: ignore[return-value]
 
     def choose(self, state: str, question: str, options: Sequence[str]) -> ChoiceResult:
-        return self.decide(state, [ChoiceQuestion("q", question, list(options))])["q"]  # type: ignore[return-value]
+        opts = list(options)
+        if self.retriever is not None and len(opts) > self.shortlist_above:
+            cut = [o for o in self.retriever(state, question, opts, self.shortlist_k) if o in set(opts)]
+            if cut:
+                opts = cut                          # two stages: the retriever cuts, the model answers on full descriptions
+        return self.decide(state, [ChoiceQuestion("q", question, opts)])["q"]  # type: ignore[return-value]
 
     def judge(self, state: str, question: str) -> NoulResult:
         return self.decide(state, [NoulQuestion("q", question)])["q"]  # type: ignore[return-value]

@@ -5,9 +5,9 @@ from unittest.mock import MagicMock
 
 import pytest
 
-import agent as agent_module
-import config
-from agent import ArgentAgent
+import argent.agent as agent_module
+import argent.config as config
+from argent.agent import ArgentAgent
 
 
 @pytest.fixture
@@ -47,7 +47,7 @@ class TestStableSystemPrompt:
         assert "REPOSITORY MAP" in eph                     # cwd listing moved here
 
     def test_ephemeral_reports_background_processes(self, agent, monkeypatch):
-        import tools
+        import argent.tools as tools
         monkeypatch.setitem(tools.ACTIVE_PROCESSES, "99", {"command": "x"})
         try:
             eph = agent._build_ephemeral_context()
@@ -102,7 +102,10 @@ class TestTrimHysteresis:
         monkeypatch.setattr(agent, "_estimate_tokens", lambda text: 1)
         monkeypatch.setattr(agent_module, "get_context_window", lambda: 100000)
         agent.max_history_messages = 10
-        self._fill(agent, 8)                                # 16 msgs > 10 -> trim fires
+        self._fill(agent, 8)                                # 16 msgs > 10
+        # Both limits must be exceeded before a summarising trim: a count overrun
+        # with room still in the window is not worth paying a distillation for.
+        monkeypatch.setattr(agent, "_history_budget", lambda: 5)
 
         calls = {}
         real_trim = agent.strategy.trim_history
@@ -115,7 +118,9 @@ class TestTrimHysteresis:
         agent._trim_history()
         assert calls["max_msgs"] == 6                       # 60% of 10: deep cut
 
-        # Headroom earned: next few turns must be no-ops (append-only).
+        # Headroom earned: with the history back inside its budget, the next turns
+        # must be no-ops (append-only).
+        monkeypatch.setattr(agent, "_history_budget", lambda: 100000)
         after = list(agent.messages)
         agent.messages.append({"role": "user", "content": "next"})
         agent.messages.append({"role": "assistant", "content": "ok"})

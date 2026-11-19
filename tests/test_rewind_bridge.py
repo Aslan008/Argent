@@ -6,9 +6,9 @@ from unittest.mock import MagicMock
 
 import pytest
 
-import agent as agent_module
-import config
-from agent import ArgentAgent
+import argent.agent as agent_module
+import argent.config as config
+from argent.agent import ArgentAgent
 from src.agent.checkpoints import set_auto_checkpoint
 from src.bridge.repl_bridge import ReplBridge
 
@@ -89,7 +89,9 @@ def test_back_with_nothing_to_go_back_to_is_an_error_not_a_crash(setup):
     repo, agent, bridge, events = setup
     run_command(bridge, events, "/back -y")
     assert not [e for e in events if e.get("type") == "rewound"]
-    assert any("Нет сообщения" in str(e.get("text", "")) for e in events if e.get("type") in ("error", "notice", "system"))
+    # Console text reaches the frontend as `output` (a stream of fragments that
+    # belong to one line); `notice` is a message of its own.
+    assert any("Нет сообщения" in str(e.get("text", "")) for e in events if e.get("type") in ("error", "notice", "system", "output"))
 
 
 def test_a_refused_file_rewind_changes_nothing_and_sends_no_event(setup):

@@ -17,7 +17,7 @@ import inspect
 
 import pytest
 
-from tools.schemas import AVAILABLE_TOOLS, INTERACTIVE_TOOLS
+from argent.tools.schemas import AVAILABLE_TOOLS, INTERACTIVE_TOOLS
 
 import re
 
@@ -73,39 +73,43 @@ class TestTheCliUsesIt:
         assert "interactive_tools = {" not in source
 
     def test_a_prompting_tool_gets_no_spinner(self):
-        from tools.schemas import INTERACTIVE_TOOLS as declared
+        from argent.tools.schemas import INTERACTIVE_TOOLS as declared
         assert "request_user_approval" in declared      # -> use_spinner is False
 
 
 class TestDismissalIsNotConsent:
-    def test_escaping_the_prompt_does_not_approve(self, monkeypatch):
+    """The tool goes through the shared approval channel now, so the seam these tests
+    drive is the channel's backend — not questionary, which the tool no longer calls."""
+
+    @pytest.fixture(autouse=True)
+    def _clean_backend(self, monkeypatch):
+        from argent.approval import reset_approval_backend
+
+        from argent.tools import misc_tools
+
+        monkeypatch.setattr(misc_tools.memory, "add_completed", lambda *a: None)
+        yield
+        reset_approval_backend()
+
+    def _answer_with(self, decision):
+        from argent.approval import set_approval_backend
+
+        set_approval_backend(lambda action, destructive, grant_key: decision)
+
+    def test_escaping_the_prompt_does_not_approve(self):
         """Ctrl+C at an approval prompt must not start the very work the user
         was declining to authorise."""
-        from tools import misc_tools
+        from argent.tools import misc_tools
 
-        class _Q:
-            @staticmethod
-            def confirm(*a, **k):
-                return type("A", (), {"ask": lambda s: None})()
-
-        monkeypatch.setitem(__import__("sys").modules, "questionary", _Q)
-        monkeypatch.setattr(misc_tools.memory, "add_completed", lambda *a: None)
+        self._answer_with("cancel")          # Esc: nobody answered
         out = misc_tools.request_user_approval("удалить всё")
+        assert out.startswith("CANCELLED")
         assert "NO" in out and "do not proceed" in out
 
-    def test_yes_and_no_still_work(self, monkeypatch):
-        from tools import misc_tools
+    def test_yes_and_no_still_work(self):
+        from argent.tools import misc_tools
 
-        def _answering(value):
-            class _Q:
-                @staticmethod
-                def confirm(*a, **k):
-                    return type("A", (), {"ask": lambda s: value})()
-            return _Q
-
-        monkeypatch.setattr(misc_tools.memory, "add_completed", lambda *a: None)
-        import sys
-        monkeypatch.setitem(sys.modules, "questionary", _answering(True))
-        assert "approved" in misc_tools.request_user_approval("план")
-        monkeypatch.setitem(sys.modules, "questionary", _answering(False))
+        self._answer_with("once")
+        assert "APPROVED" in misc_tools.request_user_approval("план")
+        self._answer_with("deny")
         assert "REJECTED" in misc_tools.request_user_approval("план")

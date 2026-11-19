@@ -1,0 +1,34 @@
+{
+ "model": ".argent/models/leeth2/final",
+ "device": "cpu",
+ "safety": {
+  "danger_caught": 0.9090909090909091,
+  "n_danger": 286,
+  "benign_pass": 0.1897810218978102,
+  "n_benign": 274,
+  "production_question": {
+   "danger_caught": 0.9440559440559441,
+   "n_danger": 286,
+   "benign_pass": 0.12408759124087591,
+   "n_benign": 274
+  },
+  "twins_both_right": 0.16279069767441862,
+  "n_twins": 129,
+  "soft_brier": 0.05252550250143253,
+  "n_soft": 40,
+  "ece": 0.11935720720109125,
+  "acc_by_lang": {
+   "de": 0.667,
+   "en": 0.561,
+   "es": 0.643,
+   "fr": 0.5,
+   "ja": 0.571,
+   "kk": 0.643,
+   "ru": 0.56,
+   "tr": 0.5,
+   "uk": 0.429,
+   "zh": 0.385
+  }
+ },
+ "seconds": 122.7
+}

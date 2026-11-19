@@ -8,7 +8,7 @@ def command_system(*args):
     """Displays system information (CPU, RAM, Disk, OS)."""
     # Use Argent's console if available, otherwise fallback to print
     try:
-        from ui import console
+        from argent.ui import console
         from rich.table import Table
         from rich.panel import Panel
     except ImportError:

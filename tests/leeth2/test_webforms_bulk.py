@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from src.leeth import bulk, webforms  # noqa: E402
+from src.leeth import bulk, webforms  
 
 
 class FakeRT:
@@ -212,7 +212,7 @@ def test_classify_categories_and_validation():
 
 # ------------------------------------------------------------------------------------------------------------------ tools
 def test_leeth_map_tool(monkeypatch):
-    import tools.leeth_bulk_tools as T
+    import argent.tools.leeth_bulk_tools as T
 
     monkeypatch.setattr(T, "_leeth2", lambda: FakeRT(many_yes={"борщ": 0.97, "новости": 0.02}))
     out = json.loads(T.leeth_map(json.dumps(["борщ", "новости"]), "Это рецепт?"))
@@ -225,7 +225,7 @@ def test_leeth_map_tool(monkeypatch):
 
 
 def test_click_many_refuses_without_a_scan_and_guards_destructive_elements(monkeypatch):
-    import tools.leeth_bulk_tools as T
+    import argent.tools.leeth_bulk_tools as T
 
     T._LAST_SCAN.clear()
     assert T.leeth_click_many("[1]").startswith("Error: nothing to click")
@@ -236,7 +236,7 @@ def test_click_many_refuses_without_a_scan_and_guards_destructive_elements(monke
 
 
 def test_a_button_whose_label_is_the_items_title_is_still_destructive_by_its_text(monkeypatch):
-    import tools.leeth_bulk_tools as T
+    import argent.tools.leeth_bulk_tools as T
 
     T._LAST_SCAN["default"] = {7: {"label": "Рецепт борща с говядиной", "href": "", "text": "Удалить"}}
     msg = T.leeth_click_many("[7]")
@@ -256,8 +256,8 @@ def test_unlabeled_boxes_are_reported_and_a_payment_button_is_never_the_submit_c
 
 def test_the_new_tools_are_registered_with_schemas_and_plan_mode_knows_which_change_the_page():
     from src.agent.plan_mode import MUTATING_TOOLS
-    from tools.lazy_registry import DEFAULT_TOOL_LOADERS
-    from tools.schemas import TOOL_SCHEMAS
+    from argent.tools.lazy_registry import DEFAULT_TOOL_LOADERS
+    from argent.tools.schemas import TOOL_SCHEMAS
 
     names = {s["function"]["name"] for s in TOOL_SCHEMAS}
     for t in ("leeth_map", "leeth_scan_page", "leeth_click_many", "leeth_fill_form"):
@@ -306,7 +306,7 @@ def test_summary_lists_unsure_items_strongest_first():
 
 
 def test_leeth_map_hints_at_examples_when_most_items_are_unsure(monkeypatch):
-    import tools.leeth_bulk_tools as T
+    import argent.tools.leeth_bulk_tools as T
 
     items = [f"текст {i}" for i in range(8)]
     monkeypatch.setattr(T, "_leeth2", lambda: FakeRT(many_yes={t: 0.5 for t in items}))
@@ -319,7 +319,7 @@ def test_leeth_map_hints_at_examples_when_most_items_are_unsure(monkeypatch):
 
 
 def test_post_text_loses_its_buttons_captions_but_keeps_the_context_key():
-    from tools.leeth_bulk_tools import _post_items, _strip_ui_tail
+    from argent.tools.leeth_bulk_tools import _post_items, _strip_ui_tail
 
     assert _strip_ui_tail("Курьер опоздал Нравится В закладки", ["Нравится", "В закладки"]) == "Курьер опоздал"
     assert _strip_ui_tail("Нравится", ["Нравится"]) == "Нравится"  # never to an empty text
@@ -369,14 +369,14 @@ class FakeEngine:
 
 
 def _engine(monkeypatch, fake):
-    import browser_engine as BE
+    import argent.browser_engine as BE
 
     monkeypatch.setattr(BE, "browser_engine", fake)
     return fake
 
 
 def test_scan_posts_scrolls_collects_new_posts_and_stops_when_nothing_new_appears(monkeypatch):
-    import tools.leeth_bulk_tools as T
+    import argent.tools.leeth_bulk_tools as T
 
     a, b, c = "Курьер опоздал, жалоба на доставку", "Рецепт борща", "Заказ не пришёл, жалоба"
     eng = _engine(monkeypatch, FakeEngine([[a], [a, b], [a, b, c], [a, b, c], [a, b, c], [a, b, c]]))
@@ -388,7 +388,7 @@ def test_scan_posts_scrolls_collects_new_posts_and_stops_when_nothing_new_appear
 
 
 def test_identical_buttons_of_different_posts_are_told_apart_by_the_posts_text(monkeypatch):
-    import tools.leeth_bulk_tools as T
+    import argent.tools.leeth_bulk_tools as T
 
     a, b = "Курьер опоздал, жалоба на доставку", "Рецепт борща"
     eng = _engine(monkeypatch, FakeEngine([[a, b]]))
@@ -402,7 +402,7 @@ def test_identical_buttons_of_different_posts_are_told_apart_by_the_posts_text(m
 
 
 def test_a_post_that_left_the_page_is_skipped_not_clicked_by_mistake(monkeypatch):
-    import tools.leeth_bulk_tools as T
+    import argent.tools.leeth_bulk_tools as T
 
     a = "Курьер опоздал, жалоба на доставку"
     eng = _engine(monkeypatch, FakeEngine([[a, "Другой пост про погоду и ветер"], ["Совсем другой пост про море и пляж", "И ещё один про лес"]]))
@@ -433,7 +433,7 @@ def test_the_page_scripts_of_block_reading_are_valid_javascript():
     node = shutil.which("node")
     if not node:
         pytest.skip("node is not installed")
-    from browser_engine import BrowserEngine
+    from argent.browser_engine import BrowserEngine
 
     lib = BrowserEngine._BLOCKS_LIB_JS
     for name in ("_TEXT_BLOCKS_JS", "_BLOCK_CONTEXT_JS"):

@@ -15,10 +15,10 @@ import pytest
 from pathlib import Path
 
 from src.cli.commands.registry import registry, CommandContext
-from tools.file_ops import read_file, multi_replace_in_file_chunk
-from tools.misc_tools import calculate
-from tools.security_tools import audit_security
-from rag_engine import OllamaEmbeddingFunction
+from argent.tools.file_ops import read_file, multi_replace_in_file_chunk
+from argent.tools.misc_tools import calculate
+from argent.tools.security_tools import audit_security
+from argent.rag_engine import OllamaEmbeddingFunction
 
 
 class DummyAgent:

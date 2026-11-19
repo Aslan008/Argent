@@ -3,16 +3,16 @@
 import pytest
 from unittest.mock import patch, MagicMock
 
-import tools.stagehand_tools as sht
-from tools.stagehand_tools import (
+import argent.tools.stagehand_tools as sht
+from argent.tools.stagehand_tools import (
     browser_act,
     browser_extract,
     browser_observe,
     reset_stagehand,
     _get_llm_config,
 )
-from tools.schemas import AVAILABLE_TOOLS, TOOL_SCHEMAS
-from browser_engine import browser_engine
+from argent.tools.schemas import AVAILABLE_TOOLS, TOOL_SCHEMAS
+from argent.browser_engine import browser_engine
 
 
 class TestStagehandRegistration:
@@ -38,7 +38,7 @@ class TestStagehandRegistration:
         assert "extract" in inspect_schema["parameters"]["properties"]["mode"]["enum"]
 
     def test_reexported_in_browser_tools(self):
-        import tools.browser_tools as bt
+        import argent.tools.browser_tools as bt
         assert hasattr(bt, "browser_act")
         assert hasattr(bt, "browser_extract")
         assert hasattr(bt, "browser_observe")
@@ -47,6 +47,7 @@ class TestStagehandRegistration:
         assert hasattr(bt, "browser_inspect")
 
 
+@pytest.mark.skipif(not sht.STAGEHAND_AVAILABLE, reason="stagehand v4 (npm) is not installed — this needs the real browser path")
 class TestStagehandWithoutBrowser:
     """Verify safe error reporting when no browser session is active."""
 
@@ -121,10 +122,11 @@ class TestStagehandLifecycleAndConfig:
         assert cfg["model"] == "anthropic/claude-3-7-sonnet"
         assert cfg["model_api_key"] == "sk-ant-test-12345"
 
+    @pytest.mark.skipif(not sht.STAGEHAND_AVAILABLE, reason="stagehand v4 (npm) is not installed — this needs the real browser path")
     def test_llm_config_native_argent_bridge(self, monkeypatch):
         monkeypatch.delenv("OPENAI_API_KEY", raising=False)
         monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-        monkeypatch.setattr("config.get_openrouter_api_key", lambda: None)
+        monkeypatch.setattr("argent.config.get_openrouter_api_key", lambda: None)
         cfg = _get_llm_config()
         assert "model" in cfg
         # In native fallback, returns ClientLLM instance

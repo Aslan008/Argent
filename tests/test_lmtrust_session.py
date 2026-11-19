@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-import session as session_mod
+import argent.session as session_mod
 
 
 # ---------------------------------------------------------------------------

@@ -2,7 +2,7 @@ from types import SimpleNamespace
 
 import pytest
 
-import tools.command_ops as co
+import argent.tools.command_ops as co
 
 
 class FakeProc:
@@ -68,8 +68,8 @@ class TestListBackgroundCommands:
 
 class TestRegistration:
     def test_tool_registered_everywhere(self):
-        import tools
-        from tools.schemas import AVAILABLE_TOOLS, TOOL_SCHEMAS
+        import argent.tools as tools
+        from argent.tools.schemas import AVAILABLE_TOOLS, TOOL_SCHEMAS
         assert "list_background_commands" in AVAILABLE_TOOLS
         assert hasattr(tools, "list_background_commands")
         names = [s["function"]["name"] for s in TOOL_SCHEMAS]

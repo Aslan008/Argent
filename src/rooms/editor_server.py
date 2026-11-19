@@ -177,7 +177,7 @@ class EditorServer:
     def _mcp_call_timeout() -> float:
         """How long Argent waits for one MCP call (the page warns about slow web-AI questions with it)."""
         try:
-            from config import get_mcp_call_timeout
+            from argent.config import get_mcp_call_timeout
             return float(get_mcp_call_timeout())
         except Exception:
             return 120.0

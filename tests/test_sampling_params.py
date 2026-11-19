@@ -5,8 +5,8 @@ including configuration, provider propagation, and CLI commands.
 from unittest.mock import MagicMock, patch
 import pytest
 
-import config
-from providers import OllamaProvider, OpenAICompatibleProvider
+import argent.config as config
+from argent.providers import OllamaProvider, OpenAICompatibleProvider
 from src.cli.commands import dispatch_command, CommandContext
 
 
@@ -108,7 +108,7 @@ class TestProviderPropagation:
         config.set_top_k(25)
         config.set_repeat_penalty(1.15)
 
-        from providers import OllamaProvider
+        from argent.providers import OllamaProvider
         provider = OllamaProvider()
         captured_kwargs = {}
 
@@ -132,7 +132,7 @@ class TestProviderPropagation:
         config.set_top_k(40)
         config.set_repeat_penalty(1.12)
 
-        from providers import XKiroProvider
+        from argent.providers import XKiroProvider
         provider = XKiroProvider(api_key="sk-test", base_url="https://api.xkiro.com/v1")
         mock_client = MagicMock()
         mock_create = MagicMock(return_value=iter([]))

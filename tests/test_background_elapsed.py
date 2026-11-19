@@ -3,7 +3,7 @@ time) so the loop guard doesn't force-stop a legitimate wait."""
 
 import queue
 
-import tools.command_ops as command_ops
+import argent.tools.command_ops as command_ops
 
 
 class _FakeProc:

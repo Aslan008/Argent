@@ -8,8 +8,8 @@ an OLLAMA_HOST without an http:// prefix.
 
 import pytest
 
-import model_limits
-from model_limits import context_choices, detect_context_length
+import argent.model_limits as model_limits
+from argent.model_limits import context_choices, detect_context_length
 
 
 class _Response:

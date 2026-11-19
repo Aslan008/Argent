@@ -30,7 +30,7 @@ STEP_TASKS = {
     "npc_policy": npc.gen_policy, "npc_persona": npc.gen_persona, "npc_policy2": npc2.gen_policy2, "npc_policy2_unseen": npc2.gen_policy2_unseen,
     "browser_click": browser.gen_click, "browser_risk": browser.gen_risk, "toolpick": tools.gen_toolpick,
 }
-from .data.synth import play as _play  # noqa: E402
+from .data.synth import play as _play  
 
 for _group in (ENVS_MORE, ENVS_UNSEEN, WEB2_ENVS, WEB2_UNSEEN):
     STEP_TASKS.update({"step_" + _name: _play.position_gen(_make) for _name, _make in _group.items()})

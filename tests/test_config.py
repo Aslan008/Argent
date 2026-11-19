@@ -1,7 +1,7 @@
 import unittest
 import os
 import json
-import config
+import argent.config as config
 
 class TestConfigCache(unittest.TestCase):
     def setUp(self):

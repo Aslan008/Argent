@@ -3,8 +3,8 @@
 import os
 import threading
 import pytest
-import tools.command_ops as command_ops
-from tools.command_ops import run_command
+import argent.tools.command_ops as command_ops
+from argent.tools.command_ops import run_command
 
 
 class _MockProc:

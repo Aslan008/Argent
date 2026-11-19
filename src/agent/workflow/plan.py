@@ -32,6 +32,7 @@ MAX_TEXT = 600
 MAX_CHECKS = 3
 MAX_FILES = 12
 MAX_CHECK_LEN = 300
+MAX_VERIFY = 2
 
 
 class PlanError(ValueError):
@@ -54,6 +55,25 @@ class Step:
     changed: List[str] = field(default_factory=list)
     notes: List[str] = field(default_factory=list)        # what went wrong so far: shown to the next attempt
     error: str = ""
+    # How each check behaved *without* this step's patch (command -> {ok, failed, output}).
+    # Kept in the plan so a retry, a resume or a report never pays for the same run twice.
+    baseline: Dict[str, dict] = field(default_factory=dict)
+    verified: List[str] = field(default_factory=list)      # what the checks proved, one line each
+    # Semantic checks: instructions a VERIFIER sub-agent carries out (open the page, press
+    # the button, read the report) when an exit code cannot tell whether the work is right.
+    verify: List[str] = field(default_factory=list)
+    # What each attempt of this step said it did, newest last. A retry starts from this,
+    # not from zero: the worker is handed what the previous one already tried and why it
+    # was not enough.
+    attempt_reports: List[str] = field(default_factory=list)
+    # What the worker is doing right now, as its own log last said it (a monitor, nothing more).
+    progress: str = ""
+    # What this step runs on, when the plan wants something other than the default: a cheap
+    # or local model for routine steps, a lower thinking level where a mistake is cheap.
+    # Empty means the configured sub-agent default, which is the main agent itself.
+    model: str = ""
+    provider: str = ""
+    thinking: str = ""
 
     @property
     def writes(self) -> bool:
@@ -74,6 +94,14 @@ class Plan:
     steps: List[Step]
     final_checks: List[str] = field(default_factory=list)
     summary: str = ""
+    # Commands kept running for the whole run: a dev server, a log tail. Their newest line
+    # is read between polls, so a step that breaks the server is noticed while it is still
+    # working, not after the run is over.
+    watch: List[str] = field(default_factory=list)
+    # Checks due later in the run: `{"after": minutes, "command": "..."}`. The short-lived
+    # cousin of a cron job — a run lasts minutes, so "after 20 minutes, run the smoke test
+    # again" is the useful form.
+    scheduled: List[dict] = field(default_factory=list)
 
     def by_id(self) -> Dict[str, Step]:
         return {s.id: s for s in self.steps}
@@ -106,12 +134,15 @@ class Plan:
 
     def to_dict(self) -> dict:
         return {"goal": self.goal, "summary": self.summary, "final_checks": list(self.final_checks),
+                "watch": list(self.watch), "scheduled": [dict(s) for s in self.scheduled],
                 "steps": [s.to_dict() for s in self.steps]}
 
     @classmethod
     def from_dict(cls, data: dict) -> "Plan":
         return cls(goal=data.get("goal", ""), summary=data.get("summary", ""),
                    final_checks=list(data.get("final_checks") or []),
+                   watch=list(data.get("watch") or []),
+                   scheduled=[dict(s) for s in (data.get("scheduled") or []) if isinstance(s, dict)],
                    steps=[Step.from_dict(s) for s in data.get("steps") or []])
 
     def outline(self) -> str:
@@ -124,8 +155,14 @@ class Plan:
             lines.append(f"{s.id}. [{s.role}] {s.title}{dep}")
             for c in s.checks:
                 lines.append(f"      проверка: {c}")
+            for v in s.verify:
+                lines.append(f"      проверка глазами: {v}")
         for c in self.final_checks:
             lines.append(f"итоговая проверка: {c}")
+        for c in self.watch:
+            lines.append(f"наблюдатель (весь прогон): {c}")
+        for item in self.scheduled:
+            lines.append(f"через {item.get('after')} мин: {item.get('command')}")
         return "\n".join(lines)
 
 
@@ -213,6 +250,10 @@ def parse_plan(text: str, goal: str, max_steps: int = 8) -> Plan:
                 deps=_strings(raw.get("deps") or raw.get("depends_on"), 8, 24),
                 files=_strings(raw.get("files"), MAX_FILES, 200),
                 checks=[c[:MAX_CHECK_LEN] for c in _strings(raw.get("checks"), MAX_CHECKS, MAX_CHECK_LEN)],
+                verify=[v[:MAX_CHECK_LEN] for v in _strings(raw.get("verify"), MAX_VERIFY, MAX_CHECK_LEN)],
+                model=str(raw.get("model") or "").strip()[:80],
+                provider=str(raw.get("provider") or "").strip()[:40],
+                thinking=str(raw.get("thinking") or "").strip().lower()[:16],
             ))
         except PlanError as e:
             raise PlanError(f"step {step_id}: {e}")
@@ -232,7 +273,28 @@ def parse_plan(text: str, goal: str, max_steps: int = 8) -> Plan:
 
     return Plan(goal=goal, steps=steps,
                 final_checks=[c[:MAX_CHECK_LEN] for c in _strings(data.get("final_checks"), MAX_CHECKS, MAX_CHECK_LEN)],
-                summary=str(data.get("summary") or "").strip()[:MAX_TEXT])
+                summary=str(data.get("summary") or "").strip()[:MAX_TEXT],
+                watch=[c[:MAX_CHECK_LEN] for c in _strings(data.get("watch"), MAX_CHECKS, MAX_CHECK_LEN)],
+                scheduled=_scheduled(data.get("scheduled")))
+
+
+def _scheduled(value) -> List[dict]:
+    """Checks due later in the run: `{"after": minutes, "command": "..."}`."""
+    if not isinstance(value, list):
+        return []
+    out: List[dict] = []
+    for item in value[:MAX_CHECKS]:
+        if not isinstance(item, dict):
+            continue
+        command = str(item.get("command") or "").strip()
+        if not command:
+            continue
+        try:
+            after = float(item.get("after") or 0)
+        except (TypeError, ValueError):
+            after = 0.0
+        out.append({"after": max(0.0, round(after, 1)), "command": command[:MAX_CHECK_LEN]})
+    return out
 
 
 def _reject_cycles(steps: List[Step]) -> None:

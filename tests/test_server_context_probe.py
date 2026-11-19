@@ -7,7 +7,7 @@ context size (65536 tokens)") - at the end of a long turn, after the work was do
 import pytest
 import requests
 
-import config
+import argent.config as config
 from src.agent import context_limit
 from src.agent.context_limit import probe_server_context
 
@@ -68,7 +68,7 @@ def test_nonsense_is_not_a_window(monkeypatch):
 
 
 def _agent(provider):
-    from agent import ArgentAgent
+    from argent.agent import ArgentAgent
     a = ArgentAgent.__new__(ArgentAgent)
     a.provider = provider
     a.max_context_tokens = config.get_context_window()

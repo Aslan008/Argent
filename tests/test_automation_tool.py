@@ -6,17 +6,17 @@ import types
 
 import pytest
 
-import approval
+import argent.approval as approval
 from src.automation import store
 from src.automation.runner import UnattendedGate
 from src.automation.store import Automation
-from tools import automation_tools
-from tools.automation_tools import manage_automations as tool
+from argent.tools import automation_tools
+from argent.tools.automation_tools import manage_automations as tool
 
 
 @pytest.fixture
 def project(tmp_path, monkeypatch):
-    monkeypatch.setattr("project_paths.project_root_or_cwd", lambda *a, **k: tmp_path)
+    monkeypatch.setattr("argent.project_paths.project_root_or_cwd", lambda *a, **k: tmp_path)
     return tmp_path
 
 
@@ -250,21 +250,21 @@ class TestNoSelfPromotion:
 
 class TestRegistered:
     def test_the_schema_and_the_function_exist(self):
-        from tools.schemas import AVAILABLE_TOOLS, TOOL_SCHEMAS
+        from argent.tools.schemas import AVAILABLE_TOOLS, TOOL_SCHEMAS
         schema = next(s for s in TOOL_SCHEMAS if s["function"]["name"] == "manage_automations")
         assert schema["function"]["parameters"]["required"] == ["action"]
         assert "manage_automations" in AVAILABLE_TOOLS
 
     def test_every_schema_parameter_is_a_real_argument(self):
         import inspect
-        from tools.schemas import TOOL_SCHEMAS
+        from argent.tools.schemas import TOOL_SCHEMAS
         schema = next(s for s in TOOL_SCHEMAS if s["function"]["name"] == "manage_automations")
         accepted = set(inspect.signature(tool).parameters)
         assert set(schema["function"]["parameters"]["properties"]) <= accepted
 
     def test_the_description_names_every_template(self):
         from src.automation import templates
-        from tools.schemas import TOOL_SCHEMAS
+        from argent.tools.schemas import TOOL_SCHEMAS
         schema = next(s for s in TOOL_SCHEMAS if s["function"]["name"] == "manage_automations")
         for template_id in templates.TEMPLATES:
             assert template_id in schema["function"]["description"]

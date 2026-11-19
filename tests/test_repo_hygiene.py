@@ -14,7 +14,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
-import repo_hygiene as H  # noqa: E402
+import repo_hygiene as H
 
 TERMS = {"names": ["jdoe-account"], "emails": ["jdoe.private@mail.test"], "extra": []}
 

@@ -8,8 +8,8 @@ model that lists the "thinking" capability (sent to any other it is an HTTP 400 
 
 import pytest
 
-import config
-from providers import OllamaProvider
+import argent.config as config
+from argent.providers import OllamaProvider
 
 
 @pytest.fixture(autouse=True)

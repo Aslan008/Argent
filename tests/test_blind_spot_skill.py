@@ -6,10 +6,10 @@ from unittest.mock import MagicMock
 
 import pytest
 
-import agent as agent_module
-import config
-from agent import ArgentAgent
-from skill_manager import SkillManager
+import argent.agent as agent_module
+import argent.config as config
+from argent.agent import ArgentAgent
+from argent.skill_manager import SkillManager
 
 _ROOT = Path(__file__).resolve().parents[1]
 _GENERAL = _ROOT / "skills" / "blind-spot-pass.md"

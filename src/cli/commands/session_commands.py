@@ -5,14 +5,14 @@ import questionary
 from rich.markup import escape
 from rich.table import Table
 
-from config import get_provider
-from file_tracker import clear_session_snapshots
-from memory_manager import memory
-from session import (
+from argent.config import get_provider
+from argent.file_tracker import clear_session_snapshots
+from argent.memory_manager import memory
+from argent.session import (
     save_session, load_session, list_sessions, delete_session, get_last_session,
     find_session, format_relative_time, format_short_path,
 )
-from ui import console, print_system, print_error
+from argent.ui import console, print_system, print_error
 from src.cli.commands.base import CommandContext, CommandResult
 from src.cli.commands.registry import registry
 
@@ -59,7 +59,7 @@ def restore_session(agent, meta: dict) -> bool:
                 print_system("[yellow]Прошлый ход был прерван (сбой, обрыв связи или закрытие окна).[/yellow] "
                              "Напишите «продолжай» — работа пойдёт с последнего сохранённого шага.")
         except Exception as e:
-            from logger import get_logger
+            from argent.logger import get_logger
             get_logger("session").warning("repair_history during restore failed: %s", e)
 
     saved_time = (data.get("saved_at") or "")[:16]
@@ -106,14 +106,20 @@ def handle_save(ctx: CommandContext) -> CommandResult:
     parts = user_input.split(" ", 1)
     name = parts[1].strip() if len(parts) > 1 else None
 
-    from command_handler import export_chat_history
+    from argent.command_handler import export_chat_history
     export_chat_history(agent, filename=name, auto=False)
 
     try:
+        try:
+            from argent.usage_tracker import usage as session_usage
+
+            usage_snapshot = session_usage.snapshot()
+        except Exception:
+            usage_snapshot = {}
         saved = save_session(agent.messages, {
             "model": agent.model_name,
             "provider": get_provider(),
-        }, session_id=agent.session_id, label=name)
+        }, session_id=agent.session_id, label=name, usage=usage_snapshot)
         if saved:
             agent.session_id = saved
             print_system(f"Сессия сохранена: {saved}" + (f" (метка: {name})" if name else ""))
@@ -295,7 +301,7 @@ def handle_clear(ctx: CommandContext) -> CommandResult:
         agent.messages.clear()
         agent.session_id = None
 
-    import command_handler
+    import argent.command_handler as command_handler
     command_handler.print_system("История диалога очищена. Новый диалог начат с чистого листа.")
     return CommandResult.continue_loop(turn_counter=0)
 
@@ -321,7 +327,7 @@ def handle_rewind(ctx: CommandContext) -> CommandResult:
         return CommandResult.continue_loop()
 
     from src.agent.checkpoints import list_checkpoints, rewind_to, CheckpointError
-    from file_tracker import clear_session_snapshots
+    from argent.file_tracker import clear_session_snapshots
 
     if "--list" in tokens or "-l" in tokens:
         limit = 15
@@ -481,7 +487,7 @@ def handle_back(ctx: CommandContext) -> CommandResult:
 
 @registry.register("/export", help_text="Экспорт истории диалога", category="session", is_prefix=True)
 def handle_export(ctx: CommandContext) -> CommandResult:
-    from command_handler import export_chat_history
+    from argent.command_handler import export_chat_history
     parts = ctx.user_input.split(" ", 1)
     name = parts[1].strip() if len(parts) > 1 else None
     export_chat_history(ctx.agent, filename=name, auto=False)
@@ -497,7 +503,7 @@ def handle_export(ctx: CommandContext) -> CommandResult:
 )
 def handle_copy(ctx: CommandContext) -> CommandResult:
     from src.cli.input_queue import set_clipboard_text
-    from ui import print_system, print_error
+    from argent.ui import print_system, print_error
     import re
 
     target = "last"

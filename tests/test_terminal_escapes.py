@@ -2,8 +2,8 @@
 
 import pytest
 
-import tools.command_ops as command_ops
-from text_safety import strip_terminal_escapes as strip
+import argent.tools.command_ops as command_ops
+from argent.text_safety import strip_terminal_escapes as strip
 from tests.test_command_ops_streaming import _MockProc, _mock_approve
 
 

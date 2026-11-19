@@ -8,7 +8,7 @@ model is generating or running tools.
 import os
 from rich.text import Text
 from rich.rule import Rule
-from config import (
+from argent.config import (
     get_thinking_display_label,
     get_model_size_category,
 )

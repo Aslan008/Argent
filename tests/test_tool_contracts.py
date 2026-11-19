@@ -25,7 +25,7 @@ class TestSchemaDeclarations:
 
     @pytest.fixture
     def schemas_by_name(self):
-        from tools.schemas import TOOL_SCHEMAS
+        from argent.tools.schemas import TOOL_SCHEMAS
         return {t["function"]["name"]: t["function"] for t in TOOL_SCHEMAS}
 
     def _find_param(self, fn_schema, param_name):
@@ -90,7 +90,7 @@ class TestReadFileContract:
     @pytest.fixture(autouse=True)
     def _setup(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
-        from tools import file_ops
+        from argent.tools import file_ops
         self.file_ops = file_ops
         self.tmp_path = tmp_path
 
@@ -99,7 +99,7 @@ class TestReadFileContract:
         (self.tmp_path / "f.py").write_text("line1\nline2\nline3\n", encoding="utf-8")
         out = self.file_ops.read_file("f.py", start_line=2)
         # Strip line-number gutter
-        from tools._helpers import _strip_read_line_numbers
+        from argent.tools._helpers import _strip_read_line_numbers
         plain = _strip_read_line_numbers(out)
         assert "line1" not in plain, "start_line=2 should skip line 1"
         assert "line2" in plain
@@ -108,7 +108,7 @@ class TestReadFileContract:
         """end_line=2 should return lines 1-2 (inclusive), not 1-3."""
         (self.tmp_path / "f.py").write_text("line1\nline2\nline3\n", encoding="utf-8")
         out = self.file_ops.read_file("f.py", end_line=2)
-        from tools._helpers import _strip_read_line_numbers
+        from argent.tools._helpers import _strip_read_line_numbers
         plain = _strip_read_line_numbers(out)
         assert "line1" in plain
         assert "line2" in plain
@@ -118,7 +118,7 @@ class TestReadFileContract:
         """start_line=1 should return from line 1 (not skip it)."""
         (self.tmp_path / "f.py").write_text("first\nsecond\n", encoding="utf-8")
         out = self.file_ops.read_file("f.py", start_line=1)
-        from tools._helpers import _strip_read_line_numbers
+        from argent.tools._helpers import _strip_read_line_numbers
         plain = _strip_read_line_numbers(out)
         assert "first" in plain
 
@@ -134,7 +134,7 @@ class TestMultiReplaceContract:
     @pytest.fixture(autouse=True)
     def _setup(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
-        from tools import file_ops
+        from argent.tools import file_ops
         self.file_ops = file_ops
         self.tmp_path = tmp_path
 
@@ -188,3 +188,168 @@ class TestMultiReplaceContract:
         assert lines[2] == "REPLACED"
         assert lines[3] == "line4"
         assert lines[4] == "line5"
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Shape of the API: names, width, description budget
+# ══════════════════════════════════════════════════════════════════════════════
+#
+# Every constant here is a RATCHET set to the value measured on 2026-10-27 and may only
+# go down. Lowering one after a cleanup is the point; raising one has to be a deliberate
+# edit with a reason in the diff. The plan these numbers serve:
+# `.argent/artifacts/tools-plan.md`.
+
+# Phase 2 lowered these from 21_870 / 2_017 by moving the long form into
+# `skills/argent-tools-reference/SKILL.md`. The plan's 9_000 turned out to be arithmetic
+# that does not survive contact with 60 tools: the remaining descriptions each hold the
+# line that prevents a known mistake (the read_file gutter, the write_file 150-line
+# guard, "the image arrives in the NEXT message"), and cutting them to ~90 characters
+# would delete exactly that. Next milestone: 13_000.
+BUDGET_TOTAL_DESCRIPTION_CHARS = 16_810
+BUDGET_PER_TOOL_DESCRIPTION_CHARS = 651          # `wait_heartbeat`
+PATH_LIKE = {"file_path", "path", "directory", "dir_path", "directory_path"}
+BUDGET_DISTINCT_PATH_NAMES = 1                      # `path` — phase 1 done
+BUDGET_PARAMETERS_PER_TOOL = 16                    # `manage_automations`
+BUDGET_UNDESCRIBED_PARAMETERS = 15
+
+#: Tools that appear only on machines where an optional subsystem is installed
+#: (`semantic_search` arrives with the RAG engine). They are exercised by their own
+#: tests and must not make the shipped budget or the handler map fail elsewhere.
+from argent.tools import OPTIONAL_TOOLS   # a product fact: docs and budgets share it
+
+
+def _all_functions():
+    from argent.tools.schemas import TOOL_SCHEMAS
+    return [entry["function"] for entry in TOOL_SCHEMAS]
+
+
+def _shipped_functions():
+    """What every install has. Optional subsystems are measured by their own tests."""
+    return [fn for fn in _all_functions() if fn["name"] not in OPTIONAL_TOOLS]
+
+
+def _props(fn):
+    return (fn.get("parameters") or {}).get("properties") or {}
+
+
+class TestApiSurface:
+    """What a caller has to hold in their head to use a tool once, without reading the
+    description twice."""
+
+    def test_tool_names_are_unique(self):
+        from collections import Counter
+
+        names = [fn["name"] for fn in _all_functions()]
+        duplicates = [name for name, count in Counter(names).items() if count > 1]
+        assert not duplicates, f"имя инструмента повторяется: {duplicates}"
+
+    def test_every_schema_has_a_handler_and_no_handler_is_orphaned(self):
+        """A schema without a handler fails on the first call; a handler without a schema
+        is invisible to the model. Neither shows up until somebody tries it."""
+        from argent.tools.lazy_registry import DEFAULT_TOOL_LOADERS
+
+        names = {fn["name"] for fn in _all_functions()}
+        unhandled = sorted(names - set(DEFAULT_TOOL_LOADERS) - OPTIONAL_TOOLS)
+        invisible = sorted(set(DEFAULT_TOOL_LOADERS) - names - OPTIONAL_TOOLS)
+        assert not unhandled, f"объявлены, но не реализованы: {unhandled}"
+        assert not invisible, f"реализованы, но не объявлены модели: {invisible}"
+
+    def test_descriptions_stay_within_the_context_budget(self):
+        fns = _shipped_functions()
+        total = sum(len(fn.get("description") or "") for fn in fns)
+        assert total <= BUDGET_TOTAL_DESCRIPTION_CHARS, (
+            f"описания выросли до {total} символов (потолок "
+            f"{BUDGET_TOTAL_DESCRIPTION_CHARS}). Это платится в КАЖДОМ запросе. Самые "
+            f"длинные: "
+            + ", ".join(
+                f"{name} {size}"
+                for size, name in sorted(
+                    ((len(fn.get("description") or ""), fn["name"]) for fn in fns),
+                    reverse=True,
+                )[:3]
+            )
+        )
+
+        over = [(fn["name"], len(fn.get("description") or "")) for fn in fns
+                if len(fn.get("description") or "") > BUDGET_PER_TOOL_DESCRIPTION_CHARS]
+        assert not over, (
+            f"длиннее потолка на инструмент ({BUDGET_PER_TOOL_DESCRIPTION_CHARS}): {over}"
+        )
+
+    def test_parameters_are_named_predictably(self):
+        used = set()
+        for fn in _all_functions():
+            used.update(_props(fn))
+        path_names = sorted(used & PATH_LIKE)
+        assert len(path_names) <= BUDGET_DISTINCT_PATH_NAMES, (
+            f"имён для пути стало {len(path_names)}: {path_names}. "
+            f"Каноническое — `path`, остальные обязаны быть алиасами."
+        )
+
+    def test_no_tool_is_wider_than_a_person_can_hold(self):
+        wide = sorted(((len(_props(fn)), fn["name"]) for fn in _shipped_functions()), reverse=True)
+        over = [pair for pair in wide if pair[0] > BUDGET_PARAMETERS_PER_TOOL]
+        assert not over, (
+            f"шире потолка ({BUDGET_PARAMETERS_PER_TOOL}): {over}. "
+            f"Связанные параметры надо свернуть в объект с собственными описаниями."
+        )
+
+    def test_every_parameter_says_what_it_is(self):
+        missing = [
+            (fn["name"], param)
+            for fn in _all_functions()
+            for param, spec in _props(fn).items()
+            if not (spec or {}).get("description")
+        ]
+        assert len(missing) <= BUDGET_UNDESCRIBED_PARAMETERS, (
+            f"параметров без описания стало {len(missing)} "
+            f"(потолок {BUDGET_UNDESCRIBED_PARAMETERS}): {missing[:8]}"
+        )
+
+    def test_every_tool_belongs_to_exactly_one_group(self):
+        """The taxonomy is what `/help` and the docs group by. A tool outside it is a tool
+        nobody looks up, and a duplicate makes the map lie."""
+        from argent.tools import TOOL_GROUPS
+
+        names = [fn["name"] for fn in _all_functions()]
+        seen = {}
+        for group, members in TOOL_GROUPS.items():
+            for name in members:
+                assert name not in seen, f"{name} в двух группах: {seen[name]} и {group}"
+                seen[name] = group
+
+        missing = sorted(set(names) - set(seen))
+        extra = sorted(set(seen) - set(names) - OPTIONAL_TOOLS)
+        assert not missing, f"инструменты вне таксономии: {missing}"
+        assert not extra, f"в таксономии есть несуществующие инструменты: {extra}"
+
+    def test_required_parameters_are_declared(self):
+        """A rename that touches `properties` but not `required` produces a schema no
+        model can satisfy: it is told to pass a name that does not exist."""
+        broken = []
+        for fn in _all_functions():
+            props = set(_props(fn))
+            for required in (fn.get("parameters") or {}).get("required") or []:
+                if required not in props:
+                    broken.append((fn["name"], required))
+        assert not broken, f"'required' ссылается на отсутствующее свойство: {broken}"
+
+    def test_the_schema_and_the_signature_agree_on_the_name(self):
+        """There is no translation layer any more: what the schema advertises is what
+        the function declares. A tool that drifted apart would fail on its first call
+        as "missing required argument", which looks like the model's mistake."""
+        import inspect
+
+        from argent.tools.schemas import AVAILABLE_TOOLS, TOOL_SCHEMAS
+
+        mismatched = []
+        for schema in TOOL_SCHEMAS:
+            fn = schema["function"]
+            impl = AVAILABLE_TOOLS.get(fn["name"])
+            if impl is None:
+                continue
+            declared = set((fn.get("parameters") or {}).get("properties") or {})
+            missing = declared - set(inspect.signature(impl).parameters)
+            if missing:
+                mismatched.append((fn["name"], sorted(missing)))
+        assert not mismatched, f"схема обещает параметры, которых нет в функции: {mismatched}"

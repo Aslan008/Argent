@@ -4,7 +4,7 @@ import tempfile
 import pytest
 from unittest.mock import patch, MagicMock
 
-from memory_manager import memory
+from argent.memory_manager import memory
 from src.agent.trimmer import (
     _is_substantive,
     _find_active_goal,
@@ -91,7 +91,7 @@ def test_prepare_for_summarizer():
             "tool_calls": [
                 {
                     "id": "call_1",
-                    "function": {"name": "read_file", "arguments": json.dumps({"file_path": "src/main.ts"})},
+                    "function": {"name": "read_file", "arguments": json.dumps({"path": "src/main.ts"})},
                 }
             ],
         },
@@ -112,11 +112,11 @@ def test_extract_deterministic_facts():
             "tool_calls": [
                 {
                     "id": "c1",
-                    "function": {"name": "read_file", "arguments": json.dumps({"file_path": "src/Game.ts"})},
+                    "function": {"name": "read_file", "arguments": json.dumps({"path": "src/Game.ts"})},
                 },
                 {
                     "id": "c2",
-                    "function": {"name": "replace_in_file", "arguments": json.dumps({"file_path": "src/Game.ts"})},
+                    "function": {"name": "replace_in_file", "arguments": json.dumps({"path": "src/Game.ts"})},
                 },
                 {
                     "id": "c3",
@@ -143,7 +143,7 @@ def test_in_flight_aging():
         {
             "role": "assistant",
             "content": "Reading...",
-            "tool_calls": [{"id": "call_a", "function": {"name": "read_file", "arguments": json.dumps({"file_path": "A.ts"})}}],
+            "tool_calls": [{"id": "call_a", "function": {"name": "read_file", "arguments": json.dumps({"path": "A.ts"})}}],
         },
         {"role": "tool", "tool_call_id": "call_a", "content": "A" * 500},
         # More turns to exceed age_threshold=2
@@ -155,7 +155,7 @@ def test_in_flight_aging():
         {
             "role": "assistant",
             "content": "Reading recent...",
-            "tool_calls": [{"id": "call_b", "function": {"name": "read_file", "arguments": json.dumps({"file_path": "B.ts"})}}],
+            "tool_calls": [{"id": "call_b", "function": {"name": "read_file", "arguments": json.dumps({"path": "B.ts"})}}],
         },
         {"role": "tool", "tool_call_id": "call_b", "content": "B" * 500},
     ]
@@ -181,7 +181,7 @@ def test_rehydrate_files():
                         "id": "c1",
                         "function": {
                             "name": "write_file",
-                            "arguments": json.dumps({"file_path": temp_path}),
+                            "arguments": json.dumps({"path": temp_path}),
                         },
                     }
                 ],
@@ -217,7 +217,7 @@ def test_hard_reset_with_memory():
             "tool_calls": [
                 {
                     "id": "c1",
-                    "function": {"name": "write_file", "arguments": json.dumps({"file_path": "src/Banner.ts"})},
+                    "function": {"name": "write_file", "arguments": json.dumps({"path": "src/Banner.ts"})},
                 }
             ],
         },
@@ -271,7 +271,7 @@ def test_soft_trim_with_summarization():
 
 
 def test_handle_slash_command_compact():
-    from command_handler import handle_slash_command
+    from argent.command_handler import handle_slash_command
 
     mock_agent = MagicMock()
     mock_agent.messages = [

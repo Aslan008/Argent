@@ -1,4 +1,4 @@
-from ui import console
+from argent.ui import console
 import os
 
 def on_startup():

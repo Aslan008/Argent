@@ -127,7 +127,6 @@ fn interactive_tools_match_the_cli_set() {
         "ask_user_questions",
         "request_user_approval",
         "run_command",
-        "run_admin_command",
         "start_background_command",
         "delete_file",
         "git_rollback",
@@ -160,6 +159,7 @@ fn snapshot_event(lines: Vec<String>, context_line: Option<String>) -> argent_tu
         ctx_percent: None,
         lines,
         context_line,
+        compaction: None,
     }
 }
 
@@ -182,7 +182,7 @@ fn bridge_built_lines_are_kept_verbatim() {
     ];
     app.handle_event(snapshot_event(lines.clone(), Some("[dim]Context: 9.5%[/dim]".into())));
     match app.messages.last() {
-        Some(MessageItem::Snapshot { lines: got, context_line }) => {
+        Some(MessageItem::Snapshot { lines: got, context_line, .. }) => {
             assert_eq!(*got, lines);
             assert_eq!(context_line.as_deref(), Some("[dim]Context: 9.5%[/dim]"));
         }
@@ -221,6 +221,7 @@ fn the_fallback_line_computes_the_cache_share_from_the_prompt() {
         ctx_percent: Some(10.0),
         lines: Vec::new(),
         context_line: None,
+        compaction: None,
     });
     match app.messages.last() {
         Some(MessageItem::Snapshot { lines, .. }) => assert_eq!(

@@ -203,6 +203,30 @@ fn the_classic_list_is_untouched() {
 // ── the toolbar ──────────────────────────────────────────────────────────────
 
 #[test]
+fn the_spend_hover_starts_on_the_spend_chip_not_on_the_uptime() {
+    let mut app = premium_app();
+    app.status.session_summary = "sum 12.3k tok · $0.0123".into();
+    app.status.last_spend = "last $0.0004".into();
+    app.status.spend_breakdown = "ESTIMATE_HOVER".into();
+    let (buf, _) = draw(&app, 120, 20);
+    let y = buf.area.height - 1;
+    let bar = row(&buf, y);
+    let spend_x = bar.find("sum 12.3k tok").expect("spend chip") as u16;
+    let uptime_x = bar.find("0m").expect("uptime") as u16;
+    assert!(spend_x > uptime_x, "spend is right-aligned: {bar:?}");
+    assert_eq!(
+        app.hover_text_at(spend_x + 1, y).as_deref(),
+        Some("ESTIMATE_HOVER"),
+        "the hover belongs to the spend region: {bar:?}"
+    );
+    assert_eq!(
+        app.hover_text_at(spend_x + 20, y).as_deref(),
+        Some("ESTIMATE_HOVER"),
+        "it also covers the later spend chips, up to /help"
+    );
+}
+
+#[test]
 fn the_toolbar_is_chips_on_a_tinted_row() {
     let mut app = premium_app();
     app.status.mode = "CHAT".into();
@@ -211,7 +235,7 @@ fn the_toolbar_is_chips_on_a_tinted_row() {
     let (buf, _) = draw(&app, 100, 20);
     let y = buf.area.height - 1;
     let bar = row(&buf, y);
-    assert!(bar.contains(" CHAT ") && bar.contains("zai:glm-5.1") && bar.contains("/help"));
+    assert!(bar.contains(" CHAT ") && bar.contains("zai:glm-5.1") && bar.contains("/help"), "{bar:?}");
     let chip = bar.find("CHAT").unwrap() as u16;
     assert_eq!(buf[(chip, y)].bg, Palette::default().accent, "the mode is a filled chip");
     assert_eq!(buf[(99, y)].bg, surface(), "the row is tinted to the edge");

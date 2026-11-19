@@ -16,8 +16,8 @@ import json
 
 import pytest
 
-import memory_manager
-from memory_manager import MemoryManager
+import argent.memory_manager as memory_manager
+from argent.memory_manager import MemoryManager
 
 
 @pytest.fixture
@@ -87,3 +87,44 @@ class TestTheWriteIsAtomic:
         reloaded = json.loads(memory.read_text(encoding="utf-8"))
         assert reloaded["objective"] == "собрать релиз"
         assert "src/main.py" in reloaded["files_modified"]
+
+
+class TestReadOnlyProject:
+    """A project this account cannot write must not break the agent.
+
+    The real case: a clone owned by another account (or a `target/`/`.argent`
+    created by an elevated build). `memory.add_error()` used to raise
+    PermissionError out of `run_command`, so the user's `cargo build` was
+    reported as "Error running command ... memory.json...tmp" even though the
+    build had run. Bookkeeping is not the command.
+    """
+
+    def test_a_read_only_project_keeps_memory_in_the_user_home(self, tmp_path, monkeypatch):
+        home = tmp_path / "home"
+        home.mkdir()
+        monkeypatch.setattr("pathlib.Path.home", classmethod(lambda cls: home))
+        blocker = tmp_path / "blocked"
+        blocker.write_text("not a directory", encoding="utf-8")
+        target = blocker / "memory.json"
+        monkeypatch.setattr(memory_manager, "resolve_memory_file", lambda: target)
+
+        manager = MemoryManager()
+        manager.add_error("boom")          # must not raise
+
+        fallback = list((home / ".argent" / "projects").rglob("memory.json"))
+        assert fallback, "the fallback copy was not written"
+        assert "boom" in fallback[0].read_text(encoding="utf-8")
+
+    def test_when_even_the_fallback_fails_it_does_not_raise(self, tmp_path, monkeypatch):
+        home = tmp_path / "blocked-home"
+        home.write_text("not a directory", encoding="utf-8")
+        monkeypatch.setattr("pathlib.Path.home", classmethod(lambda cls: home))
+        blocker = tmp_path / "blocked"
+        blocker.write_text("not a directory", encoding="utf-8")
+        target = blocker / "memory.json"
+        monkeypatch.setattr(memory_manager, "resolve_memory_file", lambda: target)
+
+        manager = MemoryManager()
+        manager.add_error("boom")          # in-memory only; still no exception
+        assert "boom" in manager.data["errors_encountered"]
+

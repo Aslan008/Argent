@@ -30,7 +30,7 @@ from src.automation.store import Automation
 
 @pytest.fixture
 def project(tmp_path, monkeypatch):
-    monkeypatch.setattr("project_paths.project_root_or_cwd", lambda *a, **k: tmp_path)
+    monkeypatch.setattr("argent.project_paths.project_root_or_cwd", lambda *a, **k: tmp_path)
     return tmp_path
 
 

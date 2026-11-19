@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=61"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -8,7 +8,8 @@ dynamic = ["version"]
 description = "Argent — an elite terminal AI coding assistant for local (Ollama/KoboldCPP) and cloud (Z.AI/OpenRouter) models."
 readme = "README.md"
 requires-python = ">=3.11"
-license = { text = "MIT" }
+license = "MIT"
+license-files = ["LICENSE"]
 authors = [{ name = "Aslan008" }]
 keywords = ["ai", "agent", "cli", "coding-assistant", "rag", "ollama", "llm"]
 dependencies = [
@@ -29,6 +30,11 @@ dependencies = [
     "numpy",
     "pydantic>=2.0",
     "sympy",
+    # API keys in the OS credential store (Windows Credential Manager, macOS
+    # Keychain, Secret Service) instead of the readable config file. When no
+    # backend exists the key falls back to the file, so this is never a hard
+    # requirement at run time.
+    "keyring>=24",
     # Token counting: without it estimate_tokens silently falls back to a
     # char-count heuristic, so context budgeting becomes a guess.
     "tiktoken",
@@ -55,31 +61,50 @@ rag = ["chromadb", "sentence-transformers", "pypdf"]
 browser = ["playwright", "playwright-stealth", "stagehand>=4.1.0"]
 research = ["crawl4ai"]
 lsp = ["multilspy"]
-dev = ["pytest"]
+# Leeth (the local router and the Leeth2 model). torch is often already present;
+# transformers and scipy are not, and without them the router cannot load at all —
+# the model tests then skip with a reason instead of failing as if the code broke.
+#   pip install -e ".[leeth]"
+leeth = ["torch", "transformers", "scipy", "onnx", "onnxruntime", "safetensors"]
+# pytest-asyncio is not optional: without it every `async def test_...` fails with
+# "async def functions are not natively supported" — 49 of them, which hid 129
+# working tests behind phantom failures. hypothesis likewise: three files cannot
+# even be collected without it.
+dev = ["pytest", "pytest-asyncio", "pytest-timeout", "pytest-cov", "hypothesis", "ruff"]
 
 [project.scripts]
-argent = "main:main"
+argent = "argent.main:main"
 
-[tool.setuptools]
-# Flat layout: explicit top-level modules plus the src/ and tools/ packages.
-py-modules = [
-    "agent", "approval", "atomic_io", "browser_detect", "browser_engine",
-    "claude_catalog", "command_handler", "config", "deep_research", "doctor", "error_help",
-    "file_tracker", "hook_manager", "host_os", "intelligence", "local_inference", "logger", "main",
-    "mcp_client", "memory_manager", "model_limits", "model_names",
-    "project_paths", "prompt_compressor", "providers", "rag_engine",
-    "run_scope", "session", "skill_manager", "text_codec", "text_safety", "tool_profiles", "tool_recovery",
-    "ui", "usage_tracker", "version", "vision", "run_tui",
-]
-
+# One package. Everything the agent imports lives under `argent/` (its own
+# modules, `argent/tools/`); `src/` stays a separate top-level package because
+# its data files are addressed by path at run time (`src/leeth/data/...`).
 [tool.setuptools.packages.find]
-include = ["src*", "tools*"]
+include = ["argent*", "src*"]
 
 [tool.setuptools.package-data]
 # Ship the declarative starter rooms with the package.
 "src.rooms" = ["starter/*.json", "editor/*.html", "editor/*.json", "editor/*.js", "editor/*.css"]
 
 [tool.setuptools.dynamic]
-version = { attr = "version.__version__" }
+version = { attr = "argent.version.__version__" }
 
 # pytest configuration lives in pytest.ini (single source).
+
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+# Vendored environments, generated data and runtime state are not source.
+extend-exclude = [
+    ".argent", ".claude", ".hypothesis", ".pytest_cache", ".ruff_cache", ".uv-cache",
+    ".venv", "venv_pyqt6", "node_modules", "argent_mobile", "argento_mobile",
+    "scratch", "exports", "leeth3_data", "leeth_live_cases", "reports", "_quarantine",
+    "dsh_tmp_test", "crates/argent-tui/target",
+]
+
+[tool.ruff.lint]
+# Gate on errors that are bugs, not on style: undefined names, syntax errors,
+# shadowed definitions and broken f-strings. The full F set (unused imports,
+# unused variables) is deliberately not enabled yet — it would be a 900-item
+# cleanup, and an `--fix` sweep across this tree is not a safe change.
+select = ["E9", "F63", "F7", "F82"]
+

@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from agent import build_agents_memory
+from argent.agent import build_agents_memory
 
 
 @pytest.fixture

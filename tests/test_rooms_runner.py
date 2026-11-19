@@ -3,7 +3,7 @@ and an integration run where the agent lies about greenness but the whitelist +
 verifier neutralise it.
 """
 
-import tools.schemas as schemas
+import argent.tools.schemas as schemas
 
 from src.rooms.engine import Engine
 from src.rooms.library import RoomLibrary, default_starter_dir

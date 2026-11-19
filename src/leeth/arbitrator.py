@@ -16,6 +16,7 @@ BEFORE the confidence/param gates — so shadow statistics capture real
 disagreement between the symbolic base and the neural gates.
 """
 
+import ast
 import importlib.util
 import json
 import os
@@ -25,7 +26,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional
-from logger import get_logger
+from argent.logger import get_logger
 
 logger = get_logger("leeth_arbitrator")
 
@@ -82,10 +83,43 @@ def _looks_like_path(p: str) -> bool:
     return False
 
 
+_ARITH_NAMES = frozenset({
+    # functions of the exact evaluator / math module
+    "sqrt", "abs", "log", "log2", "log10", "ln", "exp", "sin", "cos", "tan",
+    "asin", "acos", "atan", "atan2", "floor", "ceil", "round", "factorial", "pow",
+    # constants
+    "pi", "e", "I", "oo", "nan",
+    # what SymPy resolves: the tool's second engine answers these
+    "integrate", "diff", "limit", "solve", "series", "summ", "simplify",
+    "factor", "expand", "Eq",
+})
+
+
 def _looks_like_arithmetic(p: str) -> bool:
-    if not p or not re.search(r"\d", p):
+    """Whether the calculate tool would accept this param — the same grammar, not a narrower one.
+
+    The tool has two engines behind one entry point (an exact arithmetic evaluator and SymPy), so a
+    digits-and-operators test judges a language the tool does not speak. Measured on the live dispatch
+    path (2026-11-06): 160 conflicts, and of the 153 checkable by actually running the tool, 124 were
+    right (81%) and all 29 wrong ones were function calls — 'sqrt(144)' came back UNSAT while the tool
+    answered 12. Every identifier must therefore be a name the tool knows (or a single-letter variable),
+    which keeps the check strict about garbage like "корень из 144" while staying honest about 'sqrt(144)'.
+    """
+    s = (p or "").strip()
+    if not s or not re.search(r"\d", s):
         return False
-    return bool(re.fullmatch(r"[\d\s+\-*/().,%^]+", p))
+    # the tool normalises these two notations before it parses, so mirror it before judging
+    s = re.sub(r"(\d)\s*([A-Za-z])", r"\1*\2", s).replace("^", "**")
+    try:
+        tree = ast.parse(s, mode="eval")
+    except SyntaxError:
+        return False                      # unbalanced brackets, stray quotes, prose — malformed
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and not (node.id in _ARITH_NAMES or (len(node.id) == 1 and node.id.isascii())):
+            return False                  # a name the tool cannot resolve (os, sys, корень …)
+        if isinstance(node, ast.Call) and not isinstance(node.func, ast.Name):
+            return False                  # attribute call: nothing to do with arithmetic
+    return True
 
 
 def _looks_like_url(p: str) -> bool:
@@ -204,7 +238,7 @@ class CDCLArbitrator:
     def _is_destructive(text: str) -> bool:
         if not text:
             return False
-        from src.leeth.dispatcher import DENY_PATTERNS  # deferred: breaks import cycle
+        from src.leeth.dispatcher import DENY_PATTERNS  
         return any(p.search(text) for p in DENY_PATTERNS)
 
     # ── Core extraction (deletion-based, subset-minimal) ─────────────────────

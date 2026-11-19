@@ -1,4 +1,8 @@
 //! The agent's checklist: parsed from the bridge state, drawn between the chat and the prompt.
+//!
+//! Finished steps fold into one «✓ N готово» row (opened by a click) so the
+//! screen goes to what is left; the step being worked on carries how long it has
+//! been running, because that is what tells a stuck run from a moving one.
 
 use std::collections::HashMap;
 
@@ -17,7 +21,15 @@ fn render(app: &App, w: u16, h: u16) -> Vec<String> {
 }
 
 fn item(content: &str, status: &str) -> TodoItem {
-    TodoItem { content: content.into(), status: status.into() }
+    TodoItem { content: content.into(), status: status.into(), since: None }
+}
+
+fn running(content: &str, seconds_ago: f64) -> TodoItem {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs_f64();
+    TodoItem { content: content.into(), status: "in_progress".into(), since: Some(now - seconds_ago) }
 }
 
 fn app_with(items: Vec<TodoItem>) -> App {
@@ -34,10 +46,12 @@ fn row_of(screen: &[String], needle: &str) -> Option<usize> {
 
 #[test]
 fn parses_the_bridge_json() {
-    let todos = parse_todos(r#"[{"content":"read","status":"completed"},{"content":"edit","status":"in_progress"},{"content":"test"}]"#);
+    let todos = parse_todos(r#"[{"content":"read","status":"completed"},{"content":"edit","status":"in_progress","since":1700000000.5},{"content":"test"}]"#);
     assert_eq!(todos.len(), 3);
     assert!(todos[0].is_done() && todos[1].is_active() && !todos[2].is_done() && !todos[2].is_active());
     assert_eq!(todos[2].status, "pending");
+    assert_eq!(todos[1].since, Some(1700000000.5));
+    assert_eq!(todos[2].since, None, "у шага вне работы времени нет");
 }
 
 #[test]
@@ -61,20 +75,53 @@ fn the_state_refresh_carries_the_list_and_clears_it() {
 }
 
 #[test]
-fn draws_the_steps_with_their_marks_between_the_chat_and_the_prompt() {
-    let app = app_with(vec![item("read the code", "completed"), item("write the fix", "in_progress"), item("run tests", "pending")]);
+fn finished_steps_fold_into_one_row_and_the_work_left_is_listed() {
+    let app = app_with(vec![
+        item("read the code", "completed"),
+        item("write the fix", "in_progress"),
+        item("run tests", "pending"),
+    ]);
     let screen = render(&app, 80, 24);
     let header = row_of(&screen, "Задачи").expect("header");
     assert!(screen[header].contains("1/3"), "{}", screen[header]);
-    let done = row_of(&screen, "read the code").unwrap();
-    let active = row_of(&screen, "write the fix").unwrap();
-    let pending = row_of(&screen, "run tests").unwrap();
-    assert!(screen[done].contains('✓') && screen[active].contains('▶') && screen[pending].contains('○'));
-    assert_eq!((done, active, pending), (header + 1, header + 2, header + 3));
+
+    let done_row = row_of(&screen, "готово").expect("свёрнутая строка выполненного");
+    assert_eq!(done_row, header + 1);
+    assert!(screen[done_row].contains("✓ 1 готово"), "{}", screen[done_row]);
+    assert!(screen[done_row].contains("клик"), "видно, что строку можно открыть");
+    assert!(
+        row_of(&screen, "read the code").is_none(),
+        "свёрнутое не занимает места:\n{}",
+        screen.join("\n")
+    );
+
+    let active = row_of(&screen, "write the fix").expect("текущий шаг виден");
+    let pending = row_of(&screen, "run tests").expect("следующий виден");
+    assert!(screen[active].contains('▶') && screen[pending].contains('○'));
+    assert_eq!((active, pending), (done_row + 1, done_row + 2));
+
     let chat = row_of(&screen, "берусь").unwrap();
     assert!(chat < header, "the checklist is below the conversation");
-    let prompt = screen.iter().rposition(|r| r.contains('❯')).expect("prompt");     // your message also starts with ❯
+    let prompt = screen.iter().rposition(|r| r.contains('❯')).expect("prompt");
     assert!(prompt > pending, "and above the prompt:\n{}", screen.join("\n"));
+}
+
+#[test]
+fn a_click_on_that_row_opens_the_finished_steps() {
+    use argent_tui::app::ClickAction;
+
+    let mut app = app_with(vec![
+        item("read the code", "completed"),
+        item("write the fix", "in_progress"),
+    ]);
+    let screen = render(&app, 80, 24);
+    let done_row = row_of(&screen, "готово").unwrap();
+    assert_eq!(app.get_clicked_action(3, done_row as u16), Some(ClickAction::ToggleTodosDone));
+
+    app.todos_done_expanded = true;
+    let open = render(&app, 80, 24);
+    let step = row_of(&open, "read the code").expect("раскрытое видно");
+    assert!(open[step].contains('✓'), "{}", open[step]);
 }
 
 #[test]
@@ -93,15 +140,20 @@ fn a_question_takes_the_place_of_the_checklist() {
 }
 
 #[test]
-fn a_long_list_keeps_the_current_step_in_view_and_counts_the_rest() {
-    let mut items: Vec<TodoItem> = (1..=20).map(|i| item(&format!("step {i}"), if i <= 12 { "completed" } else { "pending" })).collect();
+fn a_long_list_keeps_the_current_step_in_view_and_says_what_is_hidden() {
+    let mut items: Vec<TodoItem> =
+        (1..=30).map(|i| item(&format!("step {i}"), if i <= 12 { "completed" } else { "pending" })).collect();
     items[12].status = "in_progress".into();
-    let screen = render(&app_with(items), 80, 30);
-    assert!(row_of(&screen, "step 13").is_some(), "the active step is visible:\n{}", screen.join("\n"));
-    assert!(row_of(&screen, "step 1 ").is_none() || row_of(&screen, "step 20").is_none());
-    let more = row_of(&screen, "ещё").expect("a 'more' row");
-    assert!(screen[more].contains("… ещё"), "{}", screen[more]);
-    assert!(row_of(&screen, "20/").is_none() && row_of(&screen, "12/20").is_some());
+    let screen = render(&app_with(items), 80, 20);
+    let text = screen.join("\n");
+    assert!(row_of(&screen, "step 13").is_some(), "the active step is visible:\n{text}");
+    assert!(row_of(&screen, "12/30").is_some(), "прогресс виден:\n{text}");
+    let more = screen
+        .iter()
+        .position(|r| r.contains("ниже") || r.contains("выше"))
+        .unwrap_or_else(|| panic!("скрытое названо числом:\n{text}"));
+    assert!(screen[more].contains('…'), "{}", screen[more]);
+    assert!(row_of(&screen, "step 30").is_none(), "хвост не влезает:\n{text}");
 }
 
 #[test]
@@ -122,12 +174,59 @@ fn long_steps_are_clipped_to_the_width() {
 }
 
 #[test]
+fn the_current_step_says_how_long_it_has_been_running() {
+    let app = app_with(vec![running("write the fix", 125.0)]);
+    let screen = render(&app, 80, 24);
+    let active = row_of(&screen, "write the fix").expect("шаг виден");
+    assert!(screen[active].contains("2м 05с"), "{}", screen[active]);
+}
+
+#[test]
+fn a_step_that_hangs_is_flagged() {
+    let app = app_with(vec![running("write the fix", 700.0)]);
+    let screen = render(&app, 80, 24);
+    let active = row_of(&screen, "write the fix").expect("шаг виден");
+    assert!(
+        screen[active].contains("долго"),
+        "через 10+ минут это уже не «нормальная работа»:\n{}",
+        screen[active]
+    );
+}
+
+#[test]
+fn a_fresh_step_is_not_flagged() {
+    let app = app_with(vec![running("write the fix", 5.0)]);
+    let screen = render(&app, 80, 24);
+    let active = row_of(&screen, "write the fix").expect("шаг виден");
+    assert!(!screen[active].contains("долго"), "{}", screen[active]);
+    assert!(screen[active].contains("5с"), "{}", screen[active]);
+}
+
+#[test]
+fn the_folded_header_also_carries_the_time() {
+    let mut app = app_with(vec![running("write the fix", 125.0)]);
+    app.todos_folded = true;
+    let screen = render(&app, 80, 24);
+    let header = row_of(&screen, "Задачи").unwrap();
+    assert!(
+        screen[header].contains("write the fix") && screen[header].contains("2м 05с"),
+        "{}",
+        screen[header]
+    );
+}
+
+#[test]
 fn the_premium_look_colours_the_marks_and_strikes_out_what_is_done() {
     use argent_tui::theme::UiStyle;
     use ratatui::style::Modifier;
 
-    let mut app = app_with(vec![item("read the code", "completed"), item("write the fix", "in_progress"), item("run tests", "pending")]);
+    let mut app = app_with(vec![
+        item("read the code", "completed"),
+        item("write the fix", "in_progress"),
+        item("run tests", "pending"),
+    ]);
     app.ui.set_style(UiStyle::Premium);
+    app.todos_done_expanded = true;
     let mut terminal = Terminal::new(TestBackend::new(80, 24)).expect("terminal");
     terminal.draw(|f| draw_ui(f, &app)).expect("draw");
     let buf = terminal.backend().buffer().clone();
@@ -137,9 +236,12 @@ fn the_premium_look_colours_the_marks_and_strikes_out_what_is_done() {
     assert_eq!(active.fg, p.accent);
     let done_at = buf.content.iter().position(|c| c.symbol() == "✓").expect("done mark");
     assert_eq!(buf.content[done_at].fg, p.ok);
-    let first_letter = &buf.content[done_at + 2];
-    assert_eq!(first_letter.symbol(), "r");
-    assert!(first_letter.modifier.contains(Modifier::CROSSED_OUT), "finished steps are struck out");
+    // «✓ 1 готово» — счётчик; зачёркнутый текст шага идёт ниже.
+    let struck = buf
+        .content
+        .iter()
+        .find(|c| c.symbol() == "r" && c.modifier.contains(Modifier::CROSSED_OUT));
+    assert!(struck.is_some(), "finished steps are struck out");
     let pending = buf.content.iter().find(|c| c.symbol() == "○").expect("pending mark");
     assert_eq!(pending.fg, p.muted);
 }
@@ -148,7 +250,11 @@ fn the_premium_look_colours_the_marks_and_strikes_out_what_is_done() {
 fn the_header_is_a_button_that_folds_the_list_to_one_row() {
     use argent_tui::app::ClickAction;
 
-    let mut app = app_with(vec![item("read the code", "completed"), item("write the fix", "in_progress"), item("run tests", "pending")]);
+    let mut app = app_with(vec![
+        item("read the code", "completed"),
+        item("write the fix", "in_progress"),
+        item("run tests", "pending"),
+    ]);
     let screen = render(&app, 80, 24);
     let header = row_of(&screen, "Задачи").unwrap();
     assert!(screen[header].contains('▾'), "open: {}", screen[header]);
@@ -160,6 +266,7 @@ fn the_header_is_a_button_that_folds_the_list_to_one_row() {
     assert!(folded[header].contains('▸') && folded[header].contains("1/3"), "{}", folded[header]);
     assert!(folded[header].contains("write the fix"), "folded, it still says what is going on: {}", folded[header]);
     assert!(row_of(&folded, "run tests").is_none() && row_of(&folded, "read the code").is_none());
+    assert!(row_of(&folded, "готово").is_none(), "свёрнутый список — одна строка");
     assert_eq!(app.get_clicked_action(3, header as u16), Some(ClickAction::ToggleTodos), "and it unfolds again");
 }
 

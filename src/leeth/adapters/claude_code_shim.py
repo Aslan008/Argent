@@ -16,7 +16,7 @@ Enables seamless integration of Leeth into Claude Code, Cursor, OpenHands, and A
 
 import time
 from typing import Any, Dict, Optional
-from logger import get_logger
+from argent.logger import get_logger
 
 logger = get_logger("claude_code_shim")
 CLAUDE_TO_LEETH_TOOL_MAP = {

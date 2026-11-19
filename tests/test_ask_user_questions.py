@@ -10,8 +10,8 @@ deviation into an unanswerable prompt was ours.
 import pytest
 from questionary import Choice as _Choice
 
-from tools import misc_tools
-from tools.misc_tools import _normalize_options, _option_text, ask_user_questions
+from argent.tools import misc_tools
+from argent.tools.misc_tools import _normalize_options, _option_text, ask_user_questions
 
 
 class TestOptionText:
@@ -151,6 +151,11 @@ class TestDegradedInput:
     @pytest.fixture
     def types_text(self, monkeypatch):
         monkeypatch.setattr(misc_tools.memory, "add_fact", lambda *a, **k: None)
+        # These exercise the terminal prompt path. Started from inside Argent the
+        # environment carries ARGENT_TUI=1, and the tool then routes the question
+        # through the TUI bridge — which has no window in a test, so every answer
+        # came back "No answer". The path being tested is chosen here, not inherited.
+        monkeypatch.delenv("ARGENT_TUI", raising=False)
         import prompt_toolkit
         monkeypatch.setattr(prompt_toolkit, "prompt", lambda *a, **k: "мой ответ")
         return None
@@ -167,7 +172,7 @@ class TestDegradedInput:
         nothing about what arrived — the shape was unknowable afterwards."""
         import logging
 
-        from tools import misc_tools as m
+        from argent.tools import misc_tools as m
         with caplog.at_level(logging.WARNING, logger=m.log.name):
             ask_user_questions([{"type": "single_choice", "question": "Сколько?",
                                  "options": [{"weight": 1, "n": 2}]}])
@@ -211,19 +216,19 @@ class TestLongOptions:
                             lambda *a, **kw: os.terminal_size((80, 24)))
 
     def test_short_options_need_no_listing(self):
-        from tools.misc_tools import _fit_options
+        from argent.tools.misc_tools import _fit_options
         choices, listing = _fit_options(["Да", "Нет"])
         assert choices == [("Да", "Да"), ("Нет", "Нет")]
         assert listing == ""          # nothing printed when nothing overflows
 
     def test_the_full_text_is_printed_above_the_menu(self, narrow):
-        from tools.misc_tools import _fit_options
+        from argent.tools.misc_tools import _fit_options
         _, listing = _fit_options([self.LONG_A, self.LONG_B])
         assert "экспорт YAML." in listing and "один источник правды." in listing
         assert "1." in listing and "2." in listing
 
     def test_the_menu_label_fits_and_is_numbered(self, narrow):
-        from tools.misc_tools import _fit_options
+        from argent.tools.misc_tools import _fit_options
         choices, _ = _fit_options([self.LONG_A, self.LONG_B])
         for i, (label, _value) in enumerate(choices, 1):
             assert label.startswith(f"{i}. ")
@@ -232,12 +237,12 @@ class TestLongOptions:
     def test_the_label_is_a_beginning_not_a_hole(self, narrow):
         """The middle-elided form read as corruption; a prefix reads as a
         prefix, and the number points at the full text."""
-        from tools.misc_tools import _fit_options
+        from argent.tools.misc_tools import _fit_options
         label = _fit_options([self.LONG_A])[0][0][0]
         assert "..." not in label
         assert label.startswith("1. Главная страница подписывается")
 
     def test_the_model_receives_the_whole_option(self, narrow):
-        from tools.misc_tools import _fit_options
+        from argent.tools.misc_tools import _fit_options
         choices, _ = _fit_options([self.LONG_A])
         assert choices[0][1] == self.LONG_A
